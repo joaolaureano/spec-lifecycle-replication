@@ -1,4 +1,4 @@
-"""Números-chave da RQ1 por ferramenta (ciclo de vida, janela de 60 dias, hipóteses H1a e H1b) e do corpus.
+"""Números-chave da RQ1 por ferramenta (ciclo de vida, janela de 60 dias, menos da metade editada, hipótese H1) e do corpus.
 Estimativa principal = média das médias por repo (sensibilidade = média por spec); IC 95% = percentis de 1.000 réplicas
 bootstrap de repos (semente fixa).
 Saídas: docs/key_numbers_final.json, data/derived/tables/*.csv. Uso: .venv/bin/python -I scripts/analysis/key_numbers.py
@@ -104,12 +104,13 @@ def bloco_janela():
 
 
 def hipoteses(ciclo, u):
-    """Vereditos de H1a e H1b pelas regras de docs/metodo.md §5b; Mann-Whitney + Cliff δ na H1b (a hipótese comparativa)."""
+    """Leitura "menos da metade editada" por grupo (descritiva) e veredito da H1 (viva > Spec Kit: ICs disjuntos +
+    Mann-Whitney + Cliff δ), pelas regras de docs/metodo.md §5b."""
     linhas = []
     c = ciclo[ciclo.metrica == "editada"].set_index("grupo")
     for g in GRUPOS + ["openspec:living"]:
         r = c.loc[g]
-        linhas.append(dict(hipotese="H1a", criterio="editada < 50%", grupo=g, estimativa=r.por_repo, ic_lo=r.ic_repo_lo,
+        linhas.append(dict(hipotese="menos_da_metade", criterio="editada < 50%", grupo=g, estimativa=r.por_repo, ic_lo=r.ic_repo_lo,
                            ic_hi=r.ic_repo_hi, limiar=0.5, veredito=veredito(r.ic_repo_lo, r.ic_repo_hi, 0.5, "<")))
     pr = u.groupby(["grupo", "repo_name"]).editada.mean()
     viva, sk = pr.loc["openspec:living"], pr.loc["speckit"]
@@ -118,7 +119,7 @@ def hipoteses(ciclo, u):
         p = stats.mannwhitneyu(x, y, alternative="greater").pvalue
         d = cliff(x.to_numpy(), y.to_numpy())
         ok = "satisfeito" if v.ic_repo_lo > s.ic_repo_hi and p < .05 else "nao_satisfeito" if v.ic_repo_hi < s.ic_repo_lo else "inconclusivo"
-        linhas.append(dict(hipotese="H1b", criterio=f"viva > Spec Kit ({nome})", grupo="openspec:living vs speckit",
+        linhas.append(dict(hipotese="H1", criterio=f"viva > Spec Kit ({nome})", grupo="openspec:living vs speckit",
                            estimativa=v.por_repo - s.por_repo, ic_lo=np.nan, ic_hi=np.nan, limiar=0.0, veredito=ok,
                            mw_p_unilateral=p, cliff_delta=d, magnitude=magnitude(d), n_a=len(x), n_b=len(y)))
     return pd.DataFrame(linhas)

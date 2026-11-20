@@ -27,7 +27,7 @@ bash scripts/reproduzir.sh --desde-o-zenodo # também refaz o texto das specs a 
 | universo e dedup | `scripts/analysis/universe.py` | `data/derived/universe.parquet`, funil |
 | RQ2: evento N1, X, sorteio conferido | `scripts/analysis/spec_rot_viabilidade.py` | `data/derived/p4_amostra.txt`; **falha** se o sorteio mudar |
 | RQ2: 2º canal de ligação (`openspec_code_refs`) e X amplo | `scripts/analysis/p4_ligacao.py` | `data/derived/tables/p4_ligacao.csv`, `data/derived/p4_ligacao.txt` |
-| RQ1, hipóteses H1a e H1b e números do corpus | `scripts/analysis/key_numbers.py` | `docs/key_numbers_final.json`, `data/derived/tables/*` |
+| RQ1, hipótese H1 e números do corpus | `scripts/analysis/key_numbers.py` | `docs/key_numbers_final.json`, `data/derived/tables/*` |
 | RQ2: tamanho da amostra | `scripts/analysis/p4_poder.py` | `data/derived/tables/p4_poder.csv` |
 | RQ2: candidatas a dona | `scripts/analysis/p4_dono.py` | `data/validation/revisao_dono/` |
 | RQ2: Y, sensibilidades e concordância | `scripts/analysis/validation_score.py` | `data/validation/resultado_*.csv`, `p4_rotulos_finais.csv` |

@@ -71,7 +71,7 @@ def main():
 
     f = fun.set_index("etapa")
     etapas = list(fun.etapa)
-    h1b = hip[hip.hipotese == "H1b"].iloc[0]
+    h1b = hip[hip.hipotese == "H1"].iloc[0]
     R = res.set_index(["amostra", "medida"])
     pb, ps = R.loc[("principal", "amplo (critério)")], R.loc[("principal", "estrito")]
     gap = R.loc[("final sem o veto humano", "amplo (critério)")]
@@ -107,8 +107,12 @@ não mediu. A pergunta do paper é **como as specs de SDD evoluem depois de cria
 código muda**, respondida por duas subquestões:
 
 - **RQ1 (edição):** com que frequência as specs são editadas depois de criadas, e isso difere entre ferramentas?
-- **RQ2 (spec decay):** com que frequência um PR que muda código ligado a uma *living spec* do OpenSpec, sem
-  atualizá-la, a deixa falsa ou incompleta?
+- **RQ2 (spec decay):** quando um PR muda o código ligado a uma *living spec* do OpenSpec, mas deixa a spec sem
+  mudança, com que frequência a spec fica falsa ou incompleta?
+
+Por que a RQ1 importa: o SDD supõe que a spec continua guiando o trabalho depois de escrita, e isso só vale se ela for
+mantida; a RQ1 testa se é, e se as ferramentas diferem. A RQ2 pergunta se uma spec viva que não foi atualizada ainda
+descreve o sistema.
 
 Os arquivos da RQ2 se chamam `p4_*` (nome interno do projeto).
 
@@ -120,9 +124,7 @@ Misturar as ferramentas num número "SDD em geral" juntaria comportamentos opost
 
 **Hipóteses** (escritas depois de explorar os dados; regras de decisão fixadas antes da validação e da rotulagem; sem
 pré-registro externo):
-- **H1a:** menos de {pc(hip[hip.hipotese == 'H1a'].limiar.iloc[0], 0)}% das specs são editadas, em cada grupo. Origem: o
-  paper-base achou 81,5% das specs com um único commit; a H1a pergunta se isso vale em cada ferramenta, depois da deduplicação.
-- **H1b:** living specs do OpenSpec são mais editadas que as do Spec Kit. Origem: Böckeler (spec-anchored, feita para ser
+- **H1:** living specs do OpenSpec são mais editadas que as do Spec Kit. Origem: Böckeler (spec-anchored, feita para ser
   mantida, × spec-first).
 - **H2:** uma fração relevante desses PRs deixa a spec desatualizada. Origem: 7 entrevistados do paper-base citaram o
   spec decay, e a literatura de documentação acha desatualização comum (Aghajani; Tan).
@@ -192,13 +194,13 @@ estimativa: média por repositório (§3). Limitação de construção: o histó
 somem.
 """)
     w(tabela(pd.DataFrame([(GN[g], f"{pc(r.por_repo)} {ic(r.ic_repo_lo, r.ic_repo_hi)}", f"{pc(r.por_spec)}", n(r.n_unidades), n(r.n_repos),
-                            LEIT[hip[(hip.hipotese == 'H1a') & (hip.grupo == g)].veredito.iloc[0]])
-                           for g, r in cic.iterrows()], columns=["Grupo", "% editada por repo [IC 95%]", "% por spec", "Specs", "Repos", "H1a (< 50%)"])))
+                            "sim" if hip[(hip.hipotese == 'menos_da_metade') & (hip.grupo == g)].veredito.iloc[0] == "satisfeito" else "não")
+                           for g, r in cic.iterrows()], columns=["Grupo", "% editada por repo [IC 95%]", "% por spec", "Specs", "Repos", "IC inteiro < 50%?)"])))
     idade = NK["idade_mediana_dias"]
     w(f"""
-**H1a** é *met* em todos os grupos: o IC inteiro fica abaixo de 50%.
+Em todos os grupos, o IC inteiro fica abaixo de 50%: menos da metade das specs é editada.
 
-**H1b: living specs são mais editadas que as do Spec Kit?** Diferença das médias por repositório:
+**H1: living specs são mais editadas que as do Spec Kit?** Diferença das médias por repositório:
 {pc(h1b.estimativa)} pontos percentuais ({pc(cic.loc['openspec:living'].por_repo)}% contra {pc(cic.loc['speckit'].por_repo)}%).
 A regra exige duas coisas: ICs 95% disjuntos **e** o teste de Mann–Whitney unilateral com p < 0,05.
 
@@ -213,7 +215,7 @@ A regra exige duas coisas: ICs 95% disjuntos **e** o teste de Mann–Whitney uni
   identidade por força bruta). Resultado: **δ = {dc(h1b.cliff_delta)}**, magnitude **{h1b.magnitude}** pelos limiares
   usuais (|δ| < 0,147 desprezível; < 0,33 pequeno; < 0,474 médio; acima, grande). Por que reportar: com milhares de
   repositórios quase qualquer diferença dá p minúsculo; o δ diz se a diferença importa.
-- **Veredito H1b: {LEIT[h1b.veredito]}**, com efeito pequeno.
+- **Veredito H1: {LEIT[h1b.veredito]}**, com efeito pequeno.
 
 **Sensibilidade à idade.** As specs do Spec Kit são mais velhas (mediana {idade['speckit']:.0f} dias até o corte,
 contra {idade['openspec:living']:.0f} das living specs), então tiveram mais tempo para ser editadas. Janela fixa:

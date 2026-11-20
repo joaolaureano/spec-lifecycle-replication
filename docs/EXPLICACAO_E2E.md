@@ -13,8 +13,12 @@ não mediu. A pergunta do paper é **como as specs de SDD evoluem depois de cria
 código muda**, respondida por duas subquestões:
 
 - **RQ1 (edição):** com que frequência as specs são editadas depois de criadas, e isso difere entre ferramentas?
-- **RQ2 (spec decay):** com que frequência um PR que muda código ligado a uma *living spec* do OpenSpec, sem
-  atualizá-la, a deixa falsa ou incompleta?
+- **RQ2 (spec decay):** quando um PR muda o código ligado a uma *living spec* do OpenSpec, mas deixa a spec sem
+  mudança, com que frequência a spec fica falsa ou incompleta?
+
+Por que a RQ1 importa: o SDD supõe que a spec continua guiando o trabalho depois de escrita, e isso só vale se ela for
+mantida; a RQ1 testa se é, e se as ferramentas diferem. A RQ2 pergunta se uma spec viva que não foi atualizada ainda
+descreve o sistema.
 
 Os arquivos da RQ2 se chamam `p4_*` (nome interno do projeto).
 
@@ -26,9 +30,7 @@ Misturar as ferramentas num número "SDD em geral" juntaria comportamentos opost
 
 **Hipóteses** (escritas depois de explorar os dados; regras de decisão fixadas antes da validação e da rotulagem; sem
 pré-registro externo):
-- **H1a:** menos de 50% das specs são editadas, em cada grupo. Origem: o
-  paper-base achou 81,5% das specs com um único commit; a H1a pergunta se isso vale em cada ferramenta, depois da deduplicação.
-- **H1b:** living specs do OpenSpec são mais editadas que as do Spec Kit. Origem: Böckeler (spec-anchored, feita para ser
+- **H1:** living specs do OpenSpec são mais editadas que as do Spec Kit. Origem: Böckeler (spec-anchored, feita para ser
   mantida, × spec-first).
 - **H2:** uma fração relevante desses PRs deixa a spec desatualizada. Origem: 7 entrevistados do paper-base citaram o
   spec decay, e a literatura de documentação acha desatualização comum (Aghajani; Tan).
@@ -96,17 +98,17 @@ binomial comum ignoraria.
 estimativa: média por repositório (§3). Limitação de construção: o histórico segue o caminho atual, então renomeações
 somem.
 
-| Grupo | % editada por repo [IC 95%] | % por spec | Specs | Repos | H1a (< 50%) |
+| Grupo | % editada por repo [IC 95%] | % por spec | Specs | Repos | IC inteiro < 50%?) |
 |---|---|---|---|---|---|
-| OpenSpec (todas as specs) | 10,8 [10,4–11,2] | 13,6 | 271.567 | 8.857 | met |
-| Outras ferramentas | 17,8 [16,5–19,1] | 19,9 | 18.093 | 2.781 | met |
-| Sem ferramenta | 40,0 [39,6–40,5] | 30,3 | 104.502 | 36.891 | met |
-| Spec Kit | 22,9 [22,2–23,5] | 21,8 | 53.633 | 10.474 | met |
-| OpenSpec living | 28,4 [27,5–29,2] | 37,3 | 72.499 | 6.063 | met |
+| OpenSpec (todas as specs) | 10,8 [10,4–11,2] | 13,6 | 271.567 | 8.857 | sim |
+| Outras ferramentas | 17,8 [16,5–19,1] | 19,9 | 18.093 | 2.781 | sim |
+| Sem ferramenta | 40,0 [39,6–40,5] | 30,3 | 104.502 | 36.891 | sim |
+| Spec Kit | 22,9 [22,2–23,5] | 21,8 | 53.633 | 10.474 | sim |
+| OpenSpec living | 28,4 [27,5–29,2] | 37,3 | 72.499 | 6.063 | sim |
 
-**H1a** é *met* em todos os grupos: o IC inteiro fica abaixo de 50%.
+Em todos os grupos, o IC inteiro fica abaixo de 50%: menos da metade das specs é editada.
 
-**H1b: living specs são mais editadas que as do Spec Kit?** Diferença das médias por repositório:
+**H1: living specs são mais editadas que as do Spec Kit?** Diferença das médias por repositório:
 5,5 pontos percentuais (28,4% contra 22,9%).
 A regra exige duas coisas: ICs 95% disjuntos **e** o teste de Mann–Whitney unilateral com p < 0,05.
 
@@ -121,7 +123,7 @@ A regra exige duas coisas: ICs 95% disjuntos **e** o teste de Mann–Whitney uni
   identidade por força bruta). Resultado: **δ = 0,17**, magnitude **small** pelos limiares
   usuais (|δ| < 0,147 desprezível; < 0,33 pequeno; < 0,474 médio; acima, grande). Por que reportar: com milhares de
   repositórios quase qualquer diferença dá p minúsculo; o δ diz se a diferença importa.
-- **Veredito H1b: met**, com efeito pequeno.
+- **Veredito H1: met**, com efeito pequeno.
 
 **Sensibilidade à idade.** As specs do Spec Kit são mais velhas (mediana 101 dias até o corte,
 contra 69 das living specs), então tiveram mais tempo para ser editadas. Janela fixa:
