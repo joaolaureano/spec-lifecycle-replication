@@ -1,0 +1,3669 @@
+===== P099 | repo spencermarx/open-code-review | PR #40: fix: vendor model enumeration — single-source strategy table, disclosed fallbacks, per-strategy e2e (#39) | capacidade: reviewer-management
+--- SPEC VIVA
+# reviewer-management Specification
+
+## Purpose
+Reviewer management governs the creation, configuration, and deployment of AI reviewer personas — the independent "Principal Engineers" that perform code reviews with customizable expertise areas and configurable redundancy.
+## Requirements
+### Requirement: Default Reviewer Personas
+
+The system SHALL provide four default reviewer personas with distinct expertise areas.
+
+#### Scenario: Principal Engineer persona
+- **GIVEN** the principal reviewer is selected
+- **WHEN** reviewing code
+- **THEN** the reviewer SHALL focus on:
+  - Architecture and cohesion
+  - Composition and structure
+  - Simplicity and patterns
+  - Net impact on codebase
+
+#### Scenario: Security Engineer persona
+- **GIVEN** the security reviewer is selected
+- **WHEN** reviewing code
+- **THEN** the reviewer SHALL focus on:
+  - Input validation and injection risks
+  - Authentication and authorization
+  - Data protection and secrets
+  - Error handling information leakage
+
+#### Scenario: Quality Engineer persona
+- **GIVEN** the quality reviewer is selected
+- **WHEN** reviewing code
+- **THEN** the reviewer SHALL focus on:
+  - Readability and maintainability
+  - Consistency with codebase conventions
+  - Error handling and edge cases
+  - Documentation and clarity
+
+#### Scenario: Testing Engineer persona
+- **GIVEN** the testing reviewer is selected
+- **WHEN** reviewing code
+- **THEN** the reviewer SHALL focus on:
+  - Test coverage and gaps
+  - Test quality (behavior vs implementation)
+  - Edge cases and boundaries
+  - Testability of code structure
+
+---
+
+### Requirement: Reviewer Persona Structure
+
+Each reviewer persona SHALL be defined as a markdown file with standard sections.
+
+#### Scenario: Persona file structure
+- **GIVEN** a reviewer persona file exists
+- **WHEN** the file is read
+- **THEN** it SHALL contain:
+  - Identity (background and perspective)
+  - Focus areas (what to look for)
+  - How You Review (approach and principles)
+  - Project Standards reminder
+
+#### Scenario: Persona location
+- **GIVEN** a reviewer named `{name}`
+- **WHEN** loading the persona
+- **THEN** the system SHALL read from `.ocr/skills/references/reviewers/{name}.md`
+
+---
+
+### Requirement: Redundancy Configuration
+
+The system SHALL support configurable redundancy at default and per-reviewer levels.
+
+#### Scenario: Default redundancy
+- **GIVEN** `config.yaml` specifies `default_redundancy: 1`
+- **WHEN** a reviewer without explicit redundancy is spawned
+- **THEN** the reviewer SHALL run 1 time
+
+#### Scenario: Per-reviewer redundancy
+- **GIVEN** `config.yaml` specifies `reviewer_redundancy: security: 2`
+- **WHEN** the security reviewer is spawned
+- **THEN** the security reviewer SHALL run 2 times
+
+#### Scenario: Runtime redundancy override
+- **GIVEN** user specifies `--redundancy 3`
+- **WHEN** any reviewer is spawned
+- **THEN** all reviewers SHALL run 3 times, overriding config
+
+---
+
+### Requirement: List Reviewers Command
+
+The system SHALL provide `/ocr:reviewers` to list all available reviewers.
+
+#### Scenario: List reviewers with config
+- **GIVEN** user invokes `/ocr:reviewers`
+- **WHEN** command executes
+- **THEN** the system SHALL display:
+  - Each reviewer name
+  - Focus summary
+  - Redundancy setting
+  - Whether reviewer is custom or default
+
+---
+
+### Requirement: Interactive Reviewer Creation
+
+The system SHALL provide `/ocr:add-reviewer` for interactive reviewer creation.
+
+#### Scenario: Add reviewer flow
+- **GIVEN** user invokes `/ocr:add-reviewer performance`
+- **WHEN** the interactive flow begins
+- **THEN** the system SHALL ask (one at a time):
+  1. What should the reviewer focus on?
+  2. What specific things should they look for?
+  3. What's their background/perspective?
+  4. Any tools, metrics, or standards to reference?
+  5. What redundancy level? (1=default, 2+=critical)
+
+#### Scenario: Preview before save
+- **GIVEN** user has answered all questions
+- **WHEN** persona is generated
+- **THEN** the system SHALL:
+  - Show preview of generated persona
+  - Ask for confirmation before saving
+
+#### Scenario: Save new reviewer
+- **GIVEN** user confirms the persona
+- **WHEN** save executes
+- **THEN** the system SHALL:
+  - Save to `.ocr/skills/references/reviewers/{name}.md`
+  - Update `config.yaml` if redundancy > 1
+  - Confirm creation to user
+
+#### Scenario: Prevent duplicate
+- **GIVEN** user invokes `/ocr:add-reviewer security`
+- **WHEN** security.md already exists
+- **THEN** the system SHALL suggest `/ocr:edit-reviewer security` instead
+
+---
+
+### Requirement: Interactive Reviewer Editing
+
+The system SHALL provide `/ocr:edit-reviewer` for modifying existing reviewers.
+
+#### Scenario: Edit reviewer flow
+- **GIVEN** user invokes `/ocr:edit-reviewer security`
+- **WHEN** security.md exists
+- **THEN** the system SHALL:
+  - Load and display current persona
+  - Ask what to change (focus, perspective, redundancy, etc.)
+  - Apply changes based on feedback
+  - Show preview and confirm before saving
+
+#### Scenario: Handle missing reviewer
+- **GIVEN** user invokes `/ocr:edit-reviewer unknown`
+- **WHEN** unknown.md does not exist
+- **THEN** the system SHALL suggest `/ocr:add-reviewer unknown` instead
+
+---
+
+### Requirement: Reviewer Template
+
+The system SHALL provide a template for creating new reviewers.
+
+#### Scenario: Template usage
+- **GIVEN** `/ocr:add-reviewer` is creating a new persona
+- **WHEN** generating the persona file
+- **THEN** the system SHALL use the template from `.ocr/skills/assets/reviewer-template.md`
+
+#### Scenario: Template structure
+- **GIVEN** the reviewer template exists
+- **WHEN** it is read
+- **THEN** it SHALL contain placeholders for:
+  - Name
+  - Identity/background
+  - Focus areas
+  - Review approach
+  - Project standards reminder
+
+### Requirement: Three-Form Default Team Schema
+
+The system SHALL accept three forms for each persona entry under `default_team` in `.ocr/config.yaml`, picked unambiguously by YAML type, all normalizing to a canonical list of reviewer instances.
+
+#### Scenario: Shorthand form (number)
+
+- **GIVEN** a config entry `security: 1` under `default_team`
+- **WHEN** the team is parsed
+- **THEN** the parser SHALL produce one reviewer instance for `security` with `instance_index = 1`, `name = "security-1"`, and `model = null`
+
+#### Scenario: Object form (count + optional model)
+
+- **GIVEN** a config entry `quality: { count: 2, model: claude-haiku-4-5-20251001 }`
+- **WHEN** the team is parsed
+- **THEN** the parser SHALL produce two reviewer instances for `quality`, each with `model = "claude-haiku-4-5-20251001"`, `instance_index = 1` and `2` respectively, and default names `quality-1` and `quality-2`
+
+#### Scenario: List form (per-instance configs)
+
+- **GIVEN** a config entry `principal: [{ model: "claude-opus-4-7" }, { model: "claude-sonnet-4-6", name: "principal-balanced" }]`
+- **WHEN** the team is parsed
+- **THEN** the parser SHALL produce two reviewer instances:
+  - First: `persona = "principal"`, `instance_index = 1`, `name = "principal-1"`, `model = "claude-opus-4-7"`
+  - Second: `persona = "principal"`, `instance_index = 2`, `name = "principal-balanced"`, `model = "claude-sonnet-4-6"`
+
+#### Scenario: Backwards compatibility with existing configs
+
+- **GIVEN** a pre-existing `.ocr/config.yaml` containing `default_team: { principal: 2, quality: 2 }` authored against a prior OCR version
+- **WHEN** the new parser runs
+- **THEN** the resolved composition SHALL contain four reviewer instances (two `principal-*`, two `quality-*`), all with `model = null`
+- **AND** no migration step SHALL be required
+
+#### Scenario: Mixing forms within a single entry is rejected
+
+- **GIVEN** a config entry `principal: { count: 2, instances: [{ model: "claude-opus-4-7" }] }`
+- **WHEN** the team is parsed
+- **THEN** the parser SHALL reject the entry with a clear error identifying the offending key
+- **AND** SHALL NOT silently coerce one form into another
+
+---
+
+### Requirement: Reviewer Instance Addressability
+
+The system SHALL assign each reviewer instance a stable, addressable identity composed of its persona and an instance index, with optional user override of the instance name.
+
+#### Scenario: Default instance naming
+
+- **GIVEN** a parsed team with two `principal` instances and no explicit `name` overrides
+- **WHEN** instance names are derived
+- **THEN** the names SHALL be `principal-1` and `principal-2`
+
+#### Scenario: User-supplied instance name override
+
+- **GIVEN** a list-form entry `principal: [{ model: "claude-opus-4-7", name: "principal-architect-lens" }]`
+- **WHEN** the team is parsed
+- **THEN** the resulting instance's `name` SHALL be `principal-architect-lens`
+
+#### Scenario: Instance index uniqueness within a persona
+
+- **GIVEN** a parsed team with multiple instances of the same persona
+- **WHEN** instance indices are inspected
+- **THEN** indices SHALL be sequential starting at 1 within each `(persona)` group
+
+---
+
+### Requirement: Per-Instance Model Assignment
+
+The system SHALL allow each reviewer instance to be assigned a model identifier (vendor-native string or user-defined alias) which, when present, SHALL be passed to the host AI CLI's per-task model override mechanism.
+
+#### Scenario: Model resolution chain
+
+- **GIVEN** a reviewer instance with no explicit `model` field
+- **WHEN** the model is resolved
+- **THEN** the system SHALL consult, in order:
+  1. The instance's own `model` field
+  2. The team-level `model` field, when present
+  3. `models.default` from `.ocr/config.yaml`, when present
+  4. None — no `--model` flag is passed and the host CLI's own default applies
+
+#### Scenario: User-defined alias expansion
+
+- **GIVEN** `models.aliases.workhorse: claude-sonnet-4-6` in config and a reviewer instance with `model: workhorse`
+- **WHEN** the team is resolved
+- **THEN** the instance's `resolved_model` SHALL be `claude-sonnet-4-6`
+
+#### Scenario: Vendor-native model identifier
+
+- **GIVEN** a reviewer instance with `model: claude-opus-4-7` (no alias defined)
+- **WHEN** the team is resolved
+- **THEN** the instance's `resolved_model` SHALL be `claude-opus-4-7` and SHALL be passed verbatim to the active adapter
+
+#### Scenario: Model is not a property of the persona file
+
+- **GIVEN** a reviewer markdown file at `.ocr/skills/references/reviewers/principal.md`
+- **WHEN** the file is inspected
+- **THEN** it SHALL NOT contain a `model:` frontmatter field
+- **AND** model selection SHALL live exclusively in `default_team` and team overrides
+
+---
+
+### Requirement: Reviewers Catalog Excludes Deployment Configuration
+
+The system SHALL keep `reviewers-meta.json` (the catalog of available reviewers) free of model or instance configuration; that data lives only in the resolved team composition.
+
+#### Scenario: reviewers-meta.json schema unchanged for new fields
+
+- **GIVEN** a workspace with the three-form schema in use
+- **WHEN** `reviewers-meta.json` is generated
+- **THEN** each `ReviewerMeta` row SHALL contain only persona-intrinsic fields (id, name, tier, icon, description, focus_areas, is_default, is_builtin, plus persona-only `known_for`/`philosophy`)
+- **AND** SHALL NOT contain a `model` or `instances` field
+
+#### Scenario: is_default reflects "this persona is in the team"
+
+- **GIVEN** `default_team` lists `principal` with count 2 (in any of the three forms)
+- **WHEN** `reviewers-meta.json` is generated
+- **THEN** the `principal` reviewer's `is_default` SHALL be `true`
+- **AND** the dashboard SHALL be free to display "in default team ×2" using both this flag and a separate query for instance count
+
+### Requirement: Reviewer Metadata Always Has a Renderable Icon
+
+Every `ReviewerMeta` entry SHALL carry a non-empty `icon` string. The system SHALL guarantee this at both boundaries that produce or serve `reviewers-meta.json`, using a single shared default-icon authority (`defaultIconFor(id, tier)`): built-in reviewers resolve to their mapped glyph, and any other reviewer falls back to a tier-appropriate generic (`brain` for personas, `user` otherwise).
+
+#### Scenario: Generated metadata carries an icon for every reviewer
+
+- **WHEN** `reviewers-meta.json` is generated from reviewer markdown files
+- **THEN** each `ReviewerMeta` row SHALL have a non-empty `icon` resolved from the shared default-icon authority
+
+#### Scenario: Sync from structured JSON backfills a missing icon
+
+- **WHEN** `ocr reviewers sync --stdin` receives a reviewer object whose `icon` is absent or an empty string
+- **THEN** the persisted entry SHALL have `icon` backfilled from `defaultIconFor(id, tier)`
+- **AND** the synced JSON written to disk SHALL contain the backfilled icon
+
+#### Scenario: A non-string icon is rejected
+
+- **WHEN** `ocr reviewers sync --stdin` receives a reviewer object whose `icon` is present but not a string
+- **THEN** validation SHALL fail with an error identifying the offending reviewer
+
+#### Scenario: Stale metadata is repaired when served
+
+- **WHEN** the dashboard reads a `reviewers-meta.json` written by an older version whose reviewer omits `icon`
+- **THEN** the served reviewer SHALL have `icon` backfilled before reaching the client, so no consumer observes an undefined icon
+
+
+--- ARQUIVOS DO PR (32)
+modified  +16    -1     .github/workflows/cross-platform-test.yml
+added     +135   -0     openspec/changes/archive/2026-06-11-update-vendor-model-enumeration/design.md
+added     +88    -0     openspec/changes/archive/2026-06-11-update-vendor-model-enumeration/proposal.md
+added     +63    -0     openspec/changes/archive/2026-06-11-update-vendor-model-enumeration/specs/cli/spec.md
+added     +146   -0     openspec/changes/archive/2026-06-11-update-vendor-model-enumeration/specs/dashboard/spec.md
+added     +71    -0     openspec/changes/archive/2026-06-11-update-vendor-model-enumeration/tasks.md
+modified  +2     -2     openspec/changes/evolve-phase4-host-aware-spawning/tasks.md
+modified  +52    -17    openspec/specs/cli/spec.md
+modified  +77    -24    openspec/specs/dashboard/spec.md
+modified  +0     -51    packages/cli-e2e/src/agent-sessions.test.ts   <== código ligado à spec
+added     +162   -0     packages/cli-e2e/src/helpers/vendor-stubs.ts
+added     +214   -0     packages/cli-e2e/src/models-list.test.ts
+modified  +28    -16    packages/cli/src/commands/models.ts   <== código ligado à spec
+modified  +273   -27    packages/cli/src/lib/__tests__/models.test.ts   <== código ligado à spec
+modified  +236   -71    packages/cli/src/lib/models.ts   <== código ligado à spec
+modified  +6     -0     packages/dashboard-api-e2e/src/helpers/server-harness.ts
+added     +161   -0     packages/dashboard-api-e2e/src/helpers/vendor-stubs.ts
+added     +180   -0     packages/dashboard-api-e2e/src/team-models-api.test.ts
+modified  +120   -47    packages/dashboard/src/client/components/ui/model-select.tsx
+added     +35    -0     packages/dashboard/src/client/components/ui/model-source-hint.tsx
+modified  +10    -4     packages/dashboard/src/client/features/commands/components/reviewer-dialog.tsx
+modified  +24    -57    packages/dashboard/src/client/features/commands/components/team-composition-panel.tsx
+modified  +5     -0     packages/dashboard/src/client/features/reviewers/components/default-team-section.tsx
+modified  +2     -0     packages/dashboard/src/client/lib/api-types.ts
+modified  +48    -24    packages/dashboard/src/server/routes/team.ts   <== código ligado à spec
+modified  +4     -7     packages/dashboard/src/server/services/ai-cli/__tests__/host-capabilities-agreement.test.ts
+added     +23    -0     packages/dashboard/src/server/services/ai-cli/__tests__/model-strategy-agreement.test.ts
+modified  +0     -55    packages/dashboard/src/server/services/ai-cli/claude-adapter.ts
+modified  +11    -4     packages/dashboard/src/server/services/ai-cli/index.ts
+modified  +0     -56    packages/dashboard/src/server/services/ai-cli/opencode-adapter.ts
+modified  +0     -24    packages/dashboard/src/server/services/ai-cli/types.ts
+modified  +0     -1     packages/dashboard/src/server/services/capture/__tests__/session-capture-service.test.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/cli-e2e/src/agent-sessions.test.ts
+@@ -797,57 +797,6 @@ describe("ocr team set --stdin", () => {
+   });
+ });
+ 
+-describe("ocr models list", () => {
+-  it("emits a JSON array with --json", async () => {
+-    const project = tracked(createInitializedProject());
+-
+-    // --vendor flag bypasses PATH detection so the test runs without
+-    // requiring claude/opencode binaries on the CI runner.
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "claude", "--json"],
+-      { cwd: project.dir },
+-    );
+-
+-    expect(result.exitCode).toBe(0);
+-    const parsed = JSON.parse(result.stdout);
+-    expect(Array.isArray(parsed)).toBe(true);
+-    expect(parsed.length).toBeGreaterThan(0);
+-    // Every entry has at minimum an id string
+-    for (const model of parsed) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
+-    }
+-  });
+-
+-  it("opencode bundled fallback uses provider-prefixed ids", async () => {
+-    const project = tracked(createInitializedProject());
+-
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "opencode", "--json"],
+-      { cwd: project.dir },
+-    );
+-    const parsed = JSON.parse(result.stdout);
+-
+-    // Bundled OpenCode ids include a `provider/` prefix; native enumeration
+-    // (when available) returns whatever opencode emits — we don't assert
+-    // shape there. Either way, ids must be non-empty strings.
+-    for (const model of parsed) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
+-    }
+-  });
+-
+-  it("rejects an unknown vendor", async () => {
+-    const project = tracked(createInitializedProject());
+-
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "nonexistent-vendor"],
+-      { cwd: project.dir },
+-    );
+-    expect(result.exitCode).not.toBe(0);
+-  });
+-});
+-
+ describe("ocr review --resume", () => {
+   it("rejects a non-existent workflow id", async () => {
+     const project = tracked(createInitializedProject());
+
+### packages/cli/src/commands/models.ts
+@@ -2,44 +2,52 @@
+  * OCR Models Command
+  *
+  * Surfaces the model identifiers the user's host AI CLI is willing to
+- * accept. Strings are vendor-native — OCR does not coin its own logical
+- * names. When the underlying CLI lacks a `models` subcommand, the output
+- * is sourced from a small bundled known-good list (best-effort, may go
+- * stale). Free-text input remains the canonical bypass.
++ * accept, resolved through the per-vendor strategy table in
++ * `lib/models.ts` (the single source of truth shared with the dashboard).
++ * Strings are vendor-native — OCR does not coin its own logical names.
++ * When native enumeration is unavailable the output is sourced from the
++ * vendor's bundled list and the reason is disclosed. Free-text input
++ * remains the canonical bypass.
+  */
+ 
+ import { Command } from "commander";
+ import chalk from "chalk";
+ import {
+   detectActiveVendor,
++  isModelVendor,
+   listModelsForVendor,
++  SUPPORTED_VENDORS,
+   type ModelVendor,
+ } from "../lib/models.js";
+ 
++const vendorList = SUPPORTED_VENDORS.join(" | ");
++
+ const listSubcommand = new Command("list")
+   .description("List models the active AI CLI is willing to accept")
+-  .option(
+-    "--vendor <vendor>",
+-    "Override autodetection (claude | opencode)",
+-  )
++  .option("--vendor <vendor>", `Override autodetection (${vendorList})`)
+   .option("--json", "Emit JSON for programmatic consumption")
+   .action(async (options: { vendor?: string; json?: boolean }) => {
+     let vendor: ModelVendor | null;
+     if (options.vendor) {
+-      if (options.vendor !== "claude" && options.vendor !== "opencode") {
++      // Case-insensitive, matching the dashboard route's behavior.
++      const requested = options.vendor.toLowerCase();
++      if (!isModelVendor(requested)) {
+         console.error(
+           chalk.red(
+-            `Invalid --vendor: "${options.vendor}". Must be "claude" or "opencode".`,
++            `Invalid --vendor: "${options.vendor}". Must be one of: ${vendorList}.`,
+           ),
+         );
+         process.exit(1);
+       }
+-      vendor = options.vendor;
++      vendor = requested;
+     } else {
+-      vendor = detectActiveVendor();
++      vendor = await detectActiveVendor();
+       if (!vendor) {
+         if (options.json) {
+-          console.log("[]");
++          // Mirrors the dashboard route's no-vendor envelope.
++          console.log(
++            JSON.stringify({ vendor: null, source: null, models: [] }, null, 2),
++          );
+           return;
+         }
+         console.error(
+@@ -51,18 +59,22 @@ const listSubcommand = new Command("list")
+       }
+     }
+ 
+-    const { source, models } = listModelsForVendor(vendor);
++    const result = await listModelsForVendor(vendor);
+ 
+     if (options.json) {
+-      console.log(JSON.stringify(models, null, 2));
++      console.log(JSON.stringify(result, null, 2));
+       return;
+     }
+ 
++    const { source, models, nativeUnavailableReason } = result;
+     console.log(chalk.bold(`Models for ${vendor} (${source})`));
+     if (source === "bundled") {
++      const reason = nativeUnavailableReason
++        ? ` — ${nativeUnavailableReason}`
++        : "";
+       console.log(
+         chalk.dim(
+-          "  Note: bundled fallback list — may be stale. Free-text input is always accepted.",
++          `  Note: bundled fallback list${reason}. Free-text input is always accepted.`,
+         ),
+       );
+     }
+
+### packages/cli/src/lib/__tests__/models.test.ts
+@@ -1,35 +1,281 @@
+-import { describe, it, expect } from "vitest";
+-import { listModelsForVendor } from "../models.js";
+-
+-describe("listModelsForVendor", () => {
+-  it("returns a non-empty list for claude (native or bundled)", () => {
+-    const result = listModelsForVendor("claude");
+-    expect(result.vendor).toBe("claude");
+-    expect(["native", "bundled"]).toContain(result.source);
+-    expect(result.models.length).toBeGreaterThan(0);
+-    for (const model of result.models) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
+-    }
++/**
++ * Hermetic tests for the vendor model-listing strategy table.
++ *
++ * `execBinaryAsync` is mocked — the previous version of this suite ran
++ * whatever real CLIs existed on the machine, which made it pass identically
++ * for native and bundled output and let the issue-#39 regression hide.
++ */
++
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++vi.mock("@open-code-review/platform", () => ({
++  execBinaryAsync: vi.fn(),
++}));
++
++import { execBinaryAsync } from "@open-code-review/platform";
++import {
++  clearModelListCache,
++  detectActiveVendor,
++  isModelVendor,
++  listModelsForVendor,
++  parseOpenCodeModelList,
++  SUPPORTED_VENDORS,
++  VENDOR_MODEL_STRATEGIES,
++} from "../models.js";
++
++const execMock = vi.mocked(execBinaryAsync);
++
++function resolveWith(stdout: string): void {
++  execMock.mockResolvedValue({ stdout, stderr: "" });
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  clearModelListCache();
++});
++
++describe("parseOpenCodeModelList", () => {
++  it("parses newline-delimited provider/model ids with provider extraction", () => {
++    const parsed = parseOpenCodeModelList(
++      "anthropic/claude-sonnet-4-6\nopencode/big-pickle\n",
++    );
++    expect(parsed).toEqual([
++      { id: "anthropic/claude-sonnet-4-6", provider: "anthropic" },
++      { id: "opencode/big-pickle", provider: "opencode" },
++    ]);
++  });
++
++  it("tolerates CRLF line endings and surrounding whitespace", () => {
++    const parsed = parseOpenCodeModelList(
++      "anthropic/claude-opus-4-8\r\n  opencode/big-pickle  \r\n",
++    );
++    expect(parsed?.map((m) => m.id)).toEqual([
++      "anthropic/claude-opus-4-8",
++      "opencode/big-pickle",
++    ]);
++  });
++
++  it("skips lines that are not bare provider-prefixed ids", () => {
++    const parsed = parseOpenCodeModelList(
++      [
++        "Fetching models...",
++        "",
++        "anthropic/claude-sonnet-4-6",
++        "WARN something happened",
++        "not-an-id",
++      ].join("\n"),
++    );
++    expect(parsed?.map((m) => m.id)).toEqual(["anthropic/claude-sonnet-4-6"]);
++  });
++
++  it("returns null (failure, not empty success) when no line matches", () => {
++    expect(parseOpenCodeModelList("")).toBeNull();
++    expect(parseOpenCodeModelList("error: kaboom\nplain text")).toBeNull();
++  });
++
++  it("keeps multi-slash ids (openrouter-style) — slash count is not constrained", () => {
++    const parsed = parseOpenCodeModelList("openrouter/meta-llama/llama-3\n");
++    expect(parsed).toEqual([
++      { id: "openrouter/meta-llama/llama-3", provider: "openrouter" },
++    ]);
++  });
++
++  it("rejects URL-shaped noise (colon in the provider segment)", () => {
++    expect(
++      parseOpenCodeModelList("https://opencode.ai/docs\nhttp://x/y\n"),
++    ).toBeNull();
++  });
++});
++
++describe("listModelsForVendor — opencode (native probe)", () => {
++  it("shells exactly `opencode models` — the wire the --json regression broke", async () => {
++    resolveWith("anthropic/claude-sonnet-4-6\n");
++    await listModelsForVendor("opencode");
++    expect(execMock).toHaveBeenCalledTimes(1);
++    expect(execMock).toHaveBeenCalledWith(
++      "opencode",
++      ["models"],
++      expect.objectContaining({ encoding: "utf-8" }),
++    );
++  });
++
++  it("returns native ids with source 'native' on probe success", async () => {
++    resolveWith("opencode/big-pickle\nanthropic/claude-opus-4-8\n");
++    const result = await listModelsForVendor("opencode");
++    expect(result.source).toBe("native");
++    expect(result.nativeUnavailableReason).toBeUndefined();
++    expect(result.models.map((m) => m.id)).toEqual([
++      "opencode/big-pickle",
++      "anthropic/claude-opus-4-8",
++    ]);
++  });
++
++  it("falls back to bundled with the child's stderr in the reason on non-zero exit", async () => {
++    execMock.mockRejectedValue(
++      Object.assign(new Error("Command failed"), {
++        code: 1,
++        stderr: "error: unknown option '--json'",
++      }),
++    );
++    const result = await listModelsForVendor("opencode");
++    expect(result.source).toBe("bundled");
++    expect(result.models).toEqual(VENDOR_MODEL_STRATEGIES.opencode.bundled);
++    expect(result.nativeUnavailableReason).toContain("opencode models");
++    expect(result.nativeUnavailableReason).toContain("unknown option '--json'");
+   });
+ 
+-  it("returns a non-empty list for opencode (native or bundled)", () => {
+-    const result = listModelsForVendor("opencode");
+-    expect(result.vendor).toBe("opencode");
+-    expect(["native", "bundled"]).toContain(result.source);
+-    expect(result.models.length).toBeGreaterThan(0);
+-    for (const model of result.models) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
++  it("reports a missing binary distinctly (ENOENT)", async () => {
++    execMock.mockRejectedValue(
++      Object.assign(new Error("spawn opencode ENOENT"), { code: "ENOENT" }),
++    );
++    const result = await listModelsForVendor("opencode");
++    expect(result.source).toBe("bundled");
++    expect(result.nativeUnavailableReason).toMatch(/not installed|not on PATH/);
++  });
++
++  it("treats unrecognized output as failure, not an empty native list", async () => {
++    resolveWith("{ totally: 'unexpected' }");
++    const result = await listModelsForVendor("opencode");
++    expect(result.source).toBe("bundled");
++    expect(result.nativeUnavailableReason).toContain(
++      "did not contain any model identifiers",
++    );
++  });
++
++  it("caches the result per vendor within the TTL", async () => {
++    resolveWith("anthropic/claude-sonnet-4-6\n");
++    await listModelsForVendor("opencode");
++    await listModelsForVendor("opencode");
++    expect(execMock).toHaveBeenCalledTimes(1);
++    clearModelListCache();
++    await listModelsForVendor("opencode");
++    expect(execMock).toHaveBeenCalledTimes(2);
++  });
++
++  it("caches successes for 60s and expires them after", async () => {
++    vi.useFakeTimers();
++    try {
++      resolveWith("anthropic/claude-sonnet-4-6\n");
++      await listModelsForVendor("opencode");
++      vi.advanceTimersByTime(59_000);
++      await listModelsForVendor("opencode");
++      expect(execMock).toHaveBeenCalledTimes(1);
++      vi.advanceTimersByTime(2_000);
++      await listModelsForVendor("opencode");
++      expect(execMock).toHaveBeenCalledTimes(2);
++    } finally {
++      vi.useRealTimers();
+     }
+   });
+ 
+-  it("bundled opencode entries include a provider prefix in the id", () => {
+-    const result = listModelsForVendor("opencode");
+-    if (result.source === "bundled") {
+-      for (const model of result.models) {
+-        expect(model.id).toMatch(/.+\/.+/);
+-      }
++  it("caches failures for only 10s so a just-installed CLI shows up quickly", async () => {
++    vi.useFakeTimers();
++    try {
++      execMock.mockRejectedValue(
++        Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
++      );
++      const failed = await listModelsForVendor("opencode");
++      expect(failed.source).toBe("bundled");
++      vi.advanceTimersByTime(9_000);
++      await listModelsForVendor("opencode");
++      expect(execMock).toHaveBeenCalledTimes(1);
++
++      // CLI gets "installed" — past the failure TTL the probe re-runs.
++      vi.advanceTimersByTime(2_000);
++      resolveWith("opencode/big-pickle\n");
++      const recovered = await listModelsForVendor("opencode");
++      expect(execMock).toHaveBeenCalledTimes(2);
++      expect(recovered.source).toBe("native");
++    } finally {
++      vi.useRealTimers();
+     }
+   });
+ });
++
++describe("listModelsForVendor — claude (declared unsupported)", () => {
++  it("never spawns a probe and serves the bundled aliases with a curated reason", async () => {
++    const result = await listModelsForVendor("claude");
++    expect(execMock).not.toHaveBeenCalled();
++    expect(result.source).toBe("bundled");
++    expect(result.models.map((m) => m.id)).toEqual(["opus", "sonnet", "haiku"]);
++    expect(result.nativeUnavailableReason).toContain(
++      "does not provide a model-listing command",
++    );
++  });
++});
++
++describe("strategy probe matrix", () => {
++  // Every strategy that declares a native probe gets the same three-case
++  // treatment. A future vendor added with a probe is enrolled automatically.
++  const probed = SUPPORTED_VENDORS.filter(
++    (v) => !("unavailableReason" in VENDOR_MODEL_STRATEGIES[v].native),
++  );
++
++  it.each(probed)(
++    "%s: success → native, garbage → bundled, error → bundled",
++    async (vendor) => {
++      // Build the success payload from the strategy's own bundled-shaped ids
++      // so the case stays valid for vendors with different id formats.
++      const sampleIds = VENDOR_MODEL_STRATEGIES[vendor].bundled.map(
++        (m) => m.id,
++      );
++      resolveWith(`${sampleIds.join("\n")}\n`);
++      const success = await listModelsForVendor(vendor);
++      expect(success.source).toBe("native");
++      expect(success.models.map((m) => m.id)).toEqual(sampleIds);
++
++      clearModelListCache();
++      resolveWith("complete garbage that parses to nothing");
++      const garbage = await listModelsForVendor(vendor);
++      expect(garbage.source).toBe("bundled");
++      expect(garbage.nativeUnavailableReason).toBeTruthy();
++
++      clearModelListCache();
++      execMock.mockRejectedValue(
++        Object.assign(new Error("boom"), { code: 1, stderr: "boom" }),
++      );
++      const errored = await listModelsForVendor(vendor);
++      expect(errored.source).toBe("bundled");
++      expect(errored.nativeUnavailableReason).toBeTruthy();
++    },
++  );
++});
++
++describe("detectActiveVendor", () => {
++  it("returns the first vendor whose --version succeeds, in table order", async () => {
++    execMock.mockRejectedValueOnce(
++      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
++    );
++    execMock.mockResolvedValueOnce({ stdout: "1.17.0\n", stderr: "" });
++    const vendor = await detectActiveVendor();
++    expect(vendor).toBe("opencode");
++    expect(execMock).toHaveBeenNthCalledWith(
++      1,
++      "claude",
++      ["--version"],
++      expect.anything(),
++    );
++  });
++
++  it("returns null when no vendor responds", async () => {
++    execMock.mockRejectedValue(
++      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
++    );
++    expect(await detectActiveVendor()).toBeNull();
++  });
++});
++
++describe("vendor registry", () => {
++  it("derives SUPPORTED_VENDORS and isModelVendor from the strategy table", () => {
++    expect(SUPPORTED_VENDORS).toEqual(["claude", "opencode"]);
++    expect(isModelVendor("claude")).toBe(true);
++    expect(isModelVendor("opencode")).toBe(true);
+
+### packages/cli/src/lib/models.ts
+@@ -1,15 +1,23 @@
+ /**
+- * Model discovery helpers shared across the CLI surface.
++ * Model discovery helpers shared across the CLI surface AND the dashboard.
+  *
+- * `ocr models list` uses these to enumerate models that the user's host AI
+- * CLI is willing to accept. Identifiers are vendor-native — OCR does not
+- * coin its own logical names. When the underlying CLI lacks a `models`
+- * subcommand, we fall back to a small bundled known-good list per vendor.
+- * The user can always type any string the CLI accepts; bundled lists are
+- * convenience, not a gate.
++ * This module is the single source of truth for vendor model enumeration:
++ * `ocr models list` and the dashboard's `GET /api/team/models` both resolve
++ * through `listModelsForVendor`, and every per-vendor behavior lives in
++ * `VENDOR_MODEL_STRATEGIES`. Adding a vendor (Codex, Gemini CLI, …) is one
++ * table entry — supported-vendor validation, detection order, and probe
++ * mechanics all derive from the table.
++ *
++ * Identifiers are vendor-native — OCR does not coin its own logical names.
++ * Each strategy either declares a native enumeration probe (argv + parser)
++ * or documents that the vendor has no model-listing command. When native
++ * enumeration is unavailable for any reason, we fall back to the strategy's
++ * bundled list and say WHY via `nativeUnavailableReason` — silent fallback
++ * is how issue #39 went unnoticed. The user can always type any string the
++ * vendor CLI accepts; listed models are convenience, never a gate.
+  */
+ 
+-import { execBinary } from "@open-code-review/platform";
++import { execBinaryAsync } from "@open-code-review/platform";
+ 
+ export type ModelDescriptor = {
+   id: string;
+@@ -18,32 +26,119 @@ export type ModelDescriptor = {
+   tags?: string[];
+ };
+ 
+-export type ModelVendor = "claude" | "opencode";
++type NativeProbe = {
++  /** Arguments passed to the vendor binary to enumerate models. */
++  args: string[];
++  /**
++   * Parses the probe's stdout into descriptors. Returns `null` when the
++   * output is unrecognized or yields zero models — zero is a failure, not
++   * an empty success, so a drifted output format falls back loudly.
++   */
++  parse: (stdout: string) => ModelDescriptor[] | null;
++};
++
++type VendorModelStrategy = {
++  displayName: string;
++  /**
++   * Either a native enumeration probe, or a curated explanation of why the
++   * vendor cannot enumerate models. We deliberately do NOT probe commands
++   * that are proven not to exist (the previous speculative
++   * `claude models --json` probe failed on every call for the product's
++   * whole life and masked the failure) — when a vendor ships a real
++   * enumeration command, its strategy gains a probe here.
++   */
++  native: NativeProbe | { unavailableReason: string };
++  /** Known-good fallback list, served only when native enumeration fails. */
++  bundled: ModelDescriptor[];
++};
++
++/**
++ * Parses `opencode models` output: one `provider/model` id per line
++ * (verified against OpenCode 1.17.0). Tolerates CRLF and blank lines, and
++ * skips any line that is not a bare provider-prefixed id so incidental
++ * noise (warnings, future banners) cannot corrupt the list.
++ */
++export function parseOpenCodeModelList(
++  stdout: string,
++): ModelDescriptor[] | null {
++  const models: ModelDescriptor[] = [];
++  for (const rawLine of stdout.split(/\r?\n/)) {
++    const line = rawLine.trim();
++    // Provider segment may not contain ":" — that rejects URL-shaped noise
++    // (`https://…`) without constraining slash count, because legitimate ids
++    // can carry more than one slash (e.g. `openrouter/meta-llama/llama-3`).
++    if (!/^[^\s:]+\/\S+$/.test(line)) continue;
++    const provider = line.slice(0, line.indexOf("/"));
++    models.push({ id: line, provider });
++  }
++  return models.length > 0 ? models : null;
++}
++
++export const VENDOR_MODEL_STRATEGIES = {
++  claude: {
++    displayName: "Claude Code",
++    native: {
++      // Verified against Claude Code 2.1.x: the CLI has no model-listing
++      // subcommand (`claude models --json` → "unknown option"). Revisit if
++      // a future release adds one.
++      unavailableReason:
++        "Claude Code does not provide a model-listing command; " +
++        "showing its documented model aliases instead",
++    },
++    // Vendor-documented aliases that always track the latest generation —
++    // dated ids here would go stale by construction (the exact bug class of
++    // issue #39). Pinned dated ids remain available via free-text entry.
++    bundled: [
++      { id: "opus", displayName: "Claude Opus (latest)" },
++      { id: "sonnet", displayName: "Claude Sonnet (latest)" },
++      { id: "haiku", displayName: "Claude Haiku (latest)" },
++    ],
++  },
++  opencode: {
++    displayName: "OpenCode",
++    native: {
++      // Plain `opencode models` — newline-delimited ids. (`--json` is not a
++      // real flag, and `--verbose` interleaves JSON metadata blocks that
++      // defeat line parsing.)
++      args: ["models"],
++      parse: parseOpenCodeModelList,
++    },
++    bundled: [
++      { id: "anthropic/claude-opus-4-8", provider: "anthropic" },
++      { id: "anthropic/claude-sonnet-4-6", provider: "anthropic" },
++      { id: "anthropic/claude-haiku-4-5", provider: "anthropic" },
++    ],
++  },
++} satisfies Record<string, VendorModelStrategy>;
+ 
+-const BUNDLED_CLAUDE_MODELS: ModelDescriptor[] = [
+-  { id: "claude-opus-4-7", displayName: "Claude Opus 4.7" },
+-  { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6" },
+-  { id: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5" },
+-];
++/** Derived from the strategy table — the table IS the vendor registry. */
++export type ModelVendor = keyof typeof VENDOR_MODEL_STRATEGIES;
+ 
+-const BUNDLED_OPENCODE_MODELS: ModelDescriptor[] = [
+-  { id: "anthropic/claude-opus-4-7", provider: "anthropic" },
+-  { id: "anthropic/claude-sonnet-4-6", provider: "anthropic" },
+-  { id: "anthropic/claude-haiku-4-5-20251001", provider: "anthropic" },
+-];
++/** Vendors with a registered model-listing strategy, in detection order. */
++export const SUPPORTED_VENDORS = Object.keys(
++  VENDOR_MODEL_STRATEGIES,
++) as ModelVendor[];
++
++export function isModelVendor(value: string): value is ModelVendor {
++  // Own-keys only: `in` would also accept prototype-chain keys like
++  // "constructor", which then explode downstream as a TypeError (500)
++  // instead of failing validation (400).
++  return Object.hasOwn(VENDOR_MODEL_STRATEGIES, value);
++}
+ 
+ /**
+- * Detects which supported AI CLI is on PATH. Returns the first one found
+- * via `<binary> --version` exiting cleanly. Returns `null` if neither
+- * `claude` nor `opencode` is available.
++ * Detects which supported AI CLI is on PATH, in `SUPPORTED_VENDORS` order.
++ * Returns the first one whose `<binary> --version` exits cleanly, or `null`
++ * if none is available. Note this is PATH-order detection only — the
++ * dashboard's `AiCliService` separately honors the `dashboard.ai_cli`
++ * config preference for choosing its active adapter.
+  */
+-export function detectActiveVendor(): ModelVendor | null {
+-  for (const vendor of ["claude", "opencode"] as const) {
++export async function detectActiveVendor(): Promise<ModelVendor | null> {
++  for (const vendor of SUPPORTED_VENDORS) {
+     try {
+-      execBinary(vendor, ["--version"], {
++      await execBinaryAsync(vendor, ["--version"], {
+         encoding: "utf-8",
+         timeout: 3000,
+-        stdio: ["ignore", "pipe", "ignore"],
+       });
+       return vendor;
+     } catch {
+@@ -53,62 +148,132 @@ export function detectActiveVendor(): ModelVendor | null {
+   return null;
+ }
+ 
+-function tryNativeEnumeration(vendor: ModelVendor): ModelDescriptor[] | null {
++export type ModelListResult = {
++  vendor: ModelVendor;
++  source: "native" | "bundled";
++  models: ModelDescriptor[];
++  /** Why the bundled list is being served. Present iff source is "bundled". */
++  nativeUnavailableReason?: string;
++};
++
++/**
++ * Turns a failed probe into a human-readable reason, preserving the child's
++ * stderr — discarding it is what made the original `--json` regression
++ * undiagnosable from OCR's own output.
++ */
++function describeProbeFailure(
++  vendor: ModelVendor,
++  args: string[],
++  err: unknown,
++): string {
++  const command = `${vendor} ${args.join(" ")}`;
++  const e = err as {
++    code?: number | string;
++    killed?: boolean;
++    stderr?: string;
++  };
++  if (e.code === "ENOENT") {
++    return `\`${vendor}\` is not installed or not on PATH`;
++  }
++  if (e.killed) {
++    return `\`${command}\` timed out or exceeded output limits`;
++  }
++  // First stderr line, ANSI/control characters stripped, capped at 200
++  // chars: the reason string travels into JSON payloads and the dashboard UI.
++  const stderr = typeof e.stderr === "string" ? e.stderr.trim() : "";
++  const firstLine = (stderr.split(/\r?\n/)[0] ?? "")
++    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
++    .replace(/[\u0000-\u001f\u007f]/g, "")
++    .slice(0, 200);
++  const detail = firstLine ? `: ${firstLine}` : "";
++  const exit = typeof e.code === "number" ? ` with exit code ${e.code}` : "";
++  return `\`${command}\` failed${exit}${detail}`;
++}
++
++async function tryNativeEnumeration(
++  vendor: ModelVendor,
++  probe: NativeProbe,
++): Promise<
++  { models: ModelDescriptor[] } | { models: null; reason: string }
++> {
++  let stdout: string;
+   try {
+-    const output = execBinary(vendor, ["models", "--json"], {
++    const result = await execBinaryAsync(vendor, probe.args, {
+       encoding: "utf-8",
+       timeout: 5000,
+-      stdio: ["ignore", "pipe", "ignore"],
+     });
+-    const parsed: unknown = JSON.parse(output);
+-    if (!Array.isArray(parsed)) return null;
+-
+-    const models: ModelDescriptor[] = [];
+-    for (const item of parsed) {
+-      if (typeof item === "string") {
+-        models.push({ id: item });
+-      } else if (
+-        typeof item === "object" &&
+-        item !== null &&
+-        "id" in (item as Record<string, unknown>) &&
+-        typeof (item as Record<string, unknown>).id === "string"
+-      ) {
+-        const obj = item as Record<string, unknown>;
+-        const desc: ModelDescriptor = { id: obj.id as string };
+-        if (typeof obj.displayName === "string") desc.displayName = obj.displayName;
+-        if (typeof obj.provider === "string") desc.provider = obj.provider;
+-        if (Array.isArray(obj.tags)) {
+-          desc.tags = obj.tags.filter((t): t is string => typeof t === "string");
+-        }
+-        models.push(desc);
+-      }
+-    }
+-    return models.length > 0 ? models : null;
+-  } catch {
+-    return null;
++    stdout = result.stdout;
++  } catch (err) {
++    return { models: null, reason: describeProbeFailure(vendor, probe.args, err) };
++  }
++  const models = probe.parse(stdout);
++  if (!models) {
++    return {
++      models: null,
++      reason: `\`${vendor} ${probe.args.join(" ")}\` output did not contain any model identifiers`,
++    };
+   }
++  return { models };
+ }
+ 
+-function bundledForVendor(vendor: ModelVendor): ModelDescriptor[] {
+-  if (vendor === "claude") return BUNDLED_CLAUDE_MODELS;
+-  return BUNDLED_OPENCODE_MODELS;
+-}
++// The dashboard server calls `listModelsForVendor` on a request path; a
++// short TTL cache bounds child-process spawns for long-lived consumers.
++// One-shot CLI invocations are unaffected (fresh process each run).
++// Failures get a much shorter TTL so a CLI installed (or fixed) while the
++// dashboard is running shows up within seconds rather than masking itself
++// behind a stale failure. Note this cache covers enumeration only —
++// `detectActiveVendor` (the route's `vendor=auto` path) probes fresh each
++// call.
++const SUCCESS_TTL_MS = 60_000;
++const FAILURE_TTL_MS = 10_000;
++const cache = new Map<ModelVendor, { result: ModelListResult; expiresAt: number }>();
+ 
+-export type ModelListResult = {
+-  vendor: ModelVendor;
+-  source: "native" | "bundled";
+-  models: ModelDescriptor[];
+-};
++/** Test seam: drop cached enumeration results. */
++export function clearModelListCache(): void {
++  cache.clear();
++}
+ 
+ /**
+  * Returns the model list for the given vendor, preferring native CLI
+- * enumeration and falling back to the bundled known-good list. Used by
+
+### packages/dashboard/src/server/routes/team.ts
+@@ -19,7 +19,9 @@ import {
+ } from '@open-code-review/cli/team-config'
+ import {
+   detectActiveVendor,
++  isModelVendor,
+   listModelsForVendor,
++  SUPPORTED_VENDORS,
+   type ModelVendor,
+ } from '@open-code-review/cli/models'
+ 
+@@ -116,33 +118,55 @@ export function createTeamRouter(ocrDir: string): Router {
+     }
+   })
+ 
++  // Vendor support derives from the CLI strategy table — the single source
++  // of truth for model enumeration. Enumeration is async so a slow vendor
++  // probe never blocks the dashboard's event loop (the lib caches
++  // enumeration results; `vendor=auto` detection probes fresh each call).
++  //
++  // The async body is wrapped in a SINGLE try/catch covering everything —
++  // including query parsing. Express 4 does not catch async throws, so any
++  // statement outside the try would become a swallowed unhandled rejection
++  // and a permanently hung request. This is the template for async routes.
+   router.get('/models', (req, res) => {
+-    let vendor: ModelVendor | null
+-    const requested = (req.query['vendor'] as string | undefined)?.toLowerCase()
+-    if (requested === 'claude' || requested === 'opencode') {
+-      vendor = requested
+-    } else if (!requested || requested === 'auto') {
+-      vendor = detectActiveVendor()
+-    } else {
+-      res.status(400).json({ error: `Unknown vendor: ${requested}` })
+-      return
+-    }
++    void (async () => {
++      try {
++        const raw = req.query['vendor']
++        if (raw !== undefined && typeof raw !== 'string') {
++          // Array/object query forms (?vendor=a&vendor=b) are malformed input.
++          res.status(400).json({ error: 'vendor must be a single string' })
++          return
++        }
++        const requested = raw?.toLowerCase()
+ 
+-    if (!vendor) {
+-      res.json({ vendor: null, source: null, models: [] })
+-      return
+-    }
++        let vendor: ModelVendor | null
++        if (requested && isModelVendor(requested)) {
++          vendor = requested
++        } else if (!requested || requested === 'auto') {
++          vendor = await detectActiveVendor()
++        } else {
++          res.status(400).json({
++            error: `Unknown vendor: ${requested}. Supported: ${SUPPORTED_VENDORS.join(', ')}`,
++          })
++          return
++        }
+ 
+-    try {
+-      const result = listModelsForVendor(vendor)
+-      res.json(result)
+-    } catch (err) {
+-      console.error('Failed to list models:', err)
+-      res.status(500).json({
+-        error: 'Failed to list models',
+-        detail: err instanceof Error ? err.message : String(err),
+-      })
+-    }
++        if (!vendor) {
++          res.json({ vendor: null, source: null, models: [] })
++          return
++        }
++
++        const result = await listModelsForVendor(vendor)
++        res.json(result)
++      } catch (err) {
++        console.error('Failed to list models:', err)
++        if (!res.headersSent) {
++          res.status(500).json({
++            error: 'Failed to list models',
++            detail: err instanceof Error ? err.message : String(err),
++          })
++        }
++      }
++    })()
+   })
+ 
+   return router
+
+===== P100 | repo dotnetfactory/fluid-calendar | PR #208: fix(tasks): sort Priority and Energy columns by semantic rank (#131) | capacidade: task-list-filtering
+--- SPEC VIVA
+# task-list-filtering Specification
+
+## Purpose
+TBD - created by archiving change issue-109-hide-upcoming-filter. Update Purpose after archive.
+## Requirements
+### Requirement: Hide upcoming tasks filter
+
+The Tasks list view SHALL provide a "Hide upcoming tasks" filter. When enabled, the list MUST hide every task that is classified as upcoming and MUST show every task that is not. A task SHALL be classified as upcoming using the same rule that drives the visible "Upcoming" badge: the task has a `startDate` and that start date falls on a later calendar day than today (day-granularity, per the `isFutureDate` helper). When the filter is disabled, the upcoming classification SHALL have no effect on which tasks are shown.
+
+#### Scenario: Filter hides a task starting on a future day
+
+- **WHEN** the "Hide upcoming tasks" filter is enabled
+- **AND** a task has a `startDate` that falls on a later calendar day than today
+- **THEN** the task is excluded from the list
+
+#### Scenario: Filter keeps a task starting later today
+
+- **WHEN** the "Hide upcoming tasks" filter is enabled
+- **AND** a task has a `startDate` that is later today (the same calendar day as now, even if the time is after the current instant)
+- **THEN** the task remains visible in the list, consistent with not showing an "Upcoming" badge
+
+#### Scenario: Filter keeps a task with no start date
+
+- **WHEN** the "Hide upcoming tasks" filter is enabled
+- **AND** a task has no `startDate`
+- **THEN** the task remains visible in the list
+
+#### Scenario: Filter keeps a task that started in the past
+
+- **WHEN** the "Hide upcoming tasks" filter is enabled
+- **AND** a task has a `startDate` on a previous calendar day
+- **THEN** the task remains visible in the list
+
+#### Scenario: Disabled filter shows upcoming tasks
+
+- **WHEN** the "Hide upcoming tasks" filter is disabled
+- **AND** a task has a `startDate` that falls on a later calendar day than today
+- **THEN** the task is shown in the list (the upcoming classification has no effect)
+
+### Requirement: Single source of truth for the upcoming classification
+
+The rule that classifies a task as upcoming SHALL be defined once in a pure, unit-testable function and reused by both the list filter and the "Upcoming" badge, so the filter and the badge can never disagree about which tasks are upcoming.
+
+#### Scenario: Filter and badge agree
+
+- **WHEN** any task is evaluated for the "Upcoming" badge and for the "Hide upcoming tasks" filter
+- **THEN** both use the same upcoming classification, so every task that would display an "Upcoming" badge is exactly the set of tasks hidden when the filter is enabled
+
+
+--- ARQUIVOS DO PR (10)
+modified  +1     -0     CHANGELOG.md
+added     +2     -0     openspec/changes/archive/2026-06-24-issue-131-semantic-priority-energy-sort/.openspec.yaml
+added     +40    -0     openspec/changes/archive/2026-06-24-issue-131-semantic-priority-energy-sort/design.md
+added     +24    -0     openspec/changes/archive/2026-06-24-issue-131-semantic-priority-energy-sort/proposal.md
+added     +35    -0     openspec/changes/archive/2026-06-24-issue-131-semantic-priority-energy-sort/specs/task-list-sorting/spec.md
+added     +21    -0     openspec/changes/archive/2026-06-24-issue-131-semantic-priority-energy-sort/tasks.md
+added     +39    -0     openspec/specs/task-list-sorting/spec.md
+added     +236   -0     src/__tests__/task-list-sorting.test.ts
+modified  +7     -6     src/components/tasks/TaskList.tsx   <== código ligado à spec
+modified  +81    -0     src/components/tasks/utils/task-list-utils.ts   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src/components/tasks/TaskList.tsx
+@@ -22,6 +22,8 @@ import { EnergyLevel, Task, TaskStatus, TimePreference } from "@/types/task";
+ 
+ import { SortableHeader, StatusFilter, TaskRow } from "./components";
+ import {
++  compareTaskEnergyLevel,
++  compareTaskPriority,
+   formatEnumValue,
+   taskMatchesListFilters,
+ } from "./utils/task-list-utils";
+@@ -124,13 +126,12 @@ export function TaskList({
+           if (!b.project?.name) return -1;
+           return direction * a.project.name.localeCompare(b.project.name);
+         case "priority":
+-          if (!a.priority) return 1;
+-          if (!b.priority) return -1;
+-          return direction * a.priority.localeCompare(b.priority);
++          // Sort by semantic rank (low < medium < high, no-priority last), not
++          // the alphabetical order of the labels. See task-list-utils.
++          return compareTaskPriority(a, b, direction);
+         case "energyLevel":
+-          if (!a.energyLevel) return 1;
+-          if (!b.energyLevel) return -1;
+-          return direction * a.energyLevel.localeCompare(b.energyLevel);
++          // Sort by semantic rank (low < medium < high), not alphabetically.
++          return compareTaskEnergyLevel(a, b, direction);
+         case "preferredTime":
+           if (!a.preferredTime) return 1;
+           if (!b.preferredTime) return -1;
+
+### src/components/tasks/utils/task-list-utils.ts
+@@ -132,6 +132,87 @@ export const priorityColors = {
+   [Priority.NONE]: "bg-muted text-muted-foreground",
+ };
+ 
++// Semantic rank for the Priority column so the Tasks list sorts by meaning
++// (low < medium < high) instead of alphabetically by the enum label.
++// Priority.NONE is intentionally omitted: the app represents "no priority" as
++// BOTH null (an untouched modal) and the literal "none" (explicit select), so
++// both must bucket last together rather than "none" sorting among real values.
++// An omitted key makes rankOf return undefined, which compareRanks sorts last.
++export const PRIORITY_SORT_RANK: Partial<Record<Priority, number>> = {
++  [Priority.LOW]: 1,
++  [Priority.MEDIUM]: 2,
++  [Priority.HIGH]: 3,
++};
++
++// Semantic rank for the Energy column (low < medium < high).
++export const ENERGY_LEVEL_SORT_RANK: Partial<Record<EnergyLevel, number>> = {
++  [EnergyLevel.LOW]: 1,
++  [EnergyLevel.MEDIUM]: 2,
++  [EnergyLevel.HIGH]: 3,
++};
++
++// Look up a value's rank in a rank map, returning undefined for missing values
++// AND for any value not present in the map. The DB stores priority/energyLevel
++// as plain strings, so a stale or externally-imported value (e.g. "urgent")
++// can reach the comparator; we treat such unknown values like a missing value
++// rather than producing NaN.
++const rankOf = (
++  value: string | null | undefined,
++  ranks: Partial<Record<string, number>>
++): number | undefined => {
++  if (value == null) return undefined;
++  // Use an own-property check so prototype keys ("toString", "__proto__", ...)
++  // don't resolve to an inherited property; an unknown string is treated like a
++  // missing one. hasOwnProperty.call avoids depending on Object.hasOwn at
++  // runtime and on the value owning its own hasOwnProperty.
++  return Object.prototype.hasOwnProperty.call(ranks, value)
++    ? ranks[value]
++    : undefined;
++};
++
++// Compare two rank lookups so missing/unknown values always sort last,
++// regardless of direction (matching the other nullable columns), and two
++// missing/unknown values compare equal (stable). `direction` is 1 (asc) or -1
++// (desc).
++const compareRanks = (
++  rankA: number | undefined,
++  rankB: number | undefined,
++  direction: number
++): number => {
++  if (rankA === undefined && rankB === undefined) return 0;
++  if (rankA === undefined) return 1;
++  if (rankB === undefined) return -1;
++  return direction * (rankA - rankB);
++};
++
++// Comparator for sorting tasks by priority rank. `direction` is 1 (asc) or -1
++// (desc), matching how the Tasks list applies its sort direction. Tasks with no
++// priority (or an unrecognized value) always sort last, regardless of
++// direction, like the other nullable columns.
++export const compareTaskPriority = (
++  a: Pick<Task, "priority">,
++  b: Pick<Task, "priority">,
++  direction: number
++): number =>
++  compareRanks(
++    rankOf(a.priority, PRIORITY_SORT_RANK),
++    rankOf(b.priority, PRIORITY_SORT_RANK),
++    direction
++  );
++
++// Comparator for sorting tasks by energy-level rank. Same direction and
++// missing/unknown-last semantics as compareTaskPriority.
++export const compareTaskEnergyLevel = (
++  a: Pick<Task, "energyLevel">,
++  b: Pick<Task, "energyLevel">,
++  direction: number
++): number =>
++  compareRanks(
++    rankOf(a.energyLevel, ENERGY_LEVEL_SORT_RANK),
++    rankOf(b.energyLevel, ENERGY_LEVEL_SORT_RANK),
++    direction
++  );
++
+ // Format date in a contextual way (Today, Tomorrow, etc.)
+ export const formatContextualDate = (date: Date) => {
+   const now = newDate();
+
+===== P101 | repo ChenChenyaqi/learn-anything | PR #98: refactor: decompose site components, composables, and utils | capacidade: site-cli
+--- SPEC VIVA
+## ADDED Requirements
+
+> **Status: Implemented.** The `serve` command is fully functional. Site files are pre-built via `vite build` and shipped in the npm package as `site-dist/`. The `serve` command spawns a Node.js HTTP server from the pre-built static files. No `--site` flag needed on `init`/`update` — the dashboard works out of the box.
+
+### Requirement: serve command starts HTTP server from pre-built site
+
+The system SHALL provide a `learn-anything serve [path]` command that: (1) ensures `.learn/topics/` exists, (2) spawns `node serve.mjs` from the bundled `site-dist/` directory, and (3) prints the local URL to the console with an option to auto-open the browser.
+
+The system SHALL NOT require `npm install` or any package installation at runtime. The site files are pre-built at publish time via `vite build` and included in the npm package.
+
+#### Scenario: serve starts the dashboard server
+
+- **WHEN** user runs `learn-anything serve` in a project directory
+- **THEN** the system spawns the pre-built HTTP server from `site-dist/` and prints the local URL
+
+#### Scenario: serve handles missing .learn directory
+
+- **WHEN** user runs `learn-anything serve` in a project that has no `.learn/` directory
+- **THEN** the system creates `.learn/topics/` and proceeds to start the server
+
+#### Scenario: serve shows warning for empty topics
+
+- **WHEN** user runs `learn-anything serve` and `.learn/topics/` is empty
+- **THEN** the system starts the server but prints a warning that no topics were found
+
+### Requirement: serve supports optional port and open flags
+
+The system SHALL support `--port <number>` to specify the HTTP server port and `--no-open` to prevent automatic browser opening on `serve`.
+
+#### Scenario: serve with custom port
+
+- **WHEN** user runs `learn-anything serve --port 8080`
+- **THEN** the HTTP server starts on port 8080
+
+#### Scenario: serve without opening browser
+
+- **WHEN** user runs `learn-anything serve --no-open`
+- **THEN** the HTTP server starts but the system does NOT open the browser automatically
+
+### Requirement: serve forwards exit signals cleanly
+
+The system SHALL forward SIGINT and SIGTERM signals from the CLI process to the server child process, and SHALL clean up the child process when the user presses Ctrl+C.
+
+#### Scenario: Ctrl+C stops the dev server
+
+- **WHEN** user presses Ctrl+C while the server is running
+- **THEN** the server child process terminates and the CLI exits cleanly
+
+--- ARQUIVOS DO PR (86)
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/design.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-api/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-card-practice/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-results-summary/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-sidebar-tab/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/tasks.md
+added     +43    -0     openspec/specs/quiz-api/spec.md
+added     +117   -0     openspec/specs/quiz-card-practice/spec.md
+added     +72    -0     openspec/specs/quiz-results-summary/spec.md
+added     +63    -0     openspec/specs/quiz-sidebar-tab/spec.md
+modified  +3     -1     packages/cli/site/package.json
+modified  +37    -205   packages/cli/site/src/App.vue
+removed   +0     -171   packages/cli/site/src/components/AppSidebar.vue
+modified  +1     -1     packages/cli/site/src/components/LoadingOverlay.vue
+renamed   +3     -2     packages/cli/site/src/components/content/ContentViewer.vue
+renamed   +2     -2     packages/cli/site/src/components/content/TableOfContents.vue
+renamed   +3     -11    packages/cli/site/src/components/content/TocLayout.vue
+renamed   +1     -1     packages/cli/site/src/components/content/useToc.ts
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizCard.vue
+added     +27    -0     packages/cli/site/src/components/quiz/QuizCloseButton.vue
+added     +42    -0     packages/cli/site/src/components/quiz/QuizDialogShell.vue
+added     +56    -0     packages/cli/site/src/components/quiz/QuizFooter.vue
+added     +44    -0     packages/cli/site/src/components/quiz/QuizLoadingView.vue
+modified  +142   -520   packages/cli/site/src/components/quiz/QuizModal.vue
+added     +118   -0     packages/cli/site/src/components/quiz/QuizPlayView.vue
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizSummary.vue
+added     +68    -0     packages/cli/site/src/components/quiz/grading.ts
+added     +39    -0     packages/cli/site/src/components/quiz/header/QuizHeader.vue
+added     +50    -0     packages/cli/site/src/components/quiz/header/QuizHelpPopover.vue
+added     +54    -0     packages/cli/site/src/components/quiz/quizApi.ts
+renamed   +10    -46    packages/cli/site/src/components/quiz/results/QuizResults.vue
+added     +57    -0     packages/cli/site/src/components/quiz/results/QuizResultsFooter.vue
+added     +63    -0     packages/cli/site/src/components/quiz/types.ts
+added     +91    -0     packages/cli/site/src/components/quiz/useQuizKeyboard.ts
+added     +81    -0     packages/cli/site/src/components/quiz/useQuizProgress.ts
+added     +116   -0     packages/cli/site/src/components/quiz/useQuizQueue.ts
+added     +95    -0     packages/cli/site/src/components/quiz/useQuizSession.ts
+renamed   +11    -32    packages/cli/site/src/components/search/SearchModal.vue
+renamed   +1     -1     packages/cli/site/src/components/search/useSearch.ts
+renamed   +0     -0     packages/cli/site/src/components/search/useSearchModal.ts
+added     +104   -0     packages/cli/site/src/components/sidebar/AppSidebar.vue
+renamed   +3     -2     packages/cli/site/src/components/sidebar/SearchTrigger.vue
+modified  +2     -2     packages/cli/site/src/components/sidebar/SidebarDashboard.vue
+added     +40    -0     packages/cli/site/src/components/sidebar/SidebarTreeNode.vue
+renamed   +1     -1     packages/cli/site/src/components/sidebar/footer/LanguageSwitch.vue
+renamed   +2     -2     packages/cli/site/src/components/sidebar/footer/SidebarFooter.vue
+renamed   +35    -58    packages/cli/site/src/components/sidebar/tabs/SidebarExerciseTree.vue
+renamed   +55    -61    packages/cli/site/src/components/sidebar/tabs/SidebarQuizTree.vue
+added     +121   -0     packages/cli/site/src/components/sidebar/tabs/SidebarTabs.vue
+renamed   +34    -57    packages/cli/site/src/components/sidebar/tabs/SidebarTopicTree.vue
+added     +37    -0     packages/cli/site/src/components/sidebar/tabs/useAutoExpand.ts
+renamed   +0     -0     packages/cli/site/src/components/sidebar/tabs/useTreeExpansion.ts
+added     +47    -0     packages/cli/site/src/composables/fileContentCache.ts
+added     +78    -0     packages/cli/site/src/composables/locales/en.ts
+added     +79    -0     packages/cli/site/src/composables/locales/zh-CN.ts
+added     +65    -0     packages/cli/site/src/composables/topicDataTypes.ts
+added     +19    -0     packages/cli/site/src/composables/useDarkMode.ts
+added     +140   -0     packages/cli/site/src/composables/useFileNavigation.ts
+modified  +5     -231   packages/cli/site/src/composables/useI18n.ts   <== código ligado à spec
+added     +74    -0     packages/cli/site/src/composables/useModalA11y.ts
+added     +17    -0     packages/cli/site/src/composables/usePlatform.ts
+removed   +0     -398   packages/cli/site/src/composables/useQuiz.ts
+added     +32    -0     packages/cli/site/src/composables/useQuizLauncher.ts
+added     +48    -0     packages/cli/site/src/composables/useSSE.ts
+added     +76    -0     packages/cli/site/src/composables/useSearchLauncher.ts
+modified  +26    -129   packages/cli/site/src/composables/useTopicData.ts   <== código ligado à spec
+modified  +2     -2     packages/cli/site/src/router/index.ts
+added     +80    -0     packages/cli/site/src/utils/highlight.ts
+modified  +5     -81    packages/cli/site/src/utils/markdown.ts
+added     +17    -0     packages/cli/site/src/utils/slug.ts
+renamed   +2     -2     packages/cli/site/src/views/Dashboard.vue
+renamed   +6     -6     packages/cli/site/src/views/TopicPage.vue
+renamed   +1     -1     packages/cli/site/test/markdown.test.ts
+added     +214   -0     packages/cli/site/test/useModalA11y.test.ts
+renamed   +4     -10    packages/cli/site/test/useQuiz.test.ts
+added     +164   -0     packages/cli/site/test/useQuizKeyboard.test.ts
+added     +127   -0     packages/cli/site/test/useQuizProgress.test.ts
+renamed   +5     -5     packages/cli/site/test/useSearch.test.ts
+renamed   +3     -3     packages/cli/site/test/useSearchModal.test.ts
+renamed   +2     -2     packages/cli/site/test/useToc.test.ts
+renamed   +3     -3     packages/cli/site/test/useTopicData.test.ts
+modified  +2     -2     packages/cli/site/tsconfig.json
+modified  +5     -0     packages/cli/site/vite.config.ts   <== código ligado à spec
+added     +15    -0     packages/cli/site/vitest.config.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/cli/site/src/composables/useI18n.ts
+@@ -1,244 +1,18 @@
+ import { ref } from 'vue';
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++
++export type { I18nKey } from './locales/en';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Types                                                             */
+ /* ------------------------------------------------------------------ */
+ 
+ export type Locale = 'en' | 'zh-CN';
+ 
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+-  | 'quiz.backToList'
+-  | 'quiz.questionProgress'
+-  | 'quiz.true'
+-  | 'quiz.false'
+-  | 'quiz.typeAnswer'
+-  | 'quiz.fixError'
+-  | 'quiz.typeMultipleChoice'
+-  | 'quiz.typeTrueFalse'
+-  | 'quiz.typeFillBlank'
+-  | 'quiz.typeErrorCorrection'
+-  | 'quiz.yourAnswer'
+-  | 'quiz.correctAnswer'
+-  | 'quiz.manualEvaluation'
+-  | 'quiz.helpTitle'
+-  | 'quiz.hintChoice'
+-  | 'quiz.hintTrueFalse'
+-  | 'quiz.hintNav'
+-  | 'quiz.hintSubmit'
+-  | 'quiz.allQuizzes'
+-  | 'quiz.groupProgress'
+-  | 'quiz.sequential'
+-  | 'quiz.random'
+-  | 'quiz.retryGroup'
+-  | 'quiz.nextGroup'
+-  | 'quiz.viewSummary'
+-  | 'quiz.allComplete'
+-  | 'quiz.totalScore'
+-  | 'quiz.loadError'
+-  | 'search.placeholder'
+-  | 'search.noResults'
+-  | 'search.open'
+-  | 'search.shortcutMac'
+-  | 'search.shortcutNonMac'
+-  | 'lang.switch'
+-  | 'theme.switch'
+-  | 'loading.note'
+-  | 'toc.title';
+-
+ type Messages = Record<I18nKey, string>;
+ 
+-/* ------------------------------------------------------------------ */
+-/*  Message tables                                                    */
+-/* ------------------------------------------------------------------ */
+-
+-const messages: Record<Locale, Messages> = {
+-  en: {
+-    'dashboard.title': 'Learning Dashboard',
+-    'dashboard.noTopics': 'No topics yet',
+-    'dashboard.startLearning': 'Run `learn-anything init` to start your first topic',
+-    'dashboard.topicCount': '{count} {count, plural, one {topic} other {topics}}',
+-    'topic.progress': 'Progress',
+-    'topic.domains': 'Domains',
+-    'topic.concepts': 'Concepts',
+-    'topic.mastered': 'Mastered',
+-    'topic.notFound': 'Topic not found',
+-    'domain.notes': 'Notes',
+-    'domain.exercises': 'Exercises',
+-    'domain.noNotes': 'No session notes yet',
+-    'domain.noExercises': 'No exercises yet',
+-    'domain.backToMap': '← Back to Knowledge Map',
+-    'domain.selectFile': 'Select a file to view its content',
+-    'status.mastered': 'Mastered',
+-    'status.inProgress': 'In Progress',
+-    'status.needsPractice': 'Needs Practice',
+-    'status.unexplored': 'Unexplored',
+-    'lang.switch': '中文',
+-    'theme.switch': 'Toggle theme',
+-    'sidebar.topics': 'Topics',
+-    'sidebar.exercises': 'Exercises',
+-    'sidebar.quizzes': 'Quizzes',
+-    'sidebar.noNotes': 'No sessions',
+-    'sidebar.noExercises': 'No exercises',
+-    'sidebar.orphanTip': 'This folder is not part of the knowledge map',
+-    'quiz.empty': 'No quizzes yet',
+-    'quiz.start': 'Start quiz',
+-    'quiz.previous': 'Previous',
+-    'quiz.next': 'Next',
+-    'quiz.submit': 'Submit',
+-    'quiz.retry': 'Retry Quiz',
+-    'quiz.complete': 'Quiz Complete',
+-    'quiz.score': 'Score',
+-    'quiz.correct': 'Correct',
+-    'quiz.incorrect': 'Incorrect',
+-    'quiz.referenceAnswer': 'Reference Answer',
+-    'quiz.backToList': 'Back to list',
+-    'quiz.questionProgress': 'Question {current} / {total}',
+-    'quiz.true': 'True',
+-    'quiz.false': 'False',
+-    'quiz.typeAnswer': 'Type your answer…',
+-    'quiz.fixError': 'Identify and fix the error…',
+-    'quiz.typeMultipleChoice': 'Multiple Choice',
+-    'quiz.typeTrueFalse': 'True / False',
+-    'quiz.typeFillBlank': 'Fill in the Blank',
+-    'quiz.typeErrorCorrection': 'Error Correction',
+-    'quiz.yourAnswer': 'Your answer',
+-    'quiz.correctAnswer': 'Correct answer',
+-    'quiz.manualEvaluation': 'Requires manual evaluation',
+-    'quiz.helpTitle': 'Keyboard Shortcuts',
+-    'quiz.hintChoice': 'Press A / B / C / D to select an option',
+-    'quiz.hintTrueFalse': 'Press 1 / 2 for True / False',
+-    'quiz.hintNav': '← / → to switch questions',
+-    'quiz.hintSubmit': 'Press {key} + Enter to submit',
+-    'quiz.allQuizzes': 'All Quizzes',
+-    'quiz.groupProgress': 'Group {current} / {total}',
+-    'quiz.sequential': 'Practice in order',
+-    'quiz.random': 'Practice shuffled',
+-    'quiz.retryGroup': 'Retry this group',
+-    'quiz.nextGroup': 'Next group',
+-    'quiz.viewSummary': 'View all results',
+-    'quiz.allComplete': 'All Complete',
+-    'quiz.totalScore': 'Total Score',
+-    'quiz.loadError': 'Failed to load quiz. Please try again.',
+-    'search.placeholder': 'Search notes…',
+-    'search.noResults': 'No matching notes',
+-    'search.open': 'Open search',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': 'Opening note…',
+-    'toc.title': 'On this page',
+-  },
+-  'zh-CN': {
+-    'dashboard.title': '学习仪表盘',
+-    'dashboard.noTopics': '暂无学习主题',
+-    'dashboard.startLearning': '运行 `learn-anything init` 开始你的第一个学习主题',
+-    'dashboard.topicCount': '{count} 个主题',
+-    'topic.progress': '学习进度',
+-    'topic.domains': '知识域',
+-    'topic.concepts': '概念',
+-    'topic.mastered': '已掌握',
+-    'topic.notFound': '未找到主题',
+-    'domain.notes': '笔记',
+-    'domain.exercises': '练习',
+-    'domain.noNotes': '暂无笔记',
+-    'domain.noExercises': '暂无练习',
+-    'domain.backToMap': '← 返回知识地图',
+-    'domain.selectFile': '选择文件查看内容',
+-    'status.mastered': '已掌握',
+-    'status.inProgress': '学习中',
+-    'status.needsPractice': '需练习',
+-    'status.unexplored': '未探索',
+-    'lang.switch': 'English',
+-    'theme.switch': '切换主题',
+-    'sidebar.topics': '笔记',
+-    'sidebar.exercises': '练习',
+-    'sidebar.quizzes': '测验',
+-    'sidebar.noNotes': '没有笔记',
+-    'sidebar.noExercises': '没有练习',
+-    'sidebar.orphanTip': '此目录不在知识地图中',
+-    'quiz.empty': '暂无测验',
+-    'quiz.start': '开始测验',
+-    'quiz.previous': '上一题',
+-    'quiz.next': '下一题',
+-    'quiz.submit': '提交',
+-    'quiz.retry': '重新测验',
+-    'quiz.complete': '测验完成',
+-    'quiz.score': '得分',
+-    'quiz.correct': '正确',
+-    'quiz.incorrect': '错误',
+-    'quiz.referenceAnswer': '参考答案',
+-    'quiz.backToList': '返回列表',
+-    'quiz.questionProgress': '第 {current} / {total} 题',
+-    'quiz.true': '正确',
+-    'quiz.false': '错误',
+-    'quiz.typeAnswer': '输入你的答案…',
+-    'quiz.fixError': '找出并修正错误…',
+-    'quiz.typeMultipleChoice': '选择题',
+-    'quiz.typeTrueFalse': '判断题',
+-    'quiz.typeFillBlank': '填空题',
+-    'quiz.typeErrorCorrection': '纠错题',
+-    'quiz.yourAnswer': '你的答案',
+-    'quiz.correctAnswer': '正确答案',
+-    'quiz.manualEvaluation': '需要人工评估',
+-    'quiz.helpTitle': '键盘快捷键',
+-    'quiz.hintChoice': '按 A / B / C / D 选择选项',
+-    'quiz.hintTrueFalse': '按 1 / 2 选择对错',
+-    'quiz.hintNav': '← / → 切换题目',
+-    'quiz.hintSubmit': '按 {key} + Enter 提交',
+-    'quiz.allQuizzes': '全部测验',
+-    'quiz.groupProgress': '第 {current} / {total} 组',
+-    'quiz.sequential': '顺序练习',
+-    'quiz.random': '随机练习',
+-    'quiz.retryGroup': '重做本组',
+-    'quiz.nextGroup': '下一组',
+-    'quiz.viewSummary': '查看总成绩',
+-    'quiz.allComplete': '全部完成',
+-    'quiz.totalScore': '总得分',
+-    'quiz.loadError': '加载测验失败，请重试。',
+-    'search.placeholder': '搜索笔记…',
+-    'search.noResults': '没有匹配的笔记',
+-    'search.open': '打开搜索',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': '正在打开笔记',
+-    'toc.title': '本页内容',
+-  },
+-};
++const messages: Record<Locale, Messages> = { en, 'zh-CN': zhCN };
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Shared state (singleton across components)                        */
+
+### packages/cli/site/src/composables/useTopicData.ts
+@@ -10,74 +10,33 @@
+ /* ================================================================== */
+ 
+ import { ref } from 'vue';
++import type {
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++} from './topicDataTypes';
++import { createSSEListener } from './useSSE';
++import { clearFileContentCache, setFileContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+-/*  Types                                                             */
++/*  Types (re-exported for consumers)                                 */
+ /* ------------------------------------------------------------------ */
+ 
+-export type ConceptStatus = 'mastered' | 'in_progress' | 'needs_practice' | 'unexplored';
+-
+-export interface Concept {
+-  name: string;
+-  slug: string;
+-  status: ConceptStatus;
+-  confidence: number;
+-  practice_count: number;
+-  explain_count: number;
+-  last_explained: string | null;
+-  last_practiced: string | null;
+-  details: string[];
+-}
+-
+-export interface Domain {
+-  name: string;
+-  slug: string;
+-  concepts: Concept[];
+-}
+-
+-export interface StateV1 {
+-  version: 1;
+-  topic: string;
+-  slug: string;
+-  created: string;
+-  domains: Domain[];
+-}
+-
+-export interface TopicSummary {
+-  slug: string;
+-  name: string;
+-  domainCount: number;
+-  totalConcepts: number;
+-  masteredCount: number;
+-  percentage: number;
+-}
++export type {
++  ConceptStatus,
++  Concept,
++  Domain,
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++  SelectedFilePayload,
++} from './topicDataTypes';
+ 
+-export interface SessionFile {
+-  filename: string;
+-  path: string;
+-}
+-
+-export interface ExerciseFile {
+-  name: string;
+-  path: string;
+-}
+-
+-export interface ExerciseGroup {
+-  conceptSlug: string;
+-  conceptName: string;
+-  files: ExerciseFile[];
+-}
+-
+-export interface SelectedFilePayload {
+-  path: string;
+-  type: 'markdown' | 'code';
+-  sourceTab?: 'topics' | 'exercises' | 'quizzes';
+-  /**
+-   * Filled in asynchronously after the file content loads.
+-   * The selection itself (path/type) is available synchronously.
+-   */
+-  content?: string;
+-}
++export { loadFileContent, loadSessionContent, loadExerciseContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  In-memory indexes (populated by initTopicData)                     */
+@@ -93,7 +52,6 @@ const sessionsBySlug = new Map<string, Map<string, SessionFile[]>>();
+ const exerciseGroupsBySlug = new Map<string, ExerciseGroup[]>();
+ const orphanSessionsBySlug = new Map<string, SessionFile[]>();
+ const orphanExercisesBySlug = new Map<string, ExerciseFile[]>();
+-const fileContents = new Map<string, string>();
+ 
+ let topicSummaryCache: TopicSummary[] | null = null;
+ 
+@@ -103,8 +61,6 @@ export function getDataVersion(): number {
+   return dataVersion.value;
+ }
+ 
+-const FILE_CACHE_MAX = 200;
+-
+ /* ------------------------------------------------------------------ */
+ /*  Helpers                                                            */
+ /* ------------------------------------------------------------------ */
+@@ -119,7 +75,7 @@ function clearIndexes() {
+   exerciseGroupsBySlug.clear();
+   orphanSessionsBySlug.clear();
+   orphanExercisesBySlug.clear();
+-  fileContents.clear();
++  clearFileContentCache();
+   topicSummaryCache = null;
+ }
+ 
+@@ -153,7 +109,7 @@ export function __injectTestData(data: {
+     orphanSessionsBySlug.set(slug, files);
+   for (const [slug, files] of Object.entries(data.orphanExercises))
+     orphanExercisesBySlug.set(slug, files);
+-  for (const [path, content] of Object.entries(data.fileContents)) fileContents.set(path, content);
++  for (const [path, content] of Object.entries(data.fileContents)) setFileContent(path, content);
+   ready = true;
+ }
+ 
+@@ -247,52 +203,13 @@ export async function initTopicData(): Promise<void> {
+ /* ------------------------------------------------------------------ */
+ 
+ export function listenForChanges(callback: () => void): () => void {
+-  let src: EventSource | null = null;
+-  let stopped = false;
+-  let retryDelay = 1000;
+-  let reconnecting = false;
+-  const MAX_RETRY_DELAY = 30000;
+-
+-  function handleReload() {
++  return createSSEListener('/api/events', () => {
+     clearIndexes();
+     initTopicData().then(() => {
+       dataVersion.value++;
+       callback();
+     });
+-  }
+-
+-  function connect() {
+-    if (stopped) return;
+-    src = new EventSource('/api/events');
+-    src.addEventListener('message', (e) => {
+-      if (e.data === 'reload') {
+-        retryDelay = 1000;
+-        handleReload();
+-      }
+-    });
+-    src.addEventListener('open', () => {
+-      retryDelay = 1000;
+-      if (reconnecting) {
+-        reconnecting = false;
+-        handleReload();
+-      }
+-    });
+-    src.onerror = () => {
+-      reconnecting = true;
+-      src?.close();
+-      src = null;
+-      if (!stopped) {
+-        setTimeout(connect, retryDelay);
+-        retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
+-      }
+-    };
+-  }
+-
+-  connect();
+-  return () => {
+-    stopped = true;
+-    src?.close();
+-  };
++  });
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -331,23 +248,3 @@ export function scanRootSessions(slug: string): SessionFile[] {
+ export function scanRootExercises(slug: string): ExerciseFile[] {
+   return orphanExercisesBySlug.get(slug) ?? [];
+ }
+-
+-export async function loadFileContent(path: string): Promise<string | null> {
+-  if (fileContents.has(path)) return fileContents.get(path)!;
+-  try {
+-    const resp = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+-    if (!resp.ok) return null;
+-    const text = await resp.text();
+-    if (fileContents.size >= FILE_CACHE_MAX) {
+-      const oldest = fileContents.keys().next().value;
+-      if (oldest) fileContents.delete(oldest);
+-    }
+-    fileContents.set(path, text);
+-    return text;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-export const loadSessionContent = loadFileContent;
+-export const loadExerciseContent = loadFileContent;
+
+### packages/cli/site/vite.config.ts
+@@ -75,6 +75,11 @@ export default defineConfig(() => {
+         },
+       },
+     ],
++    resolve: {
++      alias: {
++        '@': resolve(__dirname, 'src'),
++      },
++    },
+     build: {
+       outDir: 'dist',
+       assetsDir: 'assets',
+
+===== P102 | repo b0x42/prizm | PR #37: feat: accessibility baseline + tier 2 — VoiceOver, contrast, reduce motion, error suggestions | capacidade: detail-card-view
+--- SPEC VIVA
+## MODIFIED Requirements
+
+### Requirement: CardBackground ViewModifier (MODIFIED)
+The system SHALL provide a `CardBackground` `ViewModifier` that applies a `#FAFAFA` (light) / `#2C2C2C` (dark) background via the `CardBackground` color asset, rounded corners (radius 10), and a subtle 0.5pt border at 8% opacity. The modifier SHALL NOT apply a drop shadow. A `.cardBackground()` `View` extension SHALL expose it ergonomically.
+
+#### Scenario: Card is visually distinct in light mode
+- **WHEN** the detail pane is displayed in light mode
+- **THEN** each card SHALL render with a `#FAFAFA` background, rounded corners (radius 10), a subtle border, and no drop shadow
+
+#### Scenario: Card is visually distinct in dark mode
+- **WHEN** the detail pane is displayed in dark mode
+- **THEN** each card SHALL render with a `#2C2C2C` background, rounded corners (radius 10), a subtle border, and no drop shadow
+
+---
+
+### Requirement: DetailSectionCard header style (MODIFIED)
+Section headers ("Credentials", "Websites", etc.) SHALL use `.headline` font (13pt semibold) with default text color. Spacing between the header and the card content SHALL be 12pt.
+
+#### Scenario: Section header renders with headline style
+- **WHEN** a `DetailSectionCard` is displayed with a non-empty title
+- **THEN** the title SHALL render in `.headline` font with default (primary) text color
+
+---
+
+### Requirement: FieldRowView uses horizontal layout for all field types (MODIFIED)
+The system SHALL display field rows with the label on the left and the value on the right. Multi-line fields (notes) SHALL use a stacked layout. Masked fields SHALL display the label on the left with the masked value and eye toggle on the right. All field values SHALL use monospaced font. All field labels SHALL use default (primary) text color.
+
+#### Scenario: Single-line field renders horizontally
+- **WHEN** a `FieldRowView` is displayed with `isMultiLine` false (default) and `isMasked` false
+- **THEN** the label SHALL appear on the left and the value on the right, on the same line
+
+#### Scenario: Multi-line field renders stacked
+- **WHEN** a `FieldRowView` is displayed with `isMultiLine` true
+- **THEN** the label SHALL appear above the value in a vertical stack
+
+#### Scenario: Masked field renders horizontally
+- **WHEN** a `FieldRowView` is displayed with `isMasked` true
+- **THEN** the label SHALL appear on the left, and the masked value with eye toggle SHALL appear on the right
+
+---
+
+### Requirement: Copy on hover with feedback (MODIFIED)
+The system SHALL show a "COPY" label (displayed uppercase via `.textCase(.uppercase)`) when the user hovers over a field row. Clicking anywhere on a hovered row SHALL copy the field value. After copying, the label SHALL change to "COPIED" for 0.8 seconds. The COPY label SHALL use `.headline` font and the system accent color. The COPY label SHALL appear to the left of the field value.
+
+#### Scenario: COPY appears on hover
+- **WHEN** the user hovers over a field row with a non-empty value
+- **THEN** a "COPY" label SHALL appear to the left of the value
+
+#### Scenario: COPY hidden when not hovered
+- **WHEN** the user is not hovering over a field row
+- **THEN** no COPY label SHALL be visible
+
+#### Scenario: Click row copies value
+- **WHEN** the user clicks anywhere on a hovered field row
+- **THEN** the field value SHALL be copied to the clipboard
+
+#### Scenario: COPIED feedback after copy
+- **GIVEN** the user has clicked a field row to copy
+- **THEN** the label SHALL change to "COPIED" for 0.8 seconds, then revert to "COPY"
+
+---
+
+### Requirement: Open-in-browser icon always visible (MODIFIED)
+For field rows with a URL, the system SHALL always display an open-in-browser icon (`arrow.up.right.square`) at the trailing edge of the row. The icon SHALL use the system accent color, `.medium` image scale, and `.semibold` font weight.
+
+#### Scenario: Browser icon visible on URL fields
+- **WHEN** a `FieldRowView` has a non-nil `url`
+- **THEN** the open-in-browser icon SHALL be visible at all times (not only on hover)
+
+---
+
+### Requirement: Eye toggle icon style (MODIFIED)
+The reveal/hide eye icon on masked fields SHALL use the system accent color and `.medium` image scale.
+
+#### Scenario: Eye icon uses accent color
+- **WHEN** a masked field is displayed
+- **THEN** the eye toggle icon SHALL use the system accent color and medium size
+
+---
+
+### Requirement: Duplicate labels removed from card sections (MODIFIED)
+When a `DetailSectionCard` provides a section header (e.g. "Notes", "Custom Fields"), the field rows inside SHALL NOT render a redundant label matching the section header.
+
+#### Scenario: Notes card has no inner label
+- **WHEN** a Notes section is displayed inside a `DetailSectionCard("Notes")`
+- **THEN** only the note text SHALL appear inside the card, with no "Notes" label
+
+#### Scenario: Custom Fields card has no inner header
+- **WHEN** a Custom Fields section is displayed inside a `DetailSectionCard("Custom Fields")`
+- **THEN** no duplicate "Custom Fields" header SHALL appear inside the card
+
+---
+
+### Requirement: Metadata footer displays created and updated dates (MODIFIED)
+The system SHALL display "Updated" and "Created" dates below the last card section, left-aligned, stacked vertically, using default field text style with secondary (gray) color. Dates SHALL use `dd.MM.yyyy` format. Labels and dates SHALL be column-aligned.
+
+#### Scenario: Dates render below cards
+- **WHEN** an item detail is displayed
+- **THEN** "Updated: dd.MM.yyyy" and "Created: dd.MM.yyyy" SHALL appear below the last card, left-aligned, in gray text
+
+--- ARQUIVOS DO PR (53)
+modified  +1     -1     .github/pull_request_template.md
+added     +93    -0     ACCESSIBILITY.md
+modified  +32    -15    CONSTITUTION.md
+modified  +2     -1     DEVELOPMENT.md
+modified  +4     -4     Prizm/Domain/Repositories/AuthRepository.swift
+modified  +3     -3     Prizm/Domain/Repositories/SyncRepository.swift
+modified  +4     -1     Prizm/Presentation/Components/CardBackground.swift   <== código ligado à spec
+modified  +1     -0     Prizm/Presentation/Components/FaviconView.swift
+modified  +6     -3     Prizm/Presentation/Components/FieldRowView.swift
+modified  +1     -0     Prizm/Presentation/Components/MaskedFieldView.swift
+added     +32    -0     Prizm/Presentation/ContrastAwareOpacity.swift
+modified  +1     -0     Prizm/Presentation/Login/LoginView.swift
+modified  +1     -0     Prizm/Presentation/Login/TOTPPromptView.swift
+added     +23    -0     Prizm/Presentation/OptionalAnimation.swift
+modified  +1     -1     Prizm/Presentation/Sync/SyncProgressView.swift
+modified  +1     -0     Prizm/Presentation/Unlock/BiometricEnrollmentPromptView.swift
+modified  +4     -0     Prizm/Presentation/Vault/Attachments/AttachmentBatchSheet.swift
+modified  +4     -1     Prizm/Presentation/Vault/Attachments/AttachmentConfirmSheet.swift
+modified  +5     -1     Prizm/Presentation/Vault/Detail/AttachmentRowView.swift
+modified  +2     -1     Prizm/Presentation/Vault/Detail/AttachmentsSectionView.swift
+modified  +3     -1     Prizm/Presentation/Vault/Detail/ItemDetailView.swift
+modified  +1     -0     Prizm/Presentation/Vault/Edit/CustomFieldsEditSection.swift
+modified  +2     -0     Prizm/Presentation/Vault/Edit/EditFieldRow.swift
+modified  +2     -1     Prizm/Presentation/Vault/Edit/ItemEditView.swift
+modified  +5     -1     Prizm/Presentation/Vault/Edit/LoginEditForm.swift
+modified  +2     -0     Prizm/Presentation/Vault/Edit/PasswordGeneratorView.swift
+modified  +3     -1     Prizm/Presentation/Vault/Sidebar/SidebarView.swift
+modified  +17    -1     Prizm/Presentation/Vault/VaultBrowserView.swift
+modified  +13    -2     Prizm/Presentation/Vault/VaultBrowserViewModel.swift
+modified  +8     -0     Prizm/Prizm.xcodeproj/project.pbxproj
+added     +90    -0     Prizm/PrizmTests/Presentation/AccessibilityTier2Tests.swift
+added     +91    -0     Prizm/UITests/AccessibilityLabelTests.swift
+modified  +2     -1     README.md
+added     +2     -0     openspec/changes/archive/2026-04-13-accessibility-baseline/.openspec.yaml
+added     +59    -0     openspec/changes/archive/2026-04-13-accessibility-baseline/design.md
+added     +30    -0     openspec/changes/archive/2026-04-13-accessibility-baseline/proposal.md
+added     +38    -0     openspec/changes/archive/2026-04-13-accessibility-baseline/specs/accessibility-conformance/spec.md
+added     +118   -0     openspec/changes/archive/2026-04-13-accessibility-baseline/specs/voiceover-labels/spec.md
+added     +59    -0     openspec/changes/archive/2026-04-13-accessibility-baseline/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-accessibility-tier2/.openspec.yaml
+added     +68    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/design.md
+added     +30    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/proposal.md
+added     +35    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/specs/accessibility-contrast/spec.md
+added     +24    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/specs/accessibility-error-suggestions/spec.md
+added     +24    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/specs/accessibility-motion/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/specs/vault-browser-ui/spec.md
+added     +49    -0     openspec/changes/archive/2026-04-13-accessibility-tier2/tasks.md
+added     +38    -0     openspec/specs/accessibility-conformance/spec.md
+added     +35    -0     openspec/specs/accessibility-contrast/spec.md
+added     +24    -0     openspec/specs/accessibility-error-suggestions/spec.md
+added     +24    -0     openspec/specs/accessibility-motion/spec.md
+modified  +17    -0     openspec/specs/vault-browser-ui/spec.md
+added     +118   -0     openspec/specs/voiceover-labels/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### Prizm/Presentation/Components/CardBackground.swift
+@@ -13,13 +13,15 @@ import SwiftUI
+ /// so shifting the card background ensures the shadow remains effective in both
+ /// appearances without requiring `@Environment(\.colorScheme)` logic here.
+ struct CardBackground: ViewModifier {
++    @Environment(\.colorSchemeContrast) private var contrast
++
+     func body(content: Content) -> some View {
+         content
+             .background(Color("CardBackground"))
+             .clipShape(RoundedRectangle(cornerRadius: 10))
+             .overlay(
+                 RoundedRectangle(cornerRadius: 10)
+-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
++                    .stroke(Color.primary.opacity(Opacity.cardBorder(contrast)), lineWidth: 0.5)
+             )
+     }
+ }
+@@ -63,6 +65,7 @@ struct DetailSectionCard<Content: View>: View {
+                 Text(title!)
+                     .font(.headline)
+                     .padding(.leading, 4)
++                    .accessibilityAddTraits(.isHeader)
+                     .accessibilityIdentifier(
+                         AccessibilityID.Detail.cardHeader(title!)
+                     )
+
+===== P103 | repo reason-healthcare/rh | PR #49: Expand rh-fsh SUSHI conformance coverage | capacidade: fsh-parser
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Parse FSH source text into a typed AST
+The system SHALL parse FSH source text (a string or file contents) into a `FshDocument` containing a `Vec<Spanned<FshEntity>>`. All 11 FSH entity types SHALL be supported: Alias, Profile, Extension, Logical, Resource, Instance, ValueSet, CodeSystem, Invariant, RuleSet, and ParamRuleSet.
+
+#### Scenario: Parse a Profile entity
+- **WHEN** the parser receives FSH text containing a `Profile` declaration with metadata and rules
+- **THEN** a `FshEntity::Profile` is returned with the correct name, parent, id, title, description, and rule list
+
+#### Scenario: Parse an Extension entity
+- **WHEN** the parser receives FSH text containing an `Extension` declaration
+- **THEN** a `FshEntity::Extension` is returned with all metadata and rules
+
+#### Scenario: Parse an Instance entity
+- **WHEN** the parser receives FSH text containing an `Instance` declaration with `InstanceOf` and `Usage`
+- **THEN** a `FshEntity::Instance` is returned with `instance_of`, `usage`, and assignment rules
+
+#### Scenario: Parse a ValueSet entity
+- **WHEN** the parser receives FSH text containing a `ValueSet` declaration with include/exclude component rules
+- **THEN** a `FshEntity::ValueSet` is returned with all component rules
+
+#### Scenario: Parse a CodeSystem entity
+- **WHEN** the parser receives FSH text containing a `CodeSystem` declaration with concept rules
+- **THEN** a `FshEntity::CodeSystem` is returned with all concept definitions
+
+#### Scenario: Parse a RuleSet entity
+- **WHEN** the parser receives FSH text containing a `RuleSet` declaration
+- **THEN** a `FshEntity::RuleSet` is returned with its contained rules
+
+#### Scenario: Parse a ParamRuleSet entity
+- **WHEN** the parser receives FSH text containing a parameterized `RuleSet` declaration with named parameters
+- **THEN** a `FshEntity::ParamRuleSet` is returned with parameter names and templated rules
+
+### Requirement: Parse all FSH rule types
+The system SHALL parse all FSH rule types into typed Rust variants. Supported rule types SHALL include: CardRule, FlagRule, BindingRule, AssignmentRule, ContainsRule, OnlyRule, ObeysRule, CaretValueRule, InsertRule, AddElementRule, PathRule, ConceptRule, ValueSetComponentRule, and MappingRule.
+
+#### Scenario: Parse a cardinality rule
+- **WHEN** a rule line has the form `* path M..N` (with optional flags)
+- **THEN** a `CardRule` is returned with correct `min`, `max`, and `flags`
+
+#### Scenario: Parse an assignment rule with a coded value
+- **WHEN** a rule line has the form `* path = system#code "display"`
+- **THEN** an `AssignmentRule` is returned with a `FshValue::Code` containing `system`, `code`, and `display`
+
+#### Scenario: Parse a binding rule
+- **WHEN** a rule line has the form `* path from ValueSetName (required)`
+- **THEN** a `BindingRule` is returned with the correct value set name and binding strength
+
+#### Scenario: Parse a caret value rule
+- **WHEN** a rule line has the form `* path ^property = value`
+- **THEN** a `CaretValueRule` is returned with the correct path, caret path, and value
+
+#### Scenario: Parse an insert rule
+- **WHEN** a rule line has the form `* insert RuleSetName`
+- **THEN** an `InsertRule` is returned referencing the named RuleSet
+
+#### Scenario: Parse an add element rule
+- **WHEN** a rule line has the form `* path[x] 0..1 SomeType "short description"`
+- **THEN** an `AddElementRule` is returned with correct path, cardinality, type, and description
+
+### Requirement: Track source locations on all AST nodes
+The parser SHALL attach `SourceRange` (start and end `SourceLocation` with line, column, and byte offset) to every `Spanned<T>` wrapper in the AST.
+
+#### Scenario: Source location on entity
+- **WHEN** a `Profile` is parsed from line 3 of a source file
+- **THEN** the returned `Spanned<FshEntity>` has `loc.start.line == 3`
+
+#### Scenario: Source location on rule
+- **WHEN** a rule is parsed from a specific line in the source
+- **THEN** the rule's `SourceRange` reflects the correct start line and column
+
+### Requirement: Report parse errors with source location
+The parser SHALL return a `FshError::Parse` containing the error message and `SourceLocation` when input cannot be parsed.
+
+#### Scenario: Invalid entity keyword
+- **WHEN** the input contains an unrecognized top-level keyword
+- **THEN** the parser returns `Err(FshError::Parse { location, message })`
+
+#### Scenario: Malformed cardinality
+- **WHEN** a rule line contains a malformed cardinality expression
+- **THEN** the parser returns `Err(FshError::Parse { location, message })`
+
+### Requirement: Parse FSH paths into typed segments
+The parser SHALL parse FSH element paths into a `FshPath` consisting of typed `FshPathSegment` variants: `Name`, `Index`, `Slice`, `ChoiceType`, and `Extension`.
+
+#### Scenario: Parse a dotted path
+- **WHEN** a path like `subject.reference` is parsed
+- **THEN** a `FshPath` with two `Name` segments is returned
+
+#### Scenario: Parse a path with slice
+- **WHEN** a path like `component[systolicBP].value[x]` is parsed
+- **THEN** a `FshPath` with `Name`, `Slice`, `Name`, and `ChoiceType` segments is returned
+
+### Requirement: Parse multiline string literals
+The parser SHALL correctly parse FSH triple-quoted multiline strings (`"""..."""`) as `FshValue::Str`, preserving internal whitespace.
+
+#### Scenario: Multiline string in description
+- **WHEN** a `Description` metadata line contains a `"""..."""` value spanning multiple lines
+- **THEN** the string content is captured correctly with internal newlines preserved
+
+--- ARQUIVOS DO PR (34)
+modified  +20    -0     Cargo.lock
+modified  +1     -0     Cargo.toml
+modified  +117   -8     apps/rh-cli/src/fsh.rs   <== código ligado à spec
+modified  +97    -0     apps/rh-cli/tests/fsh_integration_test.rs
+modified  +95    -9     crates/rh-fsh/CONFORMANCE.md
+modified  +2     -1     crates/rh-fsh/Cargo.toml
+modified  +7     -1     crates/rh-fsh/README.md
+added     +2     -0     crates/rh-fsh/conformance/.gitignore
+added     +36    -0     crates/rh-fsh/conformance/README.md
+added     +23    -0     crates/rh-fsh/conformance/fixtures/profile-identity-smoke/input/fsh/profile-identity.fsh
+added     +12    -0     crates/rh-fsh/conformance/fixtures/profile-identity-smoke/sushi-config.yaml
+added     +668   -0     crates/rh-fsh/conformance/scripts/run_sushi_comparison.py
+added     +373   -0     crates/rh-fsh/src/definition_index.rs
+added     +267   -0     crates/rh-fsh/src/dependencies.rs
+modified  +45    -0     crates/rh-fsh/src/export/code_system.rs
+modified  +220   -39    crates/rh-fsh/src/export/instance.rs
+modified  +144   -1     crates/rh-fsh/src/export/mod.rs
+modified  +140   -0     crates/rh-fsh/src/fhirdefs/mod.rs
+modified  +45    -1     crates/rh-fsh/src/lib.rs
+modified  +101   -6     crates/rh-fsh/src/parser/entity.rs
+modified  +23    -5     crates/rh-fsh/src/parser/lexer.rs
+modified  +70    -0     crates/rh-fsh/src/parser/tests.rs
+modified  +26    -0     crates/rh-fsh/src/resolver/mod.rs
+added     +161   -0     crates/rh-fsh/src/sushi_config.rs
+modified  +74    -103   crates/rh-fsh/src/tank/mod.rs
+modified  +1     -0     crates/rh-packager/src/processors/fsh.rs
+added     +2     -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/.openspec.yaml
+added     +86    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/design.md
+added     +30    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/proposal.md
+added     +23    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/specs/fsh-cli/spec.md
+added     +70    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/specs/fsh-export/spec.md
+added     +43    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/specs/fsh-sushi-conformance/spec.md
+added     +28    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/specs/fsh-tank/spec.md
+added     +51    -0     openspec/changes/close-rh-fsh-sushi-conformance-gaps/tasks.md
+--- DIFF DO CÓDIGO LIGADO
+### apps/rh-cli/src/fsh.rs
+@@ -1,11 +1,32 @@
+ use anyhow::Result;
+ use clap::Subcommand;
+-use rh_fsh::{compile_fsh_files, FshParser, FshTank};
++use rh_fsh::{compile_fsh_files_with_project_config, FshParser, FshTank};
+ use serde::Serialize;
+ use std::path::PathBuf;
+ use tracing::{info, warn};
+ 
+-use crate::output::{Envelope, OutputContext, OutputFormat};
++use crate::output::{Envelope, EnvelopeError, OutputContext, OutputFormat};
++
++#[derive(Serialize)]
++struct FshCompileOutput {
++    resources: Vec<serde_json::Value>,
++    diagnostics: Vec<FshDiagnostic>,
++    #[serde(skip_serializing_if = "Vec::is_empty")]
++    output_files: Vec<WrittenResource>,
++}
++
++#[derive(Serialize)]
++struct FshDiagnostic {
++    severity: &'static str,
++    message: String,
++}
++
++#[derive(Serialize)]
++struct WrittenResource {
++    resource_type: String,
++    id: String,
++    file: String,
++}
+ 
+ #[derive(Serialize)]
+ struct TankSummary {
+@@ -59,14 +80,24 @@ pub async fn handle_command(cmd: FshCommands, ctx: &OutputContext) -> Result<()>
+             compact,
+         } => {
+             let paths: Vec<PathBuf> = inputs.iter().map(PathBuf::from).collect();
+-            let package = compile_fsh_files(&paths)?;
+-            if !package.errors.is_empty() {
+-                for e in &package.errors {
+-                    warn!("{e}");
++            let package = compile_fsh_files_with_project_config(&paths)?;
++            let diagnostics: Vec<FshDiagnostic> = package
++                .errors
++                .iter()
++                .map(|e| FshDiagnostic {
++                    severity: "warning",
++                    message: e.to_string(),
++                })
++                .collect();
++            if !diagnostics.is_empty() {
++                for e in &diagnostics {
++                    warn!("{}", e.message);
+                 }
+             }
++            let mut output_files = Vec::new();
+             if let Some(dir) = &output {
+                 std::fs::create_dir_all(dir)?;
++                let mut used_names = std::collections::HashMap::new();
+                 for resource in &package.resources {
+                     let id = resource
+                         .get("id")
+@@ -76,13 +107,19 @@ pub async fn handle_command(cmd: FshCommands, ctx: &OutputContext) -> Result<()>
+                         .get("resourceType")
+                         .and_then(|v| v.as_str())
+                         .unwrap_or("Resource");
+-                    let filename = dir.join(format!("{rt}-{id}.json"));
++                    let file_name = deterministic_resource_file_name(rt, id, &mut used_names);
++                    let filename = dir.join(&file_name);
+                     let json = if compact {
+                         serde_json::to_string(resource)?
+                     } else {
+                         serde_json::to_string_pretty(resource)?
+                     };
+                     std::fs::write(filename, json)?;
++                    output_files.push(WrittenResource {
++                        resource_type: rt.to_string(),
++                        id: id.to_string(),
++                        file: file_name,
++                    });
+                 }
+                 info!(
+                     "Wrote {} resources to {}",
+@@ -92,7 +129,22 @@ pub async fn handle_command(cmd: FshCommands, ctx: &OutputContext) -> Result<()>
+             }
+ 
+             if ctx.is_json() {
+-                print_envelope(ctx, &Envelope::ok(package.resources, "fsh compile"))?;
++                print_envelope(
++                    ctx,
++                    &Envelope {
++                        ok: true,
++                        result: Some(FshCompileOutput {
++                            resources: package.resources,
++                            diagnostics,
++                            output_files,
++                        }),
++                        errors: Vec::<EnvelopeError>::new(),
++                        meta: crate::output::EnvelopeMeta {
++                            version: env!("CARGO_PKG_VERSION").to_string(),
++                            command: "fsh compile".to_string(),
++                        },
++                    },
++                )?;
+             } else if output.is_none() {
+                 for resource in &package.resources {
+                     let json = if compact {
+@@ -140,3 +192,60 @@ pub async fn handle_command(cmd: FshCommands, ctx: &OutputContext) -> Result<()>
+     }
+     Ok(())
+ }
++
++fn deterministic_resource_file_name(
++    resource_type: &str,
++    id: &str,
++    used_names: &mut std::collections::HashMap<String, usize>,
++) -> String {
++    let base = format!(
++        "{}-{}",
++        sanitize_file_component(resource_type),
++        sanitize_file_component(id)
++    );
++    let next = used_names.entry(base.clone()).or_insert(0);
++    *next += 1;
++    if *next == 1 {
++        format!("{base}.json")
++    } else {
++        format!("{base}-{next}.json")
++    }
++}
++
++fn sanitize_file_component(value: &str) -> String {
++    let sanitized: String = value
++        .chars()
++        .map(|ch| {
++            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
++                ch
++            } else {
++                '_'
++            }
++        })
++        .collect();
++    let trimmed = sanitized.trim_matches('_');
++    if trimmed.is_empty() {
++        "unknown".to_string()
++    } else {
++        trimmed.to_string()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::collections::HashMap;
++
++    #[test]
++    fn deterministic_file_names_are_sanitized_and_disambiguated() {
++        let mut used_names = HashMap::new();
++
++        let first =
++            deterministic_resource_file_name("http://example.org/Foo", "a/b", &mut used_names);
++        let second =
++            deterministic_resource_file_name("http://example.org/Foo", "a?b", &mut used_names);
++
++        assert_eq!(first, "http___example.org_Foo-a_b.json");
++        assert_eq!(second, "http___example.org_Foo-a_b-2.json");
++    }
++}
+
+===== P104 | repo abapify/adt-cli | PR #110: docs: AWS ABAP Accelerator feature parity spec and implementation plan | capacidade: adt-cli
+--- SPEC VIVA
+# ADT CLI Specification
+
+## Purpose
+
+The ADT CLI is a platform-agnostic command-line interface that provides end-to-end ABAP development operations through direct integration with SAP ADT (ABAP Development Tools) APIs. It serves as the unified tool for ABAP DevOps workflows, from object serialization to quality reporting.
+
+## Requirements
+
+### Requirement: Platform-agnostic ABAP DevOps
+
+The ADT CLI SHALL run on any CI/CD platform without infrastructure dependencies, providing a single binary for all ABAP operations.
+
+#### Scenario: Running in GitHub Actions
+
+- **WHEN** the ADT CLI is invoked in a GitHub Actions workflow
+- **THEN** it executes all ABAP operations without requiring Jenkins or SAP-specific infrastructure
+
+### Requirement: Plugin-based extensibility
+
+The ADT CLI SHALL support dynamic plugin loading from configuration, allowing new commands and format plugins to be added without modifying core code.
+
+#### Scenario: Loading a format plugin
+
+- **WHEN** a format plugin is configured in `adt.config.ts`
+- **THEN** the CLI discovers and loads it as a new export/import format
+
+### Requirement: Direct ADT API integration
+
+The ADT CLI SHALL communicate directly with SAP ADT REST APIs, eliminating middleware dependencies.
+
+#### Scenario: Executing an ADT operation
+
+- **WHEN** a CLI command is executed (e.g., `adt get`)
+- **THEN** it communicates directly with the SAP system's ADT REST API
+
+## Background
+
+### Problem Statement with Existing Solutions
+
+#### SAP Piper Limitations
+
+**1. Infrastructure Dependency**
+
+- Requires Jenkins infrastructure setup and maintenance
+- Tied to specific CI/CD platforms and configurations
+- Heavy infrastructure overhead for simple tasks
+- Complex deployment and scaling requirements
+
+**2. Fragmented Workflow**
+
+- Multiple separate tools for different tasks
+- No unified end-to-end experience
+- Complex orchestration between different components
+- Inconsistent interfaces across tools
+
+**3. Configuration Complexity**
+
+- Multiple configuration files required (`repositories.yml`, `Jenkinsfile`, etc.)
+- Complex setup process with many prerequisites
+- Steep learning curve for teams
+- Difficult to troubleshoot configuration issues
+
+**4. Limited Local Development Support**
+
+- Primarily designed for CI/CD environments
+- Difficult to run and test locally
+- Poor developer experience for local workflows
+- No offline development capabilities
+
+**5. Platform Lock-in**
+
+- Jenkins-specific implementation
+- Difficult to migrate to other CI/CD platforms
+- Vendor-specific dependencies and limitations
+
+### Business Impact of Current Limitations
+
+- **Reduced Developer Productivity**: Complex setup and fragmented tools slow development cycles
+- **High Operational Overhead**: Infrastructure maintenance and configuration management costs
+- **Limited Flexibility**: Platform lock-in prevents adoption of modern CI/CD solutions
+- **Poor Developer Experience**: Inconsistent local and CI/CD workflows
+- **Scalability Issues**: Infrastructure-heavy solutions don't scale efficiently
+
+## ADT CLI Solution Architecture
+
+### Core Design Principles
+
+#### 1. Platform-Agnostic Design
+
+**Universal Compatibility**
+
+- Works with any CI/CD platform (GitLab, GitHub, Azure DevOps, Jenkins, etc.)
+- Same commands and behavior across all environments
+- No platform-specific dependencies or configurations
+- Easy migration between CI/CD platforms
+
+**Local-First Development**
+
+- Full functionality available for local development
+- Offline capabilities where possible
+- Consistent experience between local and CI/CD environments
+- Developer-friendly debugging and troubleshooting
+
+#### 2. End-to-End Unified Experience
+
+**Single Tool Philosophy**
+
+- Complete workflow from serialization to reporting in one CLI
+- Unified interface for all ABAP DevOps tasks
+- Consistent command structure and options
+- Reduced context switching between tools
+
+**Integrated Workflow**
+
+```bash
+# Complete transport analysis in single command chain
+adt auth login --service-key ./service-key.json
+adt import transport TR001 ./output --format abapgit
+adt atc --transport TR001 --format gitlab --output results.json
+adt report generate --transport TR001 --template summary
+```
+
+#### 3. Transport-Centric Workflow
+
+**Granular Change Focus**
+
+- Transport requests as the primary unit of change
+- Delta analysis showing exactly what changed
+- Context-aware change reviews
+- Business-focused change documentation
+
+**Change Traceability**
+
+- Complete audit trail of transport contents
+- Before/after comparison capabilities
+- Impact analysis across dependent objects
+- Change history and evolution tracking
+
+#### 4. Environment-Aware Intelligence
+
+**Adaptive Output Formatting**
+
+- GitLab Code Quality format for GitLab CI/CD
+- GitHub Actions format for GitHub workflows
+- SARIF format for security and quality tools
+- Human-readable console output for local development
+
+**Context-Sensitive Behavior**
+
+- Automatic detection of CI/CD environment
+- Appropriate logging levels and output formats
+- Environment-specific optimizations
+- Intelligent error handling and reporting
+
+### Technical Architecture
+
+#### Direct ADT API Integration
+
+**Native SAP Integration**
+
+- Direct communication with SAP ADT APIs
+- No intermediate layers or proxies
+- Authentic SAP authentication and authorization
+- Full access to SAP object metadata and operations
+
+**Type-Safe Object Handling**
+
+- Integration with ADK for type-safe ABAP object modeling
+- Compile-time validation of object structures
+- Consistent object representation across operations
+- Extensible object type system
+
+#### Lightweight Self-Contained Design
+
+**Zero Infrastructure Requirements**
+
+- Single executable with no external dependencies
+- No server infrastructure to maintain
+- No database or persistent storage requirements
+- Minimal resource footprint
+
+**Fast Setup and Execution**
+
+- Minutes to get started vs. hours for complex pipelines
+- No complex configuration or setup procedures
+- Immediate productivity for new team members
+- Rapid iteration and testing cycles
+
+## Core Command Categories
+
+### Authentication Commands
+
+```bash
+# Service key authentication (BTP)
+adt auth login --service-key ./service-key.json
+
+# Basic authentication (on-premise)
+adt auth login --username $SAP_USER --password $SAP_PASSWORD --host $SAP_HOST
+
+# Interactive authentication
+adt auth login --interactive
+
+# Token-based authentication
+adt auth login --token $SAP_TOKEN --endpoint $SAP_ENDPOINT
+```
+
+**Design Rationale**: Flexible authentication supporting multiple SAP deployment scenarios:
+
+- **Service Key**: SAP Business Technology Platform (BTP) with OAuth 2.0
+- **Basic Auth**: On-premise S/4HANA systems with username/password
+- **Interactive**: Browser-based OAuth flows
+- **Token**: Pre-generated tokens for automation
+
+### Object Management Commands
+
+```bash
+# Import transport contents
+adt import transport TR001 ./output --format abapgit
+
+# Get individual objects
+adt get object ZCL_TEST --type class --output ./objects/
+
+# List objects in package
+adt list package Z_CUSTOM --recursive
+```
+
+**Design Rationale**: Transport-centric operations with support for individual object manipulation when needed.
+
+### Quality Analysis Commands
+
+```bash
+# Run ATC checks on transport
+adt atc --transport TR001 --format gitlab --output atc-results.json
+
+# Run ATC on specific objects
+adt atc --objects ZCL_TEST,ZIF_TEST --format sarif
+
+# Custom rule sets
+adt atc --transport TR001 --ruleset custom-rules.xml
+```
+
+**Design Rationale**: Comprehensive quality analysis with environment-aware output formatting.
+
+### Reporting Commands
+
+```bash
+# Generate transport summary
+adt report generate --transport TR001 --template summary
+
+# Custom report templates
+adt report generate --transport TR001 --template ./custom-template.md
+
+# Delta analysis report
+adt report delta --transport TR001 --baseline TR000
+```
+
+**Design Rationale**: Flexible reporting system supporting custom templates and multiple output formats.
+
+## Integration Architecture
+
+### With ADT Client
+
+**Abstracted ADT Communication**
+
+- ADT CLI initializes and manages ADT Client instances
+- ADT Client handles all SAP ADT API communication
+- Plugins receive initialized ADT Client for operations
+- Clean separation between CLI orchestration and ADT communication
+- **Specification**: See [ADT Client Specification](../adt-client/README.md)
+
+```typescript
+// CLI initializes ADT Client
+const adtClient = new AdtClient();
+await adtClient.connect(connectionConfig);
+
+// Plugins receive client instance
+const plugin = pluginRegistry.getPlugin(format);
+await plugin.exportObject({
+  objectType: 'CLAS',
+  objectName: 'ZCL_EXAMPLE',
+  adtClient: adtClient,
+  targetPath: './output',
+});
+```
+
+### With ADK (ABAP Development Kit)
+
+**Type-Safe Object Processing**
+
+- ADK provides type-safe ABAP object specifications
+- ADT Client uses ADK adapters for object serialization/parsing
+- Compile-time validation of object structures
+- Consistent object representation across operations
+
+```typescript
+// Bridge pattern integration via ADT Client
+class AdkObjectHandler<T extends Spec<unknown, Kind>> {
+  constructor(
+    private adtClient: AdtClient,
+    private parser: (xml: string) => T,
+    private objectType: string,
+  ) {}
+}
+```
+
+### With abapGit Format
+
+**Standardized Object Storage**
+
+- abapGit format as the canonical object representation
+- Git-friendly project structure
+- Consistent metadata storage using ADK specifications
+- Version control optimized serialization
+
+### With CI/CD Platforms
+
+**Universal Integration Pattern**
+
+```yaml
+# GitLab CI example
+abap-quality-check:
+  script:
+    - adt auth login --service-key $SERVICE_KEY
+    - adt atc --transport $TRANSPORT_ID --format gitlab --output gl-code-quality-report.json
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+```
+
+**Environment Detection**
+
+- Automatic CI/CD platform detection
+- Appropriate output formatting and logging
+- Environment-specific optimizations
+- Seamless integration without configuration
+
+## Command Behavioral Specifications
+
+### Error Handling Standards
+
+**Consistent Error Codes**
+
+- `0`: Success
+- `1`: General error
+- `2`: Authentication error
+- `3`: Network/connectivity error
+- `4`: Object not found
+- `5`: Permission denied
+
+**Error Message Format**
+
+```
+ERROR: [Category] Description
+  Context: Additional context information
+  Solution: Suggested resolution steps
+```
+
+### Output Format Standards
+
+**JSON Output Structure**
+
+```json
+{
+  "success": boolean,
+  "data": object,
+  "metadata": {
+    "timestamp": "ISO8601",
+    "command": "string",
+    "version": "string"
+  },
+  "errors": [
+    {
+      "code": "string",
+      "message": "string",
+      "context": object
+    }
+  ]
+}
+```
+
+**Logging Levels**
+
+- `ERROR`: Critical errors requiring immediate attention
+- `WARN`: Warnings that don't prevent operation completion
+- `INFO`: General information about operation progress
+- `DEBUG`: Detailed debugging information
+- `TRACE`: Verbose execution tracing
+
+### Configuration Management
+
+**Configuration Hierarchy**
+
+1. Command-line arguments (highest priority)
+2. Environment variables
+3. Project configuration file (`.adtrc`)
+4. User configuration file (`~/.adt/config`)
+5. System defaults (lowest priority)
+
+**Configuration File Format**
+
+```json
+{
+  "endpoints": {
+    "default": {
+      "url": "https://api.sap.com",
+      "client": "100"
+    }
+  },
+  "output": {
+    "format": "json",
+    "verbosity": "info"
+  },
+  "quality": {
+    "ruleset": "default",
+    "failOnWarnings": false
+  }
+}
+```
+
+## Performance Requirements
+
+### Response Time Targets
+
+- **Authentication**: < 5 seconds
+- **Object Retrieval**: < 10 seconds per object
+- **Transport Import**: < 30 seconds for typical transport
+- **ATC Analysis**: < 60 seconds for transport-level analysis
+
+### Scalability Requirements
+
+- **Concurrent Operations**: Support for parallel object processing
+- **Large Transports**: Handle transports with 100+ objects
+- **Memory Efficiency**: < 512MB memory usage for typical operations
+- **Network Efficiency**: Minimize API calls through intelligent caching
+
+## Security Requirements
+
+### Authentication Security
+
+- **Secure Credential Storage**: No plaintext credentials in logs or temporary files
+- **Token Management**: Automatic token refresh and secure storage
+- **Certificate Validation**: Strict SSL/TLS certificate validation
+- **Audit Logging**: Complete audit trail of authentication events
+
+### Data Protection
+
+- **Sensitive Data Handling**: Secure handling of ABAP source code and metadata
+- **Temporary File Security**: Secure cleanup of temporary files
+- **Network Security**: Encrypted communication with SAP systems
+- **Access Control**: Respect SAP authorization and role-based access
+
+## Extensibility Architecture
+
+### Plugin System
+
+```typescript
+interface AdtPlugin {
+  name: string;
+  version: string;
+  commands: CommandDefinition[];
+  initialize(context: AdtContext): Promise<void>;
+}
+```
+
+### Custom Output Formats
+
+```typescript
+interface OutputFormatter {
+  format: string;
+  contentType: string;
+  transform(data: any): string;
+}
+```
+
+### Custom Quality Rules
+
+```typescript
+interface QualityRuleSet {
+  name: string;
+  rules: QualityRule[];
+  apply(objects: AbapObject[]): QualityResult[];
+}
+```
+
+## Migration and Compatibility
+
+### SAP Piper Migration Path
+
+1. **Assessment**: Analyze existing SAP Piper configuration
+2. **Mapping**: Map SAP Piper steps to ADT CLI commands
+3. **Configuration**: Create equivalent ADT CLI configuration
+4. **Testing**: Validate equivalent functionality
+5. **Deployment**: Gradual rollout with fallback capability
+
+### Backward Compatibility
+
+- **Configuration Migration**: Tools to convert existing configurations
+- **Output Format Compatibility**: Support for legacy output formats where possible
+- **API Stability**: Semantic versioning with clear deprecation policies
+
+## Success Metrics
+
+### Developer Experience
+
+- **Setup Time**: < 5 minutes from installation to first successful command
+- **Learning Curve**: < 1 hour to become productive with basic commands
+- **Error Resolution**: Clear error messages with actionable solutions
+- **Documentation Quality**: Complete command reference and examples
+
+### Technical Performance
+
+- **Reliability**: > 99.9% success rate for valid operations
+- **Performance**: Meet all response time targets
+- **Resource Usage**: Minimal memory and CPU footprint
+- **Platform Coverage**: Support for all major CI/CD platforms
+
+### Business Impact
+
+- **Adoption Rate**: Replacement of SAP Piper in target organizations
+- **Productivity Improvement**: Measurable reduction in ABAP DevOps cycle time
+- **Cost Reduction**: Lower infrastructure and maintenance costs
+- **Developer Satisfaction**: Positive feedback on developer experience
+
+## Conclusion
+
+The ADT CLI addresses the fundamental limitations of existing ABAP DevOps tools by providing a unified, platform-agnostic, developer-friendly solution. By eliminating infrastructure dependencies, simplifying configuration, and providing consistent local and CI/CD experiences, the ADT CLI enables organizations to adopt modern DevOps practices for ABAP development without the complexity and overhead of traditional solutions.
+
+The integration with ADK ensures type safety and consistency, while the transport-centric workflow aligns with ABAP development practices. The environment-aware intelligence and extensible architecture provide the flexibility needed for diverse organizational requirements while maintaining simplicity and ease of use.
+
+--- ARQUIVOS DO PR (151)
+modified  +1     -1     AGENTS.md
+added     +92    -0     Dockerfile.mcp
+modified  +1912  -12    bun.lock
+added     +93    -0     docker-compose.mcp.yaml
+added     +304   -0     docs/deployment/mcp-http.md
+added     +586   -0     docs/planning/aws-abap-accelerator-feature-parity.md
+added     +280   -0     openspec/changes/add-mcp-http-transport/design.md
+added     +174   -0     openspec/changes/add-mcp-http-transport/proposal.md
+added     +213   -0     openspec/changes/add-mcp-http-transport/specs/adt-mcp/spec.md
+added     +122   -0     openspec/changes/add-mcp-http-transport/tasks.md
+modified  +1     -0     packages/adt-cli/package.json
+modified  +22    -0     packages/adt-cli/src/index.ts
+modified  +4     -0     packages/adt-cli/src/lib/cli.ts
+added     +109   -0     packages/adt-cli/src/lib/commands/changeset/add.ts
+added     +45    -0     packages/adt-cli/src/lib/commands/changeset/begin.ts
+added     +54    -0     packages/adt-cli/src/lib/commands/changeset/commit.ts
+added     +27    -0     packages/adt-cli/src/lib/commands/changeset/index.ts
+added     +49    -0     packages/adt-cli/src/lib/commands/changeset/rollback.ts
+added     +46    -0     packages/adt-cli/src/lib/commands/changeset/state.ts
+modified  +1     -0     packages/adt-cli/src/lib/commands/index.ts
+added     +10    -0     packages/adt-cli/src/lib/services/changeset/index.ts
+added     +301   -0     packages/adt-cli/src/lib/services/changeset/service.ts
+added     +55    -0     packages/adt-cli/src/lib/utils/adt-client-v2.test.ts
+modified  +280   -10    packages/adt-cli/src/lib/utils/adt-client-v2.ts
+modified  +4     -10    packages/adt-cli/tests/e2e/harness.ts
+modified  +7     -6     packages/adt-cli/tests/e2e/parity.bdef.test.ts
+added     +328   -0     packages/adt-cli/tests/e2e/parity.changeset.test.ts
+modified  +6     -2     packages/adt-cli/tests/e2e/parity.cts.test.ts
+modified  +2     -10    packages/adt-cli/tests/e2e/parity.ddic-cds.test.ts
+modified  +4     -8     packages/adt-cli/tests/e2e/parity.e13-rfc.test.ts
+modified  +16    -4     packages/adt-cli/tests/e2e/parity.flp.test.ts
+modified  +10    -13    packages/adt-cli/tests/e2e/parity.gcts.test.ts
+modified  +1     -5     packages/adt-cli/tests/e2e/parity.misc.test.ts
+modified  +7     -6     packages/adt-cli/tests/e2e/parity.srvb.test.ts
+modified  +1     -5     packages/adt-cli/tests/e2e/parity.srvd.test.ts
+modified  +15    -10    packages/adt-cli/tests/e2e/parity.wb.test.ts
+added     +88    -0     packages/adt-cli/tests/services/changeset/service.test.ts
+modified  +3     -0     packages/adt-cli/tsconfig.lib.json
+modified  +54    -4     packages/adt-mcp/AGENTS.md
+modified  +60    -1     packages/adt-mcp/README.md
+modified  +4     -1     packages/adt-mcp/package.json
+added     +304   -0     packages/adt-mcp/src/bin/adt-mcp-http.ts
+modified  +17    -0     packages/adt-mcp/src/index.ts
+added     +210   -0     packages/adt-mcp/src/lib/http/auth.ts
+added     +99    -0     packages/adt-mcp/src/lib/http/cors.ts
+added     +110   -0     packages/adt-mcp/src/lib/http/multi-system.ts
+added     +282   -0     packages/adt-mcp/src/lib/http/oauth.ts
+added     +467   -0     packages/adt-mcp/src/lib/http/server.ts
+modified  +23    -0     packages/adt-mcp/src/lib/server.ts
+added     +56    -0     packages/adt-mcp/src/lib/session/changeset.ts
+added     +129   -0     packages/adt-mcp/src/lib/session/registry.ts
+added     +38    -0     packages/adt-mcp/src/lib/session/types.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/activate-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/activate-package.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/atc-run.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/call-hierarchy.ts
+modified  +9     -4     packages/adt-mcp/src/lib/tools/call-rfc.ts
+added     +97    -0     packages/adt-mcp/src/lib/tools/changeset-add.ts
+added     +88    -0     packages/adt-mcp/src/lib/tools/changeset-begin.ts
+added     +56    -0     packages/adt-mcp/src/lib/tools/changeset-commit.ts
+added     +75    -0     packages/adt-mcp/src/lib/tools/changeset-helpers.ts
+added     +57    -0     packages/adt-mcp/src/lib/tools/changeset-rollback.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/check-syntax.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/checkin.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/clone-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-badi.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-bdef.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-function-group.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-function-module.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-package.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-srvb.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/create-srvd.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-create-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-delete-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-get-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-list-transports.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-reassign-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-release-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-search-transports.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/cts-update-transport.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-badi.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-bdef.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-cert.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-function-module.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-srvb.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/delete-srvd.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/discovery.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/find-definition.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/find-references.ts
+modified  +8     -7     packages/adt-mcp/src/lib/tools/function-tools.ts
+modified  +41    -40    packages/adt-mcp/src/lib/tools/gcts-tools.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-badi.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-bdef.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-cds-dcl.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-cds-ddl.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-data-element.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-domain.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-flp-tile.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-include.ts
+modified  +8     -7     packages/adt-mcp/src/lib/tools/get-installed-components.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-object-structure.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-package.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-source.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-srvb.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-srvd.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-structure.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-table-contents.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-table.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-test-classes.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/get-type-hierarchy.ts
+modified  +8     -7     packages/adt-mcp/src/lib/tools/git-tools.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/grep-objects.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/grep-packages.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/import-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/import-package.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/import-transport.ts
+modified  +14    -0     packages/adt-mcp/src/lib/tools/index.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-certs.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-flp-catalogs.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-flp-groups.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-flp-tiles.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-package-objects.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/list-pses.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/lock-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/lookup-user.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/pretty-print.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/publish-service-binding.ts
+modified  +18    -4     packages/adt-mcp/src/lib/tools/run-abap.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/run-query.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/run-unit-tests.ts
+added     +284   -0     packages/adt-mcp/src/lib/tools/sap-connect.ts
+added     +65    -0     packages/adt-mcp/src/lib/tools/sap-disconnect.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/search-objects.ts
+added     +111   -0     packages/adt-mcp/src/lib/tools/session-helpers.ts
+modified  +42    -1     packages/adt-mcp/src/lib/tools/shared-schemas.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/stat-package.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/system-info.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/unlock-object.ts
+modified  +5     -4     packages/adt-mcp/src/lib/tools/unpublish-srvb.ts
+modified  +18    -4     packages/adt-mcp/src/lib/tools/update-source.ts   <== código ligado à spec
+modified  +5     -4     packages/adt-mcp/src/lib/tools/upload-cert.ts
+modified  +14    -0     packages/adt-mcp/src/lib/types.ts
+added     +261   -0     packages/adt-mcp/tests/http-auth.test.ts
+added     +233   -0     packages/adt-mcp/tests/http-changeset.test.ts
+added     +228   -0     packages/adt-mcp/tests/http-integration.test.ts
+added     +332   -0     packages/adt-mcp/tests/http-oauth.test.ts
+modified  +1     -0     packages/adt-mcp/tsdown.config.ts
+modified  +15    -1     packages/adt-tui/scripts/generate-routes.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/adt-mcp/src/lib/tools/update-source.ts
+@@ -11,7 +11,8 @@ import { z } from 'zod';
+ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+ import { createLockService } from '@abapify/adt-locks';
+ import type { ToolContext } from '../types';
+-import { connectionShape } from './shared-schemas';
++import { sessionOrConnectionShape } from './shared-schemas';
++import { resolveClient } from './session-helpers';
+ import { resolveObjectUri } from './utils';
+ 
+ export function registerUpdateSourceTool(
+@@ -22,7 +23,7 @@ export function registerUpdateSourceTool(
+     'update_source',
+     'Write new ABAP source code to an existing object (acquires lock, PUTs source, releases lock)',
+     {
+-      ...connectionShape,
++      ...sessionOrConnectionShape,
+       objectName: z.string().describe('ABAP object name'),
+       objectType: z
+         .string()
+@@ -36,8 +37,21 @@ export function registerUpdateSourceTool(
+           'Transport request number (required for transportable objects)',
+         ),
+     },
+-    async (args) => {
+-      const client = ctx.getClient(args);
++    async (args, extra) => {
++      let client;
++      try {
++        ({ client } = await resolveClient(ctx, args, extra ?? {}));
++      } catch (error) {
++        return {
++          isError: true,
++          content: [
++            {
++              type: 'text' as const,
++              text: `Update source failed: ${error instanceof Error ? error.message : String(error)}`,
++            },
++          ],
++        };
++      }
+       let objectUri: string | undefined;
+ 
+       try {
+
+===== P105 | repo epam/ai-dial-chat | PR #7623: feat(chat): update code block download button (Issue #7589) | capacidade: sticky-code-block-header
+--- SPEC VIVA
+# Spec: Sticky Code Block Header
+
+## Purpose
+
+This capability ensures that the code block header (language label, Copy button, and Download button) remains visible at the top of the code block while the user scrolls through a long code snippet, improving accessibility and usability.
+
+## Requirements
+
+### Requirement: Code block header remains visible while scrolling
+The code block header (language label + Copy and Download buttons) SHALL remain visible at the top of the code block when the user scrolls vertically through a long code snippet. The header MUST use `position: sticky` and stay within the bounds of the code block container.
+
+#### Scenario: Header stays at top during vertical scroll
+- **WHEN** a code block is tall enough to require vertical scrolling
+- **THEN** the header (language label and action buttons) SHALL remain pinned to the top of the code block's visible area as the user scrolls down
+
+#### Scenario: Header does not overlap adjacent content outside the code block
+- **WHEN** the user scrolls past the bottom of a code block
+- **THEN** the sticky header SHALL no longer be visible (it leaves the sticky region when the code block scrolls out of view)
+
+#### Scenario: Multiple code blocks on the same page each have their own sticky header
+- **WHEN** a chat message contains more than one code block
+- **THEN** each code block SHALL have its own independently sticky header, constrained to its own container
+
+### Requirement: Copy and Download controls remain accessible during scroll
+The Copy and Download icon buttons in the code block header SHALL be accessible (visible and clickable) at all times while the user is scrolling through a long code snippet, without requiring the user to scroll back to the top.
+
+#### Scenario: Copy button is reachable mid-scroll
+- **WHEN** the user has scrolled partway through a long code block
+- **THEN** the Copy button SHALL be visible and clickable in the sticky header
+
+#### Scenario: Controls are not rendered during streaming
+- **WHEN** the last message is still streaming
+- **THEN** the Copy and Download buttons SHALL NOT appear (existing behavior, unchanged)
+
+--- ARQUIVOS DO PR (13)
+modified  +1     -0     apps/chat/public/locales/en/markdown.json
+renamed   +9     -5     apps/chat/src/components/Markdown/ChangeDownloadFileNameModal.tsx
+modified  +33    -37    apps/chat/src/components/Markdown/CodeBlock.tsx   <== código ligado à spec
+modified  +8     -8     apps/chat/src/components/Markdown/Table.tsx
+modified  +1     -0     apps/chat/src/constants/i18n.ts
+modified  +5     -0     apps/chat/src/utils/app/import-export.ts
+added     +2     -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/.openspec.yaml
+added     +50    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/design.md
+added     +27    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/proposal.md
+added     +31    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/specs/codeblock-download/spec.md
+added     +22    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/tasks.md
+added     +37    -0     openspec/specs/codeblock-download/spec.md
+modified  +10    -1     openspec/specs/export/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### apps/chat/src/components/Markdown/CodeBlock.tsx
+@@ -1,5 +1,5 @@
+-import { IconCheck, IconCopy } from '@tabler/icons-react';
+-import { CSSProperties, FC, memo, useCallback } from 'react';
++import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
++import { CSSProperties, FC, memo, useCallback, useState } from 'react';
+ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+ import {
+   oneDark,
+@@ -16,7 +16,8 @@ import {
+   languageFilenameMapping,
+   languageNameMapping,
+ } from '@/src/utils/app/codeblock';
+-import { getDownLoadCurrentDate } from '@/src/utils/app/import-export';
++import { triggerDownload } from '@/src/utils/app/file';
++import { getDefaultExportFileName } from '@/src/utils/app/import-export';
+ 
+ import { Translation } from '@/src/types/translation';
+ 
+@@ -26,7 +27,8 @@ import { UISelectors } from '@/src/store/selectors';
+ import { MarkdownI18nKeys } from '@/src/constants/i18n';
+ import { DEFAULT_ICON_SIZES } from '@/src/constants/icons';
+ 
+-import Download from '@/public/images/icons/download.svg';
++import { ChangeDownloadFileNameModal } from '@/src/components/Markdown/ChangeDownloadFileNameModal';
++
+ import { DialGhostIconButton, ElementSize } from '@epam/ai-dial-ui-kit';
+ 
+ interface Props {
+@@ -49,38 +51,26 @@ export const CodeBlock: FC<Props> = memo(
+ 
+     const { copied: isCopied, onCopy: copyToClipboard } = useCopy(value);
+ 
++    const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
++
+     const lowercaseLanguage = language.toLowerCase();
+     const displayLanguage =
+       languageNameMapping[lowercaseLanguage] || lowercaseLanguage;
+ 
+-    const downloadAsFile = useCallback(() => {
+-      // languageExtensionMapping allows set empty extension
+-      const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
+-      // use the specific filename if it exists in languageFilenameMapping
+-      const suggestedFileName =
+-        languageFilenameMapping[displayLanguage] ??
+-        `ai-chat-code-${getDownLoadCurrentDate()}${fileExtension}`;
+-      const fileName = window.prompt(
+-        t(MarkdownI18nKeys.EnterFileName),
+-        suggestedFileName,
+-      );
+-
+-      if (!fileName) {
+-        // User pressed cancel on prompt
+-        return;
+-      }
+-
+-      const blob = new Blob([value], { type: 'attachment/plain' });
+-      const url = URL.createObjectURL(blob);
+-      const link = document.createElement('a');
+-      link.download = fileName;
+-      link.href = url;
+-      link.style.display = 'none';
+-      document.body.appendChild(link);
+-      link.click();
+-      document.body.removeChild(link);
+-      URL.revokeObjectURL(url);
+-    }, [displayLanguage, t, value]);
++    // languageExtensionMapping allows set empty extension
++    const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
++    const suggestedFileName =
++      languageFilenameMapping[displayLanguage] ??
++      getDefaultExportFileName(`ai-chat-code${fileExtension}`);
++
++    const handleDownloadConfirm = useCallback(
++      (filename: string) => {
++        const blob = new Blob([value], { type: 'attachment/plain' });
++        const url = URL.createObjectURL(blob);
++        triggerDownload(url, filename);
++      },
++      [value],
++    );
+ 
+     return (
+       <div
+@@ -131,12 +121,9 @@ export const CodeBlock: FC<Props> = memo(
+                   tooltip: t(MarkdownI18nKeys.Download),
+                 }}
+                 className="flex items-center rounded bg-none hover:text-accent-primary"
+-                onClick={downloadAsFile}
++                onClick={() => setIsDownloadModalOpen(true)}
+                 icon={
+-                  <Download
+-                    width={DEFAULT_ICON_SIZES.SMALL}
+-                    height={DEFAULT_ICON_SIZES.SMALL}
+-                  />
++                  <IconDownload size={DEFAULT_ICON_SIZES.SMALL} stroke={1.5} />
+                 }
+                 aria-label="Download"
+               />
+@@ -163,6 +150,15 @@ export const CodeBlock: FC<Props> = memo(
+             {value}
+           </SyntaxHighlighter>
+         </div>
++
++        <ChangeDownloadFileNameModal
++          isOpen={isDownloadModalOpen}
++          defaultFilename={suggestedFileName}
++          heading={t(MarkdownI18nKeys.DownloadCodeBlock)}
++          onConfirm={handleDownloadConfirm}
++          onClose={() => setIsDownloadModalOpen(false)}
++          dataQa="download-codeblock-modal"
++        />
+       </div>
+     );
+   },
+
+===== P106 | repo boundless-xyz/kailua | PR #133: feat: Easy upgrade script and guidance | capacidade: foundry-dependency-management
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Dependencies installed as git submodules
+The project SHALL manage OP Stack and RISC Zero Ethereum dependencies as git submodules under `lib/`, installed via `git submodule add` or equivalent.
+
+#### Scenario: OP Stack v5.0.0 submodule present
+- **WHEN** checking `lib/` directory contents
+- **THEN** `lib/optimism` SHALL exist as a git submodule pinned to the `op-contracts/v5.0.0` tag
+
+#### Scenario: RISC Zero v3.0.1 submodule present
+- **WHEN** checking `lib/` directory contents
+- **THEN** `lib/risc0-ethereum` SHALL exist as a git submodule pinned to the `v3.0.1` tag
+
+#### Scenario: forge-std unchanged
+- **WHEN** checking existing dependencies
+- **THEN** `lib/forge-std` SHALL remain at its current version (v1.9.6) and be unmodified
+
+### Requirement: Vendored flat files removed
+The project SHALL NOT contain vendored flat contract files after migration.
+
+#### Scenario: Vendor directory cleaned up
+- **WHEN** checking `src/vendor/` directory
+- **THEN** `FlatOPImportV1.4.0.sol` and `FlatR0ImportV2.0.2.sol` SHALL NOT exist
+- **AND** the `src/vendor/` directory SHALL be removed
+
+### Requirement: Import remappings configured in foundry.toml
+The project SHALL configure Foundry remappings to provide clean import paths for all dependencies.
+
+#### Scenario: OP Stack source contracts remapped
+- **WHEN** importing OP Stack source contracts (types, errors, libraries)
+- **THEN** imports SHALL use the `@optimism/src/` prefix that resolves to `lib/optimism/packages/contracts-bedrock/src/`
+
+#### Scenario: OP Stack interfaces remapped
+- **WHEN** importing OP Stack interfaces (e.g., `ISemver`, `IDisputeGame`, `IDisputeGameFactory`, `IOptimismPortal2`)
+- **THEN** imports SHALL use the `@optimism/interfaces/` prefix that resolves to `lib/optimism/packages/contracts-bedrock/interfaces/`
+
+#### Scenario: RISC Zero contracts remapped
+- **WHEN** importing RISC Zero contracts (e.g., `IRiscZeroVerifier`, `RiscZeroGroth16Verifier`)
+- **THEN** imports SHALL use the `@risc0/` prefix that resolves to `lib/risc0-ethereum/contracts/src/`
+
+#### Scenario: Transitive dependencies remapped
+- **WHEN** upstream dependencies require OpenZeppelin, solady, or other transitive dependencies
+- **THEN** remappings SHALL resolve them to the copies bundled within the upstream submodules (e.g., `@openzeppelin/contracts/` → `lib/optimism/.../lib/openzeppelin-contracts/contracts/`)
+
+### Requirement: All import paths updated to use remappings
+All Solidity files in `src/`, `test/`, and `scripts/` SHALL use the configured remapping prefixes instead of vendor file imports.
+
+#### Scenario: Source contract imports updated
+- **WHEN** compiling any file in `src/` (KailuaLib.sol, KailuaTournament.sol, KailuaVerifier.sol, KailuaTreasury.sol, KailuaGame.sol)
+- **THEN** no file SHALL contain `import "./vendor/FlatOPImportV1.4.0.sol"` or `import "./vendor/FlatR0ImportV2.0.2.sol"`
+- **AND** each file SHALL import only the specific symbols it uses via named imports from `@optimism/` or `@risc0/` remapped paths
+
+#### Scenario: Test file imports updated
+- **WHEN** compiling any file in `test/`
+- **THEN** no file SHALL contain vendor file imports
+- **AND** imports SHALL use the same `@optimism/` and `@risc0/` remapping prefixes as source contracts
+
+#### Scenario: Script file imports updated
+- **WHEN** compiling any file in `scripts/`
+- **THEN** no file SHALL contain vendor file imports
+- **AND** imports SHALL use the same `@optimism/` and `@risc0/` remapping prefixes as source contracts
+
+### Requirement: Contracts adapted to OP Stack v5 API
+Kailua contracts SHALL compile and function correctly against OP Stack v5.0.0 APIs.
+
+#### Scenario: OP Stack type compatibility
+- **WHEN** using OP Stack types (`Claim`, `Hash`, `GameType`, `Timestamp`, `Duration`)
+- **THEN** types SHALL be imported from `@optimism/src/dispute/lib/Types.sol`
+- **AND** `GameStatus` SHALL be imported from `@optimism/interfaces/dispute/IDisputeGame.sol` to avoid duplicate type definitions
+
+#### Scenario: OP Stack contract interface compatibility
+- **WHEN** Kailua contracts reference `OptimismPortal2`, `DisputeGameFactory`, `SystemConfig`, or `SuperchainConfig`
+- **THEN** references SHALL use interface types (`IOptimismPortal2`, `IDisputeGameFactory`) to avoid pragma version conflicts (v5 concrete contracts require 0.8.15)
+- **AND** tests SHALL use mock contracts instead of concrete OP Stack implementations
+
+#### Scenario: OP Stack interface path compatibility
+- **WHEN** Kailua contracts implement or reference `ISemver`, `IDisputeGame`, `IDisputeGameFactory`, or `IInitializable`
+- **THEN** interfaces SHALL be imported from `@optimism/interfaces/`
+
+### Requirement: Contracts adapted to RISC Zero v3 API
+Kailua contracts SHALL compile and function correctly against RISC Zero Ethereum v3.0.1 APIs.
+
+#### Scenario: RISC Zero verifier compatibility
+- **WHEN** using `IRiscZeroVerifier`, `RiscZeroVerifierRouter`, `RiscZeroGroth16Verifier`, or `RiscZeroMockVerifier`
+- **THEN** contracts SHALL be imported from their v3.0.1 locations via the `@risc0/` remapping
+- **AND** all method calls SHALL be compatible with the v3 interfaces
+
+#### Scenario: RISC Zero library compatibility
+- **WHEN** using `ReceiptClaimLib` in test contracts
+- **THEN** the library SHALL be imported from `@risc0/IRiscZeroVerifier.sol`
+- **AND** all library method calls (`digest()`, `ok()`) SHALL remain compatible
+
+### Requirement: Project compiles successfully
+The project SHALL compile without errors after all changes, both via `forge build` and `cargo build`.
+
+#### Scenario: forge build succeeds
+- **WHEN** running `forge build` in the foundry project directory
+- **THEN** compilation SHALL succeed with zero errors
+
+#### Scenario: cargo build succeeds
+- **WHEN** running `cargo build -p kailua-contracts` (without `--features skip-solc`)
+- **THEN** the build script SHALL compile all Solidity contracts using `foundry_compilers` with the configured remappings
+- **AND** compilation SHALL succeed with zero errors
+
+#### Scenario: Solidity version compatible
+- **WHEN** compiling with the configured Solidity version (0.8.24)
+- **THEN** all source files SHALL be compatible
+- **AND** the solar linter MAY be disabled (`lint_on_build = false`) if it cannot resolve remapping paths
+
+### Requirement: All tests pass
+All existing tests SHALL continue to pass after the migration.
+
+#### Scenario: forge test succeeds
+- **WHEN** running `forge test` in the foundry project directory
+- **THEN** all test cases SHALL pass
+
+### Requirement: build.rs reads remappings from remappings.txt
+The Rust build script (`crates/contracts/build.rs`) SHALL read import remappings from `foundry/remappings.txt` and pass them to the `foundry_compilers` project configuration.
+
+#### Scenario: Remappings loaded at build time
+- **WHEN** `cargo build -p kailua-contracts` runs the build script
+- **THEN** the build script SHALL read `foundry/remappings.txt`
+- **AND** each non-empty line SHALL be parsed as a `Remapping` using `Remapping::from_str()`
+- **AND** the parsed remappings SHALL be set on the `ProjectPathsConfig` before compilation
+
+#### Scenario: Remapped imports resolve correctly
+- **WHEN** a Solidity source file contains `import {X} from "@optimism/src/..."` or similar `@`-prefixed imports
+- **THEN** the compiler SHALL resolve the import via the loaded remappings to the correct file in the `lib/` submodule tree
+
+#### Scenario: Missing remappings.txt
+- **WHEN** `foundry/remappings.txt` does not exist
+- **THEN** the build script SHALL proceed with no remappings (preserving backward compatibility with the `skip-solc` feature or empty projects)
+
+### Requirement: build.rs triggers rebuild on dependency changes
+The build script SHALL declare `cargo:rerun-if-changed` directives for all inputs that affect Solidity compilation.
+
+#### Scenario: Remappings file change triggers rebuild
+- **WHEN** `foundry/remappings.txt` is modified
+- **THEN** the next `cargo build` SHALL re-run the build script
+
+#### Scenario: Foundry config change triggers rebuild
+- **WHEN** `foundry/foundry.toml` is modified
+- **THEN** the next `cargo build` SHALL re-run the build script
+
+#### Scenario: Library directory change triggers rebuild
+- **WHEN** any file under `foundry/lib/` changes (e.g., submodule update)
+- **THEN** the next `cargo build` SHALL re-run the build script
+
+### Requirement: Rust ABI bindings reference the current Foundry artifact layout
+The Rust contract bindings in `crates/contracts/src/lib.rs` SHALL reference artifact JSON files that exist in the package-based Foundry layout.
+
+#### Scenario: Current artifact paths used for Rust bindings
+- **WHEN** `cargo build -p kailua-contracts` expands the `alloy::sol!` macros in `crates/contracts/src/lib.rs`
+- **THEN** each referenced JSON path SHALL exist under `foundry/out/` or an intentionally selected checked-in ABI snapshot path
+- **AND** the build SHALL NOT depend on removed `Flat*.sol` artifact files
+
+#### Scenario: Deployable RISC Zero artifacts are generated during project compilation
+- **WHEN** the Rust crate needs bindings for `RiscZeroVerifierRouter` or `RiscZeroGroth16Verifier`
+- **THEN** the Foundry project SHALL include source imports that cause those contracts to be emitted under `foundry/out/`
+- **AND** the resulting artifacts SHALL contain the bytecode required by deployable Rust bindings
+
+#### Scenario: RISC Zero transitive OpenZeppelin imports resolve
+- **WHEN** `foundry_compilers` compiles the imported `RiscZeroGroth16Verifier` source during `cargo build`
+- **THEN** the compiler SHALL resolve `openzeppelin/contracts/...` imports via an explicit remapping
+- **AND** compilation SHALL succeed without missing-file import errors
+
+### Requirement: CI workflow updated
+The CI workflow SHALL correctly handle git submodule dependencies.
+
+#### Scenario: GitHub Actions checkout with submodules
+- **WHEN** the CI workflow checks out the repository
+- **THEN** the checkout step SHALL include recursive submodule initialization (e.g., `submodules: recursive`)
+
+--- ARQUIVOS DO PR (35)
+modified  +1     -1     .github/workflows/ci.yml
+modified  +26    -1     bin/cli/src/fast_track.rs
+modified  +1     -0     book/src/SUMMARY.md
+added     +73    -0     book/src/fpvm-upgrade.md
+modified  +25    -22    crates/contracts/foundry/justfile
+modified  +27    -11    crates/contracts/foundry/scripts/Deploy.s.sol
+added     +43    -0     crates/contracts/foundry/scripts/UpgradeVerifier.s.sol
+added     +134   -0     crates/contracts/foundry/src/Proxy.sol
+added     +130   -0     crates/contracts/foundry/test/ProxyUpgrade.t.sol
+modified  +6     -0     crates/contracts/src/lib.rs   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/.openspec.yaml
+added     +56    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/design.md
+added     +29    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/proposal.md
+added     +16    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/specs/fast-track-proxy/spec.md
+added     +19    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/specs/proxy-contract-wrapper/spec.md
+added     +19    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/specs/proxy-deployment/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-13-fast-track-proxy-deployment/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/.openspec.yaml
+added     +64    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/design.md
+added     +29    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/proposal.md
+added     +36    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/specs/fpvm-upgrade-docs/spec.md
+added     +41    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/specs/proxy-deployment/spec.md
+added     +30    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/specs/verifier-upgrade/spec.md
+added     +18    -0     openspec/changes/archive/2026-03-13-upgradeable-kailua-verifier/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-proxy-upgrade-test/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-03-14-proxy-upgrade-test/design.md
+added     +19    -0     openspec/changes/archive/2026-03-14-proxy-upgrade-test/proposal.md
+added     +44    -0     openspec/changes/archive/2026-03-14-proxy-upgrade-test/specs/proxy-upgrade-test/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-14-proxy-upgrade-test/tasks.md
+added     +14    -0     openspec/specs/fast-track-proxy/spec.md
+added     +34    -0     openspec/specs/fpvm-upgrade-docs/spec.md
+added     +17    -0     openspec/specs/proxy-contract-wrapper/spec.md
+added     +46    -0     openspec/specs/proxy-deployment/spec.md
+added     +44    -0     openspec/specs/proxy-upgrade-test/spec.md
+added     +28    -0     openspec/specs/verifier-upgrade/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### crates/contracts/src/lib.rs
+@@ -64,6 +64,12 @@ sol!(
+     "foundry/out/RiscZeroMockVerifier.sol/RiscZeroMockVerifier.json"
+ );
+ 
++sol!(
++    #[sol(rpc)]
++    Proxy,
++    "foundry/out/Proxy.sol/Proxy.json"
++);
++
+ sol!(
+     #[sol(rpc)]
+     OwnableUpgradeable,
+
+===== P107 | repo PhilippPolterauer/cargo-samply | PR #47: use "`=`" with `--samply-args` throughout docs | capacidade: execution
+--- SPEC VIVA
+# execution Specification
+
+## Purpose
+Defines how the binary path is resolved and how the system verifies tool availability before execution.
+## Requirements
+### Requirement: Build-Driven Path Resolution
+The system SHALL determine the binary path by parsing the `CompilerArtifact` output from `cargo build`, rather than predicting the path.
+
+#### Scenario: Cross-compilation
+- **WHEN** building for a different target triple
+- **THEN** the correct artifact path from the build output is used
+
+### Requirement: Proactive Tool Check
+The system SHALL check for the existence of `samply` in the system PATH before starting the build.
+
+#### Scenario: Samply missing
+- **WHEN** `samply` is not installed
+- **THEN** the tool exits with a clear error before compiling the project
+
+
+--- ARQUIVOS DO PR (8)
+modified  +1     -1     CHANGELOG.md
+modified  +8     -4     README.md
+modified  +1     -1     openspec/changes/archive/2025-12-27-improve-robustness-and-ux/proposal.md
+modified  +1     -1     openspec/changes/archive/2025-12-27-improve-robustness-and-ux/specs/cli/spec.md
+modified  +1     -1     openspec/specs/cli/spec.md
+modified  +3     -1     src/cli.rs   <== código ligado à spec
+modified  +4     -1     src/lib.rs
+modified  +13    -0     tests/samply-args.trycmd
+--- DIFF DO CÓDIGO LIGADO
+### src/cli.rs
+@@ -104,7 +104,9 @@ pub struct Config {
+     #[arg(long, default_value = "--bench")]
+     pub bench_flag: String,
+ 
+-    /// Arguments to pass to samply (e.g. `--samply-args "--rate 2000"`)
++    /// Arguments to pass to samply (e.g. `--samply-args="--rate 2000"`).
++    /// Use `=` so the full string is parsed as the value of `--samply-args`,
++    /// even when it starts with `--`.
+     #[arg(long)]
+     pub samply_args: Option<String>,
+ 
+

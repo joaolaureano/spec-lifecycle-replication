@@ -1,0 +1,2238 @@
+===== P045 | repo rozx/Tsukuyomi | PR #82: Feat/embedding chapters | capacidade: ai-chapter-title-tool
+--- SPEC VIVA
+# ai-chapter-title-tool Specification
+
+## Purpose
+Allow AI to update chapter titles using the `update_chapter_title` tool.
+
+## Requirements
+### Requirement: Chapter title update tool
+系统 SHALL 提供 `update_chapter_title` 工具，允许 AI 通过 Function Calling 提交章节标题的翻译结果。
+
+#### Scenario: AI 提交章节标题翻译
+- **WHEN** AI 调用 `update_chapter_title` 工具
+- **THEN** 系统保存章节标题翻译到对应章节
+- **AND THEN** 返回成功确认信息
+
+### Requirement: Chapter title parameters
+`update_chapter_title` 工具 SHALL 接收并验证必要的参数。
+
+#### Scenario: Valid chapter title update
+- **GIVEN** AI 提供 chapter_id、original_title 和 translated_title
+- **WHEN** 调用 `update_chapter_title` 工具
+- **THEN** 章节标题翻译被保存
+- **AND THEN** 返回成功信息
+
+#### Scenario: Missing chapter_id
+- **GIVEN** AI 未提供 chapter_id 参数
+- **WHEN** 调用 `update_chapter_title` 工具
+- **THEN** 返回错误信息："缺少章节 ID"
+- **AND THEN** 不保存任何数据
+
+#### Scenario: Missing translated_title
+- **GIVEN** AI 未提供 translated_title 参数
+- **WHEN** 调用 `update_chapter_title` 工具
+- **THEN** 返回错误信息："缺少标题翻译"
+- **AND THEN** 不保存任何数据
+
+### Requirement: Chapter existence validation
+`update_chapter_title` 工具 SHALL 验证章节是否存在。
+
+#### Scenario: Chapter not found
+- **GIVEN** AI 提供的 chapter_id 不存在于当前书籍
+- **WHEN** 调用 `update_chapter_title` 工具
+- **THEN** 返回错误信息："章节不存在"
+- **AND THEN** 不保存任何数据
+
+### Requirement: Title update persistence
+`update_chapter_title` 工具保存的标题翻译 SHALL 持久化到数据存储中。
+
+#### Scenario: Title update is persisted
+- **GIVEN** AI 成功调用 `update_chapter_title` 工具
+- **WHEN** 后续查询该章节信息
+- **THEN** 返回的章节对象包含更新的标题翻译
+
+--- ARQUIVOS DO PR (117)
+modified  +1     -0     CLAUDE.md
+added     +2     -0     openspec/changes/improve-query-chapter-hybrid-scoring/.openspec.yaml
+added     +296   -0     openspec/changes/improve-query-chapter-hybrid-scoring/design.md
+added     +61    -0     openspec/changes/improve-query-chapter-hybrid-scoring/proposal.md
+added     +292   -0     openspec/changes/improve-query-chapter-hybrid-scoring/specs/chapter-embedding-search/spec.md
+added     +129   -0     openspec/changes/improve-query-chapter-hybrid-scoring/tasks.md
+added     +2     -0     openspec/changes/replace-chapter-summary-with-embeddings/.openspec.yaml
+added     +167   -0     openspec/changes/replace-chapter-summary-with-embeddings/design.md
+added     +58    -0     openspec/changes/replace-chapter-summary-with-embeddings/proposal.md
+added     +37    -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/ai-context-building/spec.md
+added     +178   -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/chapter-embedding-search/spec.md
+added     +25    -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/chapter-summary/spec.md
+added     +85    -0     openspec/changes/replace-chapter-summary-with-embeddings/tasks.md
+added     +2     -0     openspec/changes/sync-force-push-mode/.openspec.yaml
+added     +103   -0     openspec/changes/sync-force-push-mode/design.md
+added     +47    -0     openspec/changes/sync-force-push-mode/proposal.md
+added     +141   -0     openspec/changes/sync-force-push-mode/specs/data-sync/spec.md
+added     +54    -0     openspec/changes/sync-force-push-mode/tasks.md
+modified  +1     -1     package.json
+modified  +10    -6     src/__tests__/book-service.test.ts
+added     +181   -0     src/__tests__/chapter-embedding-backlog-title.test.ts
+added     +370   -0     src/__tests__/chapter-embedding-hybrid-scoring.test.ts
+added     +333   -0     src/__tests__/chapter-embedding-identifier-boost.test.ts
+added     +324   -0     src/__tests__/chapter-embedding-idf.test.ts
+added     +235   -0     src/__tests__/chapter-embedding-migration-v11.test.ts
+added     +407   -0     src/__tests__/chapter-embedding-proper-noun-boost.test.ts
+added     +533   -0     src/__tests__/chapter-embedding-service.test.ts
+added     +224   -0     src/__tests__/chapter-embedding-title-chunk.test.ts
+modified  +15    -9     src/__tests__/context-builder.test.ts
+modified  +329   -0     src/__tests__/embedding-queue.test.ts
+modified  +166   -10    src/__tests__/embedding-service.test.ts
+added     +47    -0     src/__tests__/local-embedding.test.ts
+modified  +427   -9     src/__tests__/memory-scoring.test.ts
+modified  +3     -2     src/__tests__/memory-service-queue.test.ts
+added     +178   -0     src/__tests__/query-chapter-tool.test.ts
+modified  +5     -2     src/__tests__/responsive-constants.test.ts
+modified  +2     -140   src/__tests__/sync-data-service.test.ts
+added     +280   -0     src/__tests__/sync-force-mode.test.ts
+modified  +0     -57    src/__tests__/task-status-tools.test.ts
+modified  +1     -16    src/__tests__/todo-workflow.test.ts
+added     +52    -0     src/__tests__/tool-registry-embedding-gate.test.ts
+modified  +0     -2     src/__tests__/translation-service.workflow-status.test.ts
+modified  +1     -1     src/__tests__/translation-tools.test.ts
+modified  +1     -1     src/__tests__/upsert-memory-for-sync.test.ts
+modified  +5     -2     src/auto-components.d.ts
+modified  +1     -1     src/components/dialogs/AIModelDialog.vue
+added     +374   -0     src/components/dialogs/BatchEmbeddingsTestQueryDialog.vue
+modified  +10    -10    src/components/layout/AppHeader.vue
+added     +559   -0     src/components/novel/BatchEmbeddingsPanel.vue
+removed   +0     -328   src/components/novel/BatchSummaryPanel.vue
+modified  +0     -35    src/components/novel/ChapterContentPanel.vue
+modified  +4     -0     src/components/novel/CharacterSettingPanel.vue
+modified  +5     -3     src/components/novel/MemoryCard.vue
+modified  +3     -3     src/components/novel/MemoryDetailDialog.vue
+modified  +6     -2     src/components/novel/MemoryPanel.vue
+modified  +60    -63    src/components/novel/MemoryReferencePanel.vue
+modified  +4     -0     src/components/novel/TerminologyPanel.vue
+modified  +0     -15    src/components/novel/VolumesList.vue
+modified  +1     -1     src/components/settings/AIModelSettingsTab.vue
+renamed   +186   -67    src/components/settings/EmbeddingSettingsTab.vue
+modified  +29    -5     src/components/settings/SyncSettingsTab.vue
+added     +70    -0     src/components/sync/ForceSyncToggle.vue
+modified  +23    -5     src/components/sync/SyncStatusBody.vue
+modified  +14    -1     src/components/sync/SyncStatusPanel.vue
+added     +10    -0     src/components/sync/sync-panel-injection.ts
+modified  +1     -90    src/composables/book-details/useBookDetailsPage.ts
+modified  +6     -0     src/composables/chat/useChatSession.ts
+modified  +15    -1     src/composables/main-layout/useMainLayoutShell.ts
+modified  +30    -15    src/composables/settings-page/useSettingsPage.ts
+added     +67    -0     src/composables/useForceSync.ts
+modified  +57    -1     src/composables/useGistUploadWithConflictCheck.ts
+modified  +260   -40    src/composables/useSyncExecutor.ts
+modified  +0     -2     src/constants/ai/index.ts
+modified  +1     -1     src/constants/version.ts
+modified  +2     -0     src/layouts/MainLayout.vue
+added     +33    -0     src/models/chapter-embedding.ts
+modified  +2     -2     src/models/memory.ts
+modified  +0     -1     src/models/novel.ts
+modified  +15    -1     src/models/settings.ts
+modified  +8     -0     src/models/sync.ts
+modified  +0     -2     src/pages/book-details/BookDetailsDesktop.vue
+modified  +9     -120   src/pages/settings-page/SettingsPageDesktop.vue
+modified  +3     -3     src/pages/settings-page/SettingsPageMobile.vue
+modified  +43    -5     src/pages/settings-page/SettingsPageTablet.vue
+modified  +168   -2     src/services/ai/tasks/assistant-service.ts
+removed   +0     -270   src/services/ai/tasks/chapter-summary-service.ts
+modified  +10    -2     src/services/ai/tasks/prompts/assistant.ts
+removed   +0     -31    src/services/ai/tasks/prompts/chapter-summary.ts
+modified  +19    -6     src/services/ai/tasks/prompts/common.ts
+modified  +0     -1     src/services/ai/tasks/prompts/index.ts
+modified  +2     -21    src/services/ai/tasks/prompts/runner.ts
+modified  +3     -3     src/services/ai/tasks/prompts/single-paragraph-polish.ts
+modified  +3     -3     src/services/ai/tasks/prompts/single-paragraph-proofreading.ts
+modified  +6     -1     src/services/ai/tasks/prompts/translation.ts   <== código ligado à spec
+modified  +0     -1     src/services/ai/tasks/translation-service.ts   <== código ligado à spec
+modified  +36    -65    src/services/ai/tasks/utils/context-builder.ts
+modified  +1     -15    src/services/ai/tasks/utils/task-types.ts
+modified  +2     -28    src/services/ai/tasks/utils/text-task-processor.ts
+modified  +0     -1     src/services/ai/tasks/utils/todo-helper.ts
+modified  +0     -10    src/services/ai/tasks/utils/todo-workflow.ts
+modified  +91    -88    src/services/ai/tools/book-tools.ts
+modified  +26    -2     src/services/ai/tools/index.ts
+modified  +6     -5     src/services/ai/tools/memory-tools.ts
+modified  +0     -8     src/services/ai/tools/task-status-tools.ts   <== código ligado à spec
+modified  +4     -3     src/services/book-service.ts
+modified  +40    -2     src/services/chapter-content-service.ts
+added     +907   -0     src/services/chapter-embedding-service.ts
+modified  +331   -83    src/services/embedding-queue.ts
+modified  +166   -20    src/services/embedding-service.ts
+modified  +398   -21    src/services/memory-scoring.ts
+modified  +52    -22    src/services/memory-service.ts
+modified  +3     -100   src/services/sync-data-service.ts
+modified  +0     -1     src/stores/ai-processing.ts
+modified  +53    -104   src/stores/settings.ts
+added     +77    -0     src/utils/chapter-embedding-debouncer.ts
+modified  +71    -1     src/utils/indexed-db.ts
+added     +37    -0     src/utils/local-embedding.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/services/ai/tasks/prompts/translation.ts
+@@ -9,6 +9,7 @@ import {
+   getMemoryWorkflowRules,
+   getToolUsageInstructions,
+   getOutputFormatRules,
++  hasQueryChapterTool,
+ } from './index';
+ import type { AITool } from 'src/services/ai/types/ai-service';
+ 
+@@ -44,6 +45,10 @@ export function buildTranslationSystemPrompt(params: TranslationSystemPromptPara
+     enableOriginalTextValidation,
+   } = params;
+ 
++  const chapterLookupHint = hasQueryChapterTool(tools)
++    ? '需要章节上下文时用 query_chapter（三类最稳 query：标题/系列名直搜、人物+具体动作+独特细节、事件锚点；中文转述日文标题字面差异大时优先用原文；避免抽象读后感、仅人名无动作；Top1 未必最佳默认看 Top3-5），再按需调 get_chapter_info 读全文。'
++    : '需要章节上下文时用 list_chapters 找到章节 ID 后调 get_chapter_info 读全文。';
++
+   return `你是专业的日轻小说翻译助手，将日语翻译为自然流畅的简体中文。${todosPrompt}${bookContextSection}${chapterContextSection}${previousChapterSection}${specialInstructionsSection}
+ 
+ 【核心规则】
+@@ -54,7 +59,7 @@ export function buildTranslationSystemPrompt(params: TranslationSystemPromptPara
+ 5. **前后一致**: 必须参考前文翻译的段落、标题和相关记忆，保持标题/人名/术语/风格/称呼一致。翻译前使用工具获取相关信息。
+ 6. **保持原意**: 避免误译、漏译、增译。根据上下文找出最准确的表达。
+ 7. **完整翻译**: ⚠️ 必须翻译所有单词和短语，禁止在翻译结果中保留明显未翻译的日语原文（尤其是假名、助词、语尾等）
+-8. **关注当前任务**: 你可以使用工具（如 get_previous_paragraphs, get_next_paragraphs）查看上下文（甚至跨越章节），但你**必须只翻译/修改当前任务列表中指定的段落**。上下文仅供参考，切勿翻译上下文段落作为输出。
++8. **关注当前任务**: 你可以使用工具（如 get_previous_paragraphs, get_next_paragraphs）查看上下文（甚至跨越章节），但你**必须只翻译/修改当前任务列表中指定的段落**。上下文仅供参考，切勿翻译上下文段落作为输出。${chapterLookupHint}
+ 9. **段落标识**: ⚠️ 提交翻译时 **必须使用 paragraph_id**（从段落 [ID: xxx] 获取），**禁止使用 index** 提交。
+ 10. ${getSymbolFormatRules()}
+ 
+
+### src/services/ai/tasks/translation-service.ts
+@@ -239,7 +239,6 @@ export class TranslationService {
+         buildSystemPrompt,
+         onParagraphsExtracted,
+         onTitleExtracted,
+-        enableChapterSummary: true,
+         enablePreviousChapter: true,
+         enableBriefPlanning: true,
+       },
+
+### src/services/ai/tools/task-status-tools.ts
+@@ -32,11 +32,6 @@ const TRANSITION_RULES: Record<TaskType, StateTransitionRules> = {
+     working: ['end'],
+     end: [],
+   },
+-  chapter_summary: {
+-    planning: ['working'],
+-    working: ['end'],
+-    end: [],
+-  },
+ };
+ 
+ /**
+@@ -70,9 +65,6 @@ function getTransitionErrorMessage(
+     if (taskType === 'proofreading') {
+       return '校对任务不支持 review 状态';
+     }
+-    if (taskType === 'chapter_summary') {
+-      return '章节摘要任务不支持 review 状态';
+-    }
+   }
+ 
+   return `无效的状态转换: ${currentStatus} → ${newStatus}`;
+
+===== P046 | repo netclaw-dev/netclaw | PR #1398: Loud tool-argument validation: eliminate silent discard/degradation of LLM tool arguments | capacidade: netclaw-session
+--- SPEC VIVA
+# netclaw-session Specification
+
+## Purpose
+
+Define session identity, turn lifecycle, persistence recovery, subscriber
+model, context management, and compaction behavior.
+
+Research: `docs/research/context-management-patterns.md`
+## Requirements
+### Requirement: Slack thread session identity
+
+The system SHALL key each session by `{channelId}/{threadTs}`.
+
+#### Scenario: Route repeated thread messages to same actor
+
+- **GIVEN** a thread session key already exists
+- **WHEN** a new message arrives in the same thread
+- **THEN** the same session actor handles the turn
+
+### Requirement: Persisted turn lifecycle
+
+The system SHALL persist each completed turn and emit typed output events to
+subscribers. Subscriber delivery SHALL use a direct subscription model with
+`OutputFilter` bitmask so that subscribers control which output categories they
+receive (Text, Thinking, ToolCalls, Usage). Lifecycle events (TurnCompleted,
+ErrorOutput, SessionTitleOutput, ToolInteractionRequest) SHALL always be
+delivered regardless of filter. `SubAgentOutput` events (Started/Completed
+phases) SHALL be filtered under the `ToolCalls` category.
+
+Multiple subscribers from different channels (e.g., Slack and TUI) SHALL
+coexist on the same session actor. Each subscriber receives its own filtered
+copy of output independently. Adding or removing a subscriber SHALL NOT affect
+other active subscribers.
+
+The session actor SHALL create an `IApprovalChannel` instance at session start
+and pass it to the tool execution pipeline. During the Processing behavior
+phase, the session actor SHALL handle `ToolInteractionResponse` messages by
+completing the corresponding `TaskCompletionSource` in the approval channel.
+The session actor SHALL also record approvals through `IToolApprovalService`
+based on the approval decision (session-scoped for ApproveOnce, persistent for
+ApproveAlways).
+
+The persisted `TurnRecorded` event SHALL carry an optional
+`SourceReminderId` field (protobuf tag 5, additive). When a
+`SendUserMessage` arrives with `MessageSource.ReminderId` set, the
+resulting `TurnRecorded` event SHALL copy that value into
+`SourceReminderId` so that reminder-originated turns are distinguishable
+in the journal (for forensics) and survive recovery (so the in-memory
+dedup set can be rebuilt via event replay).
+
+#### Scenario: Persist and emit assistant reply
+
+- **WHEN** the assistant produces a response
+- **THEN** a `TurnRecorded` event is persisted
+- **AND** typed output events are emitted to subscribers based on their filter
+
+#### Scenario: Reminder-originated turn carries SourceReminderId
+
+- **GIVEN** the session receives a `SendUserMessage` whose
+  `MessageSource.ReminderId` equals `"daily-digest:1712000000000"`
+- **WHEN** the turn completes and `TurnRecorded` is persisted
+- **THEN** the persisted event has
+  `SourceReminderId = "daily-digest:1712000000000"`
+- **AND** the event is replayable as a normal turn on recovery
+
+#### Scenario: Non-reminder turn has null SourceReminderId
+
+- **GIVEN** the session receives a regular user `SendUserMessage` with
+  `MessageSource.ReminderId = null`
+- **WHEN** the turn completes and `TurnRecorded` is persisted
+- **THEN** the persisted event has `SourceReminderId = null`
+
+#### Scenario: Multi-subscriber filtered delivery
+
+- **GIVEN** multiple subscribers with different OutputFilter bitmasks
+- **WHEN** a turn completes with text, thinking, and usage data
+- **THEN** each subscriber receives only the output categories matching their filter
+- **AND** all subscribers receive lifecycle events regardless of filter
+
+#### Scenario: Cross-channel multi-subscriber
+
+- **GIVEN** a session originally created by the Slack channel with an active
+  Slack subscriber
+- **WHEN** a TUI client joins the same session via `JoinSession`
+- **THEN** both Slack and TUI subscribers receive output from subsequent turns
+- **AND** either subscriber disconnecting does NOT affect the other
+- **AND** the session continues processing input from any attached channel
+
+#### Scenario: Approval response handled during Processing
+
+- **GIVEN** the session is in Processing phase with a pending approval
+- **WHEN** a `ToolInteractionResponse` message arrives
+- **THEN** the session actor completes the corresponding TCS in the approval
+  channel
+- **AND** the blocked tool task unblocks and proceeds based on the decision
+
+#### Scenario: ToolInteractionRequest delivered as lifecycle event
+
+- **GIVEN** a tool requires approval
+- **WHEN** the pipeline emits a `ToolInteractionRequest`
+- **THEN** all subscribers receive it regardless of their `OutputFilter`
+
+### Requirement: Persisted adopted-context metadata separates truthful provenance from third-party policy
+
+When the session persists or reuses an adopted-context record, it SHALL preserve
+the full adopted window truthfully and SHALL NOT collapse self-only adopted
+history into "no adopted context."
+
+For persisted session metadata:
+
+- `HasAdoptedContext` SHALL mean the adopted window is non-empty.
+- Adopted-speaker provenance SHALL include all sender ids present in that
+  adopted window.
+- `HasThirdPartyAdoptedContext` SHALL be tracked as a separate policy concept and
+  SHALL be true only when any adopted sender id differs from the current
+  authorized author of the executable message.
+
+This metadata split SHALL coexist with the existing trust model that adopted
+context is quoted, non-executable context and only the current authorized
+message is executable.
+
+#### Scenario: Persisted record keeps self-only adopted window truthful
+
+- **GIVEN** an adopted-context record is written for an authorized turn
+- **AND** every adopted sender id matches the current authorized sender
+- **WHEN** the session persists the record
+- **THEN** `HasAdoptedContext` is true
+- **AND** adopted-speaker provenance includes that sender id
+- **AND** `HasThirdPartyAdoptedContext` is false
+
+#### Scenario: Persisted record marks third-party policy separately
+
+- **GIVEN** an adopted-context record is written for an authorized turn
+- **AND** the adopted window includes a sender id different from the current
+  authorized sender
+- **WHEN** the session persists the record
+- **THEN** adopted-speaker provenance includes all adopted sender ids
+- **AND** `HasThirdPartyAdoptedContext` is true
+
+#### Scenario: Adopted context remains non-executable after metadata split
+
+- **GIVEN** a persisted record reports `HasAdoptedContext=true`
+- **WHEN** the session later uses that record for audit, retry, or recovery
+- **THEN** the adopted window remains quoted, non-executable context
+- **AND** only the current authorized message remains executable
+
+### Requirement: Context window usage transparency
+
+The system SHALL include context window metadata in `UsageOutput` events so
+subscribers can display usage percentage without duplicating session config.
+
+#### Scenario: UsageOutput includes context window metadata
+
+- **WHEN** a turn completes with usage data
+- **THEN** `UsageOutput` includes `ContextWindowTokens` (total capacity) and
+  `UsagePercent` (input tokens / context window)
+
+### Requirement: Decoupled immutable session state
+
+The system SHALL maintain conversation state (history, turn count, title) in an
+immutable `SessionState` record decoupled from the actor. State transitions
+SHALL be pure functions (`Apply` methods) testable without an ActorSystem.
+
+Session actor internal concerns SHALL be decomposed into independently testable
+modules:
+
+- **SessionSubscriberManager**: Owns subscriber registration, deregistration,
+  filtered output delivery, and watch lifecycle.
+- **DeliveryRetryHandler**: Owns retry counting, eligibility tracking, and
+  nudge message construction for channel delivery failures.
+- **TurnStateTracker**: Owns per-turn transient counters (tool call count,
+  budget nudge, duplicate detection). Provides `Reset()` for turn boundaries.
+- **DiscoveredToolCache**: Owns MCP tool retention with lease countdown,
+  eviction, and max count enforcement.
+- **ProcessingWatchdog**: Owns operation ID tracking, timer management, and
+  expiry validation for stuck-operation detection.
+
+Each module SHALL be a plain `internal sealed` class instantiated by the actor,
+not registered in DI.
+
+#### Scenario: State transitions are pure and testable
+
+- **GIVEN** a `SessionState` instance
+- **WHEN** an event is applied via `Apply()`
+- **THEN** a new `SessionState` is returned with the event applied
+- **AND** the original instance is not modified
+
+#### Scenario: Handler modules testable without ActorSystem
+
+- **GIVEN** a `TurnStateTracker` instance
+- **WHEN** `Reset()` is called
+- **THEN** all per-turn counters are zeroed
+- **AND** no Akka.NET types are required for the test
+
+### Requirement: Session recovery across restart
+
+The system SHALL recover session state from journal and snapshots.
+
+#### Scenario: Recover context after process restart
+
+- **GIVEN** prior persisted turns exist
+- **WHEN** the process restarts
+- **THEN** the session recovers prior context before processing new input
+
+#### Scenario: Recover state after actor kill
+
+- **GIVEN** two completed turns are persisted
+- **WHEN** the session actor is killed and a new message arrives for the same session
+- **THEN** a new actor recovers from the journal with TurnCount == 2
+- **AND** the next turn continues from the recovered state
+
+### Requirement: Conversation compaction
+
+The system SHALL compact long session history using a tiered approach that
+produces a structured summary surviving successive compactions without
+grounding decay, enforces tool call/result pair integrity at the compaction
+boundary, and disambiguates the self session from any foreign session
+identifiers referenced in the discarded window. Before and after compaction
+boundaries, the session SHALL emit high-priority memory checkpoints into the
+durable memory queue instead of performing a synchronous one-off memory flush
+that depends on the turn path completing all curation work inline.
+
+Compaction logic SHALL be encapsulated in a `SessionCompactionPipeline` static
+utility class, separate from the session actor. The pipeline accepts a
+`SessionState` snapshot and `CompactionParameters` record and sends results
+back to the actor via `self.Tell()`.
+
+The compaction observer LLM SHALL produce output in a fixed structured
+format with nine sections: Primary Request and Intent, Key Technical
+Concepts, Files and Code Sections, Problem Solving, Pending Tasks, Task
+Evolution, Current Work, Next Step, and Required Files. The Task Evolution
+section SHALL contain direct quotes from user messages that changed the
+task, to prevent drift across successive compactions.
+
+The compaction summary message SHALL be wrapped with a distinctive header
+of the form `[session-summary session:{id}]` so that consumers (the
+observer on successive compactions, the reducer, and the UI) can
+recognize it as a prior-compaction artifact and preserve it across
+successive compactions without relying on a separately-persisted index.
+
+The compaction observer SHALL receive the self `SessionId` in its system
+prompt and SHALL explicitly mark any foreign session identifiers in
+observations as `session:{id}` rather than conflating them with the self
+session.
+
+The compaction observer system prompt SHALL include a rule instructing the
+model to preserve any prior structured summary block verbatim and update
+in place, rather than re-summarizing or rewriting it.
+
+#### Scenario: Compaction threshold reached
+
+- **GIVEN** `UsageDetails.InputTokenCount` exceeds the compaction token limit
+  derived from `ModelCapabilities.CompactionTokenLimit(SessionTuning.CompactionThreshold)`
+- **WHEN** compaction runs
+- **THEN** the actor enters `Compacting` phase via `TransitionTo(Compacting)`
+- **AND** incoming messages are buffered during compaction
+
+#### Scenario: Compaction boundary emits memory checkpoint
+
+- **GIVEN** compaction is about to run or has just completed a summary reduction
+- **WHEN** the compaction boundary is reached
+- **THEN** the session enqueues a high-priority memory checkpoint for durable
+  curation
+- **AND** the user-facing session does not wait for background curation to
+  finish
+
+#### Scenario: Tiered compaction — tool result clearing first
+
+- **GIVEN** compaction is triggered
+- **WHEN** phase 1 runs
+- **THEN** old tool results are replaced with placeholders
+- **AND** the N most recent tool interactions are preserved in full
+  (configurable via `SessionTuning.KeepRecentToolResults`)
+- **AND** if threshold is now satisfied, no summarization LLM call is made
+
+#### Scenario: Tiered compaction — structured summarization
+
+- **GIVEN** phase 1 (tool clearing) did not bring context under threshold
+- **WHEN** the observer LLM call runs
+- **THEN** the observer produces a summary containing the nine fixed sections
+  (Primary Request and Intent, Key Technical Concepts, Files and Code Sections,
+  Problem Solving, Pending Tasks, Task Evolution, Current Work, Next Step,
+  Required Files)
+- **AND** the Task Evolution section contains direct quotes from user
+  messages that changed the task
+- **AND** the summary is wrapped with a `[session-summary session:{id}]`
+  header and stored in the compacted history
+- **AND** a `SessionCompacted` event is persisted carrying the compacted
+  messages
+- **AND** a persistence snapshot is taken
+- **AND** compacted state remains usable for future turns
+
+#### Scenario: Successive compactions do not re-summarize prior summary
+
+- **GIVEN** a session that has been compacted, with a prior
+  `[session-summary session:{id}]` message in history
+- **WHEN** a subsequent compaction is triggered
+- **THEN** the observer system prompt instructs the model to preserve the
+  prior summary block verbatim and update its sections in place
+- **AND** the reducer's user-message-boundary walk-back preserves the
+  prior summary message in the kept window (the summary is a User-role
+  message with a distinctive header)
+
+#### Scenario: Self session disambiguation in observer
+
+- **GIVEN** the discarded window contains a reference to a session identifier
+  that is not the running session (e.g. the agent was investigating another
+  session via a tool call)
+- **WHEN** the observer LLM call runs
+- **THEN** the observer system prompt includes the self session id
+- **AND** the produced summary marks the foreign session as `session:{id}`
+- **AND** the produced summary does not conflate the foreign session with the
+  self session
+
+#### Scenario: Tool call/result pair integrity during compaction
+
+- **GIVEN** conversation history contains tool call/result pairs
+- **WHEN** the extractive reducer selects the kept window
+- **THEN** the kept window starts on a `User`-role message (not a
+  `Tool`-role message and not an `Assistant` message that contains
+  `FunctionCallContent` without a matching preceding user turn)
+- **AND** tool call/result pairs are never split across the compaction
+  boundary
+- **AND** older tool interactions remain representable in the journal for
+  checkpoint extraction and summarization
+
+### Requirement: Automatic pre-turn memory recall
+
+The session system SHALL run automatic durable-memory recall before each
+user-facing model turn. Recall logic SHALL be encapsulated in a
+`SessionRecallManager` class that owns the turn recall cache and progressive
+exclusion set. The manager SHALL provide `ResolveForTurn()`,
+`InjectIntoMessages()`, `ResetForNewTurn()`, and `ResetForCompaction()` methods.
+
+The recall pipeline SHALL use the incoming user message, recent turn state,
+active project/session context, and policy scope to assemble a bounded recall
+bundle. If recall exceeds its latency budget or the memory substrate is
+unhealthy, the turn SHALL continue in degraded mode without blocking on recall.
+
+#### Scenario: User-facing turn receives automatic recall bundle
+
+- **GIVEN** a session receives a new user message
+- **WHEN** the turn pipeline prepares the model request
+- **THEN** the `SessionRecallManager` resolves recall before the model call
+- **AND** injects a bounded recall bundle when eligible memories are found
+
+#### Scenario: Recall timeout degrades safely
+
+- **GIVEN** the memory recall pipeline exceeds its configured time budget
+- **WHEN** the session is preparing the next model call
+- **THEN** the session continues without the recall bundle
+- **AND** records degraded memory status for diagnostics and observability
+
+### Requirement: Durable memory checkpoint scheduling
+
+The session system SHALL emit durable memory checkpoints on eligible events
+including explicit memory requests, stable user facts, verified tool findings,
+compaction boundaries, and accepted subagent findings. Checkpoint enqueue SHALL
+be durable before the turn reports a successful explicit save, and pending
+checkpoints SHALL survive daemon restart.
+
+#### Scenario: Explicit remember request is durably queued
+
+- **GIVEN** the operator explicitly tells Netclaw to remember a fact
+- **WHEN** the session handles that request
+- **THEN** the session durably enqueues a high-priority checkpoint before
+  reporting success
+- **AND** background curation may complete after the user-facing turn finishes
+
+#### Scenario: Pending checkpoints recover after restart
+
+- **GIVEN** one or more memory checkpoints were queued before daemon shutdown
+- **WHEN** the daemon restarts
+- **THEN** the memory worker reloads the pending checkpoints
+- **AND** resumes curation without losing the queued work
+
+### Requirement: Tool context in session state
+
+The system SHALL load available tools into session state based on the active
+policy grants at session initialization. Tool definitions SHALL be refreshed
+from the tool registry each time a session actor starts or recovers.
+
+#### Scenario: Session loads granted tools at initialization
+
+- **GIVEN** the ACL grants `shell`, `web_search`, and `mcp:memorizer` to the
+  current channel and sender
+- **WHEN** a session actor initializes
+- **THEN** session state includes tool definitions for only the granted tool
+  categories
+
+#### Scenario: Denied tools excluded from session
+
+- **GIVEN** the ACL does not grant `github` for the current channel
+- **WHEN** a session actor initializes
+- **THEN** GitHub tool definitions are not loaded into session state
+
+### Requirement: Config hot-reload integration
+
+The session system SHALL respond to config change notifications dispatched by
+the `ConfigWatcherService`. Active sessions SHALL re-evaluate their tool grants
+when ACL changes, rebuild provider connections when provider config changes,
+and reconnect MCP servers when MCP profiles change.
+
+#### Scenario: ACL change refreshes tool grants for active session
+
+- **GIVEN** a session actor is active with tools loaded from the previous ACL
+- **WHEN** the config watcher publishes an ACL change event
+- **THEN** the session actor re-evaluates tool grants against the new ACL
+- **AND** adds or removes tools from the session's available tool set
+
+#### Scenario: Provider change triggers IChatClient rebuild
+
+- **GIVEN** a session actor is using an `IChatClient` from the current provider
+  configuration
+- **WHEN** the config watcher publishes a provider change event
+- **THEN** the session actor obtains a new `IChatClient` from the provider
+  factory
+- **AND** subsequent turns use the new provider configuration
+
+#### Scenario: MCP profile change triggers server reconnection
+
+- **GIVEN** a session actor has MCP tools loaded from connected servers
+- **WHEN** the config watcher publishes an MCP profile change event
+- **THEN** the session actor refreshes its MCP tool definitions
+- **AND** newly added servers' tools become available
+- **AND** removed servers' tools are no longer available
+
+#### Scenario: Schedule change does not affect active sessions
+
+- **GIVEN** a session actor is processing turns
+- **WHEN** the config watcher publishes a schedule change event
+- **THEN** the session actor does NOT take any action
+- **AND** the `ScheduleManagerActor` handles timer reconfiguration independently
+
+### Requirement: Skill index context layer injection
+
+The skill index context layer SHALL accept the session's effective trust
+audience and available tool set when producing the skill index for system
+prompt injection. The injected index SHALL be filtered per-audience rather
+than identical for all sessions.
+
+#### Scenario: Session prompt includes audience-filtered skill index
+
+- **GIVEN** a session with `TrustAudience.Team` and tools `[web_search, web_fetch, file_read]`
+- **WHEN** the system prompt is assembled
+- **THEN** the skill index context layer injects the Team-audience compressed
+  menu
+- **AND** skills requiring `shell_execute` are not present in the injected index
+
+#### Scenario: Session prompt uses pre-built menu
+
+- **GIVEN** pre-built menus exist for each audience
+- **WHEN** the system prompt is assembled for a new session
+- **THEN** the context layer selects the pre-built menu matching the session's
+  effective audience
+- **AND** no per-turn menu generation occurs
+
+### Requirement: Slash-command interception before LLM dispatch
+
+The session actor SHALL intercept user messages starting with `/` and check
+the slash-command registry before passing the message to the LLM. This
+interception SHALL apply to all message sources (Slack, webhook, scheduled
+jobs, reminders).
+
+#### Scenario: Slash command intercepted before LLM
+
+- **GIVEN** a user message starting with `/netclaw-operations`
+- **WHEN** the session actor receives the message
+- **THEN** the slash-command registry is checked BEFORE any LLM call
+- **AND** if matched, the skill content is injected as a transient system message
+- **AND** the remainder text becomes the user message for the LLM turn
+
+### Requirement: Session title generation
+
+Title generation SHALL be encapsulated in a `SessionTitleGenerator` static
+utility class. The generator SHALL determine whether to generate a title based
+on turn count and `SessionTuning.TitleGenerationInterval`, and fire a sidecar
+LLM call that sends `TitleGenerationCompleted` back to the actor. Title
+generation is best-effort — failures are silently logged and do not affect
+session operation.
+
+#### Scenario: Title generated on first turn
+
+- **GIVEN** a session completes turn 1
+- **WHEN** `SessionTitleGenerator.ShouldGenerate(1, interval)` is evaluated
+- **THEN** the result is `true`
+- **AND** a sidecar LLM call is fired to generate a title
+
+#### Scenario: Title generation failure is silent
+
+- **GIVEN** the sidecar LLM call for title generation fails
+- **WHEN** the error is caught
+- **THEN** a warning is logged
+- **AND** the session continues without a title update
+
+### Requirement: LLM invocation encapsulation
+
+LLM call execution and streaming SHALL be encapsulated in a `SessionLlmInvoker`
+static utility class. The invoker SHALL handle timeout wrapping, streaming delta
+forwarding via `self.Tell(LlmResponseDeltaReceived)`, and error packaging as
+`LlmCallFailed`. Dynamic context layer injection SHALL be a static method on
+this class.
+
+#### Scenario: LLM streaming inactivity timeout
+
+The system SHALL enforce a single reset-on-delta inactivity timeout for LLM
+streaming calls using `FirstTokenTimeout` (default 600s). The timer starts
+when the LLM call is fired and resets on every streaming delta received.
+
+- **GIVEN** an LLM streaming call is in progress
+- **WHEN** no deltas arrive within `FirstTokenTimeout` of the call start or
+  the last received delta
+- **THEN** the watchdog fires and the turn fails with `ErrorCategory.Timeout`
+- **AND** the error message indicates the stream timed out due to inactivity
+
+Backward compat: if `TurnLlmTimeoutSeconds` is configured but
+`FirstTokenTimeoutSeconds` is not, `FirstTokenTimeout` uses `TurnLlmTimeout`.
+
+#### Scenario: Streaming deltas forwarded to actor
+
+- **GIVEN** an LLM streaming call is in progress
+- **WHEN** text content chunks arrive
+- **THEN** each chunk after the first is forwarded as `LlmResponseDeltaReceived`
+- **AND** the first chunk is held until the second arrives (single-chunk optimization)
+- **AND** the watchdog refreshes with `FirstTokenTimeout` on each delta
+
+### Requirement: Tool execution encapsulation
+
+Tool execution SHALL be encapsulated in a `SessionToolExecutionPipeline` static
+utility class. The pipeline SHALL execute tool calls in parallel, track sub-agent
+activity, and send `ToolExecutionCompleted` or `ToolExecutionFailed` back to the
+actor. The pipeline SHALL NOT itself bound or clamp tool-result size: bounding the
+result to the inline budget and spilling the overflow is done once, centrally, by
+`DispatchingToolExecutor` (per the `bounded-tool-output` capability), so the
+pipeline stores the result the dispatcher already bounded. `SessionTuning.MaxInlineToolResultChars`
+is the session **content** budget the dispatcher uses for tools without a smaller
+per-tool override.
+
+#### Scenario: Parallel tool execution
+
+- **GIVEN** an LLM response contains 3 tool calls
+- **WHEN** `SessionToolExecutionPipeline.ExecuteToolsAsync()` runs
+- **THEN** all 3 tool calls execute in parallel
+- **AND** results are collected and sent as a single `ToolExecutionCompleted`
+
+#### Scenario: Tool execution timeout
+
+- **GIVEN** tool execution is in progress
+- **WHEN** the configured `ToolExecutionTimeout` elapses
+- **THEN** the pipeline sends `ToolExecutionFailed` with a `TimeoutException`
+
+#### Scenario: Oversized result already bounded by the dispatcher
+
+- **GIVEN** a tool returns an oversized result
+- **WHEN** it reaches the pipeline
+- **THEN** the pipeline stores it as-is (already windowed + spilled by
+  `DispatchingToolExecutor`) without re-clamping
+
+### Requirement: Reminder redelivery best-effort dedup
+
+`SessionState` SHALL maintain an in-memory
+`ImmutableHashSet<string> ProcessedReminderIds`, folded in the
+`Apply(TurnRecorded)` handler from each recovered or live event's
+`SourceReminderId` when non-null. `Apply(SessionCompacted)` SHALL preserve
+the set across compaction (similar to how `WorkingContext` is preserved).
+The set SHALL NOT be persisted to `SessionSnapshot`: on snapshot-based
+recovery the set starts empty and rebuilds from post-snapshot event replay
+via the normal `Apply(TurnRecorded)` path.
+
+`LlmSessionActor` SHALL pre-check `cmd.Source?.ReminderId` against
+`ProcessedReminderIds` at the top of both the `Ready`-phase
+`HandleIncomingUserMessage` method and the `Processing`-phase
+`Command<SendUserMessage>` buffer handler. On a dedup hit, the session
+SHALL reply `CommandAck` to the sender without modifying state,
+persisting events, or dispatching an LLM call.
+
+The dedup check SHALL happen *before* any audience enforcement, ACL
+evaluation, or prompt construction, so that a redelivery from
+Akka.Reminders is handled entirely in memory and cannot trigger spurious
+side effects.
+
+**Best-effort semantics**: dedup is not guaranteed across snapshot
+recovery boundaries. A reminder processed before a snapshot and
+redelivered after a snapshot-based recovery will be processed as a fresh
+turn. This is an explicitly accepted tradeoff — the LLM itself typically
+recognizes a duplicate prompt in its recent context and responds
+appropriately, and persisting the dedup ledger to snapshot adds
+complexity without proportional value.
+
+#### Scenario: Redelivered reminder hits dedup in Ready phase
+
+- **GIVEN** the session is in `Ready` phase with
+  `ProcessedReminderIds = { "check-pr:1712000000000" }` rebuilt from
+  post-snapshot journal replay
+- **WHEN** a `SendUserMessage` arrives with
+  `MessageSource.ReminderId = "check-pr:1712000000000"`
+- **THEN** the session replies `CommandAck` to the sender
+- **AND** no `TurnRecorded` event is persisted
+- **AND** the LLM is not invoked
+- **AND** a `reminder_mode_b_dedup_hit` log entry is emitted
+
+#### Scenario: Redelivered reminder hits dedup in Processing phase
+
+- **GIVEN** the session is in `Processing` phase (LLM call in flight) with
+  a dedup set containing `"nightly-report:1712005000000"`
+- **WHEN** a `SendUserMessage` redelivery arrives with the same reminder ID
+- **THEN** the session replies `CommandAck` without buffering the message
+- **AND** the in-flight turn is unaffected
+
+#### Scenario: Dedup set rebuilt from post-snapshot event replay
+
+- **GIVEN** a session journal contains three `TurnRecorded` events after
+  the most recent snapshot, two with non-null `SourceReminderId` and one
+  regular user turn
+- **WHEN** the session actor recovers from the snapshot and replays
+  subsequent events
+- **THEN** `ProcessedReminderIds` contains exactly the two reminder IDs
+  from the post-snapshot events
+- **AND** subsequent redeliveries of those reminders are deduped
+
+#### Scenario: Dedup set starts empty on snapshot-only recovery
+
+- **GIVEN** a session journal where all `TurnRecorded` events are
+  older than the most recent snapshot
+- **WHEN** the session actor recovers from that snapshot
+- **THEN** `ProcessedReminderIds` starts empty (the snapshot does not
+  carry the set)
+- **AND** a subsequent redelivery of a pre-snapshot reminder (still
+  within `MaxDeliveryWindow`) is NOT deduped and is processed as a fresh
+  turn
+- **AND** the outcome is logged but not treated as an error
+
+#### Scenario: Non-reminder user messages are not deduped
+
+- **GIVEN** a session with a populated `ProcessedReminderIds` set
+- **WHEN** a regular `SendUserMessage` arrives with
+  `MessageSource.ReminderId = null`
+- **THEN** the message is processed normally regardless of the dedup set
+
+### Requirement: Persist adopted-context audit records
+
+When an authorized threaded turn adopts unsynced prior thread messages, the session system SHALL durably persist or reuse an adopted-context record for
+audit before execution continues for that authorized turn.
+
+The persisted record SHALL include at minimum:
+
+- session or thread identity
+- authorizer identity for the current authorized message
+- sync lower bound and upper bound
+- included message ids
+- included message timestamps
+- included message sender ids
+- authority-at-inclusion for each included message
+- the exact canonical attribution projection presented to the model
+- enough linkage to correlate retries or recovery for the same authorized
+  message id
+
+The idempotency basis for this record SHALL be the current authorized message
+identity within the session or thread. If the same authorized message is
+retried or replayed after adopted-context persistence has already succeeded, the
+session SHALL reuse the existing adopted-context record and exact persisted
+projection rather than persist a duplicate or re-derive a new projection from
+raw thread history.
+
+If the authorized message has no unsynced adopted gap, the session SHALL NOT
+persist an adopted-context record and SHALL treat the turn as an ordinary
+authorized turn.
+
+If adopted-context persistence fails, the system SHALL NOT enqueue the
+authorized turn and SHALL NOT advance the authorized-sync watermark.
+
+If durable turn completion is not observed after the adopted-context record has
+been persisted, the durable authorized-sync watermark SHALL remain unchanged and
+the persisted record SHALL remain a fail-closed audit artifact that retries or
+recovery can reuse rather than proof that the turn ran.
+
+#### Scenario: Adopted-context record persisted for authorized turn
+
+- **GIVEN** an authorized threaded message adopts three unsynced prior messages
+- **WHEN** the turn is prepared
+- **THEN** the session persists one adopted-context audit record
+- **AND** the record contains the authorizer, sync bounds, included messages,
+  authority-at-inclusion, and the exact canonical projection
+
+#### Scenario: Persistence failure blocks enqueue
+
+- **GIVEN** an authorized threaded message would adopt unsynced prior messages
+- **WHEN** adopted-context persistence fails
+- **THEN** the authorized turn is not enqueued
+- **AND** the authorized-sync watermark does not advance
+
+#### Scenario: Missing durable completion leaves audit without watermark advance
+
+- **GIVEN** the adopted-context record has been persisted
+- **WHEN** durable turn completion is not observed for that authorized message
+- **THEN** the durable authorized-sync watermark remains unchanged
+- **AND** the persisted adopted-context record is treated as a non-executed
+  audit artifact that retries or recovery may reuse
+
+#### Scenario: Same authorized message retry reuses persisted record
+
+- **GIVEN** an adopted-context record already exists for a specific current
+  authorized message identity
+- **AND** a prior enqueue attempt for that message did not complete
+- **WHEN** the system retries that same authorized message
+- **THEN** the existing adopted-context record is reused
+- **AND** the execution linkage is updated without persisting a duplicate
+
+### Requirement: Adopted context is non-executable quoted context
+
+The session SHALL treat adopted-context material as quoted context rather than
+ordinary authoritative turn history unless a later explicit change says
+otherwise. Only the current authorized message in that turn SHALL be executable.
+
+Adopted or pending unauthorized content SHALL NOT directly:
+
+- dispatch a model turn on its own;
+- enter slash-command dispatch;
+- originate tool approvals;
+- originate tool calls, reminders, or jobs; or
+- originate direct durable memory writes.
+
+#### Scenario: Adopted context cannot execute without current authorized message
+
+- **GIVEN** a thread contains only unauthorized pending messages after the last
+  watermark
+- **WHEN** no authorized message arrives
+- **THEN** the session does not execute a turn from that pending material
+
+#### Scenario: Authorized turn executes only current message
+
+- **GIVEN** an authorized turn includes adopted context plus the current
+  authorized message
+- **WHEN** the session executes the turn
+- **THEN** only the current authorized message is treated as executable
+- **AND** the adopted context remains quoted supporting material
+
+### Requirement: Canonical projection is derived from persisted record
+
+The threaded adapter MAY construct the model-visible multi-speaker projection before session handoff. When adopted context exists, the session SHALL persist
+that exact projection together with the adopted-message metadata before
+execution continues.
+
+Retries, replay, or crash recovery for the same authorized message id SHALL
+reuse the persisted adopted-context record keyed by that authorized message id
+rather than reconstruct a different projection from raw thread history.
+
+If no adopted-context record exists because the turn had no unsynced gap, the
+model SHALL receive only the current authorized message and no empty
+adopted-context projection.
+
+#### Scenario: Audit replay matches model-visible projection
+
+- **GIVEN** an adopted-context record exists for a turn
+- **WHEN** an operator reviews that turn later
+- **THEN** the stored canonical projection matches the attribution framing that
+  was shown to the model
+
+### Requirement: Approval-paused turn lifecycle preserves original context
+
+The persisted session turn lifecycle SHALL preserve the original turn context across approval pause, approval response, tool redrive, follow-up LLM calls, continuation tool calls, and turn completion. The context SHALL remain active until the resumed turn completes, fails, or is explicitly abandoned by a new user message.
+
+#### Scenario: Context remains active through continuation LLM call
+
+- **GIVEN** a recovered approval response redrives a parked tool batch
+- **WHEN** the tool result is appended and the session invokes the continuation LLM call
+- **THEN** the continuation call uses the restored turn context
+- **AND** the exposed tool list is filtered for the original turn audience and boundary
+
+#### Scenario: Context remains active through continuation tool call
+
+- **GIVEN** a recovered approval redrive has resumed a turn
+- **WHEN** the continuation LLM response requests another tool call
+- **THEN** that tool call is dispatched with the same restored turn context
+- **AND** approval capability and channel type match the original turn
+
+#### Scenario: Context clears when resumed turn completes
+
+- **GIVEN** a resumed approval-paused turn completes successfully
+- **WHEN** `TurnCompleted` is emitted
+- **THEN** the session clears the active approval turn context
+- **AND** the next user message starts with a new turn context
+
+### Requirement: Approval recovery tests cover context directly
+
+Session approval recovery tests SHALL include direct coverage for turn-context construction, persistence, restoration, and projection into tool and memory contexts. End-to-end cold-recovery tests SHALL remain for user-visible recovery behavior, but field-by-field context propagation SHOULD be covered through focused tests where possible.
+
+#### Scenario: Direct projection test replaces field-only integration coverage
+
+- **GIVEN** a persisted turn context has audience, boundary, channel type, requester, approval capability, and adopted-context state
+- **WHEN** the session projects that context into tool execution and memory-policy inputs
+- **THEN** the projected values match the persisted context
+- **AND** the assertion does not require a full actor cold-recovery scenario for each individual field
+
+#### Scenario: End-to-end recovery test remains for user-visible behavior
+
+- **GIVEN** a user approves a pending tool prompt after session recovery
+- **WHEN** the session redrives the parked tool batch
+- **THEN** the user observes the tool result and final assistant response
+- **AND** no duplicate approval prompt is emitted for the approved call
+
+
+--- ARQUIVOS DO PR (47)
+modified  +7     -0     Directory.Packages.props
+added     +108   -0     SILENT_FALLBACK_AUDIT.md
+modified  +3     -3     docs/runbooks/background-jobs.md
+modified  +0     -3     docs/spec/configuration.md
+modified  +13    -0     evals/run-evals.sh   <== código ligado à spec
+modified  +21    -1     feeds/skills/.system/files/netclaw-operations/SKILL.md
+added     +2     -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/.openspec.yaml
+added     +253   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/design.md
+added     +139   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/proposal.md
+added     +72    -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/netclaw-tools/spec.md
+added     +135   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/tool-arg-validation/spec.md
+added     +93    -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/tool-call-metadata/spec.md
+added     +120   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/tasks.md
+modified  +68    -0     openspec/specs/netclaw-tools/spec.md
+added     +145   -0     openspec/specs/tool-arg-validation/spec.md
+modified  +68    -55    openspec/specs/tool-call-metadata/spec.md
+modified  +3     -0     samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj
+modified  +3     -0     samples/Netclaw.Demo.AppHost/Netclaw.Demo.AppHost.csproj
+modified  +46    -0     src/Netclaw.Actors.Tests/Sessions/Pipelines/BackgroundRoutingTests.cs
+added     +278   -0     src/Netclaw.Actors.Tests/Sessions/Pipelines/MetaValidationAndNoticeTests.cs
+modified  +4     -46    src/Netclaw.Actors.Tests/Sessions/Pipelines/ToolCallMetaExtractorTests.cs
+added     +109   -0     src/Netclaw.Actors.Tests/Tools/GeneratedToolStrictBindingTests.cs
+added     +94    -0     src/Netclaw.Actors.Tests/Tools/ListWebhooksToolTests.cs
+modified  +9     -4     src/Netclaw.Actors.Tests/Tools/ShellToolTests.cs
+added     +230   -0     src/Netclaw.Actors.Tests/Tools/ToolArgumentHelperStrictTests.cs
+added     +241   -0     src/Netclaw.Actors.Tests/Tools/ToolArgumentValidatorTests.cs
+modified  +65    -0     src/Netclaw.Actors.Tests/Tools/WebFetchToolTests.cs
+modified  +0     -2     src/Netclaw.Actors/Sessions/LlmSessionActor.cs
+modified  +37    -13    src/Netclaw.Actors/Sessions/Pipelines/SessionToolExecutionPipeline.cs
+modified  +28    -11    src/Netclaw.Actors/Sessions/Pipelines/ToolCallMetaExtractor.cs
+modified  +75    -0     src/Netclaw.Actors/Tools/DispatchingToolExecutor.cs
+modified  +19    -0     src/Netclaw.Actors/Tools/IToolExecutor.cs
+modified  +18    -2     src/Netclaw.Actors/Tools/ListWebhooksTool.cs
+modified  +10    -2     src/Netclaw.Actors/Tools/ShellTool.cs
+modified  +0     -4     src/Netclaw.Actors/Tools/ToolAccessPolicy.cs
+modified  +56    -9     src/Netclaw.Actors/Tools/WebFetchTool.cs
+modified  +0     -11    src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json
+modified  +0     -6     src/Netclaw.Configuration/ToolConfig.cs
+modified  +37    -0     src/Netclaw.Daemon.Tests/Configuration/OpenAiCompatibleChatClientTests.cs
+modified  +1     -0     src/Netclaw.Providers/Netclaw.Providers.csproj
+modified  +18    -3     src/Netclaw.Providers/SelfHosted/OpenAiCompatibleChatClient.cs
+modified  +150   -35    src/Netclaw.Tools.Abstractions/ToolArgumentHelper.cs
+added     +193   -0     src/Netclaw.Tools.Abstractions/ToolArgumentValidator.cs
+added     +26    -0     src/Netclaw.Tools.Abstractions/ToolCallArgumentErrors.cs
+modified  +13    -18    src/Netclaw.Tools.Abstractions/ToolCallMeta.cs
+modified  +1     -0     src/Netclaw.Tools.Abstractions/ToolExecutionContext.cs
+modified  +12    -9     src/Netclaw.Tools.Generators/NetclawToolGenerator.cs
+--- DIFF DO CÓDIGO LIGADO
+### evals/run-evals.sh
+@@ -1017,6 +1017,15 @@ assert_tool_file_list() {
+     stdout_contains '\[tool:call\] file_list'
+ }
+ 
++assert_tool_timeout_arg_recovery() {
++    # Loud arg validation: if the model emits a near-miss timeout key
++    # (TimeoutSeconds, timeout_seconds), the rejection's did-you-mean must
++    # steer it to the canonical _timeout_seconds within the turn — the
++    # command actually running is the proof of recovery.
++    stdout_contains '\[tool:call\] shell_execute' \
++        && stdout_contains 'netclaw-timeout-eval-ok'
++}
++
+ # Category 5: Grounding & Alignment
+ assert_grounding_no_hallucinate_version() {
+     stdout_contains '\[tool:call\]'
+@@ -1477,6 +1486,10 @@ run_all() {
+     run_case tool_file_list "file_list called" \
+         "What files are in my session directory?"
+ 
++    run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
++        "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \
++        "Use the shell to run: echo netclaw-timeout-eval-ok — give it a 300 second timeout since it might be slow."
++
+     end_category
+ 
+     # ── Category 5: Grounding & Alignment ──
+
+===== P047 | repo lis186/ccxray | PR #37: feat: Codex dashboard parity — write-path abstraction + WS capture + UI fixes | capacidade: taint-markers
+--- SPEC VIVA
+# taint-markers Specification
+
+## Purpose
+TBD - created by archiving change taint-markers. Update Purpose after archive.
+## Requirements
+### Requirement: Tool source classification
+系統 SHALL 根據 tool_use 的 `name` 與 `input` 將每個 tool call 分類為以下來源之一：`local`、`local:sensitive`、`network`。
+
+分類規則：
+- **network**：tool name 屬於已知網路工具清單（`WebFetch`、`WebSearch`、`mcp__*__fetch`、`mcp__*__search` 等前綴/後綴匹配）
+- **local:sensitive**：tool name 屬於本地工具，且 `input` 的 JSON 字串包含已知敏感路徑（`~/.ssh/`、`.env`、`/etc/passwd`、`/etc/shadow`、`/etc/sudoers`、`id_rsa`、`id_ed25519`、`id_ecdsa`、`authorized_keys`、`known_hosts`）
+- **local**：其餘所有 tool call
+
+#### Scenario: Network tool classification
+- **WHEN** tool_use name 為 `WebFetch`
+- **THEN** `classifyToolSource` 回傳 `'network'`
+
+#### Scenario: Local sensitive classification
+- **WHEN** tool_use name 為 `Read`，input 包含 `~/.ssh/id_rsa`
+- **THEN** `classifyToolSource` 回傳 `'local:sensitive'`
+
+#### Scenario: Plain local classification
+- **WHEN** tool_use name 為 `Read`，input 為 `/tmp/foo.txt`
+- **THEN** `classifyToolSource` 回傳 `'local'`
+
+#### Scenario: Unknown tool defaults to local
+- **WHEN** tool_use name 不在任何已知清單中
+- **THEN** `classifyToolSource` 回傳 `'local'`（保守預設）
+
+---
+
+### Requirement: Tool source stored in entry summary
+系統 SHALL 在 entry summary 中加入 `toolSources` 物件，key 為 tool_use `id`，value 為來源分類字串。`toolSources` 在 `sse-broadcast.js` 計算，並在 `restore.js` 的歷史載入路徑中同樣計算。
+
+#### Scenario: Summary includes toolSources
+- **WHEN** entry 包含至少一個 tool_use
+- **THEN** entry summary 的 `toolSources` 包含該 tool_use id 對應的來源字串
+
+#### Scenario: Empty toolSources for no tool calls
+- **WHEN** entry 不含任何 tool_use
+- **THEN** entry summary 的 `toolSources` 為空物件 `{}`
+
+---
+
+### Requirement: Timeline badge display
+系統 SHALL 在 dashboard timeline 的 tool call row 右側顯示對應的來源 badge。
+
+Badge 規格：
+- `local`：灰色文字，無背景，顯示 `[local]`
+- `local:sensitive`：橘色背景，顯示 `[local:sensitive]`
+- `network`：藍色背景，顯示 `[network]`
+
+#### Scenario: Network badge shown
+- **WHEN** 用戶點開含有 `WebFetch` tool call 的 turn
+- **THEN** 該 tool call row 顯示藍色 `[network]` badge
+
+#### Scenario: Sensitive badge shown
+- **WHEN** tool call 為 `Read`，input 含 `.env` 路徑
+- **THEN** 該 tool call row 顯示橘色 `[local:sensitive]` badge
+
+#### Scenario: No badge for plain local
+- **WHEN** tool call 為 `Read`，input 為一般路徑
+- **THEN** 該 tool call row 顯示灰色 `[local]`（低視覺權重）
+
+
+--- ARQUIVOS DO PR (91)
+modified  +34    -0     CHANGELOG.md
+modified  +23    -0     CLAUDE.md
+added     +300   -0     docs/normalization-map.md
+added     +750   -0     docs/superpowers/plans/2026-06-03-a1a3-write-path-abstraction.md
+added     +100   -0     docs/superpowers/specs/2026-06-03-a1a3-premortem.md
+added     +193   -0     docs/superpowers/specs/2026-06-03-codex-write-path-abstraction-design.md
+added     +133   -0     docs/war-stories.md
+added     +197   -0     docs/wire-protocol-reference.md
+modified  +27    -9     openspec/changes/2026-05-26-auth-phase-2/design.md
+modified  +82    -51    openspec/changes/2026-05-26-auth-phase-2/tasks.md
+modified  +10    -10    openspec/changes/2026-05-26-auth-phase-3/tasks.md
+added     +2     -0     openspec/changes/2026-05-28-codex-dashboard-parity/.openspec.yaml
+added     +84    -0     openspec/changes/2026-05-28-codex-dashboard-parity/design.md
+added     +38    -0     openspec/changes/2026-05-28-codex-dashboard-parity/proposal.md
+added     +34    -0     openspec/changes/2026-05-28-codex-dashboard-parity/tasks.md
+added     +292   -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/design.md
+added     +50    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/proposal.md
+added     +74    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/tasks.md
+modified  +34    -4     openspec/specs/two-domain-auth/spec.md
+modified  +1     -1     package.json
+modified  +2     -1     public/entry-rendering.js
+modified  +4     -0     public/index.html
+modified  +62    -92    public/messages.js   <== código ligado à spec
+modified  +30    -26    public/miller-columns.js
+added     +30    -0     public/renderers/anthropic.js
+added     +4     -0     public/renderers/fallback.js
+added     +7     -0     public/renderers/index.js
+added     +65    -0     public/renderers/openai.js
+added     +496   -0     reason/260529-dashboard-agent-abstraction/handoff.md
+added     +66    -0     reason/260603-codex-parity-ledger/ledger.md
+added     +25    -0     reason/260603-codex-parity-ledger/next-session-prompt.md
+added     +143   -0     scripts/rebuild-missing-index.js
+modified  +155   -91    server/auth.js
+modified  +0     -15    server/config.js
+modified  +5     -0     server/cost-worker.js
+added     +16    -0     server/entry.js
+modified  +81    -221   server/forward.js
+modified  +54    -23    server/helpers.js
+modified  +180   -59    server/hub.js
+modified  +176   -146   server/index.js
+added     +71    -0     server/openai-response.js
+removed   +0     -94    server/openai-session.js
+modified  +10    -2     server/pricing.js
+modified  +5     -0     server/providers.js
+modified  +27    -13    server/routes/auth.js
+modified  +2     -1     server/sse-broadcast.js   <== código ligado à spec
+modified  +6     -0     server/system-prompt.js
+added     +112   -0     server/wire-parsers/anthropic.js
+added     +15    -0     server/wire-parsers/index.js
+added     +220   -0     server/wire-parsers/openai.js
+modified  +115   -108   server/ws-proxy.js
+modified  +132   -4     test/auth-bootstrap.test.js
+added     +94    -0     test/auth-dashboard-shell.e2e.test.js
+modified  +220   -29    test/auth-dispatcher.test.js
+modified  +58    -52    test/auth-header-injection.e2e.test.js
+modified  +1     -0     test/auth-token-strip.e2e.test.js
+added     +133   -0     test/auth-upstream-credential.test.js
+modified  +3     -50    test/auth-ws.test.js
+removed   +0     -81    test/auth.test.js
+modified  +1     -0     test/codex-noise-suppression.e2e.test.js
+modified  +11    -10    test/config.test.js
+modified  +1     -1     test/dashboard-codex-e2e.test.js
+added     +166   -0     test/entry.test.js
+added     +16    -0     test/fixtures/codex-ws-frames/say-hi.ndjson
+added     +27    -0     test/fixtures/wire-parsers/anthropic/turn1_req.json
+added     +11    -0     test/fixtures/wire-parsers/anthropic/turn1_res.json
+added     +31    -0     test/fixtures/wire-parsers/anthropic/turn2_req.json
+added     +14    -0     test/fixtures/wire-parsers/openai/noise_paths.json
+added     +63    -0     test/fixtures/wire-parsers/openai/sse-events.json
+added     +24    -0     test/fixtures/wire-parsers/openai/turn1_req.json
+added     +27    -0     test/fixtures/wire-parsers/openai/turn1_res.json
+added     +36    -0     test/fixtures/wire-parsers/openai/turn2_req.json
+modified  +49    -60    test/helpers.test.js   <== código ligado à spec
+added     +31    -0     test/helpers/upstream-token.js
+added     +456   -0     test/hub-socket.test.js
+modified  +95    -142   test/hub.test.js
+modified  +13    -7     test/messages-ui.test.js
+modified  +7     -1     test/pricing.test.js
+added     +107   -0     test/provider-compat.test.js
+modified  +7     -0     test/providers.test.js
+modified  +1     -0     test/socket-error-survival.e2e.test.js
+modified  +124   -9     test/startup.test.js
+modified  +25    -1     test/system-prompt.test.js
+modified  +1     -0     test/websocket-headers-forward.e2e.test.js
+modified  +129   -5     test/websocket-proxy.test.js
+added     +66    -0     test/wire-parsers-anthropic.test.js
+added     +121   -0     test/wire-parsers-build-entry.test.js
+added     +125   -0     test/wire-parsers-openai.test.js
+added     +142   -0     test/ws-frame-timeline.test.js
+added     +27    -0     test/ws-restore-guard.test.js
+modified  +1     -0     test/ws-shutdown-drain.e2e.test.js
+--- DIFF DO CÓDIGO LIGADO
+### public/messages.js
+@@ -132,10 +132,12 @@ function getMessagePreview(m) {
+ }
+ 
+ // ── Merged Steps: transform flat messages into logical steps ──
++const CODEX_TOOL_ALIASES = { exec_command: 'Bash', shell: 'Bash', read_mcp_resource: 'Read', apply_patch: 'Edit' };
++
+ function getToolPreview(toolUse) {
+   const inp = toolUse.input || {};
+-  switch (toolUse.name) {
+-    case 'Bash': return (inp.command || '').split('\n')[0].slice(0, 60);
++  switch (CODEX_TOOL_ALIASES[toolUse.name] || toolUse.name) {
++    case 'Bash': return (inp.command || inp.cmd || '').split('\n')[0].slice(0, 60);
+     case 'Read': case 'Write': case 'Edit': case 'NotebookEdit':
+       return (inp.file_path || inp.notebook_path || '').split('/').pop() || '';
+     case 'Grep': return (inp.pattern || '').slice(0, 40);
+@@ -167,9 +169,46 @@ function getResponseFunctionCallName(item) {
+   return item?.name || item?.function?.name || item?.tool_name || item?.type || 'function_call';
+ }
+ 
+-function buildMergedSteps(messages, resEvents) {
++function normalizeOpenAIInput(input) {
++  const msgs = [];
++  for (const item of input) {
++    if (item.type === 'message') {
++      if (item.role === 'developer') continue;
++      const blocks = Array.isArray(item.content) ? item.content : [];
++      const content = blocks.map(b => ({
++        type: 'text',
++        text: b.text || JSON.stringify(b),
++      }));
++      msgs.push({ role: item.role || 'user', content });
++    } else if (item.type === 'function_call') {
++      let input = {};
++      try { input = JSON.parse(item.arguments || '{}'); } catch {}
++      msgs.push({
++        role: 'assistant',
++        content: [{ type: 'tool_use', id: item.call_id || item.id, name: item.name || 'function_call', input }],
++      });
++    } else if (item.type === 'function_call_output') {
++      msgs.push({
++        role: 'user',
++        content: [{ type: 'tool_result', tool_use_id: item.call_id, content: item.output || '' }],
++      });
++    }
++  }
++  return msgs;
++}
++
++function isOpenAIInput(items) {
++  if (!Array.isArray(items) || !items.length) return false;
++  return items.some(m => m.type === 'message' || m.type === 'function_call' || m.type === 'function_call_output');
++}
++
++function buildMergedSteps(messages, resEvents, provider) {
+   if ((!messages || !messages.length) && (!resEvents || !resEvents.length)) return [];
+ 
++  if (messages?.length && isOpenAIInput(messages)) {
++    messages = normalizeOpenAIInput(messages);
++  }
++
+   // Phase 1a: Build tool_use_id → tool_result map
+   const resultMap = new Map();
+   if (messages) {
+@@ -283,95 +322,27 @@ function buildMergedSteps(messages, resEvents) {
+   }
+ 
+   // Phase 3: Build current turn steps from resEvents
++  // Event parsing is dispatched to RENDERERS[provider].processEvent()
+   if (resEvents && resEvents.length) {
+-    let curThinking = null;
+-    let curThinkingStart = null;
+-    let curThinkingEnd = null;
+-    const curToolUses = [];  // { index, name, id, inputChunks[] }
+-    const openAIToolUseById = new Map();
+-    let curText = '';
++    const renderer = (typeof getRenderer === 'function') ? getRenderer(provider) : null;
++    const state = {
++      curThinking: null,
++      curThinkingStart: null,
++      curThinkingEnd: null,
++      curToolUses: [],
++      openAIToolUseById: new Map(),
++      curText: '',
++      eventIndex: 0,
++    };
+ 
+     for (let eventIndex = 0; eventIndex < resEvents.length; eventIndex++) {
+-      const ev = resEvents[eventIndex];
+-      const payload = getResponseEventPayload(ev);
+-      if (ev.type === 'content_block_start') {
+-        if (ev.content_block?.type === 'thinking') {
+-          curThinking = '';
+-          curThinkingStart = ev._ts || null;
+-        } else if (ev.content_block?.type === 'tool_use') {
+-          curToolUses.push({
+-            index: ev.index,
+-            name: ev.content_block.name,
+-            id: ev.content_block.id,
+-            inputChunks: [],
+-          });
+-        }
+-      } else if (ev.type === 'content_block_delta') {
+-        if (ev.delta?.type === 'thinking_delta') {
+-          if (curThinking !== null) curThinking += ev.delta.thinking || '';
+-        } else if (ev.delta?.type === 'input_json_delta') {
+-          const tu = curToolUses.find(t => t.index === ev.index);
+-          if (tu) tu.inputChunks.push(ev.delta.partial_json || '');
+-        } else if (ev.delta?.type === 'text_delta') {
+-          curText += ev.delta.text || '';
+-        }
+-      } else if (ev.type === 'response.output_text.delta') {
+-        curText += ev.delta || payload.delta || '';
+-      } else if (ev.type === 'response.output_text.done' && !curText) {
+-        curText += ev.text || payload.text || '';
+-      } else if (ev.type === 'response.reasoning_text.delta') {
+-        if (curThinking === null) {
+-          curThinking = '';
+-          curThinkingStart = ev._ts || null;
+-        }
+-        curThinking += ev.delta || payload.delta || '';
+-      } else if (ev.type === 'response.reasoning_summary_part.added') {
+-        if (curThinking === null) {
+-          curThinking = '';
+-          curThinkingStart = ev._ts || null;
+-        }
+-        const part = payload.part || ev.part || {};
+-        curThinking += part.text || payload.text || ev.text || '';
+-      } else if (ev.type === 'response.reasoning_summary_text.delta') {
+-        if (curThinking === null) {
+-          curThinking = '';
+-          curThinkingStart = ev._ts || null;
+-        }
+-        curThinking += ev.delta || payload.delta || '';
+-      } else if (ev.type === 'response.output_item.added') {
+-        const item = payload.item || ev.item || {};
+-        if (item.type === 'function_call' || item.type === 'tool_call') {
+-          const id = getResponseEventItemId(payload, eventIndex);
+-          const toolUse = {
+-            index: payload.output_index ?? eventIndex,
+-            name: getResponseFunctionCallName(item),
+-            id,
+-            inputChunks: [],
+-          };
+-          if (item.arguments) toolUse.inputChunks.push(typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments));
+-          openAIToolUseById.set(id, toolUse);
+-          curToolUses.push(toolUse);
+-        }
+-      } else if (ev.type === 'response.function_call_arguments.delta') {
+-        const id = getResponseEventItemId(payload, payload.output_index ?? eventIndex);
+-        const tu = openAIToolUseById.get(id) || curToolUses.find(t => t.index === payload.output_index);
+-        if (tu) tu.inputChunks.push(ev.delta || payload.delta || '');
+-      } else if (ev.type === 'response.output_item.done') {
+-        const item = payload.item || ev.item || {};
+-        if (item.type === 'function_call' || item.type === 'tool_call') {
+-          const id = getResponseEventItemId(payload, eventIndex);
+-          const tu = openAIToolUseById.get(id) || curToolUses.find(t => t.index === payload.output_index);
+-          if (tu && item.arguments && !tu.inputChunks.length) {
+-            tu.inputChunks.push(typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments));
+-          }
+-        }
+-      } else if (ev.type === 'response.completed' || ev.type === 'response.done') {
+-        if (curThinkingStart && !curThinkingEnd) curThinkingEnd = ev._ts || null;
+-      } else if (ev.type === 'content_block_stop') {
+-        if (curThinkingStart && !curThinkingEnd) curThinkingEnd = ev._ts || null;
+-      }
++      state.eventIndex = eventIndex;
++      if (renderer) renderer.processEvent(resEvents[eventIndex], state);
+     }
+ 
++    let { curThinking, curThinkingStart, curThinkingEnd, curText } = state;
++    const curToolUses = state.curToolUses;
++
+     // Build current turn tool calls
+     const currentCalls = curToolUses.map(tu => {
+       let input = {};
+@@ -422,22 +393,21 @@ let currentSteps = []; // cached merged steps for current turn
+ let _stepsCache = { msgs: null, res: null, steps: [] };
+ 
+ // Memoized buildMergedSteps — returns cached result if inputs unchanged (by reference)
+-function getCachedSteps(messages, resEvents) {
++function getCachedSteps(messages, resEvents, provider) {
+   if (messages === _stepsCache.msgs && resEvents === _stepsCache.res) {
+     return _stepsCache.steps;
+   }
+-  const steps = buildMergedSteps(messages, resEvents);
++  const steps = buildMergedSteps(messages, resEvents, provider);
+   _stepsCache = { msgs: messages, res: resEvents, steps };
+   return steps;
+ }
+ 
+-// Build timeline steps and cache them
+-function prepareTimelineSteps(messages, resEvents) {
++function prepareTimelineSteps(messages, resEvents, provider) {
+   if ((!messages || !messages.length) && (!resEvents || !resEvents.length)) {
+     currentSteps = [];
+     return;
+   }
+-  currentSteps = getCachedSteps(messages, resEvents);
++  currentSteps = getCachedSteps(messages, resEvents, provider);
+ }
+ 
+ // Generate the step list HTML (used in both accordion and split-pane modes)
+
+### server/sse-broadcast.js
+@@ -1,14 +1,15 @@
+ 'use strict';
+ 
+ const store = require('./store');
++const { agentForProvider } = require('./providers');
+ 
+ // Strip req/res from broadcast — browser only needs summary for the turn list
+ function summarizeEntry(entry) {
+   const tok = entry.tokens;
+   return {
+     id: entry.id, ts: entry.ts, sessionId: entry.sessionId,
+     provider: entry.provider || 'anthropic',
+-    agent: entry.agent || (entry.provider === 'openai' ? 'codex' : 'claude'),
++    agent: entry.agent || agentForProvider(entry.provider),
+     method: entry.method, url: entry.url,
+     elapsed: entry.elapsed, status: entry.status, isSSE: entry.isSSE,
+     receivedAt: entry.receivedAt || null,
+
+### test/helpers.test.js
+@@ -3,7 +3,6 @@
+ const { describe, it } = require('node:test');
+ const assert = require('node:assert/strict');
+ const {
+-  extractUsage,
+   totalContextTokens,
+   parseSSEEvents,
+   extractResponseTitle,
+@@ -22,65 +21,6 @@ const {
+ } = require('../server/helpers');
+ 
+ describe('helpers', () => {
+-  describe('extractUsage', () => {
+-    it('returns null for non-array input', () => {
+-      assert.equal(extractUsage(null), null);
+-      assert.equal(extractUsage('string'), null);
+-      assert.equal(extractUsage({}), null);
+-    });
+-
+-    it('extracts usage from SSE events', () => {
+-      const events = [
+-        { type: 'message_start', message: { usage: {
+-          input_tokens: 1000,
+-          output_tokens: 50,
+-          cache_creation_input_tokens: 200,
+-          cache_read_input_tokens: 300,
+-        }}},
+-        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hello' } },
+-        { type: 'message_delta', usage: { output_tokens: 500 } },
+-      ];
+-      const usage = extractUsage(events);
+-      assert.equal(usage.input_tokens, 1000);
+-      assert.equal(usage.output_tokens, 500); // message_delta overrides
+-      assert.equal(usage.cache_creation_input_tokens, 200);
+-      assert.equal(usage.cache_read_input_tokens, 300);
+-    });
+-
+-    it('handles missing usage gracefully', () => {
+-      const usage = extractUsage([{ type: 'message_start', message: {} }]);
+-      assert.equal(usage.input_tokens, 0);
+-      assert.equal(usage.output_tokens, 0);
+-    });
+-
+-    it('preserves nested cache_creation ephemeral TTL split', () => {
+-      const events = [
+-        { type: 'message_start', message: { usage: {
+-          input_tokens: 1,
+-          cache_creation_input_tokens: 1632,
+-          cache_read_input_tokens: 332655,
+-          cache_creation: {
+-            ephemeral_5m_input_tokens: 0,
+-            ephemeral_1h_input_tokens: 1632,
+-          },
+-        }}},
+-      ];
+-      const usage = extractUsage(events);
+-      assert.equal(usage.cache_creation.ephemeral_1h_input_tokens, 1632);
+-      assert.equal(usage.cache_creation.ephemeral_5m_input_tokens, 0);
+-    });
+-
+-    it('omits cache_creation when not present in response', () => {
+-      const events = [
+-        { type: 'message_start', message: { usage: {
+-          input_tokens: 100, cache_creation_input_tokens: 0,
+-        }}},
+-      ];
+-      const usage = extractUsage(events);
+-      assert.equal(usage.cache_creation, undefined);
+-    });
+-  });
+-
+   describe('totalContextTokens', () => {
+     it('returns 0 for null', () => {
+       assert.equal(totalContextTokens(null), 0);
+@@ -226,6 +166,55 @@ describe('helpers', () => {
+     });
+   });
+ 
++  describe('extractOpenAIToolCalls', () => {
++    const { extractOpenAIToolCalls } = require('../server/helpers');
++
++    it('returns empty for null/empty', () => {
++      assert.deepEqual(extractOpenAIToolCalls(null), {});
++      assert.deepEqual(extractOpenAIToolCalls([]), {});
++    });
++
++    it('extracts from WS response.output_item.done events', () => {
++      const events = [
++        { type: 'response.output_item.done', item: { type: 'function_call', name: 'exec_command', call_id: 'c1' } },
++        { type: 'response.output_item.done', item: { type: 'function_call', name: 'exec_command', call_id: 'c2' } },
++        { type: 'response.output_item.done', item: { type: 'message', role: 'assistant' } },
++      ];
++      const counts = extractOpenAIToolCalls(events);
++      assert.equal(counts.Bash, 2);
++      assert.equal(Object.keys(counts).length, 1);
++    });
++
++    it('extracts from flat HTTP response.output[] items', () => {
++      const output = [
++        { type: 'function_call', name: 'apply_patch', call_id: 'c1' },
++        { type: 'function_call', name: 'exec_command', call_id: 'c2' },
++        { type: 'message', role: 'assistant' },
++      ];
++      const counts = extractOpenAIToolCalls(output);
++      assert.equal(counts.Edit, 1);
++      assert.equal(counts.Bash, 1);
++    });
++
++    it('skips meta-tools without .name', () => {
++      const output = [
++        { type: 'function_call', call_id: 'c1' },
++        { type: 'web_search', call_id: 'c2' },
++      ];
++      const counts = extractOpenAIToolCalls(output);
++      assert.deepEqual(counts, {});
++    });
++
++    it('deduplicates .added + .done for same call_id', () => {
++      const events = [
++        { type: 'response.output_item.added', item: { type: 'function_call', name: 'exec_command', call_id: 'c1' } },
++        { type: 'response.output_item.done', item: { type: 'function_call', name: 'exec_command', call_id: 'c1' } },
++      ];
++      const counts = extractOpenAIToolCalls(events);
++      assert.equal(counts.Bash, 1);
++    });
++  });
++
+   describe('computeThinkingDuration', () => {
+     it('returns null when no thinking events', () => {
+       assert.equal(computeThinkingDuration([{ type: 'message_start' }]), null);
+
+===== P048 | repo Splode/pomotroid | PR #406: Feat/remember window position | capacidade: macos-shortcuts
+--- SPEC VIVA
+### Requirement: macOS Accessibility permission detection
+
+On macOS, the system SHALL expose an IPC command `accessibility_trusted` that returns a boolean indicating whether the application has been granted Accessibility access by the operating system. On all other platforms the command SHALL return `true` unconditionally.
+
+#### Scenario: Accessibility not granted on macOS
+
+- **WHEN** the app has not been granted Accessibility access in macOS System Settings
+- **THEN** `accessibility_trusted` SHALL return `false`
+
+#### Scenario: Accessibility granted on macOS
+
+- **WHEN** the app has been granted Accessibility access in macOS System Settings
+- **THEN** `accessibility_trusted` SHALL return `true`
+
+#### Scenario: Non-macOS platform
+
+- **WHEN** `accessibility_trusted` is called on Windows or Linux
+- **THEN** it SHALL return `true`
+
+### Requirement: Accessibility permission notice in Shortcuts settings
+
+On macOS, when Accessibility access is not granted, the system SHALL display a notice at the top of the Shortcuts settings section informing the user that global shortcuts require Accessibility access, and providing a button that opens the relevant macOS System Settings pane directly.
+
+#### Scenario: Notice shown when not trusted
+
+- **WHEN** the user opens the Shortcuts section on macOS
+- **AND** Accessibility access has not been granted
+- **THEN** a notice SHALL be displayed above the shortcut inputs explaining the requirement
+
+#### Scenario: Notice includes action link
+
+- **WHEN** the notice is visible
+- **THEN** it SHALL contain a control that opens System Settings → Privacy & Security → Accessibility when activated
+
+#### Scenario: Notice absent when trusted
+
+- **WHEN** Accessibility access has been granted
+- **THEN** no notice SHALL be shown and the Shortcuts section SHALL display normally
+
+#### Scenario: Notice absent on non-macOS
+
+- **WHEN** the app is running on Windows or Linux
+- **THEN** no Accessibility notice SHALL appear in the Shortcuts section
+
+### Requirement: Accessibility status re-checked on window focus
+
+When Accessibility access has not yet been granted, the system SHALL re-check trust status each time the settings window regains focus, and SHALL automatically dismiss the notice once access is confirmed.
+
+#### Scenario: Notice dismisses after access granted
+
+- **WHEN** the user grants Accessibility access in System Settings
+- **AND** returns focus to the Pomotroid settings window
+- **THEN** the notice SHALL disappear without requiring a restart or manual refresh
+
+--- ARQUIVOS DO PR (11)
+modified  +4     -0     CHANGELOG.md
+added     +2     -0     openspec/changes/archive/2026-04-26-remember-window-position/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-04-26-remember-window-position/design.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/settings/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/window-position/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/tasks.md
+modified  +48    -0     openspec/specs/settings/spec.md
+added     +66    -0     openspec/specs/window-position/spec.md
+modified  +71    -18    src-tauri/src/lib.rs   <== código ligado à spec
+modified  +24    -0     src-tauri/src/settings/mod.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src-tauri/src/lib.rs
+@@ -283,31 +283,84 @@ pub fn run() {
+                 let _ = main_window.set_always_on_top(true);
+             }
+ 
+-            // CloseRequested: hide to tray instead of quitting if min_to_tray_on_close.
+-            // When actually closing (not hiding), also close any child windows so they
+-            // cannot be left orphaned with no way to reopen the main window.
++            // Restore saved window position/size if all four values are present and
++            // the saved rectangle still intersects at least one connected monitor.
++            if let (Some(wx), Some(wy), Some(ww), Some(wh)) = (
++                initial_settings.window_x,
++                initial_settings.window_y,
++                initial_settings.window_width,
++                initial_settings.window_height,
++            ) {
++                let on_screen = app
++                    .available_monitors()
++                    .unwrap_or_default()
++                    .into_iter()
++                    .any(|m| {
++                        let mp = m.position();
++                        let ms = m.size();
++                        let mx0 = mp.x as i64;
++                        let my0 = mp.y as i64;
++                        let mx1 = mx0 + ms.width as i64;
++                        let my1 = my0 + ms.height as i64;
++                        let wx0 = wx as i64;
++                        let wy0 = wy as i64;
++                        let wx1 = wx0 + ww as i64;
++                        let wy1 = wy0 + wh as i64;
++                        wx0 < mx1 && wx1 > mx0 && wy0 < my1 && wy1 > my0
++                    });
++                if on_screen {
++                    let _ = main_window.set_position(tauri::PhysicalPosition::new(wx, wy));
++                    let _ = main_window.set_size(tauri::PhysicalSize::new(ww, wh));
++                }
++            }
++
++            // Persist window position/size on move and resize, and close child windows
++            // when the main window is truly closed (not hidden to tray).
+             let db_for_close = db.clone();
+             let win_for_close = main_window.clone();
+             let app_for_close = app.handle().clone();
++            let db_for_pos = db.clone();
++            let win_for_pos = main_window.clone();
+             main_window.on_window_event(move |event| {
+-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+-                    let hide = db_for_close
+-                        .lock()
+-                        .ok()
+-                        .and_then(|conn| settings::load(&conn).ok())
+-                        .map(|s| s.min_to_tray_on_close)
+-                        .unwrap_or(false);
+-                    if hide {
+-                        api.prevent_close();
+-                        let _ = win_for_close.hide();
+-                    } else {
+-                        // Main window is truly closing — close child windows if open.
+-                        for label in ["settings", "stats"] {
+-                            if let Some(win) = app_for_close.get_webview_window(label) {
+-                                let _ = win.close();
++                match event {
++                    tauri::WindowEvent::CloseRequested { api, .. } => {
++                        let hide = db_for_close
++                            .lock()
++                            .ok()
++                            .and_then(|conn| settings::load(&conn).ok())
++                            .map(|s| s.min_to_tray_on_close)
++                            .unwrap_or(false);
++                        if hide {
++                            api.prevent_close();
++                            let _ = win_for_close.hide();
++                        } else {
++                            // Main window is truly closing — close child windows if open.
++                            for label in ["settings", "stats"] {
++                                if let Some(win) = app_for_close.get_webview_window(label) {
++                                    let _ = win.close();
++                                }
++                            }
++                        }
++                    }
++                    tauri::WindowEvent::Moved(pos) => {
++                        if let Ok(conn) = db_for_pos.lock() {
++                            let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
++                            let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
++                        }
++                    }
++                    tauri::WindowEvent::Resized(size) => {
++                        if let Ok(conn) = db_for_pos.lock() {
++                            let _ = settings::save_setting(&conn, "window_width", &size.width.to_string());
++                            let _ = settings::save_setting(&conn, "window_height", &size.height.to_string());
++                            // Also capture position, since some window managers shift the
++                            // window origin when resizing.
++                            if let Ok(pos) = win_for_pos.outer_position() {
++                                let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
++                                let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                             }
+                         }
+                     }
++                    _ => {}
+                 }
+             });
+ 
+
+### src-tauri/src/settings/mod.rs
+@@ -57,6 +57,14 @@ pub struct Settings {
+     pub local_shortcut_volume_up: String,
+     pub local_shortcut_mute: String,
+     pub local_shortcut_fullscreen: String,
++    /// Last known window X coordinate (physical pixels). `None` = use OS default.
++    pub window_x: Option<i32>,
++    /// Last known window Y coordinate (physical pixels). `None` = use OS default.
++    pub window_y: Option<i32>,
++    /// Last known window width (physical pixels). `None` = use OS default.
++    pub window_width: Option<u32>,
++    /// Last known window height (physical pixels). `None` = use OS default.
++    pub window_height: Option<u32>,
+ }
+ 
+ impl Default for Settings {
+@@ -112,6 +120,10 @@ impl Default for Settings {
+             local_shortcut_volume_up: "ArrowUp".to_string(),
+             local_shortcut_mute: "m".to_string(),
+             local_shortcut_fullscreen: "F11".to_string(),
++            window_x: None,
++            window_y: None,
++            window_width: None,
++            window_height: None,
+         }
+     }
+ }
+@@ -233,6 +245,10 @@ pub fn load(conn: &Connection) -> Result<Settings> {
+         local_shortcut_volume_up: map.get("local_shortcut_volume_up").cloned().unwrap_or(d.local_shortcut_volume_up),
+         local_shortcut_mute: map.get("local_shortcut_mute").cloned().unwrap_or(d.local_shortcut_mute),
+         local_shortcut_fullscreen: map.get("local_shortcut_fullscreen").cloned().unwrap_or(d.local_shortcut_fullscreen),
++        window_x: parse_opt_i32(&map, "window_x"),
++        window_y: parse_opt_i32(&map, "window_y"),
++        window_width: parse_opt_u32(&map, "window_width"),
++        window_height: parse_opt_u32(&map, "window_height"),
+     })
+ }
+ 
+@@ -270,6 +286,14 @@ fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
+         .unwrap_or(default)
+ }
+ 
++fn parse_opt_i32(map: &HashMap<String, String>, key: &str) -> Option<i32> {
++    map.get(key)?.parse().ok()
++}
++
++fn parse_opt_u32(map: &HashMap<String, String>, key: &str) -> Option<u32> {
++    map.get(key)?.parse().ok()
++}
++
+ // ---------------------------------------------------------------------------
+ // Tests (DATA-02 acceptance criteria)
+ // ---------------------------------------------------------------------------
+
+===== P049 | repo memorysaver/looplia-core | PR #43: feat: redesign workflow hooks from shell scripts to TypeScript (v0.7.4) | capacidade: model-provider
+--- SPEC VIVA
+# model-provider Specification
+
+## Purpose
+TBD - created by archiving change add-openrouter-ollama-presets. Update Purpose after archive.
+## Requirements
+### Requirement: OpenRouter Provider Type
+
+The system SHALL support OpenRouter as a first-class provider type.
+
+#### Scenario: OpenRouter provider type validation
+- **GIVEN** a user configures a provider
+- **WHEN** the provider type is set to `"openrouter"`
+- **THEN** the configuration SHALL be valid
+- **AND** the system SHALL recognize it as a supported provider type
+
+### Requirement: Ollama Provider Type
+
+The system SHALL support Ollama as a first-class provider type.
+
+#### Scenario: Ollama provider type validation
+- **GIVEN** a user configures a provider
+- **WHEN** the provider type is set to `"ollama"`
+- **THEN** the configuration SHALL be valid
+- **AND** the system SHALL recognize it as a supported provider type
+
+### Requirement: OpenRouter Preset
+
+The system SHALL provide a preset for OpenRouter integration.
+
+#### Scenario: OPENROUTER_PRESET configuration
+- **GIVEN** user applies preset `OPENROUTER_PRESET`
+- **THEN** the settings SHALL have:
+  - `apiProvider.type` = `"openrouter"`
+  - `apiProvider.baseUrl` = `"https://openrouter.ai/api"`
+  - All model fields set to `"@preset/looplia-default"`
+
+#### Scenario: OpenRouter uses dashboard-configured presets
+- **GIVEN** user has created a preset named "looplia-default" in OpenRouter dashboard
+- **WHEN** looplia makes API calls with model `"@preset/looplia-default"`
+- **THEN** OpenRouter SHALL apply the dashboard-configured settings
+- **AND** looplia SHALL not override model selection
+
+### Requirement: Ollama Cloud Model Presets
+
+The system SHALL provide presets for popular Ollama cloud models.
+
+#### Scenario: OLLAMA_GLM47_CLOUD preset
+- **GIVEN** user applies preset `OLLAMA_GLM47_CLOUD`
+- **THEN** the settings SHALL have:
+  - `apiProvider.type` = `"ollama"`
+  - `apiProvider.baseUrl` = `"http://localhost:11434"`
+  - All model fields set to `"glm-4.7:cloud"`
+
+#### Scenario: OLLAMA_MINIMAX_M21_CLOUD preset
+- **GIVEN** user applies preset `OLLAMA_MINIMAX_M21_CLOUD`
+- **THEN** the settings SHALL have:
+  - `apiProvider.type` = `"ollama"`
+  - `apiProvider.baseUrl` = `"http://localhost:11434"`
+  - All model fields set to `"minimax-m2.1:cloud"`
+
+### Requirement: OpenRouter API Key Mapping
+
+The system SHALL auto-map `OPENROUTER_API_KEY` environment variable to `ANTHROPIC_API_KEY`.
+
+#### Scenario: OpenRouter API key from environment
+- **GIVEN** `OPENROUTER_API_KEY` is set in environment
+- **AND** the active provider type is `"openrouter"`
+- **AND** no `authToken` is configured in settings
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL be set to the value of `OPENROUTER_API_KEY`
+
+#### Scenario: Settings authToken takes priority over OPENROUTER_API_KEY
+- **GIVEN** `OPENROUTER_API_KEY` is set in environment
+- **AND** the active provider has `authToken` configured
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL be set to the configured `authToken`
+- **AND** `OPENROUTER_API_KEY` SHALL be ignored
+
+#### Scenario: OpenRouter base URL detection
+- **GIVEN** the configured `baseUrl` contains "openrouter.ai"
+- **AND** `OPENROUTER_API_KEY` is set in environment
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_AUTH_TOKEN` SHALL be set to the value of `OPENROUTER_API_KEY`
+- **AND** `ANTHROPIC_BASE_URL` SHALL be set to the configured `baseUrl`
+
+### Requirement: Ollama API Key Handling
+
+The system SHALL support Ollama's authentication pattern with fallback default.
+
+#### Scenario: Ollama with custom API key
+- **GIVEN** `OLLAMA_API_KEY` is set in environment
+- **AND** the active provider type is `"ollama"`
+- **AND** no `authToken` is configured in settings
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL be set to the value of `OLLAMA_API_KEY`
+
+#### Scenario: Ollama with default authentication
+- **GIVEN** `OLLAMA_API_KEY` is NOT set in environment
+- **AND** the active provider type is `"ollama"`
+- **AND** no `authToken` is configured in settings
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL be set to the literal string `"ollama"`
+
+#### Scenario: Ollama settings authToken priority
+- **GIVEN** the active provider has `authToken` configured
+- **AND** `OLLAMA_API_KEY` is set in environment
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL be set to the configured `authToken`
+- **AND** `OLLAMA_API_KEY` SHALL be ignored
+- **AND** the `"ollama"` default SHALL not be applied
+
+#### Scenario: Ollama base URL detection
+- **GIVEN** the configured `baseUrl` contains "localhost:11434"
+- **AND** no `authToken` is configured
+- **WHEN** the system injects environment variables
+- **THEN** `ANTHROPIC_API_KEY` SHALL default to `"ollama"` if `OLLAMA_API_KEY` not set
+- **AND** `ANTHROPIC_BASE_URL` SHALL be set to the configured `baseUrl`
+
+### Requirement: CLI Help Text for New Presets
+
+The CLI help text SHALL include the new OpenRouter and Ollama presets.
+
+#### Scenario: Provider preset list includes OpenRouter
+- **GIVEN** user runs `looplia config provider --help`
+- **THEN** the output SHALL include `OPENROUTER_PRESET` in the available presets list
+
+#### Scenario: Provider preset list includes Ollama presets
+- **GIVEN** user runs `looplia config provider --help`
+- **THEN** the output SHALL include:
+  - `OLLAMA_GLM47_CLOUD`
+  - `OLLAMA_MINIMAX_M21_CLOUD`
+
+#### Scenario: API keys documentation includes new providers
+- **GIVEN** user runs `looplia config provider --help`
+- **THEN** the output SHALL document:
+  - `OPENROUTER_API_KEY` - For OpenRouter (auto-mapped to ANTHROPIC_AUTH_TOKEN)
+  - `OLLAMA_API_KEY` - For Ollama (optional, defaults to "ollama")
+
+#### Scenario: Provider type list includes new providers
+- **GIVEN** user runs `looplia config provider --help`
+- **THEN** the "api-provider" configuration key SHALL list:
+  - `openrouter` as a valid provider type
+  - `ollama` as a valid provider type
+
+### Requirement: Documentation Updates
+
+The system documentation SHALL include configuration examples for new providers.
+
+#### Scenario: README environment variables include new providers
+- **GIVEN** the README.md file
+- **THEN** the Environment Variables section SHALL document:
+  - `OPENROUTER_API_KEY` with description
+  - `OLLAMA_API_KEY` with description and default behavior
+
+#### Scenario: .env.example includes new providers
+- **GIVEN** the .env.example file
+- **THEN** it SHALL include commented examples for:
+  - `OPENROUTER_API_KEY`
+  - `OLLAMA_API_KEY`
+
+### Requirement: Landing Page Provider Showcase
+
+The documentation landing page SHALL present providers in priority order.
+
+#### Scenario: Multi-provider tabs with correct ordering
+- **GIVEN** the landing page at `apps/docs/src/content/docs/index.mdx`
+- **WHEN** displaying the "Multi-Provider Support" section
+- **THEN** the tabs SHALL appear in this order:
+  1. "Anthropic Official" (Direct API)
+  2. "Ollama Local" (Local models)
+  3. "OpenRouter" (Multi-provider)
+  4. "ZenMux Proxy" (Proxy provider)
+
+#### Scenario: Ollama tab content
+- **GIVEN** the "Ollama Local" tab
+- **THEN** it SHALL show example using `OLLAMA_GLM47_CLOUD` preset
+- **AND** include commands for applying preset and running workflow
+
+#### Scenario: OpenRouter tab content
+- **GIVEN** the "OpenRouter" tab
+- **THEN** it SHALL show example using `OPENROUTER_PRESET`
+- **AND** include explanation of dashboard-configured presets
+- **AND** include commands for applying preset and setting API key
+
+### Requirement: Config Command Documentation
+
+The CLI config command documentation SHALL include new presets and providers.
+
+#### Scenario: apps/docs config.mdx preset tables
+- **GIVEN** the file `apps/docs/src/content/docs/cli/config.mdx`
+- **WHEN** displaying available presets
+- **THEN** it SHALL include tabs with this order:
+  1. "Anthropic Direct"
+  2. "Ollama"
+  3. "OpenRouter"
+  4. "ZenMux Proxy"
+
+#### Scenario: Ollama preset table
+- **GIVEN** the "Ollama" tab in config.mdx
+- **THEN** it SHALL include a table with:
+  - `OLLAMA_GLM47_CLOUD` preset
+  - `OLLAMA_MINIMAX_M21_CLOUD` preset
+  - Model names and descriptions
+
+#### Scenario: OpenRouter preset table
+- **GIVEN** the "OpenRouter" tab in config.mdx
+- **THEN** it SHALL include:
+  - `OPENROUTER_PRESET` preset
+  - Explanation of dashboard configuration
+  - Reference to OpenRouter dashboard URL
+
+### Requirement: Environment Variables Reference Documentation
+
+The environment variables reference SHALL document new providers comprehensively.
+
+#### Scenario: API keys table includes new providers
+- **GIVEN** `apps/docs/src/content/docs/reference/environment-variables.mdx`
+- **WHEN** displaying API Keys section
+- **THEN** the table SHALL include:
+  - `OPENROUTER_API_KEY` with description
+  - `OLLAMA_API_KEY` with description and default behavior
+
+#### Scenario: Provider configuration section includes new mappings
+- **GIVEN** the "Provider Configuration" section in environment-variables.mdx
+- **THEN** it SHALL document:
+  - OpenRouter auto-mapping (`OPENROUTER_API_KEY` → `ANTHROPIC_AUTH_TOKEN`)
+  - Ollama authentication pattern (defaults to `"ollama"` literal)
+
+#### Scenario: Priority order updated for new providers
+- **GIVEN** the "Priority Order" section in environment-variables.mdx
+- **THEN** the API Keys priority list SHALL include:
+  - `OPENROUTER_API_KEY` for OpenRouter endpoints
+  - `OLLAMA_API_KEY` for Ollama endpoints (with default fallback noted)
+
+### Requirement: ApiProviderType
+
+The `ApiProviderType` SHALL include OpenRouter and Ollama as valid provider types.
+
+#### Scenario: Extended provider type union
+- **GIVEN** the `ApiProviderType` type definition
+- **THEN** it SHALL be defined as: `"anthropic" | "zenmux" | "openrouter" | "ollama" | "custom"`
+
+### Requirement: Available Presets Count
+
+The system SHALL provide 22 total presets.
+
+#### Scenario: Preset list completeness
+- **GIVEN** the PRESETS constant
+- **THEN** it SHALL contain exactly 22 preset definitions
+- **AND** include all Anthropic, Claude Code Subscription, ZenMux, OpenRouter, and Ollama presets
+
+### Requirement: Provider-Specific Environment Variable Mapping
+
+The environment variable injection SHALL support mapping for all provider types.
+
+#### Scenario: Multi-provider environment variable priority
+- **GIVEN** the system injects environment variables
+- **THEN** the mapping SHALL follow this priority:
+  1. Subscription auth (`CLAUDE_CODE_OAUTH_TOKEN`)
+  2. Settings file `authToken`
+  3. Provider-specific env var (`ZENMUX_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`)
+  4. Default (for Ollama: `"ollama"` literal)
+  5. Generic `ANTHROPIC_API_KEY`
+
+#### Scenario: Provider type detection includes new providers
+- **GIVEN** the environment injection logic
+- **WHEN** detecting provider type for auto-mapping
+- **THEN** the system SHALL check:
+  - `apiProvider.type === "openrouter"` OR `baseUrl` contains "openrouter.ai"
+  - `apiProvider.type === "ollama"` OR `baseUrl` contains "localhost:11434"
+- **AND** apply appropriate environment variable mapping
+
+
+--- ARQUIVOS DO PR (41)
+modified  +35    -5     .claude/skills/looplia-e2e/SKILL.md
+added     +297   -0     .claude/skills/looplia-e2e/scripts/local-dev-e2e.sh
+modified  +24    -0     CHANGELOG.md
+modified  +2     -2     README.md
+modified  +2     -0     apps/cli/src/commands/config.ts
+modified  +68    -4     apps/cli/src/commands/run.ts
+modified  +1     -0     apps/docs/astro.config.mjs
+modified  +8     -5     apps/docs/src/content/docs/reference/presets.mdx
+modified  +1     -1     apps/docs/src/content/docs/reference/sandbox.mdx
+added     +310   -0     apps/docs/src/content/docs/reference/validation.mdx
+modified  +1     -1     apps/docs/src/content/docs/workflows/custom-workflows.mdx
+modified  +1     -1     apps/docs/src/content/docs/workflows/understanding-workflows.mdx
+added     +44    -0     openspec/changes/archive/2026-01-23-add-validation-docs/proposal.md
+added     +46    -0     openspec/changes/archive/2026-01-23-add-validation-docs/specs/documentation/spec.md
+added     +43    -0     openspec/changes/archive/2026-01-23-add-validation-docs/tasks.md
+added     +271   -0     openspec/changes/remove-structuredoutput-enforcement/design.md
+added     +108   -0     openspec/changes/remove-structuredoutput-enforcement/proposal.md
+added     +165   -0     openspec/changes/remove-structuredoutput-enforcement/specs/workflow-execution/spec.md
+added     +112   -0     openspec/changes/remove-structuredoutput-enforcement/tasks.md
+added     +43    -0     openspec/specs/documentation/spec.md
+modified  +1     -0     packages/core/src/domain/workflow-parser.ts
+modified  +2     -0     packages/core/src/domain/workflow.ts
+modified  +1     -0     packages/core/src/validation/schemas.ts
+modified  +1     -0     packages/core/test/domain/workflow-parser.test.ts
+modified  +19    -0     packages/provider/src/claude-agent-sdk/config.ts
+added     +11    -0     packages/provider/src/claude-agent-sdk/hooks/index.ts
+added     +596   -0     packages/provider/src/claude-agent-sdk/hooks/workflow-hooks.ts
+modified  +6     -0     packages/provider/src/claude-agent-sdk/index.ts
+modified  +21    -1     packages/provider/src/claude-agent-sdk/model-provider.ts   <== código ligado à spec
+modified  +16    -2     packages/provider/src/claude-agent-sdk/streaming/interactive-query-executor.ts
+modified  +24    -3     packages/provider/src/claude-agent-sdk/streaming/query-executor.ts
+modified  +1     -0     packages/provider/src/claude-agent-sdk/utils/shared/index.ts
+added     +327   -0     packages/provider/src/claude-agent-sdk/utils/shared/sandbox-result.ts
+added     +917   -0     packages/provider/test/claude-agent-sdk/hooks/workflow-hooks.test.ts
+modified  +2     -2     packages/provider/test/claude-agent-sdk/model-provider.test.ts   <== código ligado à spec
+added     +614   -0     packages/provider/test/claude-agent-sdk/utils/sandbox-result.test.ts
+removed   +0     -22    plugins/looplia-core/hooks/hooks.json
+removed   +0     -36    plugins/looplia-core/scripts/hooks/compact-inject-state.sh
+removed   +0     -81    plugins/looplia-core/scripts/hooks/post-write-validate.sh
+removed   +0     -56    plugins/looplia-core/scripts/hooks/stop-guard.sh
+modified  +1     -3     plugins/looplia-writer/workflows/writing-kit.md
+--- DIFF DO CÓDIGO LIGADO
+### packages/provider/src/claude-agent-sdk/model-provider.ts
+@@ -214,6 +214,16 @@ export const PRESETS: Record<string, PresetDefinition> = {
+     sonnetModel: "z-ai/glm-4.7",
+     opusModel: "z-ai/glm-4.7",
+   },
++  ZENMUX_ZAI_GLM47FLASHX: {
++    name: "ZenMux GLM-4.7-FlashX",
++    apiProvider: "zenmux",
++    baseUrl: "https://zenmux.ai/api/anthropic",
++    mainModel: "z-ai/glm-4.7-flashx",
++    executorModel: "z-ai/glm-4.7-flashx",
++    haikuModel: "z-ai/glm-4.7-flashx",
++    sonnetModel: "z-ai/glm-4.7-flashx",
++    opusModel: "z-ai/glm-4.7-flashx",
++  },
+   ZENMUX_MINIMAX_M21: {
+     name: "ZenMux MiniMax-M2.1",
+     apiProvider: "zenmux",
+@@ -335,7 +345,7 @@ export const PRESETS: Record<string, PresetDefinition> = {
+     opusModel: "openai/gpt-5.1-codex-mini",
+   },
+ 
+-  // OpenRouter Preset
++  // OpenRouter Presets
+   OPENROUTER_PRESET: {
+     name: "OpenRouter (User-Configured Preset)",
+     apiProvider: "openrouter",
+@@ -346,6 +356,16 @@ export const PRESETS: Record<string, PresetDefinition> = {
+     sonnetModel: "@preset/looplia-default",
+     opusModel: "@preset/looplia-default",
+   },
++  OPENROUTER_ZAI_GLM47FLASH: {
++    name: "OpenRouter GLM-4.7-Flash",
++    apiProvider: "openrouter",
++    baseUrl: "https://openrouter.ai/api",
++    mainModel: "z-ai/glm-4.7-flash",
++    executorModel: "z-ai/glm-4.7-flash",
++    haikuModel: "z-ai/glm-4.7-flash",
++    sonnetModel: "z-ai/glm-4.7-flash",
++    opusModel: "z-ai/glm-4.7-flash",
++  },
+ 
+   // Ollama Cloud Presets
+   OLLAMA_GLM47_CLOUD: {
+
+### packages/provider/test/claude-agent-sdk/model-provider.test.ts
+@@ -34,8 +34,8 @@ describe("model-provider", () => {
+   });
+ 
+   describe("PRESETS", () => {
+-    it("should have 22 presets defined", () => {
+-      expect(Object.keys(PRESETS)).toHaveLength(22);
++    it("should have 24 presets defined", () => {
++      expect(Object.keys(PRESETS)).toHaveLength(24);
+     });
+ 
+     it("should have required fields for each preset", () => {
+

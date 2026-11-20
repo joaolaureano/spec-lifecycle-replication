@@ -1,0 +1,488 @@
+===== P199 | pmcfadin/cqlite PR #2150 | capacidade do par: tombstone-reconciliation
+PR: feat(#1706): one event facade — migrate cqlite-core log→tracing, drop log dep
+arquivos ligados: cqlite-core/src/query/executor.rs
+--- linhas alteradas (2; mostrando até 40)
+-        log::debug!("executor: Scanning for table: {:?}", table.name());
++        tracing::debug!("executor: Scanning for table: {:?}", table.name());
+--- candidata: core-event-logging [PR+termos]
+  | # core-event-logging
+  | ## ADDED Requirements
+  | ### Requirement: One event facade — `tracing`
+  > ### Requirement: One event facade — `tracing`
+  > `cqlite-core` SHALL emit all runtime log **events** through the `tracing` facade
+  > only. No `log::{warn,info,debug,error,trace}!` event macro SHALL remain in
+  > - **WHEN** `cqlite-core/src` is searched for `log::{warn,info,debug,error,trace}!`
+  > - **THEN** existing `tracing` spans are unchanged, and every migrated call keeps
+  > from `log::` to `tracing::` (facade-only; message content is owned by AG5 #1694).
+  > ### Requirement: Corruption events reach a bridge-less tracing subscriber
+  > Core events SHALL reach a `tracing` subscriber even when no `tracing-log`
+--- candidata: write-span-levels [termos]
+  | # write-span-levels
+  | ## ADDED Requirements
+  | ### Requirement: Write-side spans emit at DEBUG, not INFO
+  > Write-side and compaction `#[tracing::instrument]` spans SHALL be emitted at
+  > DEBUG level, matching the read side's `debug_span!` discipline. Span names and
+  > - **GIVEN** a `tracing` subscriber installed at INFO (the CLI default)
+  > `memtable.insert` + `wal.append`)
+  > to before (only `level = "debug"` is added), so dashboards and docs that
+  > - **GIVEN** a `tracing` subscriber at INFO
+  > `tracing` subscriber installed at INFO (the CLI default posture), and SHALL
+  > subscriber-on number measured with a fmt/`tracing` subscriber at INFO
+--- candidata: correctness-signals [termos]
+  | # correctness-signals Specification
+  | ## Purpose
+  | TBD - created by archiving change correctness-signals. Update Purpose after archive.
+  > The read path SHALL emit `cqlite.read.sstables_pruned` (unit `{sstable}`, bounded attribute
+  > `cqlite.sstable.format`) incremented once for each SSTable excluded from a read because its
+  > counter counts SSTables actually skipped, in `{sstable}` units.
+  > #### Scenario: A point read over a multi-SSTable table skips absent SSTables
+  > - **WHEN** a partition point lookup runs over a table with multiple SSTables where the key is
+  > - **THEN** `cqlite.read.sstables_pruned` increments once per SSTable whose presence oracle
+  > - **AND** the increment carries `cqlite.sstable.format` = `"big"` or `"bti"` matching each
+  > `1`, bounded attribute `cqlite.sstable.format`) ONLY when an authoritative scan of that
+
+===== P200 | tsenoner/protspace_web PR #279 | capacidade do par: prep-failure-routing
+PR: feat: surface support inbox across the interface
+arquivos ligados: app/src/explore/notifications.test.ts;app/src/explore/notifications.ts;app/src/lib/notify.test.ts;app/src/lib/notify.ts
+--- linhas alteradas (68; mostrando até 40)
++  it('attaches a "Report this" mailto action to the import failure notification', () => {
++    const action = getDataLoadFailureNotification(dataError('Invalid parquet bundle')).action;
++    expect(action?.label).toBe('Report this');
++    expect(action?.href).toMatch(/^mailto:hello@protspace\.app\?/);
++    expect(action?.href).toContain('subject=%5BBug%5D%20Dataset%20import%20failed');
++  });
++  it('attaches a "Report this" mailto action to the export failure notification', () => {
++    const action = getExportFailureNotification(new Error('Disk full')).action;
++    expect(action?.label).toBe('Report this');
++    expect(action?.href).toMatch(/^mailto:hello@protspace\.app\?/);
++    expect(action?.href).toContain('subject=%5BBug%5D%20Export%20failed');
++  });
++import { buildBugContext, buildMailto, clientContext } from '../lib/support';
++/**
++ * Build a "Report this" toast action that opens a prefilled support email
++ * describing the failing operation and its error.
++ */
++function buildReportAction(operation: string, error: unknown): NotifyOptions['action'] {
++  return {
++    label: 'Report this',
++    href: buildMailto({
++      subject: `[Bug] ${operation} failed`,
++      body: buildBugContext({ operation, error, ...clientContext() }),
++    }),
++  };
++}
++    action: buildReportAction('Dataset import', prepError ?? detail.message),
++    action: buildReportAction('Export', error),
++  it('forwards an action to sonner as a label and onClick handler', () => {
++    notify.error({
++      title: 'Export failed.',
++      action: { label: 'Report this', href: 'mailto:hello@protspace.app?subject=x' },
++    });
++    const [, payload] = mockedToast.error.mock.calls[0];
++    expect(payload.action).toEqual({
++      label: 'Report this',
++      onClick: expect.any(Function),
++    });
++  });
++  it('omits the action key when no action is provided', () => {
+--- candidata: support-contact [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Support link construction
+  | The system SHALL provide pure builder functions that construct `mailto:` links, prefilled GitHub-issue links, and bug-report bodies from a single source for the support address (`hello@protspace.app`)
+  > The system SHALL provide pure builder functions that construct `mailto:` links, prefilled GitHub-issue links, and bug-report bodies from a single source for the support address (`hello@protspace.app`)
+  > #### Scenario: Mailto link with subject and body
+  > - **WHEN** a `mailto:` link is built with a subject and body
+  > - **THEN** the result targets `hello@protspace.app` with `subject` and `body` query parameters, each URL-encoded
+  > - **WHEN** a `mailto:` or GitHub-issue link is built with an empty or absent subject or body
+  > #### Scenario: GitHub issue link is prefilled and labeled
+  > - **WHEN** a GitHub-issue link is built with a title and body
+  > - **THEN** the result targets the project repository's `/issues/new` endpoint with URL-encoded `title` and `body` and a `bug` label
+--- candidata: query-builder-filtering [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Filter query builder is opened from the control bar
+  | The control bar SHALL expose a `Filter` button that opens the query-builder overlay (`role="dialog"`, `aria-label="Filter Query Builder"`) containing a `protspace-query-builder` element. Opening the b
+  > The control bar SHALL expose a `Filter` button that opens the query-builder overlay (`role="dialog"`, `aria-label="Filter Query Builder"`) containing a `protspace-query-builder` element. Opening the b
+  > - **WHEN** the user clicks the `Filter` button with no active query
+  > - **THEN** the `Filter Query Builder` dialog becomes visible
+  > - **AND** it contains one `protspace-query-condition-row`
+  > - **Categorical** annotations render a `protspace-query-value-picker`: the user adds one or more values, which appear as chips on the row; the picker lists the annotation's values in a stable order de
+  > - **Numeric** annotations (including a numeric annotation materialized into legend bins, which keeps `sourceKind: 'numeric'`) render a `protspace-query-numeric-input`: an operator dropdown (`>`, `<`, 
+  > - **WHEN** the user opens a condition, selects a categorical annotation, and adds a value from the value picker
+  > - **WHEN** the user opens a condition, selects a numeric annotation, chooses an operator, and enters the required bound(s)
+--- candidata: prep-observability [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Structured logging pipeline
+  | The `protspace-prep` service SHALL route all log output through a single `structlog`-based pipeline configured once at startup, before any module acquires a logger. The renderer SHALL be selectable vi
+  > The `protspace-prep` service SHALL route all log output through a single `structlog`-based pipeline configured once at startup, before any module acquires a logger. The renderer SHALL be selectable vi
+  > - **WHEN** existing code calls `logging.getLogger("protspace_prep.*")` and logs an event
+  > Every log line emitted during the execution of a preparation job SHALL carry the job's `job_id` as a structured field. The background pipeline task SHALL clear any inherited request/context state and 
+  > ### Requirement: Failure detail is logged, not shown to users
+  > When a preparation step fails, the full diagnostic detail (such as subprocess exit code and captured stderr) SHALL be recorded in the structured logs correlated by `job_id`. The message returned to th
+  > #### Scenario: Subprocess failure detail goes to logs
+  > - **WHEN** a `protspace` subprocess exits non-zero
+  > - **AND** the user-facing failure message does not contain the raw stderr output
+
+===== P201 | aehrc/pathling PR #2551 | capacidade do par: fhirpath-to-column-r
+PR: v9.4.0
+arquivos ligados: lib/R/R/context.R;lib/R/tests/testthat/test-context.R
+--- linhas alteradas (174; mostrando até 40)
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
+--- candidata: r-evaluate-fhirpath [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  | The R library SHALL provide an exported function
+  > ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  > `pathling_evaluate_fhirpath(pc, resource_type, resource_json, fhirpath_expression, context_expression, variables)`
+  > that invokes the Java `PathlingContext.evaluateFhirPath()` method via sparklyr's
+  > `j_invoke` and returns an R list containing the typed results and the expected
+  > The `context_expression` and `variables` parameters SHALL be optional, defaulting
+  > #### Scenario: Simple string expression
+  > - **WHEN** `pathling_evaluate_fhirpath(pc, "Patient", patient_json, "name.family")` is called with a Patient JSON containing family name "Smith"
+  > - **THEN** the returned list contains `results` with one entry having `type = "string"` and `value = "Smith"`, and `expectedReturnType = "string"`
+--- candidata: fhirpath-evaluation-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Evaluate FHIRPath expression against a single resource
+  | The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > ### Requirement: Evaluate FHIRPath expression against a single resource
+  > The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > string), a FHIRPath expression string, an optional context expression string,
+  > and optional variables, and returns a list of typed result values.
+  > The method SHALL use the existing Pathling FHIRPath engine (Spark-based) to
+  > evaluate the expression, encoding the resource into a one-row Dataset
+  > internally.
+  > #### Scenario: Simple expression evaluation
+--- candidata: fhirpath-lab-server [PR]
+  | ## ADDED Requirements
+  | ### Requirement: POST /$fhirpath-r4 endpoint
+  | The server SHALL expose a `POST /$fhirpath-r4` endpoint that accepts a FHIR
+  > Parameters resource as the request body (Content-Type: `application/json`) and
+  > returns a FHIR Parameters resource as the response.
+  > #### Scenario: Successful expression evaluation
+  > resource containing an `expression` and a `resource` parameter
+  > - **THEN** the server returns HTTP 200 with a FHIR Parameters resource
+  > containing the evaluation results
+  > #### Scenario: Missing required expression parameter
+  > - **WHEN** a POST request is sent without an `expression` parameter
+--- candidata: r-search-to-column [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Convert FHIR search expression to Spark column
+  | The R library SHALL provide a function `pc_search_to_column(pc, resource_type,
+  > ### Requirement: Convert FHIR search expression to Spark column
+  > The R library SHALL provide a function `pc_search_to_column(pc, resource_type,
+  > search_expression)` that accepts a PathlingContext, a FHIR resource type name,
+  > and a FHIR search query string, and returns a Spark Column object representing
+  > - **WHEN** `pc_search_to_column(pc, "Patient", "gender=male")` is called
+  > - **THEN** a Spark Column object (`spark_jobj`) is returned that evaluates to
+  > true for Patient resources where gender equals male.
+  > - **WHEN** `pc_search_to_column(pc, "Patient", "gender=male&active=true")` is
+--- candidata: r-fhirpath-helpers [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  | The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  > The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > #### Scenario: Filter patients by gender using FHIRPath
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows where gender equals male
+  > #### Scenario: Filter with combined boolean expression
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male' and birthDate > @1970-01-01")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows matching both conditions
+
+===== P202 | yexiyue/ratatui-kit PR #7 | capacidade do par: global-atoms
+PR: feat: 重写文档示例与内置组件体系
+arquivos ligados: examples/store.rs
+--- linhas alteradas (129; mostrando até 40)
+-use ratatui::{
+-    style::{Style, Stylize},
+-    text::Line,
+-};
+-use ratatui_kit::ratatui;
+-use ratatui_kit::{
+-    crossterm::event::{Event, KeyCode, KeyEventKind},
+-    prelude::tui_input::backend::crossterm::EventHandler,
+-    prelude::*,
+-    ratatui::layout::Constraint,
+-};
+-// 全局响应式原子（类 Jotai/Recoil）：模块级声明，零宏零结构。
+-// 跨页面共享，任何组件 use_atom 订阅，写入仅唤醒订阅者。
+-static COUNT: Atom<i32> = Atom::new(|| 0);
+-static VALUE: Atom<String> = Atom::new(String::new);
+-#[tokio::main]
+-async fn main() {
+-    let routes = routes! {
+-        "/" => HomePage,
+-        "/counter" => CounterPage,
+-        "/input" => InputPage,
+-    };
+-    element!(RouterProvider(
+-        routes:routes,
+-        index_path:"/",
+-    ))
+-    .fullscreen()
+-    .await
+-    .expect("Failed to run the application");
+-}
+-#[component]
+-fn HomePage(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+-    let count = hooks.use_atom(&COUNT);
+-    let value = hooks.use_atom(&VALUE);
+-    let mut navigate = hooks.use_navigate();
+-    hooks.use_events(move |event| {
+-        if let Event::Key(key_event) = event
+-            && key_event.kind == KeyEventKind::Press
+-        {
+-            match key_event.code {
+--- candidata: input-events [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 单一事件源与中央分发
+  | 终端 SHALL 退化为单一 raw event 源（异步、泛型签名 `Terminal::<T>::next_event(&mut self) -> Option<T::Event>`，`None` 表示事件流结束），不再向多个订阅者广播。渲染循环取到一个 raw event 后,MUST 经唯一的中央分发器 `InputRuntime::dispatch` 投递给当前帧登记的事件 handle
+  > 终端 SHALL 退化为单一 raw event 源（异步、泛型签名 `Terminal::<T>::next_event(&mut self) -> Option<T::Event>`，`None` 表示事件流结束），不再向多个订阅者广播。渲染循环取到一个 raw event 后,MUST 经唯一的中央分发器 `InputRuntime::dispatch` 投递给当前帧登记的事件 handle
+  > - **THEN** `Terminal::events()`/`Terminal::wait()`/`TerminalEvents`/`subscribers`、`use_events`/`use_local_events`、`UpdaterTerminal::events` 均不复存在
+  > `InputRuntime` 的层栈与 handler 表 SHALL 在每帧 update 开始时（`begin_frame`)清空并重建:每个本帧参与的组件在其 update 期间重新登记层与 handler。因此被卸载的组件、关闭（`open=false`）的弹窗 MUST 在下一帧自动退出活跃集,无需显式注销,且 MUST NOT 发生注册表泄漏或身份串号。
+  > ### Requirement: InputLayer 独占栈与 blocks_lower 互斥
+  > `InputRuntime` SHALL 维护一个按注册序（update 自顶向下 = z 序）排列的输入层栈。`dispatch` 计算活跃层集时 MUST 从栈顶向下,遇到第一个 `blocks_lower=true` 的层即截断:该层及其之上的层活跃,其下所有层（`Global` 除外)失活。
+  > ### Requirement: 事件消费 EventResult 截断传播
+  > 事件 handler SHALL 返回 `EventResult`（`Consumed` 或 `Ignored`,默认 `Ignored`)。`dispatch` 在有序投递过程中遇到 `Consumed` MUST 立即停止,不再投递给后续 handler;遇到 `Ignored` 则继续下一个。
+  > ### Requirement: 事件归属作用域 EventScope
+--- candidata: element-head-codegen [PR]
+  | ## ADDED Requirements
+  | ### Requirement: head 与 children 类型分离
+  | element 的「头部」（类型路径 + 可选 `(props)`）解析 SHALL 由独立的 `ParsedElementHead` 承载，该类型 MUST NOT 含 `children` 字段——使「头部解析阶段触及子节点块 `{}`」在类型层面无法表达，无需依赖注释约定。
+  > element 的「头部」（类型路径 + 可选 `(props)`）解析 SHALL 由独立的 `ParsedElementHead` 承载，该类型 MUST NOT 含 `children` 字段——使「头部解析阶段触及子节点块 `{}`」在类型层面无法表达，无需依赖注释约定。
+  > - **WHEN** 任意调用方解析一个 element 头部（`element!` 的 `Parse` 或 `routes!` 的 `ParsedRoute::parse`）
+  > - **THEN** 它得到的是仅含 ty + props 的 `ParsedElementHead`，`{}` 仍留在输入流中由调用方自行决定归属（`element!` 当 children、`routes!` 当子路由），头部类型本身没有承接 children 的字段
+  > ### Requirement: element codegen 单一真源
+  > `Element<Ty>` 的构造 codegen SHALL 仅由 `ParsedElementHead` 提供（单一真源）；`children` MUST 作为 codegen 的参数注入，而非从持有状态读取。`element!` 与 `routes!` MUST 经由同一 codegen 路径生成元素。
+  > #### Scenario: element! 与 routes! 共享同一 codegen
+  > - **WHEN** `element!(Comp(prop: v))` 与 `routes!{ "/x" => Comp(prop: v) }` 各自展开
+  > - **WHEN** codegen 需要为带子节点的 element 注入 children
+--- candidata: router-path-matching [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 动态路由尾部静态段按段边界匹配
+  | 对参数段后还有静态尾段的动态路由(如 `/users/:id/edit`),`Outlet` 匹配成功后 SHALL 校验剩余路径为空或以 `/` 起始(与静态段边界语义一致),MUST NOT 让尾段以前缀方式跨段误匹配。等价地,其匹配正则在尾部 SHALL 锚定段边界(`$` 或 `/`)。
+  > 路由匹配按 `routes!` 声明顺序取首个匹配项;该"声明顺序即优先级"语义 SHALL 在文档中明确(静态路由应声明在同前缀的动态路由之前,以免被遮蔽)。
+  > - **THEN** 不存在 `use_route_mut` 这种"看似可变实则丢弃"的 API;改用 `use_state`/`AtomState` 或 `use_route_state` + `push_with_state`
+  > # router-path-matching Specification
+  > 路由匹配按 `routes!` 声明顺序取首个匹配项;该"声明顺序即优先级"语义 SHALL 在文档中明确(静态路由应声明在同前缀的动态路由之前,以免被遮蔽)。
+  > - **THEN** 不存在 `use_route_mut` 这种"看似可变实则丢弃"的 API;改用 `use_state`/`AtomState` 或 `use_route_state` + `push_with_state`
+--- candidata: reactive-state-core [PR]
+  | ## ADDED Requirements
+  | ### Requirement: try_* 非阻塞且不忙等
+  | `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > ### Requirement: read/write 重入快速失败
+  > `read()`/`write()` 在无法借用时 SHALL 快速 panic(经 `try_*` 返回 `None` 后 `expect`),而非忙等或死锁。持守卫期间对同一 state 的重入读写属编程错误,SHALL 以 panic 快速暴露而非静默卡死。
+  > `State` 与 `AtomState` SHALL 继续使用 `SyncStorage` 并保持 `Send + Sync`,以支持在后台 `tokio::spawn` 任务中移动状态句柄并写入。本变更 MUST NOT 改为 `UnsyncStorage`,也 MUST NOT 移除 `Send + Sync`。
+  > - **WHEN** 在 `tokio::spawn` 的后台任务中持有 `State`/`AtomState` 句柄并写入
+  > `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > ### Requirement: read/write 重入快速失败
+  > `read()`/`write()` 在无法借用时 SHALL 快速 panic(经 `try_*` 返回 `None` 后 `expect`),而非忙等或死锁。持守卫期间对同一 state 的重入读写属编程错误,SHALL 以 panic 快速暴露而非静默卡死。
+--- candidata: element-borrow-lifetimes [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 借用派生句柄绑定到借用期
+  | `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > - **WHEN** 从 `&'a mut AnyElement<'b>` 派生一个 `AnyElement`
+  > - **WHEN** trybuild 用例尝试让派生的借用 `AnyElement`/`AnyProps` 逃逸出源的可变借用作用域
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > - **WHEN** 从 `&'a mut AnyElement<'b>` 派生一个 `AnyElement`
+  > - **WHEN** trybuild 用例尝试让派生的借用 `AnyElement`/`AnyProps` 逃逸出源的可变借用作用域
+  > # element-borrow-lifetimes Specification
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+
+===== P203 | PsychQuant/che-ical-mcp PR #65 | capacidade do par: eventkit-handler-test-harness
+PR: cluster: error-sanitizer hardening + DI test seam convention (#39, #40, #41, #34)
+arquivos ligados: Sources/CheICalMCP/Server.swift
+--- linhas alteradas (22; mostrando até 40)
++    /// Constructor with per-feature test seams.
++    ///
++    /// `reminderCleanupSource` is the canonical example of the "narrow `*Source`
++    /// protocol" DI convention (#34, see `CLAUDE.md` "Test Seam Convention"):
++    /// production code passes nothing → defaults to `EventKitManager.shared`;
++    /// `CleanupHandlerTests` passes a `FakeEventKitManager`. New handlers that
++    /// need a test fake should add their own narrow `*Source` parameter here
++    /// rather than widening `EventKitManaging`.
++            // Outer catch (#37 spec R8). Per-batch handlers route their own
++            // catches through writeFailureLog; this catch fires only when an
++            // error escapes ALL inner handling — so a framework error here
++            // means the operator's last debug channel is stderr. #39 carve-out:
++            // only write stderr for non-trusted errors. Trusted errors carry
++            // identical text on the wire (`code == rawLog`) so duplicating to
++            // stderr would just amplify noise; framework errors hide their
++            // localizedDescription from the wire (sanitized to a code) so
++            // stderr is the only place to surface it.
++            if !(error is TrustedErrorMessage) {
++                FileHandle.standardError.write(
++                    Data("handleToolCall(\(EventKitErrorSanitizer.escapeForStderr(name))) failed: \(EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog))\n
++                )
++            }
+--- candidata: eventkit-error-sanitization [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: cleanup_completed_reminders response reflects sanitized codes end-to-end
+  | The `cleanup_completed_reminders` MCP tool handler SHALL, when invoked in binding mode with `dry_run: false`, pass `failures` tuples from `BatchDeleteResult` into the response `failures[]` array with 
+  > ### Requirement: cleanup_completed_reminders response reflects sanitized codes end-to-end
+  > As a consequence of this requirement and "deleteRemindersBatch catch block routes errors through the sanitizer", `failures[].error` in any response produced by `cleanup_completed_reminders` SHALL sati
+  > This invariant applies to the `sanitize(_:)` API only. Other MCP tool handlers that consume `sanitizeForResponse(_:)` (defined in a later requirement) accept a broader value domain that includes verba
+  > #### Scenario: End-to-end sanitized code reaches response
+  > - **GIVEN** a `FakeEventKitManager` scripted to return `BatchDeleteResult(successCount: 0, failedCount: 1, failures: [("r1", "eventkit_error_3")])` for `deleteRemindersBatch`
+  > - **AND** a `CheICalMCPServer` initialized with `reminderCleanupSource` = that fake
+  > ### Requirement: TrustedErrorMessage marker protocol opts a Swift error type into pass-through dispatch
+  > The system SHALL provide a public empty marker protocol named `TrustedErrorMessage` declared in the same module as `EventKitErrorSanitizer`. The protocol SHALL declare zero method, property, or associ
+--- candidata: setup-permission-flow [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Interactive --setup presents TCC dialogs from a foreground app context
+  | When `--setup` runs in an interactive session, the binary SHALL request Calendar and Reminders full access from inside a foreground `NSApplication` (regular activation policy with a running main run l
+  > #### Scenario: Framework error during a request is sanitized
+  > - **THEN** the binary prints the entity's access line with the error text passed through control-character sanitization
+  > - **AND** the run is treated as failed (non-zero exit)
+  > When `--setup` runs in a session detected as non-interactive, the binary SHALL report each entity's authorization status headlessly and exit, and SHALL NOT enter the foreground `NSApplication` run loo
+  > #### Scenario: Non-interactive session skips the would-block request
+  > - **AND** the binary prints a skipped status for the entity rather than blocking on a dialog
+  > ### Requirement: Permission-denied responses surface the resolvable binary path and --setup command
+  > When a tool call fails because Calendar or Reminders access is insufficient, and when the startup banner detects that access is not granted, the output SHALL include the resolved absolute path of the 
+--- candidata: event-attendees [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Event responses include attendees array
+  | All event-returning tool responses SHALL include an `attendees` array when the event has participants. Each attendee object SHALL contain `name` (string or null), `email` (string), `role` (string), `s
+  > - **WHEN** an `EKParticipant.url` is `mailto:user@example.com`
+  > - **THEN** the extracted email SHALL be `user@example.com`
+  > - **WHEN** an `EKParticipant.url` is `https://example.com/user`
+  > - **THEN** the email field SHALL contain the full URL string `https://example.com/user`
+  > ### Requirement: Attendee info in all event-returning handlers
+  > The following tools SHALL include attendee and organizer information in their event output: `list_events`, `search_events`, `list_events_quick`, `check_conflicts`, `create_event` (response), `update_e
+  > #### Scenario: Consistency across handlers
+  > - **THEN** both responses SHALL contain identical `attendees` and `organizer` fields for that event
+
+===== P204 | lueluelue12138/sharp-gui PR #16 | capacidade do par: backend-modular-architecture
+PR: feat(video): 添加视频 3DGS 重建能力
+arquivos ligados: backend/runtime.py;backend/security/access_control.py
+--- linhas alteradas (43; mostrando até 40)
+-SHARP_LOG_LEVEL = os.environ.get("SHARP_LOG_LEVEL", "DEBUG" if SHARP_VERBOSE else "INFO").strip().upper()
++SHARP_LOG_LEVEL = os.environ.get("SHARP_LOG_LEVEL", "INFO").strip().upper()
++SHARP_HTTP_LOGS = os.environ.get("SHARP_HTTP_LOGS", "").strip().lower() in {
++    "1",
++    "true",
++    "yes",
++    "on",
++    "debug",
++}
++LOG_LEVEL_VALUES = {
++    "DEBUG": 10,
++    "INFO": 20,
++    "WARN": 30,
++    "WARNING": 30,
++    "ERROR": 40,
++}
++def get_log_level_value(level=None):
++    return LOG_LEVEL_VALUES.get((level or SHARP_LOG_LEVEL or "INFO").upper(), 20)
++def is_log_enabled(level):
++    return get_log_level_value(level) >= get_log_level_value()
++def log(level, message):
++    """Print backend diagnostics using the configured SHARP_LOG_LEVEL."""
++    normalized = (level or "INFO").upper()
++    if normalized == "WARNING":
++        normalized = "WARN"
++    if not is_log_enabled(normalized):
++        return
++    print(f"[{normalized}] {message}", flush=True)
+-    if SHARP_VERBOSE:
+-        print(f"[DEBUG] {message}", flush=True)
++    log("DEBUG", message)
++    logging.basicConfig(level=get_log_level_value(), format="[%(levelname)s] %(name)s: %(message)s")
+-    log.setLevel(logging.DEBUG if SHARP_VERBOSE else logging.WARNING)
++    log.setLevel(get_log_level_value() if SHARP_HTTP_LOGS else logging.WARNING)
+-    if path in {"/api/generate", "/api/photo-conversions"}:
++    if path == "/api/video-reconstructions/status":
++        return ACCESS_UNLOCKED
++    if path in {
++        "/api/generate",
++        "/api/photo-conversions",
+--- candidata: local-video-gallery-preview [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: The system SHALL discover supported local video files
+  | The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > ### Requirement: The system SHALL discover supported local video files
+  > The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > #### Scenario: Album contains supported video files
+  > - **WHEN** a configured album contains supported video files
+  > - **THEN** the album media listing SHALL include those videos with stable IDs, names, timestamps, sizes, media type, preview URL, download URL, and playback URL
+  > #### Scenario: Video playback URL is generated
+  > - **WHEN** the system returns a playback URL for a video item
+  > - **THEN** the URL SHALL use a path-style route with the video ID, a short-lived signed token, and a safe filename suffix
+--- candidata: local-photo-album-gallery [tasks+termos]
+  | # local-photo-album-gallery Specification
+  | ## Purpose
+  | 为 Sharp GUI 增加本地照片相册图库能力，使用户能够配置多个本地照片目录、按相册浏览照片、以高性能瀑布流查看缩略图、预览和下载原图，并将单张或多张照片加入现有 3D 生成队列。该能力必须同时兼容 Windows、Linux 和 macOS 部署端。
+  > # local-photo-album-gallery Specification
+  > ### Requirement: The system SHALL allow local photo album roots to be configured
+  > The system SHALL allow a local user to configure one or more photo directory roots, and SHALL represent each configured directory as a photo album.
+  > #### Scenario: Add a photo directory from localhost
+  > - **WHEN** a localhost user adds a valid photo directory
+  > - **THEN** the system SHALL persist the directory as a photo album configuration
+  > - **AND** the album SHALL appear in the photo album list without requiring application restart
+  > #### Scenario: Non-local client attempts to modify photo roots
+--- candidata: video-3dgs-reconstruction [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 系统 SHALL 从本地视频创建重建任务
+  | 系统 SHALL 允许具备生成权限的用户从已配置本地相册中的受支持视频创建静态 3DGS 重建任务，并且不得向前端暴露源视频的绝对文件系统路径。
+  > - **THEN** 任务 SHALL 记录为 environment-centric 重建
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+  > # video-3dgs-reconstruction Specification
+  > Define the local-video-to-3DGS reconstruction workflow, including task creation, runtime pipeline behavior, dependency diagnostics, output compatibility, and UI requirements.
+  > - **THEN** 任务 SHALL 记录为 environment-centric 重建
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+--- candidata: windows-portable-release-packages [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Windows Release 必须提供按 GPU 目标区分的完整便携 ZIP 包
+  | Windows Release 必须提供 Windows x64 GPU 完整便携 ZIP 包的外部下载链接，并按支持的 NVIDIA 运行时目标拆分；便携包路径不得要求普通用户再运行在线依赖安装脚本。
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+  > - **WHEN** 用户在解压后的 `cu128-rtx50-video-recon` 包目录运行 `portable-run.bat`
+  > - **THEN** 启动器必须优先把包内 `.video-reconstruction-env\Scripts`、`.video-reconstruction-env\colmap\bin` 和包内 `ffmpeg/ffprobe` 目录加入 `PATH`
+  > - **WHEN** 用户把解压后的 `cu128-rtx50-video-recon` 包目录移动到另一个 Windows 路径或另一个 Windows 用户目录
+  > - **WHEN** 打包流程校验 `cu128-rtx50-video-recon` 包
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+--- candidata: feedforward-reconstruction-engine [PR]
+  | > **状态：已废弃（2026-06-24）**
+  | >
+  | > 本规格仅作为探索记录保留，不再作为当前实现要求。废弃原因：在目标 Windows + RTX 5070 Ti Laptop 12GB 环境验证中，Pi3/Pi3X 路线对多帧一次性推理的显存压力过高并出现 OOM；降低帧数后的 smoke 产物质量异常，无法达到稳定路线的可验收效果；长视频场景需要覆盖足够视角，当前方案的帧预算与质量目标矛盾；同时权重许可/分发要求不适合作为默认能力。当前分支回

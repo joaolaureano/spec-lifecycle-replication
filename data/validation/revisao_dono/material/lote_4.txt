@@ -1,0 +1,1970 @@
+===== P062 | VimCommando/kibana-object-manager PR #11 | capacidade do par: agents
+PR: Implement concurrent API calls for significant speedup
+arquivos ligados: src/cli.rs;src/kibana/agents/loader.rs
+--- linhas alteradas (474; mostrando até 40)
++use std::sync::Arc;
++use tokio::task::JoinSet;
++/// - KIBANA_MAX_REQUESTS: Maximum number of concurrent requests (optional, default: 8)
+-    KibanaClient::try_new(url, auth, project_dir).context("Failed to create Kibana client")
++    let max_requests = std::env::var("KIBANA_MAX_REQUESTS")
++        .ok()
++        .and_then(|s| s.parse().ok())
++        .unwrap_or(8);
++    KibanaClient::try_new(url, auth, project_dir, max_requests)
++        .context("Failed to create Kibana client")
+-    let project_dir = project_dir.as_ref();
++    let project_dir = Arc::<Path>::from(project_dir.as_ref());
++    let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
+-    let client = load_kibana_client(project_dir)?;
++    let client = load_kibana_client(&*project_dir)?;
+-    // This ensures space definitions are up-to-date before pulling resources
+-    if should_process_api("spaces", api_filter) {
++    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
+-            match pull_spaces_internal(project_dir, &client).await {
++            match pull_spaces_internal(&*project_dir, &client).await {
+-    // Pull each managed space
+-    for space_id in &target_space_ids {
+-        log::info!("Processing space: {}", space_id.cyan());
+-        // Get space client for this space
+-        let space_client = client.space(space_id)?;
+-        // Pull saved objects for this space
+-        if should_process_api("saved_objects", api_filter) {
+-            if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
+-                total_count += count;
++    let mut set = JoinSet::new();
++    // Pull each managed space concurrently
++    for space_id in target_space_ids {
++        let client = client.clone();
++        let project_dir = project_dir.clone();
++        let api_filter = api_filter.clone();
++        set.spawn(async move {
++            log::info!("Processing space: {}", space_id.cyan());
++            let mut space_total = 0;
++            // Get space client for this space
++            let space_client = client.space(&space_id)?;
+--- candidata: concurrency [tasks+PR]
+  | # Spec Delta: Concurrency Control
+  | ## ADDED Requirements
+  | ### Requirement: Global API Concurrency Limit
+  > `KibanaClient` SHALL implement a global limit on the number of simultaneous "in-flight" HTTP requests across all instances (including space-scoped clones).
+  > - **GIVEN** `KibanaClient` initialized with `MAX_REQUESTS = 2`
+  > - **WHEN** making 3 simultaneous API requests
+  > - **THEN** the first 2 requests SHALL be sent immediately
+  > - **THEN** the 3rd request SHALL wait until one of the first 2 completes
+  > - **WHEN** `KibanaClient` is initialized
+  > ### Requirement: Concurrent Asset Processing
+  > The application SHALL perform asset-level operations concurrently to minimize total execution time.
+--- candidata: cli [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: API Filtering
+  | The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > - **THEN** the system pulls all supported object types (Spaces, Saved Objects, Workflows, Agents, Tools)
+  > #### Scenario: Filter by single API
+  > - **WHEN** the user runs `kibob pull --api tools`
+  > - **AND** skips Spaces, Saved Objects, Workflows, and Agents
+  > - **WHEN** the user runs `kibob push --api agents,workflows`
+  > - **THEN** the system pushes Agents and Workflows
+  > - **AND** skips Spaces, Saved Objects, and Tools
+--- candidata: include-dependencies [tasks]
+  | # Capability: Include Dependencies
+  | ## ADDED Requirements
+  | ### Requirement: Automatic Dependency Inclusion
+  > #### Scenario: Adding an Agent with Tools
+  > - **Given** an agent that references two tools: `tool-a` and `tool-b`.
+  > - **When** the user runs `kibob add agent my-agent`.
+  > - **Then** `my-agent` is added to `agents.yml`.
+  > - **And** `tool-a` and `tool-b` are added to `tools.yml`.
+  > - **And** the JSON files for the agent and both tools are written to the filesystem.
+  > - **Given** a tool that references workflow `wf-1`.
+  > - **When** the user runs `kibob add tools my-tool`.
+--- candidata: kibana-sync [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Explicit Client Configuration
+  | The `kibana-sync` crate SHALL construct clients from explicit configuration values rather than CLI project directories.
+  > ### Requirement: Explicit Client Configuration
+  > The `kibana-sync` crate SHALL construct clients from explicit configuration values rather than CLI project directories.
+  > #### Scenario: Construct client with default space
+  > - **WHEN** a consumer builds a client with a Kibana URL, auth configuration, and no explicit spaces
+  > - **THEN** the client is created with the `default` space available
+  > #### Scenario: Construct client with caller-provided spaces
+  > - **WHEN** a consumer builds a client with a caller-provided list or map of spaces
+  > - **THEN** the client validates space-bound clients against that registry
+--- candidata: kibana-client [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Space-Aware Client Architecture
+  | The Kibana client SHALL be split into two structs:
+  > ### Requirement: Space-Aware Client Architecture
+  > The Kibana client SHALL be split into two structs:
+  > - `KibanaClient`: Root client that holds shared HTTP client, base URL, and space registry
+  > - `SpaceClient`: Space-bound view that automatically prefixes API paths with space
+  > #### Scenario: Create space-bound client
+  > - **WHEN** calling `kibana.space("marketing")`
+  > - **THEN** return `Ok(SpaceClient)` if "marketing" exists in loaded spaces
+  > - **THEN** return `Err` if "marketing" is not in the spaces manifest
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR passa a usar recursos de concorrência, como semáforos, que não são descritos na spec.
+
+===== P070 | jdjingdian/StaticRouteHelper PR #14 | capacidade do par: os-conditional-persistence
+PR: feat(ui): refine desktop experience and codify ui style governance
+arquivos ligados: StaticRouter/View/LegacyRouteListView.swift
+--- linhas alteradas (40; mostrando até 40)
+-                    .font(.headline)
++                    .font(.title3.weight(.semibold))
++                    .padding(.horizontal, 10)
++                    .padding(.vertical, 4)
++                    .background(RouterTheme.subtleFill, in: Capsule())
++                        .font(.system(size: 13, weight: .semibold))
++                        .frame(width: 26, height: 22)
+-                .buttonStyle(.plain)
++                .buttonStyle(.borderedProminent)
++                .controlSize(.small)
+-            .padding(.vertical, 8)
++            .padding(.vertical, 10)
+-                            .frame(width: 22, height: 22)
++                            .frame(width: 24, height: 24)
+-                    .buttonStyle(.borderedProminent)
+-                    .tint(.green)
++                    .buttonStyle(LegacyRouteActionIconButtonStyle(tint: RouterTheme.accent))
+-                            .frame(width: 22, height: 22)
++                            .frame(width: 24, height: 24)
+-                    .buttonStyle(.borderedProminent)
+-                    .tint(.red)
++                    .buttonStyle(LegacyRouteActionIconButtonStyle(tint: RouterTheme.danger))
+-            .width(80)
++            .width(90)
++private struct LegacyRouteActionIconButtonStyle: ButtonStyle {
++    let tint: Color
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .foregroundStyle(configuration.isPressed ? tint.opacity(0.95) : tint)
++            .background(
++                RoundedRectangle(cornerRadius: 7, style: .continuous)
++                    .fill(configuration.isPressed ? tint.opacity(0.22) : tint.opacity(0.12))
++            )
++            .overlay(
++                RoundedRectangle(cornerRadius: 7, style: .continuous)
++                    .stroke(tint.opacity(0.26), lineWidth: 0.6)
++            )
++            .animation(.easeInOut(duration: 0.16), value: configuration.isPressed)
++    }
++}
+--- candidata: ui-style-governance [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: UI 设计规范文档必须作为后续 UI 开发基线
+  | The project MUST treat `design/STYLE_GUIDE.md` as the baseline for UI-related implementation decisions, including visual tokens, component patterns, hierarchy, and interaction behavior.
+  > - **THEN** the proposal/design artifacts MUST reference `design/STYLE_GUIDE.md` as the style baseline
+  > - **AND** the change description MUST explain alignment with existing style rules or explicitly list justified deviations
+  > The project MUST keep `design/README.md` and `design/STYLE_GUIDE.md` as the canonical documentation entry for UI style governance.
+  > - **THEN** they MUST use the `design/` documents as the primary reference instead of ad-hoc style choices
+  > Any change to core UI style rules (color tokens, control sizing patterns, interaction conventions, layout hierarchy) MUST update style documentation before or together with implementation changes.
+  > # ui-style-governance 规范
+  > - **THEN** the proposal/design artifacts MUST reference `design/STYLE_GUIDE.md` as the style baseline
+  > - **AND** the change description MUST explain alignment with existing style rules or explicitly list justified deviations
+--- candidata: os-conditional-observable [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: RouterService 条件式响应式框架
+  | `RouterService` SHALL 在 macOS 14.0 及以上使用 `@Observable`（Observation 框架），在 macOS 12–13 使用 `ObservableObject` + `@Published`。两条路径 SHALL 在同一个源文件中通过 `#if canImport(Observation)` + `@available(macOS 14, *)`
+  > - **THEN** `RouterService` 使用 `@Observable` 宏，`helperStatus`、`systemRoutes`、`lastError` 属性无需 `@Published` 标注，视图通过类型化 `@Environment(RouterService.self)` 接收实例
+  > - **THEN** `RouterService` 使用 `@Observable` 宏，`helperStatus`、`systemRoutes`、`lastError` 属性无需 `@Published` 标注，视图通过类型化 `@Environment(RouterService.self)` 接收实例
+--- candidata: router-service [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: RouterService 统一服务接口
+  | 系统 SHALL 提供 `RouterService` 作为所有路由操作和 Helper 通信的唯一入口。在 macOS 14+ 上 `RouterService` SHALL 遵循 `@Observable`（Observation 框架），通过类型化 `@Environment(RouterService.self)` 注入视图层级。在 macOS 12–13 上 SHALL 遵循 `Obse
+  > - `systemRoutes: [SystemRouteEntry]`
+  > - `systemRoutes: [SystemRouteEntry]`
+  > - `systemRoutes: [SystemRouteEntry]`（系统路由表缓存）
+  > - `systemRoutes: [SystemRouteEntry]`
+--- candidata: legacy-route-crud [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: macOS 12–13 路由规则 CRUD（基于 Core Data）
+  | 在 macOS 12–13 上，用户 SHALL 能够执行完整的路由规则增删改查操作，数据由 Core Data（`RouteRuleMO`）持久化：
+--- candidata: route-crud [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: 添加路由规则
+  | 用户 SHALL 能够通过路由列表视图中的 "添加路由" 按钮打开 Sheet 表单，输入路由信息并保存。
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Não identifiquei a spec responsável. O PR altera comportamentos de SwiftUI, enquanto a spec trata de persistência em segundo plano.
+
+===== P077 | Litash/moomoo-api-mcp PR #4 | capacidade do par: account-info
+PR: Feat/auto select account for trades
+arquivos ligados: src/moomoo_mcp/services/trade_service.py;tests/test_services/test_trade_service.py
+--- linhas alteradas (129; mostrando até 40)
+-from moomoo import OpenSecTradeContext, RET_OK, SecurityFirm, TrdMarket
++from moomoo import OpenSecTradeContext, OrderStatus, RET_OK, SecurityFirm, TrdMarket
++    def _convert_status_filter(
++        self, status_filter_list: list[str] | None
++    ) -> list | None:
++        """Convert string status values to OrderStatus enum values.
++        The Moomoo SDK expects OrderStatus enum values, not strings.
++        This method converts user-provided string values to the proper enum format.
++        Args:
++            status_filter_list: List of status strings like ['SUBMITTED', 'FILLED_ALL'].
++        Returns:
++            List of OrderStatus enum values, or None if input is None.
++        Raises:
++            ValueError: If an invalid status string is provided.
++        """
++        if status_filter_list is None:
++            return None
++        converted = []
++        for status_str in status_filter_list:
++            # OrderStatus has the attribute matching the string (e.g., OrderStatus.SUBMITTED)
++            status_enum = getattr(OrderStatus, status_str.upper(), None)
++            if status_enum is None:
++                valid_statuses = [
++                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING", "SUBMIT_FAILED",
++                    "SUBMITTED", "FILLED_PART", "FILLED_ALL",
++                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART", "CANCELLED_ALL",
++                    "REJECTED", "DISABLED", "DELETED", "FAILED", "NONE"
++                ]
++                raise ValueError(
++                    f"Invalid order status: '{status_str}'. "
++                    f"Valid options: {valid_statuses}"
++                )
++            converted.append(status_enum)
++        return converted
+-            status_filter_list: Filter by order statuses.
++            status_filter_list: Filter by order statuses (as strings).
++                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
++                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
++                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+-            List of order dictionaries.
+--- candidata: order-retrieval [tasks+termos]
+  | # Order Retrieval
+  | ## ADDED Requirements
+  | ### Support Getting Order List
+  > The system must allow retrieving a list of orders (today's orders) filtered by environment and account.
+  > Given the user wants to see their orders
+  > When they call `get_orders(trd_env='REAL')`
+  > Then the tool should return a list of orders including order ID, code, side, price, qty, status.
+  > When they call `get_deals(trd_env='REAL')`
+  > Then the tool should return a list of deals including deal ID, order ID, code, price, qty.
+--- candidata: order-modification [tasks+termos]
+  | # Order Modification and Cancellation
+  | ## ADDED Requirements
+  | ### Support Modifying Orders
+  > The system must allow modifying price, quantity, or other attributes of an open order.
+  > Given an open order with ID '12345'
+  > When a user calls `modify_order(order_id='12345', op='NORMAL', price=355.0)`
+  > Then the order modification request should be sent to Moomoo
+  > And the tool should return success status.
+  > The system must allow cancelling an open order.
+  > Given an open order with ID '67890'
+  > When a user calls `cancel_order(order_id='67890')`
+--- candidata: order-placement [tasks]
+  | # Order Placement
+  | ## ADDED Requirements
+  | ### Support placing orders
+  > ### Support placing orders
+  > The system must allow placing orders with `code`, `side`, `qty`, `price`, `order_type`, and `trd_env`.
+  > Supported order types include: `NORMAL` (Limit), `MARKET`, `STOP`, `STOP_LIMIT`, `TRAILING_STOP`, `TRAILING_STOP_LIMIT`, `AUCTION`, `AUCTION_LIMIT`, etc.
+  > When they call `place_order(code='HK.00700', side='BUY', qty=100, price=350.0, order_type='NORMAL')`
+  > Then the order should be submitted to Moomoo
+  > And the tool should return the order ID.
+  > When they call `place_order(code='US.AAPL', side='BUY', qty=100, price=0.0, order_type='MARKET')`
+  > Then the order should be submitted
+--- candidata: watchlist-management [PR]
+  | # Spec: Watchlist Management
+  | ## ADDED Requirements
+  | ### R1: List Security Groups
+  > - **Then** it returns a list of groups, including their IDs and names
+  > - **Then** it returns a list of securities in that group, each with their code and name
+--- candidata: trade-unlock [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Auto-unlock Trade at Startup
+  | The MCP server SHALL automatically unlock trade during startup if a trade password is provided via environment variable.
+  > The MCP server SHALL automatically unlock trade during startup if a trade password is provided via environment variable.
+  > - **AND** log a success message indicating REAL account access is enabled
+  > - **AND** log a success message indicating REAL account access is enabled
+  > #### Scenario: Skip unlock when no password provided
+  > - **AND** log an info message indicating SIMULATE-only mode
+  > #### Scenario: Handle unlock failure gracefully
+  > - **GIVEN** an environment variable is set with an invalid password
+  > - **AND** REAL account access will not be available
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Não identifiquei a spec responsável. A mudança pode pertencer a uma capacidade separada para seleção automática de carteiras.
+
+===== P085 | halo-sigs/plugin-photos PR #77 | capacidade do par: theme-url-context
+PR: feat: add public read-only JSON API for SPA themes
+arquivos ligados: src/main/java/run/halo/photos/vo/PhotoVo.java
+--- linhas alteradas (30; mostrando até 40)
+-            .exif(photo.getExif())
++            .exif(cloneExifWithoutGps(photo.getExif()))
++    private static Photo.PhotoExif cloneExifWithoutGps(Photo.PhotoExif source) {
++        if (source == null) {
++            return null;
++        }
++        var copy = new Photo.PhotoExif();
++        copy.setMake(source.getMake());
++        copy.setModel(source.getModel());
++        copy.setLensModel(source.getLensModel());
++        copy.setSoftware(source.getSoftware());
++        copy.setDateTimeOriginal(source.getDateTimeOriginal());
++        copy.setFNumber(source.getFNumber());
++        copy.setExposureTime(source.getExposureTime());
++        copy.setIso(source.getIso());
++        copy.setFocalLength(source.getFocalLength());
++        copy.setFocalLengthIn35mm(source.getFocalLengthIn35mm());
++        copy.setFlash(source.getFlash());
++        copy.setWhiteBalance(source.getWhiteBalance());
++        copy.setExposureMode(source.getExposureMode());
++        copy.setExposureProgram(source.getExposureProgram());
++        copy.setMeteringMode(source.getMeteringMode());
++        copy.setImageWidth(source.getImageWidth());
++        copy.setImageHeight(source.getImageHeight());
++        // GPS fields intentionally nulled for privacy
++        copy.setGpsLatitude(null);
++        copy.setGpsLongitude(null);
++        copy.setGpsAltitude(null);
++        return copy;
++    }
+--- candidata: photo-exif [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: PhotoVo exposes the exif field for theme consumption
+  | `PhotoVo` SHALL include an `exif` field populated from `Photo.exif`, so that theme templates and the public API can access EXIF data via `photoFinder` or the `api.photo.halo.run/v1alpha1` endpoints.
+  > ### Requirement: PhotoVo exposes the exif field for theme consumption
+  > `PhotoVo` SHALL include an `exif` field populated from `Photo.exif`, so that theme templates and the public API can access EXIF data via `photoFinder` or the `api.photo.halo.run/v1alpha1` endpoints.
+  > The factory `PhotoVo.from(Photo)` SHALL produce a defensive copy of `Photo.exif` rather than aliasing the same instance, and SHALL force the GPS coordinate fields (`gpsLatitude`, `gpsLongitude`, `gpsA
+  > The underlying `Photo.PhotoExif` type and the values stored on the `Photo` extension SHALL remain unchanged. Consumers that serialize `Photo` directly (e.g. console endpoints under `console.api.photo.
+  > JSON serialization of `PhotoVo` SHALL omit the GPS fields entirely (relying on the system-wide `Include.NON_NULL` configuration); the JSON SHALL NOT contain `gpsLatitude`, `gpsLongitude`, or `gpsAltit
+  > #### Scenario: Theme retrieves photos with EXIF
+  > - **WHEN** a theme calls `photoFinder.listAll()` or similar methods to obtain a photo list
+  > - **THEN** each returned `PhotoVo` SHALL have its non-GPS `exif` fields set to the corresponding `Photo.exif` values
+--- candidata: public-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Public Photo List Effective-Time Sort Is Index-Backed
+  | `GET /apis/api.photo.halo.run/v1alpha1/photos` for the default ordering and for `sort=exif.dateTimeOriginal,(asc|desc)` SHALL be served by an index-backed query whose memory and CPU cost per request i
+  > ### Requirement: Public Photo List Effective-Time Sort Is Index-Backed
+  > `GET /apis/api.photo.halo.run/v1alpha1/photos` for the default ordering and for `sort=exif.dateTimeOriginal,(asc|desc)` SHALL be served by an index-backed query whose memory and CPU cost per request i
+  > The same guarantee SHALL apply to data flowing through `PhotoPublicQueryService.listPhotos(...)` regardless of whether the caller is the public endpoint, the `PhotoFinder` SPI, or the SSR `PhotoRouter
+  > - **WHEN** an anonymous client issues `GET /apis/api.photo.halo.run/v1alpha1/photos?page=1&size=20` (no `sort` parameter) against a gallery of 50 000 photos
+  > - **THEN** the server responds without first loading all 50 000 photos into memory for sorting
+  > - **WHEN** a Thymeleaf template calls `photoFinder.listAll()` against a gallery of 50 000 photos and `PhotoPublicQueryService.listAllPhotos(...)` iterates through pages of 500
+  > - **WHEN** an anonymous visitor requests `GET /photos/{name}` and `PhotoRouter` computes neighbour photos via `PhotoPublicQueryService.listAllPhotos(...)`
+  > ### Requirement: Public API Group Exists At api.photo.halo.run/v1alpha1
+--- candidata: photo-detail-page [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Theme-Side Photo List Route With Query-String Pagination
+  | The plugin SHALL register a theme-side `GET /photos` route that renders the gallery list. Pagination MUST use the query parameters `page` (1-based, default `1`) and `size` (default from `base.pageSize
+  > ### Requirement: Theme-Side Photo List Route With Query-String Pagination
+  > The plugin SHALL register a theme-side `GET /photos` route that renders the gallery list. Pagination MUST use the query parameters `page` (1-based, default `1`) and `size` (default from `base.pageSize
+  > - **WHEN** a visitor requests `GET /photos` with no query parameters
+  > - **THEN** the response renders the `photos` template with page 1 and the configured default page size, including all photos regardless of group
+  > - **WHEN** a visitor requests `GET /photos?page=3&size=20`
+  > - **WHEN** a visitor requests `GET /photos?group=trips`
+  > - **THEN** the response includes only photos whose `spec.groupName` equals `trips`, paginated using the default or supplied page parameters
+  > The plugin SHALL keep `GET /photos/page/{page}` resolvable by issuing a `301 Moved Permanently` response that points at `/photos?page={page}`. The redirect MUST NOT re-render the list template. The re
+--- candidata: admin-ui-polish [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Cohesive Toolbar Layout
+  | The admin photo console SHALL provide a cohesive toolbar where search, tag filtering, view switching, batch status, pagination context, and primary actions remain aligned, consistently spaced, and usa
+  > The admin photo console SHALL provide a cohesive toolbar where search, tag filtering, view switching, batch status, pagination context, and primary actions remain aligned, consistently spaced, and usa
+  > - **WHEN** the user opens the photo management console with at least one group and photos
+  > The admin photo console SHALL render photo groups with clear active, hover, drag, empty, loading, and action states that preserve the user's ability to scan and manage groups.
+  > - **THEN** the selected group is visually distinct from other groups and its photo count remains readable
+  > ### Requirement: Refined Photo Grid
+  > The admin photo console SHALL render grid photo cards with stable dimensions, readable names and tags, clear selection state, and explicit loading or deletion feedback.
+  > #### Scenario: Grid photo selected
+  > - **WHEN** the user selects one or more photos in grid mode
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O helper passa a remover coordenadas GPS do EXIF devolvido por PhotoVo.
+
+===== P105 | epam/ai-dial-chat PR #7623 | capacidade do par: sticky-code-block-header
+PR: feat(chat): update code block download button (Issue #7589)
+arquivos ligados: apps/chat/src/components/Markdown/CodeBlock.tsx
+--- linhas alteradas (64; mostrando até 40)
+-import { IconCheck, IconCopy } from '@tabler/icons-react';
+-import { CSSProperties, FC, memo, useCallback } from 'react';
++import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
++import { CSSProperties, FC, memo, useCallback, useState } from 'react';
+-import { getDownLoadCurrentDate } from '@/src/utils/app/import-export';
++import { triggerDownload } from '@/src/utils/app/file';
++import { getDefaultExportFileName } from '@/src/utils/app/import-export';
+-import Download from '@/public/images/icons/download.svg';
++import { ChangeDownloadFileNameModal } from '@/src/components/Markdown/ChangeDownloadFileNameModal';
++    const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+-    const downloadAsFile = useCallback(() => {
+-      // languageExtensionMapping allows set empty extension
+-      const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
+-      // use the specific filename if it exists in languageFilenameMapping
+-      const suggestedFileName =
+-        languageFilenameMapping[displayLanguage] ??
+-        `ai-chat-code-${getDownLoadCurrentDate()}${fileExtension}`;
+-      const fileName = window.prompt(
+-        t(MarkdownI18nKeys.EnterFileName),
+-        suggestedFileName,
+-      );
+-      if (!fileName) {
+-        // User pressed cancel on prompt
+-        return;
+-      }
+-      const blob = new Blob([value], { type: 'attachment/plain' });
+-      const url = URL.createObjectURL(blob);
+-      const link = document.createElement('a');
+-      link.download = fileName;
+-      link.href = url;
+-      link.style.display = 'none';
+-      document.body.appendChild(link);
+-      link.click();
+-      document.body.removeChild(link);
+-      URL.revokeObjectURL(url);
+-    }, [displayLanguage, t, value]);
++    // languageExtensionMapping allows set empty extension
++    const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
++    const suggestedFileName =
++      languageFilenameMapping[displayLanguage] ??
+--- candidata: codeblock-download [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code block download button uses standard icon
+  | The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > ### Requirement: Code block download button uses standard icon
+  > The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > #### Scenario: Download icon is visible in code block toolbar
+  > - **THEN** the download button SHALL display the `IconDownload` tabler icon (not the custom SVG)
+  > ### Requirement: Code block download opens in-app filename dialog
+  > When the user clicks the download button in a code block, the system SHALL open an in-app modal dialog (`ChangeDownloadFileNameModal`) for filename input instead of a native browser prompt.
+  > #### Scenario: Download button click opens modal
+  > - **WHEN** the user clicks the download button in a code block toolbar
+--- candidata: export [PR]
+  | ## Purpose
+  | Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  | ## Requirements
+  > Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  > ### Requirement: Export filenames SHALL use a zero-padded ISO date prefix
+  > #### Scenario: Conversation export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `2026-07-03_` (not `2026-7-3_`)
+  > #### Scenario: Conversations history export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `YYYY-MM-DD_` with zero-padded month and day
+  > #### Scenario: Prompt export filename uses zero-padded date
+  > - **WHEN** the user exports a single prompt
+--- candidata: markdown-table [termos]
+  | ## Purpose
+  | Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  | ## Requirements
+  > Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  > A toolbar SHALL be rendered above each markdown table in a chat message, offering one-click copy of the table data as CSV, plain text (TXT), and Markdown.
+  > - **WHEN** the user clicks the "Copy as CSV" toolbar button
+  > - **WHEN** the user clicks the "Copy as TXT" toolbar button
+  > #### Scenario: Copy as Markdown places a GFM table on the clipboard
+  > - **WHEN** the user clicks the "Copy as MD" toolbar button
+  > - **THEN** the table data SHALL be written to the clipboard as a GitHub-Flavored Markdown table, including a separator row with alignment markers
+  > - **WHEN** the user clicks any copy toolbar button
+--- candidata: edit-message-save-tooltip [termos]
+  | # Specification: Edit Message Save & Submit Tooltip
+  | ## Overview
+  | The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > ### Requirement: Save & Submit tooltip displays when button is disabled
+  > The system SHALL display a tooltip on the Save & Submit button explaining why the button is disabled. The tooltip text SHALL be contextual based on the disable condition.
+  > - **WHEN** user is editing a message and a file attachment is in the uploading state
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Wait for attachment to load"
+  > #### Scenario: Message content is empty
+  > - **WHEN** user is editing a message and the message content is empty (no text and no attachments)
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Please type message"
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff altera o fluxo de download, não a posição fixa do cabeçalho.
+
+===== P121 | kniwase/WebComPy PR #194 | capacidade do par: package-topology
+PR: feat: transfer Signal values through hydration payload
+arquivos ligados: packages/webcompy-server/src/webcompy_server/_html.py;scripts/run-e2e-tests.sh
+--- linhas alteradas (30; mostrando até 40)
+-        html_output = await _generate_html_impl(
++        html_output, app_loader_html = await _generate_html_impl(
++        if prerender and ctx._root is not None:
++            try:
++                payload_json = ctx._root._collect_transfer_data()
++                data_script = f'<script type="application/json" id="__webcompy_data__">{payload_json}</script>'
++                html_output = html_output.replace(
++                    "</body>",
++                    f"{data_script}\n{app_loader_html}</body>",
++                )
++            except Exception as e:
++                _logger.warning("Failed to inject hydration data payload: %s", e)
++                html_output = html_output.replace("</body>", f"{app_loader_html}</body>")
++        else:
++            html_output = html_output.replace("</body>", f"{app_loader_html}</body>")
+-    if prerender and ctx._root is not None:
+-        try:
+-            payload_json = ctx._root._collect_transfer_data()
+-            data_script = f'<script type="application/json" id="__webcompy_data__">{payload_json}</script>'
+-            html_output = html_output.replace("</body>", f"{data_script}\n{app_loader_html}</body>")
+-        except Exception as e:
+-            _logger.warning("Failed to inject hydration data payload: %s", e)
+-            html_output = html_output.replace("</body>", f"{app_loader_html}</body>")
+-    else:
+-        html_output = html_output.replace("</body>", f"{app_loader_html}</body>")
+-    return html_output.replace("<head>", f"<head>\n{head_content_html}", 1)
++    html_output = html_output.replace("<head>", f"<head>\n{head_content_html}", 1)
++    return html_output, app_loader_html
+-  ["bootstrap-static"]="e2e/core/test_bootstrap.py e2e/core/test_static_site.py"
++  ["bootstrap-static"]="e2e/core/test_bootstrap.py e2e/core/test_static_site.py e2e/core/test_signal_value_transfer.py"
+--- candidata: hydration-data-transfer [tasks+PR+termos]
+  | # Hydration Data Transfer
+  | ## Purpose
+  | WebComPy currently re-executes all component setups in the browser during hydration, re-fetching data that was already resolved on the server. This causes duplicate network requests, a flash of loadin
+  > WebComPy currently re-executes all component setups in the browser during hydration, re-fetching data that was already resolved on the server. This causes duplicate network requests, a flash of loadin
+  > This change introduces a server-to-browser data transfer mechanism. The `ServerFetchPort` caches self-site responses during SSR. Resolved `AsyncResult` states are collected from the component tree. Th
+  > `HYDRATION_DATA_KEY: InjectKey[dict[str, Any]]` SHALL be defined in `packages/webcompy/src/webcompy/di/_keys.py` and exported from `packages/webcompy/src/webcompy/di/__init__.py`. The value SHALL be t
+  > - **AND** `HYDRATION_DATA_KEY` SHALL be usable as the first argument to `inject()`
+  > ### Requirement: has_resolved_data() shall query the transfer payload
+  > `has_resolved_data(component_id: str) -> bool` SHALL be defined in `packages/webcompy/src/webcompy/hydration/__init__.py` and SHALL return `True` when the transfer payload contains a resolved `AsyncRe
+  > - **WHEN** `HYDRATION_DATA_KEY` is provided with a payload containing `{"component-1": TransferAsyncResultEntry(...)}`
+  > - **WHEN** `HYDRATION_DATA_KEY` is provided with a payload that does not contain `"component-x"`
+--- candidata: async-rendering [tasks+PR]
+  | # Async Rendering Pipeline
+  | ## Purpose
+  | The rendering pipeline supports async component definitions, async lifecycle hooks, and async child rendering. Sibling children are still rendered sequentially to preserve DOM ordering and short-circu
+  > `_hydrate_node()` SHALL remain synchronous in this change. `ElementAbstract._hydrate_node()`, `ElementWithChildren._hydrate_node()`, and `DynamicElement._hydrate_node()` SHALL be `def` methods. All `_
+  > - **THEN** the async render pipeline SHALL be scheduled via `resolve_async(ctx._root._render())`
+  > - **THEN** `await app_root._render()` SHALL be called within the async pipeline
+  > This is a behavioral match to the current sequential rendering pipeline. With sync rendering, children are processed one by one and an exception in child N aborts rendering immediately (children N+1 a
+  > - **WHEN** one child's `_render()` raises an unexpected exception during sequential rendering
+  > - **THEN** the exception SHALL propagate immediately via the `await`
+  > - **AND** the exception SHALL be re-raised to the caller
+  > In the browser (PyScript) environment, `app.run()` SHALL schedule the async render via `resolve_async(ctx._root._render())`. This SHALL NOT block the event loop. The loading indicator removal and prof
+--- candidata: components [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Component after-rendering lifecycle hook shall be deferred when triggered by reactive navigation
+  | When a component's `on_after_rendering` hook is triggered as a side effect of a reactive change (such as a route change via `SwitchElement._refresh()`), the hook SHALL NOT execute synchronously within
+  > - **WHEN** a page is loaded directly via URL (initial hydration)
+  > Components SHALL provide hooks for before rendering, after rendering, and before destruction. These hooks allow components to perform side effects like fetching data, setting up subscriptions, or clea
+  > Components SHALL provide hooks for before rendering, after rendering, and before destruction. These hooks allow components to perform side effects like fetching data, setting up subscriptions, or clea
+  > - **AND** `ThemeKey` SHALL be available to descendant components via `inject(ThemeKey)`
+  > #### Scenario: Component injects a value during setup
+  > - **WHEN** a component setup function calls `inject(RouterKey)` and an ancestor scope provides `RouterKey`
+  > - **AND** `ThemeKey` SHALL be available to descendant components via `inject(ThemeKey)`
+  > #### Scenario: Component injects a value during setup
+--- candidata: signal-value-transfer [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Signal values shall be collected from __signal_members__ during SSR
+  | During SSR/SSG, after the render tree completes and `await_pending()` finishes, the framework SHALL traverse the component tree and collect Signal values from each `Component`'s `__signal_members__` r
+  > During SSR/SSG, after the render tree completes and `await_pending()` finishes, the framework SHALL traverse the component tree and collect Signal values from each `Component`'s `__signal_members__` r
+  > - **THEN** the payload's `signals` section SHALL contain `{component_id: {"count": 5, "name": "Alice"}}`
+  > - **THEN** the payload's `signals` section SHALL include `{"doubled": 10}` (the cached value)
+  > - **THEN** the payload's `signals` section SHALL include `{"items": [1, 2, 3]}`
+  > #### Scenario: Non-serializable Signal value is dropped with warning
+  > - **THEN** the Signal SHALL be excluded from the payload
+  > - **AND** a warning SHALL be logged
+  > - **THEN** the payload's `signals` section SHALL contain an empty dict `{}` for that component ID (or omit it entirely)
+--- candidata: app-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Application configuration shall use type-safe dataclasses
+  | The framework SHALL provide `AppConfig`, `ServerConfig`, and `GenerateConfig` dataclasses with validated fields and sensible defaults. `AppConfig` SHALL contain settings shared between browser and ser
+  > #### Scenario: Creating a minimal application configuration
+  > #### Scenario: Creating a minimal application configuration
+  > #### Scenario: Creating a minimal application configuration
+  > # Application Configuration — Delta: feat-hydration-measurement
+  > `AppConfig` SHALL include a `profile: bool = False` field. When `True`, the generated HTML SHALL include profiling bootstrap code that captures `pyscript_ready` at the start of the PyScript execution.
+  > - **AND** the generated HTML SHALL include profiling bootstrap code
+  > # Application Configuration — Delta: feat-hydration-full
+  > ### Requirement: AppConfig shall include a hydrate field for hydration control
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR adiciona leitura e tratamento de HTML, fora do escopo da spec original.
+
+===== P125 | tmck-code/yet-another-statusline PR #66 | capacidade do par: statusline-packaging
+PR: fix(openspec): colour bars by name hash, not list position
+arquivos ligados: claude/yas/layout.py;claude/yas/renderer.py
+--- linhas alteradas (6; mostrando até 40)
+-    openspec_bars = [r.openspec_bar(name, d, t, width, title_w, i) for i, (name, d, t) in enumerate(changes)]
++    openspec_bars = [r.openspec_bar(name, d, t, width, title_w) for name, d, t in changes]
++import zlib
+-    def openspec_bar(self, name: str, done: int, total: int, box_width: int = 80, title_w: int = 25, idx: int = 0) -> str:
++    def openspec_bar(self, name: str, done: int, total: int, box_width: int = 80, title_w: int = 25) -> str:
++        idx = zlib.crc32(name.encode()) % len(self.SPEC_GRADIENTS)
+--- candidata: openspec-bar-colour [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Name-derived gradient selection
+  | An OpenSpec change bar SHALL select its gradient from `SPEC_GRADIENTS` using a
+  > An OpenSpec change bar SHALL select its gradient from `SPEC_GRADIENTS` using a
+  > - **WHEN** several differently-named changes are rendered
+  > deterministic hash such as `zlib.crc32` or a `hashlib` digest so the colour does
+  > An OpenSpec change bar SHALL select its gradient from `SPEC_GRADIENTS` using a
+  > - **WHEN** several differently-named changes are rendered
+  > deterministic hash such as `zlib.crc32` or a `hashlib` digest so the colour does
+--- candidata: cache-countdown [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Prompt-cache anchor extraction from the transcript
+  | `TranscriptUsage` SHALL capture, during its existing single forward scan of the transcript jsonl, the wall-clock `timestamp` of the most recent line whose `message.usage` shows prompt-cache activity —
+  > - **WHEN** `cache_anchor_epoch` and the token-usage totals are both read from one `TranscriptUsage`
+  > - **THEN** the remaining-time figure's colour changes from the theme safe colour to the theme alert colour (the same ladder as the rate-limit percentages)
+  > - **WHEN** the same session renders at narrow and medium widths
+  > ### Requirement: Cache Countdown visibility and width-shed
+  > The wide layout SHALL omit the Cache Countdown section AND its divider when `view.cache_countdown` is `None` (no cache event or expired), re-threading the row's elbows back to only the path divider. I
+  > #### Scenario: Shed first under width pressure
+  > - **THEN** the remaining-time figure's colour changes from the theme safe colour to the theme alert colour (the same ladder as the rate-limit percentages)
+  > - **WHEN** the same session renders at narrow and medium widths
+--- candidata: section-labels [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Opt-in wide-only label activation
+  | The statusline SHALL paint superscript section labels onto the wide layout's border and separator rows only when `cfg.labels` is `true`. When `cfg.labels` is `false` the layout SHALL render identicall
+  > - **WHEN** `cfg.labels` is true and the terminal width selects the wide layout
+  > - **WHEN** `cfg.labels` is true but the width selects the narrow or medium layout
+  > The 5h cell SHALL carry `5h` over its glyph and, in its **full** form, additionally `remain` (over the reset countdown), `used` (over the used percentage), and `burn rate` (over the burn-rate trend); 
+  > - **THEN** the top border above it shows a `changes` label anchored over that block, and when there is no dirty block no `changes` label is emitted
+  > The statusline SHALL map ASCII label text to Unicode superscript glyphs for rendering (e.g. `tokens` → `ᵗᵒᵏᵉⁿˢ`). Characters that have a defined superscript form (letters, digits, `+`, `/`, space) SHA
+  > #### Scenario: Digits and width preserved
+  > - **THEN** that character is emitted unchanged and the total visible width still equals the input length
+  > - **WHEN** `cfg.labels` is true and the terminal width selects the wide layout
+--- candidata: statusline-info [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Lazy pure-read SessionView gather
+  | The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+  > The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+  > - **WHEN** a `SessionView` is constructed and a narrow-width build reads only `view.subagents`
+  > `SessionView.session_inout` SHALL be the sole definition of the Session Share % denominator: `(billed_in + cache_read + out) + sum(total_input + output)` over the running subagents. No layout builder 
+  > - **THEN** it equals the transcript billed-in plus cache-read plus output, plus each subagent's `total_input + output`
+  > #### Scenario: The wide builder receives day totals as data
+  > The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+  > - **WHEN** a `SessionView` is constructed and a narrow-width build reads only `view.subagents`
+  > The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+--- candidata: task-checklist [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Plan Generation scoping
+  | The task parser SHALL render and count only the **latest plan generation**, not every task created in the session. A new generation SHALL begin when a `TaskCreate` event is folded while **all** curren
+  > The task parser SHALL render and count only the **latest plan generation**, not every task created in the session. A new generation SHALL begin when a `TaskCreate` event is folded while **all** curren
+  > - **THEN** `done/total` counts only the tasks of the latest generation
+  > - **THEN** the rendered task rows (items plus any collapse lines) total at most 6, and the `in_progress` item is among them
+  > The checklist SHALL render the full header + Active Window in the **wide** and **medium** layouts. In the **narrow** layout it SHALL render a single compact line — the checklist glyph, `done/total`, a
+  > - **THEN** it renders the header (glyph + done/total + Total Elapsed) followed by the Active Window of item rows
+  > - **THEN** it renders one line of glyph + done/total + the active task's live timer (omitted if nothing is in_progress), with no per-item rows
+  > The checklist SHALL render the full header + Active Window in the **wide** and **medium** layouts. In the **narrow** layout it SHALL render a single compact line — the checklist glyph, `done/total`, a
+  > - **THEN** it renders the header (glyph + done/total + Total Elapsed) followed by the Active Window of item rows
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff muda a cor visível das barras.
+
+===== P139 | TencentBlueKing/bk-lite PR #2972 | capacidade do par: token-blacklist
+PR: bugfix 修复ISSUE 提出的问题
+arquivos ligados: server/apps/system_mgmt/nats_api.py
+--- linhas alteradas (174; mostrando até 40)
+-    result = get_user_login_token(user, username)
++    result = get_user_login_token(user, username, skip_token_for_otp=True)
+-        result["data"]["password_expiry_reminder"] = password_expiry_reminder
++        # Only add password_expiry_reminder if not requiring OTP (has token)
++        if not result.get("data", {}).get("require_otp"):
++            result["data"]["password_expiry_reminder"] = password_expiry_reminder
++@nats_client.register
++def generate_qr_code_by_user_id(user_id):
++    """
++    Generate OTP QR code for a user by user_id.
++    This is the secure version that requires authentication.
++    The user_id comes from the authenticated session.
++    """
++    user = User.objects.filter(id=user_id).first()
++    if not user:
++        return {"result": False, "message": "User not found"}
++    user.otp_secret = pyotp.random_base32()
++    user.save()
++    totp = pyotp.TOTP(user.otp_secret)
++    # 创建用于Authenticator应用的配置URL
++    provisioning_uri = totp.provisioning_uri(name=user.username, issuer_name="WeopsX")
++    qr = qrcode.QRCode(
++        version=1,
++        error_correction=qrcode.constants.ERROR_CORRECT_L,
++        box_size=10,
++        border=4,
++    )
++    qr.add_data(provisioning_uri)
++    qr.make(fit=True)
++    img = qr.make_image(fill_color="black", back_color="white")
++    buffer = io.BytesIO()
++    img.save(buffer, format="PNG")
++    qr_code_base64 = base64.b64encode(buffer.getvalue()).decode()
++    return {"result": True, "data": {"qr_code": qr_code_base64}}
++@nats_client.register
++def verify_otp_code_by_user_id(user_id, otp_code):
++    """
++    Verify OTP code for a user by user_id.
++    This is the secure version that requires authentication.
++    The user_id comes from the authenticated session.
+--- candidata: otp-challenge-flow [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Two-phase login for OTP-enabled users
+  | When a user has OTP enabled, the system SHALL require both password verification AND OTP verification before issuing an access token. Password verification alone MUST NOT grant API access.
+  > ### Requirement: Two-phase login for OTP-enabled users
+  > When a user has OTP enabled, the system SHALL require both password verification AND OTP verification before issuing an access token. Password verification alone MUST NOT grant API access.
+  > #### Scenario: Password correct, OTP enabled
+  > - **WHEN** user submits correct username and password
+  > - **AND** user has OTP enabled
+  > - **THEN** system returns a temporary `challenge_id` (not a JWT token)
+  > - **AND** system does NOT set `bklite_token` cookie
+  > - **AND** response includes `require_otp: true`
+--- candidata: otp-management [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: OTP QR code generation requires authentication
+  | The system SHALL require user authentication before generating OTP QR codes, and MUST only generate for the authenticated user.
+  > ### Requirement: OTP QR code generation requires authentication
+  > The system SHALL require user authentication before generating OTP QR codes, and MUST only generate for the authenticated user.
+  > - **WHEN** authenticated user calls `GET /api/generate_qr_code/`
+  > - **THEN** system generates new OTP secret for `request.user`
+  > - **AND** returns QR code for the authenticated user
+  > - **AND** does NOT accept `username` parameter
+  > #### Scenario: Unauthenticated request to generate QR code
+  > - **WHEN** unauthenticated user calls `GET /api/generate_qr_code/`
+--- candidata: secure-token-cookie [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  | The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+  > ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  > The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+  > #### Scenario: Login response sets secure cookie
+  > - **WHEN** a user successfully authenticates via the login endpoint
+  > - **THEN** the HTTP response includes a `Set-Cookie` header for `bklite_token` with `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400` (default)
+  > - **WHEN** client-side JavaScript attempts to read `document.cookie` for `bklite_token`
+  > ### Requirement: Frontend SHALL NOT write bklite_token via document.cookie
+  > The frontend `crossDomainAuth.ts` module SHALL NOT set the `bklite_token` cookie via `document.cookie`. The `saveAuthToken` function SHALL be removed or refactored to rely on the server-set cookie. Th
+--- candidata: admin-expired-password-login [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  | When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  > When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > #### Scenario: Expired `admin` account password on main login page
+  > - **WHEN** the user whose username is `admin` submits correct username and password on the main web login page
+  > - **AND** the user's password is expired according to `pwd_set_validity_period`
+  > - **THEN** the system SHALL continue into the existing forced password reset flow
+  > - **AND** the user SHALL be required to enter a new password before product access is granted
+  > #### Scenario: Expired `admin` account password on re-login window
+--- candidata: execution-interrupt [PR]
+  | # 执行中断信号持久化修复
+  | ## 问题描述
+  | 执行中断只保存在带 TTL（默认 3600s）的缓存键里，运行中的 Agent/Tool/AGUI 轮询也只读这个缓存键，不读取任何持久状态。中断请求一旦过期或缓存丢失，长任务会继续执行。
+  > INTERRUPT_CACHE_TTL = int(os.getenv("WORKFLOW_INTERRUPT_CACHE_TTL", "3600"))
+  > cache.set(_get_interrupt_cache_key(execution_id), payload, INTERRUPT_CACHE_TTL)
+  > return WorkFlowTaskResult.objects.filter(
+  > ).exists()
+  > - 缓存未命中时：增加一次数据库 `exists()` 查询
+  > - `exists()` 查询很快，且只在缓存过期后执行
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A mudança pode pertencer a outra capacidade, pois trata principalmente de QR Code, embora ele também possa servir como token.
+
+===== P155 | jdjingdian/StaticRouteHelper PR #16 | capacidade do par: swiftdata-persistence
+PR:  fix(ui): unify settings entry and align route edit sheets
+arquivos ligados: StaticRouter/View/LegacyRouteListView.swift
+--- linhas alteradas (72; mostrando até 40)
+-        VStack(alignment: .leading, spacing: 20) {
+-            Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
+-                .font(.headline)
++        VStack(alignment: .leading, spacing: 14) {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
++                    .font(.title2.bold())
++                Text("Network / Gateway")
++                    .font(.footnote)
++                    .foregroundStyle(.secondary)
++            }
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.destination.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.destination.label"), systemImage: "dot.scope")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+-                                .stroke(networkError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(networkError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                        .multilineTextAlignment(.center)
+-                        .frame(width: 50)
++                        .frame(width: 68)
+-                                .stroke(prefixLengthError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(prefixLengthError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                Text("= \(subnetMaskPreview)")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++                }
++                if let err = prefixLengthError {
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+-            VStack(alignment: .leading, spacing: 6) {
+--- candidata: route-crud [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: 添加路由规则
+  | 用户 SHALL 能够通过路由列表视图中的 "添加路由" 按钮打开 Sheet 表单，输入路由信息并保存。
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+--- candidata: router-service [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: RouterService 统一服务接口
+  | 系统 SHALL 提供 `RouterService` 作为所有路由操作和 Helper 通信的唯一入口。在 macOS 14+ 上 `RouterService` SHALL 遵循 `@Observable`（Observation 框架），通过类型化 `@Environment(RouterService.self)` 注入视图层级。在 macOS 12–13 上 SHALL 遵循 `Obse
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+--- candidata: os-conditional-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 双持久化栈按 OS 版本条件初始化
+  | 应用启动时 SHALL 根据当前 macOS 版本选择持久化后端：
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+--- candidata: main-navigation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: NavigationSplitView 两栏主布局
+  | 应用主窗口 SHALL 使用 NavigationSplitView 实现两栏布局，左侧为 Sidebar，右侧为 Detail 内容区。
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+--- candidata: os-conditional-observable [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: RouterService 条件式响应式框架
+  | `RouterService` SHALL 在 macOS 14.0 及以上使用 `@Observable`（Observation 框架），在 macOS 12–13 使用 `ObservableObject` + `@Published`。两条路径 SHALL 在同一个源文件中通过 `#if canImport(Observation)` + `@available(macOS 14, *)`
+  > - **THEN** `RouterService` 遵循 `ObservableObject`，所有需响应的属性标注 `@Published`，视图通过 `@EnvironmentObject var routerService: RouterService` 接收实例
+  > - macOS 14+：`.environment(routerService)`（无 EnvironmentKey，依赖 `@Observable` 协议）
+  > - macOS 12–13：`.environmentObject(routerService)`
+  > - **WHEN** 应用在 macOS 14 上运行，`routerService` 作为 `@State` 持有
+  > - **THEN** 视图层通过 `@Environment(RouterService.self)` 正确获取 `routerService`，无运行时崩溃
+  > - **WHEN** 应用在 macOS 13 上运行，`routerService` 作为 `@StateObject` 持有
+  > - **THEN** 视图层通过 `@EnvironmentObject var routerService: RouterService` 正确获取实例，无运行时崩溃
+  > - **THEN** `RouterService` 遵循 `ObservableObject`，所有需响应的属性标注 `@Published`，视图通过 `@EnvironmentObject var routerService: RouterService` 接收实例
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR atualiza a UI; a spec trata de persistência.
+
+===== P181 | koki-develop/Cork PR #33 | capacidade do par: recent-workspaces-picker
+PR: feat(updater): add in-app updater via tauri-plugin-updater
+arquivos ligados: src-tauri/src/menu.rs
+--- linhas alteradas (9; mostrando até 40)
++    let check_for_updates_item =
++        MenuItemBuilder::with_id("check_for_updates", "Check for Updates...").build(app)?;
++        .item(&check_for_updates_item)
++        "check_for_updates" => {
++            if let Some(window) = focused_webview_window(app) {
++                let target = EventTarget::webview_window(window.label());
++                let _ = app.emit_to(target, "menu:check-for-updates", ());
++            }
++        }
+--- candidata: updater [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: アプリは起動時に最新リリースを自動チェックする
+  | Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > - **THEN** その Window の `useUpdater` はマウント時にラベルが `main` 以外と判定するため、`check()` を一切呼ばない
+  > - **AND** 既存の `main` Window で auto-check 済みの場合の toast も追加 Window には表示されない
+  > - **AND** ただし `Cork > Check for Updates...` メニューによる手動チェックはこの追加 Window でも引き続き使用可能
+  > #### Scenario: `main` Window が auto-check 完了前に閉じられた
+  > - **WHEN** `main` Window で auto-check 進行中（`check()` の Promise resolve 前）にユーザーが `main` Window を閉じる
+  > - **AND** 次回起動時の auto-check で再試行される
+  > ユーザーは macOS メニュー `Cork > Check for Updates...`（`Cork` サブメニューの `about` 直後に配置）から、手動チェックを任意のタイミングで実行できなければならない (MUST)。手動チェックは自動チェックと異なり、結果が「最新」「更新あり」「エラー」のいずれであっても UI で明示的にフィードバックしなければならない (MUST)。
+--- candidata: multi-window [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: ユーザーは `File > New Window` メニューから新規ウィンドウを開ける
+  | アプリケーションメニューには `File` サブメニューがあり、その配下に `New Window` メニューアイテムが存在しなければならない (MUST)。`New Window` のアクセラレータは `CmdOrCtrl+Shift+N` でなければならない (MUST)。クリックまたはアクセラレータ押下のいずれかで新規 `WebviewWindow` が生成され、フォーカスを受け取り、ウィン
+  > - **THEN** メニューイベント `new_window` が発火する
+  > `Cmd+,` (Settings メニュー) で `menu:open-settings` イベントが発火するとき、イベントは `app.get_focused_window()` で取得した単一の `WebviewWindow` にのみ送られなければならない (MUST)。フォーカスを持たないウィンドウが Settings ダイアログを意図せず開いてしまってはならない (MUST NOT)。
+  > - **THEN** `app.get_focused_window()` は `None` を返す
+  > macOS で Tauri の `RunEvent::Reopen { has_visible_windows: false, .. }` ハンドラが発火したとき、システムは `app.webview_windows()` の現在のウィンドウ集合を取得し、次の通り分岐しなければならない (MUST):
+  > - **(A) `webview_windows().is_empty()` が true** (本当に 1 枚もウィンドウが存在しない、すべて `Cmd+W` で閉じられた): 新規 `WebviewWindow` を `state.next_window_label()` で採番した `workspace-<n>` ラベルで生成し、生成前 (build より前) に履歴の自動復元シード処理 (
+  > - **(B) `webview_windows()` に 1 件以上ある** (`Cmd+H` で隠した状態、または `Cmd+M` で最小化した状態): すべての既存ウィンドウに対し `unminimize()` → `show()` → `set_focus()` を呼んで再表示する (MUST)。新規ウィンドウを追加で生成してはならない (MUST NOT)。
+  > 起動経路 (`setup()` 内) を除き、`main` ラベルを再利用してはならない (MUST NOT)。`has_visible_windows: true` のリオープン (まだ見えるウィンドウがある状態でのアイコンクリック) では新規ウィンドウを生成してはならず、何もしない (macOS の標準フォアグラウンド復帰に委ねる) (MUST)。
+  > 履歴自動復元シードは `build()` を呼ぶ**前**に完了させなければならない (MUST)。これは、`WebviewWindowBuilder::build()` が webview を生成して同期 return した後、フロントエンドの JS ロードと `getWorkspaceDirectory()` 呼び出しが非同期で別スレッドで進行するため、build 後に seed すると「フロ
+--- candidata: mcp-server [termos]
+  | # mcp-server
+  | ## ADDED Requirements
+  | ### Requirement: MCP サーバはアプリ起動時に設定に従って起動する
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+  > #### Scenario: 複数 window でも設定は共通
+  > - **WHEN** Cork が複数 window を開いている状態でいずれかの window の Settings から `token` を変更する
+  > - **THEN** 変更は全 window に共通の MCP サーバインスタンスに反映される (window ごとに別 token で認証されることはない)
+  > - **AND** Toggle の `aria-checked` が `true` になる
+  > - **AND** Toggle の `aria-checked` は `true` のままで、OFF にバウンスバックしない
+  > - **THEN** 現在 Cork のいずれかの window で開かれている全 workspace に対応するエントリを含む `mcp.json` スニペットが表示される
+  > - **WHEN** Toggle が ON だがどの window でも workspace が選択されていない状態で SettingsDialog を開く
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de workspaces; o PR cria um comando.
+
+===== P198 | Larusso/unity-version-manager PR #456 | capacidade do par: payload-format-detection
+PR: Add installation progress reporting
+arquivos ligados: uvm_install/src/sys/mac/pkg.rs
+--- linhas alteradas (18; mostrando até 40)
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
+--- candidata: installation-progress [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Display download progress with metrics
+  | The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > ### Requirement: Display download progress with metrics
+  > The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > #### Scenario: Download progress updates during file transfer
+  > - **THEN** the system displays a progress bar showing bytes downloaded, total bytes, current speed in MB/s, and updates at least once per second
+  > #### Scenario: Multiple components show individual progress
+  > - **THEN** each component displays its own progress bar with individual download metrics
+  > - **THEN** the progress bar shows completion state and total time taken
+  > - **THEN** system displays a spinner with message indicating extraction is in progress
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec não descreve as mensagens de UI alteradas pelo PR.
+
+===== P207 | elastic/terraform-provider-elasticstack PR #3722 | capacidade do par: provider-pf-only
+PR: [OpenSpec] Fix multiple Authorization headers when ES and Kibana use different auth
+arquivos ligados: internal/clients/kibanaoapi/client.go
+--- linhas alteradas (13; mostrando até 40)
+-	if t.Username != "" {
+-		req.SetBasicAuth(t.Username, t.Password)
+-	}
+-	if t.APIKey != "" {
+-		req.Header.Add("Authorization", "ApiKey "+t.APIKey)
+-	}
+-	if t.BearerToken != "" {
++	switch {
++	case t.BearerToken != "":
++	case t.APIKey != "":
++		req.Header.Set("Authorization", "ApiKey "+t.APIKey)
++	case t.Username != "":
++		req.SetBasicAuth(t.Username, t.Password)
+--- candidata: kibana-client-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Kibana auth config resolution uses method-scoped clearing
+  | When `buildKibanaOapiConfigFromFramework` applies the Kibana provider block on top of the ES base config, it MUST detect which auth method the Kibana block introduces and clear fields from conflicting
+  > - **BasicAuth**: `Username` + `Password`
+  > - **APIKey**: `APIKey`
+  > - **BearerToken**: `BearerToken`
+  > - BasicAuth introduced → clear `APIKey` and `BearerToken` inherited from ES base
+  > - APIKey introduced → clear `Username`, `Password`, and `BearerToken` inherited from ES base
+  > - BearerToken introduced → clear `Username`, `Password`, and `APIKey` inherited from ES base
+  > #### Scenario: ES APIKey + Kibana BasicAuth → Kibana config has BasicAuth only
+  > - **THEN** the resolved `kibanaOapiConfig` SHALL have `Username` and `Password` set
+--- candidata: provider-configuration-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: ES credentials inherited into Kibana config only when no Kibana auth is configured
+  | The provider MUST inherit ES authentication credentials into the Kibana config (via `base.toKibanaOapiConfig()`) so that users who configure a single auth source for all services do not need to repeat
+  > - **THEN** the resolved Kibana config SHALL have `Username` and `Password` set
+  > - **AND** `APIKey` SHALL NOT be present in the Kibana config
+  > - **AND** Kibana requests SHALL carry exactly one `Authorization` header
+  > Fleet (provider block and env) is the lowest-priority auth source for Kibana resources. `withFleetBlockFallback` MUST check whether any auth method is already set in the Kibana config before filling a
+  > This prevents a cleared auth method from being re-introduced. For example: if the Kibana block sets BasicAuth (causing inherited ES `APIKey` to be cleared), `withFleetBlockFallback` must not refill `A
+  > #### Scenario: Kibana BasicAuth set, Fleet block has APIKey → Fleet auth not used
+  > - **GIVEN** the Kibana config has `Username` and `Password` set (from the Kibana provider block, after method-scoped clearing)
+  > - **THEN** the Kibana config SHALL retain `Username` and `Password`
+--- candidata: fleet-client-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Fleet auth config resolution uses method-scoped clearing
+  | When `newFleetConfigFromFramework` applies the Fleet provider block on top of the already-resolved Kibana config, it MUST detect which auth method the Fleet block introduces and clear fields from conf
+  > - BasicAuth introduced (`Username` or `Password` set) → clear `APIKey` and `BearerToken`
+  > - APIKey introduced → clear `Username`, `Password`, and `BearerToken`
+  > - BearerToken introduced → clear `Username`, `Password`, and `APIKey`
+  > #### Scenario: Kibana BasicAuth + Fleet APIKey block → Fleet config has APIKey only
+  > - **GIVEN** the Kibana config has `Username` and `Password` set (resolved from ES base or Kibana block)
+  > - **THEN** the resolved `fleetConfig` SHALL have `APIKey` set
+  > - **AND** `Username` and `Password` SHALL be empty
+  > - **AND** `BearerToken` SHALL be empty
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A mudança trata de autenticação, assunto que a spec não descreve.
+
+===== P213 | kalbasit/ncps PR #1341 | capacidade do par: narinfo-purge-serving
+PR: fix(cache): delete the stored variant on NAR eviction
+arquivos ligados: pkg/cache/cache.go
+--- linhas alteradas (26; mostrando até 40)
+-		if err := c.narStore.DeleteNar(ctx, narURL); err != nil {
++		// Remove the physical bytes. A Compression:none NAR's real object is stored
++		// under the .nar.zst variant (statNarInStore mirrors this), so that variant
++		// must be deleted too — deleting only the bare none URL would orphan the
++		// blob while the marker below is cleared, making the /upload presence check
++		// lie. ErrNotFound is returned only when no variant was present, preserving
++		// the established "deleting an absent NAR errors" contract; a real failure
++		// is returned and leaves the marker intact (the NAR stays present).
++		deleted := false
++		if narURL.Compression == nar.CompressionTypeNone {
++			zstdURL := narURL
++			zstdURL.Compression = nar.CompressionTypeZstd
++			switch err := c.narStore.DeleteNar(ctx, zstdURL); {
++			case err == nil:
++				deleted = true
++			case !errors.Is(err, storage.ErrNotFound):
++				return err
++			}
++		}
++		switch err := c.narStore.DeleteNar(ctx, narURL); {
++		case err == nil:
++			deleted = true
++		case !errors.Is(err, storage.ErrNotFound):
++		if !deleted {
++			return storage.ErrNotFound
++		}
+--- candidata: upload-reference-presence [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: The /upload path MUST treat a NAR with a durable bytes-stored marker as present
+  | On the upload-only (`/upload`) path, the system SHALL consider a narinfo's backing NAR present when a `nar_file` row matching the NAR's hash and query has a non-null `bytes_stored_at` marker, **indepe
+  > ### Requirement: The /upload path MUST treat a NAR with a durable bytes-stored marker as present
+  > On the upload-only (`/upload`) path, the system SHALL consider a narinfo's backing NAR present when a `nar_file` row matching the NAR's hash and query has a non-null `bytes_stored_at` marker, **indepe
+  > The marker SHALL be trusted only on the upload-only path. On the substituter path a genuinely missing NAR SHALL still be self-healed from upstream rather than reported present.
+  > #### Scenario: A peer-stored NAR is present on /upload before local bytes are visible
+  > - **GIVEN** a `nar_file` for hash `H` with `bytes_stored_at` set and NO bytes in this replica's local store
+  > - **WHEN** the narinfo for `H` is read on the upload-only path
+  > - **THEN** the system SHALL return the narinfo (the NAR is present)
+  > - **GIVEN** a narinfo advertising `url=nar/<H>.nar` (Compression none)
+--- candidata: api-surface [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: `HEAD /build-trace-v2/{drvName}/{outputName}.doi` endpoint
+  | The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > - **WHEN** a client sends `HEAD /build-trace-v2/{drvName}/{outputName}.doi` for a stored entry
+  > The system SHALL expose a GET endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns the stored build trace entry as JSON.
+  > **Response:** `Content-Type: application/json`, body is the build trace v3 JSON object with `key` and `value` fields, `value.signatures` containing all stored signatures including ncps's own.
+  > ### Requirement: `PUT /upload/build-trace-v2/{drvName}/{outputName}.doi` endpoint
+  > The system SHALL expose a PUT endpoint under the `/upload` prefix for storing build trace entries. Authorization follows the same `putPermitted` boolean gate used by narinfo and NAR uploads.
+  > **Authorization:** `putPermitted == false` (the default) causes an immediate `405 Method Not Allowed` response before any body is read. No per-request authentication. (Consistent with existing narinfo
+  > The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+--- candidata: fsck [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Fsck MUST detect CDC NARs whose stored size mismatches the declared NarSize
+  | In CDC mode, `ncps fsck` SHALL query for `nar_file` rows where `total_chunks > 0` AND
+  > ### Requirement: Fsck MUST detect CDC NARs whose stored size mismatches the declared NarSize
+  > represent NARs that were committed as "complete" CDC artifacts but whose total stored
+  > bytes do not match the narinfo's declared uncompressed size. These rows SHALL be reported
+  > The check SHALL be implemented as a dedicated DB query (`GetCDCNarFilesWithSizeMismatch`)
+  > - **WHEN** a `nar_file` row has `total_chunks > 0` and `file_size = 490516` while the linked narinfo has `nar_size = 166983168`
+  > - **THEN** `ncps fsck` reports it under "CDC NARs with size mismatch"
+  > #### Scenario: Non-CDC nar_file is not flagged by this check
+  > - **WHEN** a `nar_file` row has `total_chunks = 0` (whole-file storage)
+--- candidata: cdc-chunking [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: CDC ingestion MUST validate total byte count before committing
+  | When CDC chunking completes (the chunker signals end-of-stream by closing `chunksChan`),
+  > the system SHALL compare the total accumulated uncompressed bytes (`totalSize`) against
+  > - **WHEN** the decompressed NAR stream ends before `fileSize` bytes are consumed (e.g., upstream HTTP/2 stream drops with GOAWAY)
+  > - **WHEN** the decompressed NAR stream produces exactly `fileSize` uncompressed bytes before EOF
+  > - **AND** no error is returned
+  > - **AND** `UpdateNarFileTotalChunks` is called regardless of how many bytes were chunked
+  > the system SHALL compare the total accumulated uncompressed bytes (`totalSize`) against
+  > - **WHEN** the decompressed NAR stream ends before `fileSize` bytes are consumed (e.g., upstream HTTP/2 stream drops with GOAWAY)
+  > - **WHEN** the decompressed NAR stream produces exactly `fileSize` uncompressed bytes before EOF
+--- candidata: chunks-to-nar-migration [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Reconstruct a whole NAR from its chunks, verified against the recorded hash
+  | The system SHALL provide a `migrate-chunks-to-nar` operation that, for a chunked `nar_file`, reconstructs the whole NAR by concatenating its chunks in `chunk_index` order, verifies the reconstructed b
+  > The system SHALL provide a `migrate-chunks-to-nar` operation that, for a chunked `nar_file`, reconstructs the whole NAR by concatenating its chunks in `chunk_index` order, verifies the reconstructed b
+  > #### Scenario: Chunked NAR is reconstructed, verified, and stored whole
+  > - **GIVEN** a `nar_file` for hash `H` with `total_chunks > 0` and all chunks present
+  > - **AND** the resulting `nar_file` record SHALL represent a whole-file NAR (`total_chunks = 0`, no chunk links)
+  > - **GIVEN** a chunked `nar_file` for hash `H` whose reconstructed bytes do not match `NarHash`
+  > - **GIVEN** a chunked `nar_file` for hash `H` with at least one referenced chunk absent from the chunk store
+  > The operation SHALL be safe to re-run and safe to resume after interruption. A NAR already in the whole-file representation SHALL be skipped. An interruption SHALL NOT leave a half-written whole file 
+  > - **GIVEN** a run was interrupted while migrating hash `H` (e.g. after writing the whole file but before flipping the record, or before reclaiming chunks)
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A mudança trata de compressão, assunto que a spec original não descreve.
+
+===== P222 | tmck-code/yet-another-statusline PR #71 | capacidade do par: task-checklist
+PR: feat(renderer): whole-unit cwd include/omit in fit_path
+arquivos ligados: claude/yas/renderer.py
+--- linhas alteradas (46; mostrando até 40)
+-from yas.render.text import _middle_ellipsis, _visible_width, fmt_dur, fmt_tok
++from yas.render.text import _visible_width, fmt_dur, fmt_tok
+-        *, show_commit: bool = True, show_dirty: bool = True,
++        *, show_path: bool = True, show_commit: bool = True, show_dirty: bool = True,
++        # The cwd path is a whole unit: shown in full or omitted entirely (no
++        # middle-ellipsis). show_path=False yields the branch-only rung (glyph +
++        # arrow + branch) used as a width-degradation step below the path forms.
++        path_part = f'{self.PWD}{short_pwd}{self.R} ' if show_path else ''
+-            f'{self.ICON_PATH}{GLYPH_FOLDER}  {self.PWD}{short_pwd}{self.R}'
+-            f' {self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
++            f'{self.ICON_PATH}{GLYPH_FOLDER}  {path_part}'
++            f'{self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
++    def path_glyph_only(self) -> str:
++        """Presence-glyph floor: the folder glyph alone (1 visible column).
++        The overflow-safe terminal state of the path ladder — it can never
++        exceed the available width or disturb the box border math.
++        """
++        return f'{self.ICON_PATH}{GLYPH_FOLDER}{self.R}'
++        # Whole-unit include/omit ladder; first candidate that fits wins.
++        # full → drop commit → drop commit+dirty → compact path+branch →
++        # branch-only (path omitted) → glyph-only floor. The path is never
++        # middle-ellipsized: it is shown in full or dropped whole, and the
++        # branch outlives the path. compact_only enters at the compact rung.
+-        # Ellipsis on short_pwd only
+-        for pwd_w in range(target_w - 1, 0, -1):
+-            trunc_pwd = _middle_ellipsis(short_pwd, pwd_w)
+-            candidate = self.path_git_compact(trunc_pwd, git)
+-            if fits(candidate):
+-                return candidate
+-        # Ellipsis on both short_pwd and branch
+-        # Overhead of path_git_compact with empty strings is 5 visible chars.
+-        half = max(1, (target_w - 5) // 2)
+-        trunc_pwd    = _middle_ellipsis(short_pwd,  half)
+-        trunc_branch = _middle_ellipsis(git.branch, half)
+-        truncated_git = GitInfo(
+-            branch=trunc_branch, commit=git.commit,
+-            modified=git.modified, untracked=git.untracked,
+-            deleted=git.deleted, renamed=git.renamed,
++        # Path omitted whole, branch retained (glyph + arrow + branch).
++        branch_only = self.path_git(
+--- candidata: path-display [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Whole-unit cwd include or omit
+  | The cwd path SHALL be rendered as a whole unit: it is either included in full
+  > ### Requirement: Whole-unit cwd include or omit
+  > The cwd path SHALL be rendered as a whole unit: it is either included in full
+  > (using the existing initial-collapsed `short_pwd` form) or omitted entirely. The
+  > system SHALL NOT apply middle-ellipsis or any partial truncation to the cwd path
+  > at any width.
+  > #### Scenario: Path included when it fits
+  > - **WHEN** the available width fits the path-plus-branch line
+  > - **THEN** the full `short_pwd` is shown alongside the branch
+--- candidata: statusline-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Layered configuration precedence
+  | The statusline SHALL resolve every configurable knob through a single, fixed precedence chain: CLI flag (where one exists) → canonical `YAS_*` environment variable → legacy-alias environment variable 
+  > - **WHEN** `[layout].max_width = 200` is set in `yas.toml` and `YAS_MAX_WIDTH=160` is set in the environment
+  > - **THEN** the resolved `max_width` is `160`
+  > - **THEN** every knob resolves to its built-in default (`max_width=140`, `full_width=false`, `soft_limit=150000`, `token_window=60`, `theme=dark`, `bg_shift=warm`)
+  > The statusline SHALL read configuration from `yas.toml` located in `CLAUDE_CONFIG_DIR` (defaulting to `~/.claude/`). The file SHALL use a sectioned schema: `[layout]` for `max_width` and `full_width`,
+  > - **WHEN** `yas.toml` contains `[layout]` `max_width = 200`, `[tokens]` `soft_limit = 1000000`, and `[appearance]` `theme = "dark"`
+  > - **THEN** the statusline renders normally using env + defaults and reports no config error
+  > ### Requirement: TOML parsing with graceful 3.10 degradation
+  > The statusline SHALL parse `yas.toml` using the standard-library `tomllib` module and SHALL remain zero-dependency. On a Python runtime where `tomllib` is unavailable (3.10), the statusline SHALL skip
+--- candidata: subagent-row-layout [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Two-line row field set
+  | A subagent rendered in two-line form SHALL place the elapsed duration at the front of line 1, followed by the agent type, a `·` separator, and the description. Line 1 SHALL end with a right-aligned cl
+  > A subagent rendered in two-line form SHALL place the elapsed duration at the front of line 1, followed by the agent type, a `·` separator, and the description. Line 1 SHALL end with a right-aligned cl
+  > #### Scenario: Two-line row renders duration-first with the line-1 cluster
+  > - **WHEN** a subagent is rendered in two-line form with room for all fields
+  > - **THEN** line 1 reads `<dur> <type> · <description>` with a right-aligned `share% · tok · model` cluster, and line 2 reads `└ <glyph> <Tool[arg]>`
+  > - **WHEN** any subagent row is rendered
+  > When line 1 lacks room for the full `share% · tok · model` cluster, the description SHALL truncate first. If the cluster still does not fit, fields SHALL shed in order: share% first, then tok. The mod
+  > - **THEN** the description truncates with an ellipsis while the full cluster is retained
+  > #### Scenario: Cluster sheds share% then tok under width pressure
+--- candidata: subagent-cohort [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Done detection via end_turn
+  | The statusline SHALL treat a subagent as **Done** when, and only when, its transcript jsonl contains an assistant message whose `message.stop_reason` equals `"end_turn"`. The timestamp of that line SH
+  > #### Scenario: Interrupted agent never emits end_turn
+  > - **THEN** the subagent is never marked Done and never receives the Done visual treatment
+  > The statusline SHALL scope the visible subagent cohort to the current turn. A subagent is a member of the cohort when its `first_timestamp` is at or after the last user-prompt timestamp for the sessio
+  > - **WHEN** a subagent's `first_timestamp` is at or after the last user-prompt timestamp
+  > - **WHEN** a subagent started before the last user prompt but its transcript was written within the liveness window
+  > #### Scenario: Running agent is always shown
+  > - **WHEN** a subagent is still running (not Done and written within the liveness window)
+  > - **THEN** it is shown regardless of how long ago it started
+--- candidata: cache-countdown [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Prompt-cache anchor extraction from the transcript
+  | `TranscriptUsage` SHALL capture, during its existing single forward scan of the transcript jsonl, the wall-clock `timestamp` of the most recent line whose `message.usage` shows prompt-cache activity —
+  > #### Scenario: No cache activity yields a zero anchor
+  > `SessionView` SHALL expose a lazily-evaluated, cached `cache_countdown` derived from `transcript_usage`'s raw anchor and the view's single frozen `now`. It SHALL compute `remaining = cache_ttl − (now 
+  > ### Requirement: Cache Countdown rendering on the wide path/model row
+  > The wide layout SHALL render the **Cache Countdown** as its own vsep-delimited section on the path/model content row, positioned between the rate-limit helper and the model section, with a single left
+  > #### Scenario: Section renders with glyph, value, and divider
+  > - **WHEN** a wide render has a live `cache_countdown` of `(187, 38)`
+  > - **THEN** the path/model row contains a `│`-delimited section showing the cache glyph and `3m07s`, and that divider's column appears in the top border `downs` and the following separator `ups`
+  > - **THEN** the remaining-time figure's colour changes from the theme safe colour to the theme alert colour (the same ladder as the rate-limit percentages)
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A apresentação do caminho muda: ele passa a aparecer inteiro ou a ser omitido conforme a largura.
+
+===== P227 | tatargabor/set-core PR #6 | capacidade do par: verify-gate
+PR: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization)
+arquivos ligados: lib/set_orch/engine.py
+--- linhas alteradas (84; mostrando até 40)
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
+--- candidata: orch-plan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python planning orchestration
+  | The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > #### Scenario: Planning from Python replan
+  > - **WHEN** `auto_replan_cycle()` needs to generate a new plan
+  > - **THEN** it SHALL call `planner.run_planning_pipeline()` which orchestrates the full flow
+  > - **AND** the pipeline SHALL use existing Python functions: `detect_test_infra()`, `build_decomposition_context()`, `validate_plan()`, `enrich_plan_metadata()`
+  > - **WHEN** planning detects a registered design MCP server
+  > - **THEN** it SHALL fetch the design snapshot and include design tokens in the decomposition prompt
+  > The Python planning pipeline SHALL check the triage gate before proceeding with decomposition.
+--- candidata: orch-replan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python auto-replan cycle without bash dependency
+  | The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > ### Requirement: Python auto-replan cycle without bash dependency
+  > The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > #### Scenario: Auto-replan triggered after all changes complete
+  > - **WHEN** all changes reach terminal status and `auto_replan` directive is true
+  > - **THEN** the Python monitor SHALL call `engine.auto_replan_cycle()` directly (Python function)
+  > - **AND** `auto_replan_cycle()` SHALL NOT shell out to bash `planner.sh`
+  > ### Requirement: Python replan collects context via Python functions
+  > The Python `auto_replan_cycle()` SHALL collect replan context by calling Python functions directly.
+--- candidata: replan-domain-plan-reuse [PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - On replan, look up `domains-plans-<lineage>.json` and reuse cached domain plans whose input hasn't changed.
+  > - Domain-input hashing (digest summary + requirements + planning brief).
+  > - Reuse logic for the 3-phase parallel path.
+  > - Reuse logic for the serial path (whole-plan reuse on identical digest input).
+  > - Telemetry recording how many domains were reused vs re-planned.
+  > - Generating the saved domain plans (that's `orch-plan-python`).
+  > - Diff-update digest pipeline (that's `digest-diff-update`).
+  > - The replan trigger logic itself (that's `orch-replan-python`).
+--- candidata: planner-strategy-routing [PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - Directive `planner.strategy` with values `serial | parallel | auto` (default `auto`).
+  > - `auto` mode that picks `serial` or `parallel` based on estimated flat-prompt input tokens.
+  > - Function `estimate_flat_prompt_tokens(digest_dir, replan_ctx)` that returns an integer estimate without invoking Claude.
+  > - Removal of the legacy `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic.
+  > - Single-call decompose path becomes the primary code path (the existing flat path at `planner.py:2674-2693` lifted out of the fallback branch).
+  > - Choosing models per strategy (covered by `model_config` and the cost-optimized preset).
+  > - The 3-phase pipeline implementation itself (covered by `orch-plan-python`).
+  > - Replan strategy selection (covered by `replan-scoped-patch`).
+--- candidata: orchestration-engine [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Monitor loop poll interval
+  | The orchestrator monitor loop SHALL poll active changes every 15 seconds.
+  > The orchestrator monitor loop SHALL poll active changes every 15 seconds.
+  > The orchestrator SHALL pre-create `proposal.md` (not `brief-context.md`) in the change directory during dispatch, providing Ralph with structured scope context.
+  > - **WHEN** `dispatch_change()` creates a new change in a worktree
+  > - **THEN** the orchestrator SHALL create `openspec/changes/{name}/proposal.md` with:
+  > - `## Capabilities` section with the change name
+  > ### Requirement: State initialization with integer verify retry count
+  > The `init_state()` function SHALL initialize `verify_retry_count` as an integer (0), not a boolean.
+  > - **THEN** each change object SHALL include `verify_retry_count: 0` (integer)
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O replanejamento passa a reutilizar planos conforme hashes; a spec trata do verify gate.
+
+===== P234 | norish-recipes/norish PR #468 | capacidade do par: mobile-offline-auth
+PR: Rc/0.19.0
+arquivos ligados: apps/mobile/src/app/_layout.tsx;apps/mobile/src/providers/trpc-provider.tsx;packages/shared-react/src/providers/trpc-provider.tsx
+--- linhas alteradas (34; mostrando até 40)
++import { GroceriesProvider } from "@/context/groceries-context";
++import { StoresProvider } from "@/context/stores-context";
+-            <RecipesProvider>{children}</RecipesProvider>
++            <RecipesProvider>
++              <StoresProvider>
++                <GroceriesProvider>{children}</GroceriesProvider>
++              </StoresProvider>
++            </RecipesProvider>
++export function getCurrentBaseUrl(): string {
++  return currentBaseUrl;
++}
+-import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
+-import { normalizeSubscriptionData } from "@norish/shared/lib/operation-helpers";
++import { unwrapPayload } from "@norish/shared/lib/operation-helpers";
++import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
++function withPayloadCompatibility(data: unknown): unknown {
++  const payload = unwrapPayload(data);
++  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
++    return payload;
++  }
++  const prototype = Object.getPrototypeOf(payload);
++  if (prototype !== Object.prototype && prototype !== null) {
++    return payload;
++  }
++  if ("payload" in payload) {
++    return payload;
++  }
++  return {
++    ...(payload as Record<string, unknown>),
++    payload,
++  };
++}
+-    onData: (data: unknown) => observerOptions.onData?.(normalizeSubscriptionData(data)),
++    onData: (data: unknown) => observerOptions.onData?.(withPayloadCompatibility(data)),
+--- candidata: recipe-share-react-state [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared-react exposes authenticated recipe-share hooks
+  | The system SHALL provide shared-react hooks for authenticated recipe-share management so web and mobile can list, create, update, revoke, and delete recipe share links through a common client contract
+  > The system SHALL provide shared-react hooks for authenticated recipe-share management so web and mobile can list, create, update, revoke, and delete recipe share links through a common client contract
+  > #### Scenario: Client manages recipe shares through shared-react
+  > - **WHEN** an authenticated shared-react consumer needs share state for a recipe
+  > - **THEN** the system SHALL expose query and mutation hooks for the recipe's share list and share lifecycle actions from `packages/shared-react`
+  > - **WHEN** an authenticated user creates a share link through the shared-react mutation contract
+  > ### Requirement: Shared-react can resolve public shared recipes
+  > The system SHALL provide a shared-react query hook for resolving the public shared recipe contract by token without requiring app-specific data wiring.
+  > #### Scenario: Client loads a shared recipe from a token
+--- candidata: shared-groceries-hooks [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable groceries hook family
+  | `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable groceries hook family
+  > `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared groceries hooks are available to both apps
+  > - **WHEN** web and mobile import shared groceries hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared groceries modules SHALL NOT import platform runtime modules
+  > #### Scenario: Complete groceries hook family is returned
+  > - **WHEN** the groceries hook family is created in shared-react
+--- candidata: mobile-groceries-backend [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mobile recurrence panel preserves editor state
+  | The mobile groceries editor SHALL present recurrence configuration in a full-height panel and SHALL restore the grocery editor with the selected recurrence settings intact when the recurrence panel cl
+  > The mobile groceries editor SHALL present recurrence configuration in a full-height panel and SHALL restore the grocery editor with the selected recurrence settings intact when the recurrence panel cl
+  > ### Requirement: Mobile groceries read flow uses backend data
+  > The mobile groceries screen SHALL render household grocery data from the shared tRPC-backed groceries hooks instead of mock data.
+  > - **WHEN** the groceries query succeeds with grocery items, recurring groceries, stores, and recipe metadata
+  > - **AND** recurring groceries are visually represented with their recurrence state
+  > - **WHEN** the groceries query is loading
+  > - **THEN** the mobile Groceries tab shows a loading state instead of mock groceries
+  > - **WHEN** the groceries query succeeds with no grocery items
+--- candidata: mobile-groceries-ui [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mobile groceries screen provides two organization modes
+  | The mobile groceries UI SHALL replace the placeholder groceries tab with an iOS-first grocery experience that supports viewing groceries grouped by store and grouped by recipe.
+  > ### Requirement: Mobile groceries screen provides two organization modes
+  > The mobile groceries UI SHALL replace the placeholder groceries tab with an iOS-first grocery experience that supports viewing groceries grouped by store and grouped by recipe.
+  > - **WHEN** a user opens the groceries tab on iOS
+  > - **THEN** the groceries content SHALL update to the selected organization mode
+  > Store mode SHALL organize groceries into an unsorted section plus ordered store sections so the mobile information architecture matches the web grocery model.
+  > - **WHEN** grocery data includes one or more stores
+  > Recipe mode SHALL organize groceries by source recipe so users can understand which meal plan or recipe contributed each grocery item.
+  > #### Scenario: Recipe sections render contributing groceries
+--- candidata: mobile-ui [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Safe-Area-Top Offset
+  | The app layout SHALL account for device safe areas to prevent content from overlapping with system UI elements like the iOS Dynamic Island or notch.
+  > - **WHEN** a user interacts with actions or links contained in the starter panel
+  > - **AND** starter-template labels, doc links, and walkthrough entries SHALL NOT be shown
+  > - **AND** disabled or unknown locale codes SHALL NOT be shown
+  > #### Scenario: Permission state is loading or unknown
+  > - **AND** starter-template labels, doc links, and walkthrough entries SHALL NOT be shown
+  > - **AND** disabled or unknown locale codes SHALL NOT be shown
+  > #### Scenario: Permission state is loading or unknown
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR adiciona providers e compatibilidade de subscriptions para compras, fora do escopo da autenticação offline.
+
+===== P248 | jdjingdian/StaticRouteHelper PR #16 | capacidade do par: os-conditional-observable
+PR:  fix(ui): unify settings entry and align route edit sheets
+arquivos ligados: StaticRouter/View/LegacyRouteListView.swift
+--- linhas alteradas (72; mostrando até 40)
+-        VStack(alignment: .leading, spacing: 20) {
+-            Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
+-                .font(.headline)
++        VStack(alignment: .leading, spacing: 14) {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
++                    .font(.title2.bold())
++                Text("Network / Gateway")
++                    .font(.footnote)
++                    .foregroundStyle(.secondary)
++            }
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.destination.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.destination.label"), systemImage: "dot.scope")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+-                                .stroke(networkError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(networkError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                        .multilineTextAlignment(.center)
+-                        .frame(width: 50)
++                        .frame(width: 68)
+-                                .stroke(prefixLengthError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(prefixLengthError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                Text("= \(subnetMaskPreview)")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++                }
++                if let err = prefixLengthError {
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+-            VStack(alignment: .leading, spacing: 6) {
+--- candidata: route-crud [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: 添加路由规则
+  | 用户 SHALL 能够通过路由列表视图中的 "添加路由" 按钮打开 Sheet 表单，输入路由信息并保存。
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+--- candidata: router-service [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: RouterService 统一服务接口
+  | 系统 SHALL 提供 `RouterService` 作为所有路由操作和 Helper 通信的唯一入口。在 macOS 14+ 上 `RouterService` SHALL 遵循 `@Observable`（Observation 框架），通过类型化 `@Environment(RouterService.self)` 注入视图层级。在 macOS 12–13 上 SHALL 遵循 `Obse
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+--- candidata: swiftdata-persistence [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: SwiftData ModelContainer 配置
+  | 应用启动时，当运行在 macOS 14.0 及以上版本时 SHALL 创建包含 `RouteRule` 和 `RouteGroup` 两个模型的 `ModelContainer`，并通过 `.modelContainer()` 修饰符注入到 SwiftUI 视图层级中。在 macOS 12–13 上 SHALL 改为初始化 `LegacyPersistenceStack`（Core Data）并通
+  > - `id: UUID`、`network: String`、`prefixLength: Int`、`gatewayType: GatewayType`、`gateway: String`、`isActive: Bool`、`groups: [RouteGroup]`、`createdAt: Date`
+  > - **THEN** 系统保存 RouteRule 到 SwiftData，`gateway` 值为 "utun3"
+  > - **THEN** 系统保存 RouteGroup 到 SwiftData，`routes` 初始为空数组
+  > - **THEN** 该 RouteRule 的 `groups` 数组包含 "Office VPN"，该分组的 `routes` 数组包含该 RouteRule
+  > - `prefixLength: Int`（CIDR 前缀长度，如 24）
+  > - `gatewayType: GatewayType`（枚举：`.ipAddress` 或 `.interface`）
+  > - `gateway: String`（网关 IP 地址或网络接口名称）
+  > RouteRule SHALL 提供计算属性 `subnetMask: String`，根据 `prefixLength` 计算对应的子网掩码字符串（如 24 → "255.255.255.0"）。
+--- candidata: os-conditional-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 双持久化栈按 OS 版本条件初始化
+  | 应用启动时 SHALL 根据当前 macOS 版本选择持久化后端：
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+--- candidata: main-navigation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: NavigationSplitView 两栏主布局
+  | 应用主窗口 SHALL 使用 NavigationSplitView 实现两栏布局，左侧为 Sidebar，右侧为 Detail 内容区。
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff altera a apresentação da edição de rotas, fora da compatibilidade de onChange entre versões do macOS.
+
+===== P253 | aleris/woti PR #2 | capacidade do par: working-hours-shading
+PR: add sub-hour navigation interval (60/30/15 min)
+arquivos ligados: src/tui/event.rs;src/tui/render.rs
+--- linhas alteradas (780; mostrando até 40)
+-        let mut pending_h_offset: i32 = 0;
++        // Counts pending cell steps. One cell == self.interval.minutes() minutes.
++        let mut pending_cell_offset: i32 = 0;
+-                Duration::from_millis(if pending_h_offset != 0 { DEBOUNCE_MS } else { 250 });
++                Duration::from_millis(if pending_cell_offset != 0 { DEBOUNCE_MS } else { 250 });
+-                                pending_h_offset -= step;
++                                pending_cell_offset -= step;
+-                                pending_h_offset += step;
++                                pending_cell_offset += step;
++                            (KeyCode::Char('i'), KeyModifiers::NONE) => {
++                                nav_start = None;
++                                nav_dir = 0;
++                                self.cycle_interval();
++                                terminal.draw(|f| self.render(f))?;
++                                last_render = Instant::now();
++                            }
+-                if pending_h_offset != 0
++                if pending_cell_offset != 0
+-                    self.hour_offset += pending_h_offset;
+-                    pending_h_offset = 0;
++                    self.cell_offset += pending_cell_offset;
++                    pending_cell_offset = 0;
+-                if pending_h_offset != 0 {
+-                    self.hour_offset += pending_h_offset;
+-                    pending_h_offset = 0;
++                if pending_cell_offset != 0 {
++                    self.cell_offset += pending_cell_offset;
++                    pending_cell_offset = 0;
+-use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, TIMELINE_GAP};
++use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, NavInterval, TIMELINE_GAP};
+-pub fn compute_datetime_for_hour(
+-    _tz: Tz,
++/// Compute the datetime for a cell whose offset from "now" is given in minutes.
++/// Used by the sub-hour interval rendering pipeline (and equivalent to the
++/// legacy hour-based helper when `offset_minutes` is a multiple of 60).
++pub fn compute_datetime_for_minutes(
+-    offset_from_current: i32,
++    offset_minutes: i32,
+-    let duration = chrono::Duration::hours(offset_from_current as i64);
+-    now_tz + duration
+--- candidata: sub-hour-nav-interval [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  | The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  > The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > #### Scenario: Default interval is 60 minutes when nothing is configured
+  > - **WHEN** the user runs `woti` with no `--interval` flag and no persisted `config.interval`
+  > - **THEN** the TUI launches with the navigation interval set to 60 minutes and renders identically to today (no tick glyphs, no minute markers)
+  > #### Scenario: Valid 30-minute interval
+  > - **WHEN** the user runs `woti --interval 30`
+  > - **THEN** the TUI launches with the navigation interval set to 30 minutes
+--- candidata: half-hour-timeline-indicator [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: TimelineParams carries timezone minute offset
+  | The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > ### Requirement: TimelineParams carries timezone minute offset
+  > The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > #### Scenario: Whole-hour timezone
+  > - **WHEN** a timezone has offset +5:00 (offset_m = 0)
+  > - **THEN** `TimelineParams.offset_m` is 0
+  > #### Scenario: Half-hour timezone
+  > - **WHEN** a timezone has offset +5:30 (offset_m = 30)
+  > - **THEN** `TimelineParams.offset_m` is 30
+--- candidata: hour-offset-indicator [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Relative offset label is displayed when selection is not current hour
+  | The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > ### Requirement: Relative offset label is displayed when selection is not current hour
+  > The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > describing how many hours the selection is from the current time. The row SHALL only be visible when `hour_offset != 0`.
+  > #### Scenario: Selection is 2 hours in the future
+  > - **WHEN** the user navigates 2 hours to the right (`hour_offset == 2`)
+  > - **THEN** the indicator row displays "in 2 hours"
+  > #### Scenario: Selection is 3 hours in the past
+  > - **WHEN** the user navigates 3 hours to the left (`hour_offset == -3`)
+--- candidata: accelerated-nav [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Single-tap navigation unchanged
+  | A single left or right arrow key press SHALL move the timeline by exactly 1 hour in the corresponding direction, regardless of acceleration state.
+  > ### Requirement: Single-tap navigation unchanged
+  > A single left or right arrow key press SHALL move the timeline by exactly 1 hour in the corresponding direction, regardless of acceleration state.
+  > - **THEN** `hour_offset` decreases by 1
+  > #### Scenario: Single right tap
+  > - **WHEN** the user presses the right arrow key once and releases
+  > - **THEN** `hour_offset` increases by 1
+  > ### Requirement: Repeat events are handled for left/right keys
+  > The event loop SHALL process `KeyEventKind::Repeat` events for left and right arrow keys in addition to `KeyEventKind::Press` events.
+--- candidata: multi-column-day-label [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Day marker displays date alongside day name
+  | The timeline day marker row SHALL display the short weekday name followed by a space and the numeric day-of-month (e.g., "WED 18", "THU 1") at each day boundary.
+  > ### Requirement: Day marker displays date alongside day name
+  > The timeline day marker row SHALL display the short weekday name followed by a space and the numeric day-of-month (e.g., "WED 18", "THU 1") at each day boundary.
+  > #### Scenario: Day marker format at midnight boundary
+  > - **WHEN** the timeline crosses midnight into Wednesday March 18
+  > - **THEN** the day marker row displays "WED 18" starting at the midnight column
+  > #### Scenario: Single-digit date
+  > - **WHEN** the timeline crosses midnight into Thursday March 1
+  > - **THEN** the day marker row displays "THU 1" starting at the midnight column
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A navegação e a renderização passam a aceitar células de 30 e 15 minutos. A spec trata das cores por faixa de horário.
+
+===== P261 | Chorus-AIDLC/Chorus PR #359 | capacidade do par: root-idea-resolution
+PR: feat: AgentInstance addressing — idea-rooted pin-once-inherit
+arquivos ligados: src/mcp/tools/public.ts
+--- linhas alteradas (8; mostrando até 40)
++import { isAssignmentOwnedByActor } from "@/lib/uuid-resolver";
+-      // Status update requires assignee check
++      // Status update requires assignee check. The shared helper also passes an
++      // `agent_instance` assignment owned by this agent.
+-        const isAssignee =
+-          (task.assigneeType === "agent" && task.assigneeUuid === auth.actorUuid) ||
+-          (task.assigneeType === "user" && auth.ownerUuid && task.assigneeUuid === auth.ownerUuid);
++        const isAssignee = await isAssignmentOwnedByActor(auth, task.assigneeType, task.assigneeUuid);
+--- candidata: instance-addressed-assignment [PR+termos]
+  | # instance-addressed-assignment Specification
+  | ## Purpose
+  | TBD - created by archiving change add-agent-instance-addressing. Update Purpose after archive.
+  > # instance-addressed-assignment Specification
+  > TBD - created by archiving change add-agent-instance-addressing. Update Purpose after archive.
+  > ### Requirement: agent_instance is a third polymorphic assignee type
+  > Ideas and Tasks SHALL support a third polymorphic assignee type `agent_instance` in addition
+  > to `user` and `agent`. A pinned assignment SHALL be represented as `assigneeType = "agent_instance"`
+  > with `assigneeUuid` referencing an `AgentInstance.uuid`; an un-pinned agent assignment SHALL
+  > remain `assigneeType = "agent"` with `assigneeUuid` referencing an `Agent.uuid`. No additional
+  > pin columns SHALL be added to Idea or Task — the polymorphic `assigneeType`/`assigneeUuid`
+--- candidata: agent-instance [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AgentInstance is a durable (company, agent, host, cwd) identity
+  | The system SHALL persist a first-class `AgentInstance` entity uniquely identified by the
+  > ### Requirement: AgentInstance is a durable (company, agent, host, cwd) identity
+  > tuple `(companyUuid, agentUuid, host, cwd)`. The entity SHALL store only durable identity
+  > fields — `companyUuid`, `agentUuid`, `host`, `cwd`, `createdAt`, `updatedAt` — and SHALL NOT
+  > - **WHEN** a daemon connection is registered for an `(agentUuid, host, cwd)` that has no
+  > - **WHEN** a daemon connection is registered for an `(agentUuid, host, cwd)` that already has
+  > - **WHEN** a daemon for the same `(agentUuid, host, cwd)` disconnects and reconnects, producing
+  > A `DaemonConnection` SHALL carry a nullable `agentInstanceUuid` referencing the
+  > `(agentUuid, host, cwd)`, the system SHALL set `agentInstanceUuid` to the matching
+--- candidata: cli-daemon [tasks]
+  | # cli-daemon
+  | ## ADDED Requirements
+  | ### Requirement: Daemon subcommand and notification subscription
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > #### Scenario: Task assignment wakes Claude Code
+  > - **WHEN** the subscribed agent receives a `task_assigned` notification
+  > When the server reports a `connection_conflict` event for one of the daemon's path-connections (a live daemon already holds the same `(agent, host, cwd)`), the daemon SHALL print a prominent WARNING t
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > #### Scenario: Task assignment wakes Claude Code
+  > - **WHEN** the subscribed agent receives a `task_assigned` notification
+  > `GET /api/entities/{type}/{uuid}/root-idea` (authenticated with its agent API key) and
+--- candidata: conversational-idea-entry [termos]
+  | # Delta Spec: conversational-idea-entry
+  | ## ADDED Requirements
+  | ### Requirement: The create-idea modal SHALL offer a conversational mode when online daemon connections exist
+  > The create-idea modal SHALL keep the static form as its default mode and SHALL show an explicit switch into a conversational mode. The switch SHALL be enabled only when at least one daemon connection 
+  > ### Requirement: The offline hint SHALL reuse the shared daemon-connect guidance without hardcoding the command in i18n
+  > The disabled-state hint SHALL present the daemon startup guidance by composing the shared daemon-connect CTA (or by interpolating the shared `DAEMON_START_COMMAND` constant as a message parameter). Th
+  > - **THEN** the hint shows the copyable daemon startup command sourced from the shared constant, and the i18n messages contain only a `{command}` placeholder rather than the literal command
+  > The conversational mode SHALL list agents that have at least one online daemon connection and, for the selected agent, SHALL let the user pick the target connection instance (host + cwd) using the sha
+  > - **WHEN** the selected agent has two or more online daemon connections
+  > - **THEN** the send action stays disabled until the user picks one instance, and each choice displays host and cwd per the shared instance formatting rules
+  > - **WHEN** the selected agent has exactly one online daemon connection
+--- candidata: report-realtime [termos]
+  | # report-realtime Specification
+  | ## ADDED Requirements
+  | ### Requirement: Creating a report-typed Document SHALL fan out a `document/created` `RealtimeEvent`
+  > When `documentService.createDocument` persists a row with `type === "report"`, the service MUST publish exactly one `RealtimeEvent` on the `change` channel of the shared `eventBus`. The event MUST car
+  > - **WHEN** an authenticated agent calls `chorus_create_report` with `proposalUuid = P.uuid`, a non-empty `title`, and a non-empty Markdown `content`
+  > - **AND** the server MUST emit one `RealtimeEvent` with `entityType = "document"`, `action = "created"`, `entityUuid` equal to the new document's UUID, `projectUuid` equal to `P.projectUuid`, and `act
+  > - **WHEN** an authenticated PM agent calls `chorus_pm_create_document` with `type = "tech_design"` (or `prd`, `adr`, `spec`, `guide`)
+  > - **WHEN** an agent calls `chorus_create_report`
+  > ### Requirement: Creating an idea-rooted report SHALL also fan out an `idea/updated` `RealtimeEvent`
+  > When the report-typed Document being created is linked to a Proposal whose `inputType === "idea"` (i.e. an idea-rooted Proposal), `documentService.createDocument` MUST publish a second `RealtimeEvent`
+  > - **WHEN** an agent calls `chorus_create_report` referencing that Proposal
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O status de tarefas passa a aceitar atribuições de agent_instance. A spec trata da resolução REST de root idea.
+
+===== P266 | aserowy/yeet PR #297 | capacidade do par: theming
+PR: directory icon plugin
+arquivos ligados: yeet-lua/src/hook.rs
+--- linhas alteradas (79; mostrando até 40)
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    if let Err(err) =
+-        try_invoke_on_window_change(lua, viewport_paths, viewports, preview_is_directory)
+-    {
++    if let Err(err) = try_invoke_on_window_change(lua, viewport_paths, viewports, buffer_types) {
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    ctx.set("preview_is_directory", preview_is_directory)?;
+-    for (key, path) in viewport_keys.iter().zip(viewport_paths.iter()) {
+-        if let Some(p) = path {
+-            if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++    for (i, (key, path)) in viewport_keys.iter().zip(viewport_paths.iter()).enumerate() {
++        if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++            if let Some(p) = path {
++            if let Some(bt) = buffer_types[i] {
++                subtable.set("buffer_type", bt)?;
++            }
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-    fn on_window_change_preview_is_directory_true() {
++    fn on_window_change_preview_buffer_type_directory() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            "prefix_column_width should be 2 when preview_is_directory is true"
++            "prefix_column_width should be 2 when preview buffer_type is directory"
+-    fn on_window_change_preview_is_directory_false() {
++    fn on_window_change_preview_buffer_type_content() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            false,
++            [Some("directory"), Some("directory"), Some("content")],
+-            "prefix_column_width should be 0 when preview_is_directory is false"
++            "prefix_column_width should be 0 when preview buffer_type is content"
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+--- candidata: lua [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Global y table is exposed to Lua
+  | The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > #### Scenario: y.plugin subtable is accessible in init.lua
+  > The system SHALL expose a `y.hook` table in the Lua environment. Each hook name (`on_window_create`, `on_window_change`, `on_bufferline_mutate`) SHALL be a Lua table with an `:add()` method for regist
+  > - **THEN** `y.hook` SHALL be a table with `on_window_create`, `on_window_change`, and `on_bufferline_mutate` as hook objects supporting `:add()`
+  > #### Scenario: User registers on_window_change callback
+--- candidata: plugins/directory-icons [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Plugin sets prefix column width to 2
+  | The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > #### Scenario: Plugin sets prefix width on parent and current at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is set to `2` on parent and current panes only
+  > #### Scenario: Plugin does not set preview prefix width at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is NOT set on the preview pane by `on_window_create`
+  > #### Scenario: Plugin sets preview prefix width for directory preview via on_window_change
+--- candidata: on-window-change-hook [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  | The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  > The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > #### Scenario: Preview changes from directory to file
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a directory to a file
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == false`
+  > #### Scenario: Preview changes from file to directory
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a file to a directory
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == true`
+--- candidata: buffer [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Line wrapping
+  | Buffers SHALL support a word wrapping mode that breaks long lines at word boundaries to fit within the viewport width.
+  > - Indent continuation lines to align with the content column of the first line
+  > - **WHEN** a window is created before any directory-icons hook updates width
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook
+  > #### Scenario: Non-directory buffer can represent icon segment
+  > - **WHEN** a non-directory buffer line is represented through `@yeet-buffer`
+  > The directory window SHALL use shared `@yeet-buffer` icon-column rendering across all three of its buffer instances rather than window-specific icon drawing logic.
+  > #### Scenario: Three directory buffers share icon-column path
+  > - **WHEN** a directory window renders its three `@yeet-buffer` instances
+--- candidata: directory-icons-plugin [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin owns all icon identification and text color logic
+  | The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The plugin SHALL check the buffer type via the `ctx.buffer.type` field (from the read-only `buffer` metadata object, populated from the `BufferType` enum's string representation) provided in each `on_
+  > #### Scenario: Plugin processes directory buffer entries
+  > - **WHEN** the hook fires with `ctx.buffer.type` equal to `"directory"`
+  > The plugin SHALL determine whether an entry is a directory by checking if the content string ends with a trailing slash (`/`). No separate `is_directory` flag is needed.
+  > #### Scenario: Plugin identifies directory by trailing slash
+  > - **WHEN** the hook receives a bufferline whose content ends with `/`
+  > - **THEN** the plugin treats the entry as a directory and uses directory icon resolution
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O hook Lua troca preview_is_directory por buffer_type em cada viewport. A spec trata de tokens de cor do tema.
+
+===== P272 | Hedgehogues/awesome-claude PR #2 | capacidade do par: sdd-archive-cases
+PR: Release 0.6.1
+arquivos ligados: skills/sdd/scripts/_sdd_yaml.py;skills/sdd/scripts/state.py
+--- linhas alteradas (54; mostrando até 40)
++    _sdd_yaml.py merge-state <change-dir>
++    _sdd_yaml.py update-index-description <index-yaml-path> <capability> <description>
+-    return load(change_dir).get("creates") or []
++    creates = load(change_dir).get("creates") or []
++    return [entry if isinstance(entry, str) else entry.get("name", "") for entry in creates]
++def read_creates_with_meta(change_dir: str) -> list[dict]:
++    """Return creates entries normalized to [{name: str, title: str | None}].
++    Supports both string entries ("name") and object entries ({name, title}).
++    """
++    creates = load(change_dir).get("creates") or []
++    result = []
++    for entry in creates:
++        if isinstance(entry, str):
++            result.append({"name": entry, "title": None})
++        elif isinstance(entry, dict):
++            result.append({"name": entry.get("name", ""), "title": entry.get("title")})
++    return result
++def merge_state(change_dir: str) -> None:
++    state_path = os.path.join(change_dir, ".sdd-state.yaml")
++    if not os.path.exists(state_path):
++        return
++    with open(state_path, encoding="utf-8") as f:
++        state = yaml.safe_load(f) or {}
++    data = load(change_dir)
++    if not data:
++        return
++    for field in ("stage", "last_step_at"):
++        if field in state:
++            data[field] = state[field]
++    save(change_dir, data)
++def cmd_merge_state(change_dir: str) -> int:
++    if not os.path.exists(_path(change_dir)):
++        print(f"ERROR: .sdd.yaml not found in {change_dir}", file=sys.stderr)
++        return 2
++    merge_state(change_dir)
++    return 0
++    if cmd == "merge-state" and len(sys.argv) == 3:
++        return cmd_merge_state(sys.argv[2])
++    state.py is-final <stage>
++FIELD_VALIDATORS = {
+--- candidata: sdd-state [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: State-file location
+  | `.sdd-state.yaml` SHALL располагаться в директории change'а: `openspec/changes/<change-name>/.sdd-state.yaml` — рядом с `proposal.md`, `tasks.md`, `.sdd.yaml`. Файл MUST быть один на change.
+  > `.sdd-state.yaml` SHALL располагаться в директории change'а: `openspec/changes/<change-name>/.sdd-state.yaml` — рядом с `proposal.md`, `tasks.md`, `.sdd.yaml`. Файл MUST быть один на change.
+  > #### Scenario: Один change — один state-file
+  > - **WHEN** пользователь работает с change `foo`
+  > - **THEN** state-file для него находится только в `openspec/changes/foo/.sdd-state.yaml`; глобальных или сторонних реестров нет
+  > - **WHEN** sdd-скилл создал или обновил `.sdd-state.yaml` в активном change'е
+  > `.sdd-state.yaml` SHALL содержать минимум поля: `stage` (одно из: `proposed | contradiction-ok | contradiction-failed | applying | verifying | verify-ok | verify-failed | archiving | archived | archiv
+  > Дополнительные поля по контексту: `verify_result` (`{total, failed, failed_tasks}` для verifying-стадий), `contradiction_last_run`, `contradiction_hard_issues`.
+  > - **THEN** файл содержит как минимум `stage`, `last_step_at`, `owner`; парсится через `yaml.safe_load` без ошибок
+--- candidata: sdd-archive [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Inline spec-verification
+  | `/sdd:archive` SHALL выполнять L1/L2/L3 верификацию реализации против live `spec.md` после merge specs в `openspec/specs/`, до копирования `test-plan.md` и удаления `.sdd-state.yaml`. Отдельная команд
+  > `/sdd:archive` SHALL выполнять L1/L2/L3 верификацию реализации против live `spec.md` после merge specs в `openspec/specs/`, до копирования `test-plan.md` и удаления `.sdd-state.yaml`. Отдельная команд
+  > - **WHEN** пользователь вызывает `/sdd:archive <change-name>` и все Requirements из live spec'ов прошли L1+L2+L3
+  > - **THEN** скилл архивирует change, прогоняет inline spec-verify, копирует `test-plan.md` в `openspec/specs/<cap>/`, обновляет `.sdd-state.yaml` со `stage: archived`, удаляет `.sdd-state.yaml`
+  > #### Scenario: Spec-verify fail после merge specs
+  > - **WHEN** specs уже merged в `openspec/specs/`, но verify обнаружил `missing` или `partial` Requirements
+  > - **THEN** скилл обновляет `.sdd-state.yaml` со `stage: archive-failed`, выводит red-banner с двумя опциями (`git restore openspec/specs/` или новый change через `/sdd:propose`), MUST NOT удалять `.sd
+  > При неудачном spec-verify внутри `/sdd:archive` (specs уже merged) скилл SHALL вывести выделенный red-banner:
+  > 🔴 OR: start a new change via /sdd:propose
+--- candidata: structured-apply-output [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Three SDD workflow skills produce a fixed-order user-facing report
+  | The skills `sdd:apply`, `sdd:contradiction`, and `sdd:archive` SHALL each produce a final user-facing report whose blocks appear in this exact canonical order, top-to-bottom:
+  > No content SHALL appear below `## Вопросы к пользователю`. The block order is identical across the three skills, with the exception that `## Как проверить` exists only in `sdd:apply`.
+  > - **WHEN** `sdd:apply` finishes implementation for a change with non-empty `.sdd.yaml.creates`
+  > - **THEN** `## Технические статусы` lists facts only (file paths, test results, exit codes, index.yaml updates), no prose
+  > - **THEN** `## Реализованные фичи` lists each capability from `.sdd.yaml.creates` with status `done` or `partial`
+  > - **WHEN** `sdd:contradiction` finishes its detector phases for a change directory
+  > - **WHEN** `sdd:archive` finishes archiving a completed change with non-empty `.sdd.yaml.creates`
+  > - **THEN** `## Архивированные артефакты` lists each archived capability from `.sdd.yaml.creates` with paths to `openspec/specs/<capability>/spec.md` and `openspec/specs/<capability>/test-plan.md`
+  > The `sdd:apply` skill SHALL render a mandatory block `## Как проверить` immediately after `## Реализованные фичи` and before any optional block. The block SHALL provide concrete verification guidance 
+--- candidata: archive-merges-into-support [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: sdd:archive верифицирует merges-into capabilities
+  | `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > ### Requirement: sdd:archive верифицирует merges-into capabilities
+  > `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > #### Scenario: Change с непустым merges-into
+  > - **WHEN** `.sdd.yaml.merges-into` содержит одну или более capabilities
+  > - **THEN** для каждой capability из `merges-into` выполняется L1/L2/L3 верификация против `openspec/specs/<cap>/spec.md`
+  > - **THEN** вердикт (passed / gaps_found / human_needed) учитывается наравне с `creates`
+  > #### Scenario: Verify-fail для merges-into
+  > - **WHEN** L1/L2/L3 для capability из `merges-into` возвращает `gaps_found`
+--- candidata: sdd-ownership [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Owner поле в .sdd.yaml
+  | `.sdd.yaml` каждого change'а SHALL содержать поле `owner:` со строковым значением (email) — единственный владелец change'а. MUST быть инициализировано при `/sdd:propose` через identity-resolver.
+  > `.sdd.yaml` каждого change'а SHALL содержать поле `owner:` со строковым значением (email) — единственный владелец change'а. MUST быть инициализировано при `/sdd:propose` через identity-resolver.
+  > - **THEN** `identity.py` выводит ошибку на stderr и завершается с ненулевым кодом
+  > Каждый sdd-скилл, изменяющий состояние change'а (`/sdd:contradiction`, `/sdd:apply`, `/sdd:archive`), SHALL вызывать `identity.py` в начале выполнения и сравнивать результат с `owner:` из `.sdd.yaml`.
+  > #### Scenario: Своя change
+  > #### Scenario: Чужая change, согласие на перезапись
+  > #### Scenario: Чужая change, отказ от перезаписи
+  > - **THEN** скилл останавливается с сообщением «работа над чужим change'ем отклонена»; ничего не меняет
+  > ### Requirement: Owner живёт только в change-уровне
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Os scripts SDD ganham merge-state, is-final e validação de estado. A spec trata dos casos de teste de archive.
+
+===== P286 | lehuygiang28/vkara PR #2 | capacidade do par: curated-playlist-suggestions
+PR: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates
+arquivos ligados: apps/api/src/youtubei.ts;apps/web/src/services/youtube-api.ts
+--- linhas alteradas (68; mostrando até 40)
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++import { env } from './env';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+--- candidata: platform-redis [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Single Redis options factory
+  | The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > #### Scenario: API redis client uses factory
+  > - **WHEN** `apps/api/src/redis.ts` creates the shared ioredis client
+  > - **THEN** it MUST use `createRedisOptions` from `@vkara/redis` with validated env
+  > - **THEN** they MUST use the same `createRedisOptions` output as the main API client
+  > - **AND** MUST NOT duplicate inline `REDIS_HOST` / `REDIS_PORT` parsing
+  > `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` MUST be declared in `redisEnv()` with defaults matching current behavior (`localhost`, `6379`, optional password).
+  > - **THEN** `createRedisOptions` MUST target `localhost:6379` with no password
+--- candidata: platform-env [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Centralized environment validation
+  | The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > - **WHEN** the API process starts with required Redis and server variables set correctly
+  > `@vkara/env` MUST export domain factories (at minimum `embedEnv()`, `redisEnv()`, `serverEnv()` for API and `webPublicEnv()` for web) that apps compose using `createEnv({ extends: [...] })`.
+  > #### Scenario: API composes embed and redis env
+  > - **THEN** it MUST `extends` embed and redis presets so `VKARA_EMBED_*` and `REDIS_*` variables are available on `env`
+  > Base parsers `parseEnvFlag` and `parseEnvPositiveInt` MUST live in `@vkara/env` and preserve existing semantics: flags accept `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` (case-insensitive); invalid f
+  > ### Requirement: No ad-hoc process.env in application code
+  > After migration, application modules in `apps/api` and `apps/web` MUST NOT read `process.env` directly except inside env definition files (`src/env.ts`, `next.config.ts` edge cases documented in desig
+--- candidata: platform-redis-cache [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Redis cache plumbing package
+  | The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > YouTube cache modules MUST continue to own key prefixes, TTL constants, and response validation logic. `@vkara/cache-redis` MUST NOT hard-code `youtube-embed:` or playlist key shapes.
+  > - **THEN** keys MUST remain `youtube-embed:{videoId}` with values `1` or `0`
+  > - **THEN** keys MUST remain `youtube-playlist-details:{listId}:{scope}` with TTL 3600 seconds
+  > - **THEN** keys MUST remain `youtube-channel:{channelId}` with TTL 86400 seconds
+  > ### Requirement: In-memory youtube continuation cache excluded
+  > Process-local `Map` caches for search/related continuations in `apps/api/src/modules/youtube/cache.ts` MUST NOT move into `@vkara/cache-redis` in this change.
+  > #### Scenario: Search continuation stays in-process
+--- candidata: platform-feature-flags [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: VKARA feature flags are env-backed
+  | Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > `VKARA_EMBED_PREFILTER_AT_LIST` MUST default to disabled (falsy) when unset, preserving current list endpoint behavior per `youtube-embed-playability` spec.
+  > - **THEN** it MUST use the shared embed env helper or `env` field produced by `@vkara/env`
+  > The system MUST define `VKARA_EXPERIMENTS` in `@vkara/env` with `FLAG_DOCS` metadata (default falsy, scope `both`, description for TikTok experiments gating).
+  > API code MUST use a typed helper (e.g. `isExperimentsEnabled()`) to mount TikTok plugins and MUST NOT register `POST /tiktok/search` when the flag is falsy.
+  > - **THEN** the TikTok Elysia plugin MUST NOT be mounted
+  > - **THEN** the TikTok search routes MUST be registered on the API server
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+--- candidata: monorepo-package-boundaries [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Package layers and dependency direction
+  | Internal packages MUST follow dependency direction: **apps → domain → platform → tooling**. Domain packages MUST NOT depend on apps. Platform packages MUST NOT depend on domain packages.
+  > #### Scenario: Env package has no youtube imports
+  > - **WHEN** `@vkara/env` is typechecked
+  > - **THEN** it MUST NOT import from `@vkara/youtube`, `@vkara/room`, or deleted `shared-*` packages
+  > ### Requirement: shared packages removed at completion
+  > The packages `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` MUST be deleted from the workspace when this change is archived. No production code MAY import them.
+  > #### Scenario: Zero shared imports before archive
+  > - **THEN** ripgrep for `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` across `apps/` and `packages/` MUST return zero matches
+  > - **THEN** they MUST NOT reference workspace dependencies on deleted `shared-*` packages
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Falhas de busca e vídeos relacionados no YouTube passam a retornar HTTP 502. A spec trata das sugestões curadas de playlists.

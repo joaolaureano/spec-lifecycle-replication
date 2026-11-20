@@ -1,0 +1,1145 @@
+===== P221 | repo archmaxai/archmax | PR #20: Add local Git versioning and GitHub sync for projects | capacidade: deployment
+--- SPEC VIVA
+# deployment Specification
+
+## Purpose
+TBD - created by archiving change add-single-image-deployment. Update Purpose after archive.
+## Requirements
+### Requirement: Single Docker Image Deployment
+
+The Dockerfile SHALL create the `archmax` system user and a dedicated `/data` directory (owned by `archmax`) as the root of all persistent application data, with `HOME=/data`.
+
+The entrypoint SHALL validate critical environment variables before starting application processes. When validation fails, the container stays running with a clear error message instead of crash-looping.
+
+The API server SHALL await database connection, schema migrations, and admin seeding to complete before accepting HTTP traffic. The worker SHALL await database connection and schema migrations before processing jobs.
+
+#### Scenario: Non-root process execution
+
+- **WHEN** the container starts
+- **THEN** the API server, worker, and nginx processes run as the non-root `archmax` user
+- **AND** `ARCHMAX_DATA_DIR/projects` is writable by the `archmax` user
+- **AND** `HOME` is set to `ARCHMAX_DATA_DIR` so DuckDB can write its extension cache to `~/.duckdb/` (i.e. `$ARCHMAX_DATA_DIR/.duckdb/`)
+
+#### Scenario: Container stays up on bad configuration
+
+- **WHEN** the container starts with missing or invalid required environment variables
+- **THEN** the container remains running (does not exit or crash-loop)
+- **AND** `docker logs` shows a human-readable error with fix instructions
+- **AND** no stack traces or raw JSON error output appear in the logs
+
+#### Scenario: Migrations complete before traffic
+
+- **WHEN** the API server starts
+- **THEN** database connection, schema migrations, and admin seeding complete before the HTTP server begins accepting requests
+
+### Requirement: Unified Data Directory
+
+`ARCHMAX_DATA_DIR` SHALL be the root directory for all persistent application data (default `/data` in Docker). All persistent application data MUST reside under `ARCHMAX_DATA_DIR`. The directory layout SHALL be:
+
+- `/data/projects/` — semantic model YAML files (`ARCHMAX_DATA_DIR/projects`)
+- `/data/mongodb/` — embedded MongoDB data files (only when using embedded MongoDB; under `ARCHMAX_DATA_DIR/mongodb`)
+- `/data/.duckdb/` — DuckDB extension cache (created automatically; under `ARCHMAX_DATA_DIR/.duckdb/` via `HOME=$ARCHMAX_DATA_DIR`)
+
+Redis data SHALL be stored in `/tmp/redis` and is explicitly ephemeral (not backed up). When using an external MongoDB via `MONGODB_URI`, the `/data/mongodb/` directory is unused.
+
+A single bind mount (`-v ~/.archmax:/data`) captures all persistent state: project files, embedded MongoDB data, and the DuckDB extension cache.
+
+#### Scenario: Single volume mount captures all persistent data
+
+- **WHEN** a user mounts a single host volume to `/data`
+- **THEN** semantic model files, embedded MongoDB data, and DuckDB extension cache are persisted across container restarts
+
+#### Scenario: Data directory is created on first run
+
+- **WHEN** the container starts for the first time with a fresh volume
+- **THEN** the entrypoint creates `$ARCHMAX_DATA_DIR/projects/` and `$ARCHMAX_DATA_DIR/mongodb/` if they do not exist
+
+### Requirement: Docker Compose Production Configuration
+
+The `docker-compose.yml` SHALL use `APP_BASE_URL` (interpolated from the host environment with a default of `http://localhost:8080`) instead of a hardcoded `CORS_ORIGINS` value. The compose file SHALL mount the named volume `archmax-data` to `/data` inside the archmax service container.
+
+#### Scenario: Compose stack starts successfully
+
+- **WHEN** a user runs `docker compose up -d` with required environment variables set
+- **THEN** the `archmax-data` volume is mounted at `/data` inside the archmax container
+
+#### Scenario: Compose stack behind a proxy
+
+- **WHEN** a user sets `APP_BASE_URL=https://archmax.example.com` in the host environment and runs `docker compose up -d`
+- **THEN** the archmax container receives `APP_BASE_URL=https://archmax.example.com`
+- **AND** authentication and CORS work correctly for requests from `https://archmax.example.com`
+
+### Requirement: Deployment Documentation
+
+Data backup instructions MUST explain how to back up the `/data` volume (covering project files, embedded MongoDB data, and DuckDB extensions) and external MongoDB data separately when using Compose.
+
+The Docker reference page volumes section MUST list `/data` as the persistent mount point with `projects/`, `mongodb/`, and `.duckdb/` underneath, and `/tmp/redis` as ephemeral.
+
+The configuration reference MUST document `APP_BASE_URL` as the recommended way to configure the public URL for proxy/cloud deployments, and note that `CORS_ORIGINS` and `AUTH_BASE_URL` are available as advanced overrides.
+
+The configuration reference MUST document the `/data/` layout (`projects/`, `mongodb/`, `.duckdb/`) and the single-volume backup strategy.
+
+#### Scenario: User needs to back up data
+
+- **WHEN** a user reads the self-hosting guide
+- **THEN** they find instructions for backing up the `/data` volume (semantic models, embedded MongoDB, and DuckDB extensions)
+- **AND** separate guidance for backing up external MongoDB data via the Compose volume or managed service
+
+#### Scenario: User looks up Docker volume configuration
+
+- **WHEN** a user reads the Docker reference page
+- **THEN** they find a volumes section listing `/data` as the persistent mount point
+- **AND** the section explains that `projects/`, `mongodb/`, and `.duckdb/` live under `/data` and that `/tmp/redis` is ephemeral
+
+#### Scenario: User deploys behind a reverse proxy
+
+- **WHEN** a user reads the configuration reference
+- **THEN** they find `APP_BASE_URL` documented as the recommended env var for proxy deployments
+- **AND** they understand that setting `APP_BASE_URL` automatically configures CORS and auth origins
+
+### Requirement: Docker Reference Page
+
+The documentation site SHALL include a dedicated Docker reference page (`reference/docker`) that serves as the canonical, in-depth resource for running archmax via Docker. The page MUST cover:
+
+- **Image contents**: what is bundled (API server, BullMQ worker, frontend SPA, nginx reverse proxy, embedded MongoDB, embedded Redis)
+- **Exposed ports**: `8080` (nginx -> API + SPA)
+- **Environment variables**: a complete table listing every variable the image accepts, its default value, whether it is required or optional, and Docker-specific behavior notes (e.g. `MONGODB_URI` — omit to use embedded MongoDB, `REDIS_URL` — omit to use embedded Redis)
+- **Volumes**: `/data` (persistent — `projects/`, `mongodb/`, `.duckdb/`), `/tmp/redis` (ephemeral)
+- **Entrypoint behavior**: the decision tree for starting embedded MongoDB and/or Redis vs. using external, startup ordering (mongod -> redis-server -> worker -> API -> nginx), and how `MONGODB_URI` / `REDIS_URL` gate the embedded services
+- **Docker Compose reference**: explanation of the repo-root `docker-compose.yml` services, volumes, and networking
+- **Health checks**: recommended Docker `HEALTHCHECK` or liveness probe commands
+- **Resource recommendations**: minimum RAM and disk for small and medium deployments
+- **Troubleshooting**: common issues (port conflicts, volume permissions, MongoDB/Redis connection failures, log locations)
+
+The page MUST be linked in the documentation sidebar under "Reference".
+
+#### Scenario: User looks up Docker volume configuration
+
+- **WHEN** a user reads the Docker reference page
+- **THEN** they find a volumes section listing `/data` as the persistent mount point
+- **AND** the section explains that `projects/`, `mongodb/`, and `.duckdb/` live under `/data` and that `/tmp/redis` is ephemeral
+
+#### Scenario: User looks up entrypoint behavior
+
+- **WHEN** a user reads the Docker reference page
+- **THEN** they find a section explaining the startup decision tree
+- **AND** it documents that omitting `MONGODB_URI` triggers embedded `mongod` and omitting `REDIS_URL` triggers embedded `redis-server`
+
+#### Scenario: User troubleshoots container startup failure
+
+- **WHEN** a user's container fails to start and they consult the Docker reference
+- **THEN** they find a troubleshooting section with common issues and remedies
+- **AND** MongoDB connection errors are covered with guidance on verifying `MONGODB_URI` or checking embedded `mongod` logs
+
+### Requirement: CI Docker Image Builds
+
+The CI pipeline SHALL build the Docker image on every pull request to catch build failures before merge. A dedicated GitHub Actions workflow (`.github/workflows/pr-docker-build.yml`) SHALL:
+
+- Trigger on `pull_request` events (`opened`, `synchronize`) targeting `main`
+- Build the Docker image using BuildKit with GitHub Actions layer caching (`type=gha`)
+- Push the image to `ghcr.io/<repository>:pr-<number>` so reviewers can test the exact PR build
+- Post (or update) a comment on the PR with the `docker pull` command for the built image
+
+On release (merged PR with a `release` label), a separate workflow SHALL build and push the final image tagged with both `latest` and the semver version (`ghcr.io/<repository>:<version>`).
+
+#### Scenario: PR opened or updated
+
+- **WHEN** a pull request is opened or a new commit is pushed to a PR targeting `main`
+- **THEN** the CI workflow builds the Docker image
+- **AND** pushes it to `ghcr.io/<repository>:pr-<pr-number>`
+- **AND** posts a comment on the PR with the pull command
+
+#### Scenario: PR comment is updated on subsequent pushes
+
+- **WHEN** a PR already has a Docker image comment from a previous push
+- **AND** a new commit is pushed to the PR
+- **THEN** the existing comment is updated (not duplicated) with the latest image reference
+
+#### Scenario: Release build on merge
+
+- **WHEN** a PR with a `release`, `release:minor`, or `release:major` label is merged to `main`
+- **THEN** the release workflow creates a GitHub release with a semver tag
+- **AND** builds and pushes the Docker image tagged as `latest` and `<version>` to ghcr.io
+
+### Requirement: Docker Health Check
+
+The Dockerfile SHALL include a `HEALTHCHECK` instruction that probes the API health endpoint to provide native container health status to Docker and orchestrators.
+
+The `HEALTHCHECK` SHALL:
+- Use `curl -sf http://127.0.0.1:3000/api/health` to hit the API directly (bypassing nginx)
+- Poll every 30 seconds with a 5-second timeout
+- Allow a 15-second start period for embedded services (MongoDB, Redis) to boot
+- Retry 3 times before marking the container as unhealthy
+
+#### Scenario: Container reports healthy after startup
+
+- **WHEN** the container starts and all services (API, MongoDB, Redis) are ready
+- **AND** the Docker health check runs after the start period
+- **THEN** `docker inspect` shows the container health as `healthy`
+
+#### Scenario: Container reports unhealthy when API is down
+
+- **WHEN** the API process crashes or MongoDB becomes unreachable
+- **AND** the health endpoint returns HTTP 503 or is unreachable
+- **THEN** after 3 consecutive failed checks, `docker inspect` shows the container health as `unhealthy`
+
+### Requirement: Playwright E2E Tests in CI
+
+The CI pipeline SHALL run Playwright end-to-end browser tests against the Docker image on every pull request. The E2E test infrastructure SHALL:
+
+- Live in a dedicated `apps/e2e/` workspace package with `@playwright/test`
+- Use a `docker-compose.ci.yml` that starts the application Docker image alongside MongoDB and Redis
+- Run after the Docker image is built and pushed to GHCR
+- Execute tests against `localhost:8080` (the nginx entrypoint of the Docker image)
+- Upload Playwright HTML reports and failure screenshots as GitHub Actions artifacts
+- Block the PR from merging if any E2E test fails
+
+The CI workflow SHALL generate random `UI_USERNAME` and `UI_PASSWORD` values at runtime and inject them into the Docker Compose stack and the Playwright test environment via `E2E_USERNAME` and `E2E_PASSWORD` env vars. Credentials MUST NOT be hardcoded in any committed file (compose file, test file, or workflow).
+
+`docker-compose.ci.yml` SHALL use environment variable interpolation (`${UI_USERNAME}`, `${UI_PASSWORD}`) instead of hardcoded credential values.
+
+The E2E test suite SHALL read login credentials exclusively from `E2E_USERNAME` and `E2E_PASSWORD` environment variables and MUST NOT contain hardcoded usernames or passwords.
+
+The test suite SHALL cover at minimum:
+- Health endpoint returns healthy
+- Unauthenticated redirect to login page
+- Login page renders correctly (heading, username field, password field, sign-in button)
+- Successful login with valid randomly-generated credentials
+- Failed login with empty password
+- Failed login with correct username and wrong password
+- Failed login with wrong username and wrong password
+
+#### Scenario: PR with passing E2E tests
+
+- **WHEN** a pull request is opened or updated
+- **AND** the Docker image builds successfully
+- **THEN** the E2E job generates random `UI_USERNAME` and `UI_PASSWORD` values
+- **AND** starts the Docker image with the generated credentials via Docker Compose
+- **AND** waits for the health endpoint to return healthy
+- **AND** runs Playwright tests with `E2E_USERNAME` and `E2E_PASSWORD` set to the generated values
+- **AND** the GitHub check is marked as successful
+
+#### Scenario: PR with failing E2E tests
+
+- **WHEN** a Playwright test fails (e.g., login page does not render, navigation error)
+- **THEN** the GitHub check is marked as failed
+- **AND** the Playwright HTML report and failure screenshots are uploaded as artifacts
+- **AND** the PR is blocked from merging
+
+#### Scenario: Docker image fails to start
+
+- **WHEN** the Docker image starts but the health endpoint does not return healthy within 60 seconds
+- **THEN** the E2E job fails without running Playwright tests
+- **AND** the container logs are captured for debugging
+
+#### Scenario: Empty password rejected at login
+
+- **WHEN** the e2e test submits the correct username with an empty password
+- **THEN** the login form shows an error
+- **AND** the user remains on the login page
+
+#### Scenario: Wrong password rejected at login
+
+- **WHEN** the e2e test submits the correct username with an incorrect password
+- **THEN** the login form shows an error banner
+- **AND** the user remains on the login page
+
+#### Scenario: Wrong username and password rejected at login
+
+- **WHEN** the e2e test submits an unknown username with an incorrect password
+- **THEN** the login form shows an error banner
+- **AND** the user remains on the login page
+
+### Requirement: Agent API Configuration Guidance in .env.example
+
+The `.env.example` file SHALL clearly communicate that `AGENT_API_KEY` is required for all AI agent features (Semantic Model Builder, Testing Playground, conversation title generation). The comment block for the `AGENT_*` variables MUST:
+
+- State that `AGENT_API_KEY` is required (not optional) for agent functionality
+- List supported providers (OpenRouter, OpenAI, Azure OpenAI, Ollama, or any OpenAI-compatible endpoint)
+- Note that `AGENT_API_BASE_URL` defaults to OpenRouter and should be changed when using a different provider
+- Note that `AGENT_MODEL` should match the provider's model naming convention
+
+The `docker-compose.yml` SHALL include a comment on the `AGENT_API_KEY` line indicating that it is required for agent features.
+
+#### Scenario: New user reads .env.example
+
+- **WHEN** a new user opens `.env.example` to configure the application
+- **THEN** they find a clearly marked section explaining that `AGENT_API_KEY` must be set for the AI agent to work
+- **AND** they understand which providers are supported and how to obtain a key
+
+#### Scenario: User deploys without AGENT_API_KEY
+
+- **WHEN** a user starts the application without setting `AGENT_API_KEY`
+- **THEN** the application starts successfully (the key is not required for startup)
+- **AND** agent features are unavailable until the key is configured
+
+### Requirement: Agent Configuration Status in Config Endpoint
+
+The `/api/config` endpoint SHALL include an `agentConfigured` boolean field that indicates whether the agent API key is set. The endpoint MUST NOT expose the actual key value or any secret material. The field SHALL be `true` when `AGENT_API_KEY` is a non-empty string, and `false` otherwise.
+
+#### Scenario: Agent is configured
+
+- **WHEN** `AGENT_API_KEY` is set to a non-empty value
+- **AND** a client requests `GET /api/config`
+- **THEN** the response includes `"agentConfigured": true`
+
+#### Scenario: Agent is not configured
+
+- **WHEN** `AGENT_API_KEY` is not set or is empty
+- **AND** a client requests `GET /api/config`
+- **THEN** the response includes `"agentConfigured": false`
+- **AND** no secret values are leaked in the response
+
+### Requirement: Entrypoint Environment Pre-flight Check
+
+The Docker entrypoint script SHALL validate that critical environment variables (`BETTER_AUTH_SECRET`, `UI_PASSWORD`) are set before starting Node.js processes. When validation fails, the entrypoint SHALL print a human-readable error message listing each missing variable with a description of its purpose and a fix hint, then execute `sleep infinity` to keep the container running without crash-looping.
+
+The pre-flight check SHALL run after embedded MongoDB/Redis setup (so `MONGODB_URI` and `REDIS_URL` are already resolved) but before spawning the worker or API server.
+
+#### Scenario: Required variable missing in Docker
+
+- **WHEN** the container starts without `BETTER_AUTH_SECRET` set
+- **THEN** the entrypoint prints an error banner listing the missing variable and its purpose
+- **AND** the container stays running via `sleep infinity` (exit code 0 on SIGTERM)
+- **AND** no Node.js process is started
+
+#### Scenario: All required variables present
+
+- **WHEN** the container starts with all required environment variables set
+- **THEN** the entrypoint proceeds to start the worker, API server, and nginx as normal
+
+### Requirement: APP_BASE_URL Environment Variable
+
+The system SHALL accept an optional `APP_BASE_URL` environment variable that specifies the public-facing URL of the archmax instance (e.g. `https://archmax.example.com`). When `APP_BASE_URL` is set:
+
+- `AUTH_BASE_URL` SHALL default to the value of `APP_BASE_URL` unless `AUTH_BASE_URL` is explicitly set
+- `CORS_ORIGINS` SHALL default to the value of `APP_BASE_URL` unless `CORS_ORIGINS` is explicitly set
+
+When `APP_BASE_URL` is not set, existing defaults SHALL be preserved (`AUTH_BASE_URL` defaults to `http://localhost:${PORT}`, `CORS_ORIGINS` defaults to `http://localhost:5173`).
+
+#### Scenario: Cloud deployment with APP_BASE_URL only
+
+- **WHEN** the application starts with `APP_BASE_URL=https://archmax.example.com` and neither `AUTH_BASE_URL` nor `CORS_ORIGINS` is set
+- **THEN** Better Auth uses `https://archmax.example.com` as its base URL
+- **AND** CORS allows requests from `https://archmax.example.com`
+- **AND** Better Auth trusts `https://archmax.example.com` as an origin
+
+#### Scenario: APP_BASE_URL with explicit CORS_ORIGINS override
+
+- **WHEN** the application starts with `APP_BASE_URL=https://archmax.example.com` and `CORS_ORIGINS=https://archmax.example.com,https://other.example.com`
+- **THEN** the explicit `CORS_ORIGINS` value is used (both origins allowed)
+- **AND** `AUTH_BASE_URL` still derives from `APP_BASE_URL`
+
+#### Scenario: APP_BASE_URL with explicit AUTH_BASE_URL override
+
+- **WHEN** the application starts with `APP_BASE_URL=https://archmax.example.com` and `AUTH_BASE_URL=https://auth.internal:3000`
+- **THEN** Better Auth uses `https://auth.internal:3000` as its base URL
+- **AND** CORS still derives from `APP_BASE_URL`
+
+#### Scenario: No APP_BASE_URL set (backward compatible)
+
+- **WHEN** the application starts without `APP_BASE_URL` set
+- **THEN** `AUTH_BASE_URL` defaults to `http://localhost:${PORT}`
+- **AND** `CORS_ORIGINS` defaults to `http://localhost:5173`
+- **AND** existing behavior is unchanged
+
+### Requirement: Production Startup Warning for Missing APP_BASE_URL
+
+When `NODE_ENV` is `production` and `APP_BASE_URL` is not set, the application SHALL print a warning to stderr indicating that `APP_BASE_URL` should be set to the public URL to avoid authentication and CORS errors behind a reverse proxy. The warning SHALL NOT prevent the application from starting.
+
+#### Scenario: Production without APP_BASE_URL
+
+- **WHEN** the application starts with `NODE_ENV=production` and no `APP_BASE_URL`
+- **THEN** a warning is printed to stderr advising the operator to set `APP_BASE_URL`
+- **AND** the application starts normally
+
+#### Scenario: Production with APP_BASE_URL
+
+- **WHEN** the application starts with `NODE_ENV=production` and `APP_BASE_URL` is set
+- **THEN** no warning about `APP_BASE_URL` is printed
+
+### Requirement: Build-Time Version Injection
+
+The Dockerfile SHALL accept an `APP_VERSION` build argument (defaulting to `dev`) and set it as the `APP_VERSION` environment variable in the production stage.
+
+The release workflow SHALL pass the resolved semver version (without `v` prefix) as the `APP_VERSION` build arg when building and pushing the Docker image.
+
+The PR Docker build workflow SHALL pass `pr-<number>` as the `APP_VERSION` build arg.
+
+#### Scenario: Release build embeds semver version
+
+- **WHEN** the release workflow builds the Docker image after creating tag `v0.4.0`
+- **THEN** the image is built with `APP_VERSION=0.4.0`
+- **AND** the API process has `APP_VERSION=0.4.0` in its environment
+
+#### Scenario: PR build embeds PR identifier
+
+- **WHEN** the PR workflow builds the Docker image for PR #42
+- **THEN** the image is built with `APP_VERSION=pr-42`
+
+#### Scenario: Local development without build arg
+
+- **WHEN** a developer builds the Docker image locally without passing `APP_VERSION`
+- **THEN** the version defaults to `dev`
+
+### Requirement: Authenticated Version Endpoint
+
+The API SHALL expose an authenticated `GET /api/version` endpoint that returns the application version. The endpoint SHALL sit behind the session auth middleware so that only authenticated users can access it.
+
+The response SHALL be a JSON object with a `version` field containing the value of the `APP_VERSION` environment variable. When `APP_VERSION` is not set, the field SHALL default to `"dev"`.
+
+The version MUST NOT be exposed on unauthenticated endpoints (`/api/health`, `/api/config`).
+
+#### Scenario: Authenticated user requests version
+
+- **WHEN** an authenticated user requests `GET /api/version` on a container built with `APP_VERSION=0.4.0`
+- **THEN** the response JSON is `{ "version": "0.4.0" }`
+
+#### Scenario: Unauthenticated request is rejected
+
+- **WHEN** an unauthenticated client requests `GET /api/version`
+- **THEN** the response is `401 Unauthorized`
+
+#### Scenario: Version endpoint returns dev fallback
+
+- **WHEN** an authenticated user requests `GET /api/version` on a local dev server without `APP_VERSION` set
+- **THEN** the response JSON is `{ "version": "dev" }`
+
+
+--- ARQUIVOS DO PR (67)
+modified  +3     -2     .env.example
+modified  +17    -0     README.md
+modified  +0     -2     apps/api/package.json
+modified  +2     -4     apps/api/src/app.ts
+added     +219   -0     apps/api/src/routes/git.test.ts
+added     +135   -0     apps/api/src/routes/git.ts
+removed   +0     -159   apps/api/src/routes/github.ts
+modified  +30    -9     apps/api/src/routes/projects.ts
+modified  +26    -111   apps/api/src/routes/publish.ts
+added     +23    -0     apps/api/src/utils/github.ts
+added     +24    -0     apps/api/src/utils/params.ts
+added     +146   -0     apps/api/src/utils/publish-flow.test.ts
+added     +67    -0     apps/api/src/utils/publish-flow.ts
+modified  +1     -0     apps/docs/astro.config.mjs
+added     +130   -0     apps/docs/src/content/docs/guides/version-control.mdx
+modified  +2     -0     apps/docs/src/content/docs/index.mdx
+modified  +34    -10    apps/frontend/src/components/model-visualization/model-visualization.tsx
+modified  +2     -0     apps/frontend/src/components/model-visualization/types.ts
+modified  +12    -44    apps/frontend/src/components/publish-toolbar.tsx
+modified  +11    -4     apps/frontend/src/components/semantic-model-explorer.tsx
+modified  +1     -2     apps/frontend/src/lib/project-context.tsx
+added     +152   -0     apps/frontend/src/lib/use-git.ts
+added     +51    -0     apps/frontend/src/lib/use-publish.ts
+modified  +21    -7     apps/frontend/src/routes/_auth/$projectId/index.tsx
+modified  +311   -113   apps/frontend/src/routes/_auth/$projectId/settings.tsx
+added     +99    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/design.md
+added     +38    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/proposal.md
+added     +200   -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/specs/project-git-versioning/spec.md
+added     +81    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/specs/project-management/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/specs/semantic-model-agent/spec.md
+added     +77    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/specs/semantic-model-publishing/spec.md
+added     +64    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/specs/semantic-models/spec.md
+added     +84    -0     openspec/changes/archive/2026-04-18-add-local-git-versioning/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-log-refine-button/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-log-refine-button/specs/mcp-monitoring/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-log-refine-button/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-query-resilience/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-query-resilience/specs/data-connections/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-query-resilience/specs/mcp-server/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-18-add-query-resilience/tasks.md
+added     +24    -0     openspec/changes/archive/2026-04-19-add-publish-history-revert-pagination/proposal.md
+added     +99    -0     openspec/changes/archive/2026-04-19-add-publish-history-revert-pagination/specs/project-git-versioning/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-19-add-publish-history-revert-pagination/tasks.md
+modified  +1     -1     openspec/project.md
+modified  +16    -1     openspec/specs/data-connections/spec.md
+modified  +18    -0     openspec/specs/mcp-monitoring/spec.md
+modified  +38    -4     openspec/specs/mcp-server/spec.md
+added     +285   -0     openspec/specs/project-git-versioning/spec.md
+modified  +56    -81    openspec/specs/project-management/spec.md
+modified  +37    -0     openspec/specs/semantic-model-agent/spec.md
+modified  +27    -37    openspec/specs/semantic-model-publishing/spec.md
+modified  +63    -0     openspec/specs/semantic-models/spec.md
+modified  +1     -0     packages/core/package.json
+modified  +38    -0     packages/core/prompts/semantic-model-agent.md
+modified  +0     -2     packages/core/src/config/env.ts   <== código ligado à spec
+modified  +2     -4     packages/core/src/models/Project.ts
+modified  +89    -2     packages/core/src/services/agent-tools.test.ts
+modified  +50    -0     packages/core/src/services/agent-tools.ts
+modified  +5     -1     packages/core/src/services/agent.ts
+added     +444   -0     packages/core/src/services/git.test.ts
+added     +473   -0     packages/core/src/services/git.ts
+added     +142   -0     packages/core/src/services/publish.test.ts
+modified  +13    -9     packages/core/src/services/publish.ts
+modified  +81    -0     packages/core/src/services/semantic-model-files.test.ts
+modified  +34    -2     packages/core/src/services/semantic-model-files.ts
+modified  +4     -1     packages/core/src/services/semantic-model-schema.ts
+modified  +300   -320   pnpm-lock.yaml
+--- DIFF DO CÓDIGO LIGADO
+### packages/core/src/config/env.ts
+@@ -38,8 +38,6 @@ const envSchema = z.object({
+ 
+   TEST_AGENT_MAX_ITERATIONS: z.string().optional().default("100"),
+ 
+-  GITHUB_CLIENT_ID: z.string().optional(),
+-  GITHUB_CLIENT_SECRET: z.string().optional(),
+   ENCRYPTION_KEY: z.string().optional(),
+ });
+ 
+
+===== P222 | repo tmck-code/yet-another-statusline | PR #71: feat(renderer): whole-unit cwd include/omit in fit_path | capacidade: task-checklist
+--- SPEC VIVA
+# task-checklist Specification
+
+## Purpose
+
+Define how the statusline derives and renders the live task checklist from `TaskCreate`/`TaskUpdate` events: scoping output to the latest plan generation, per-task and total timing, an active-anchored display window, pinned visibility while work is in progress, layout-specific rendering, and consistent timer formatting.
+
+## Requirements
+
+### Requirement: Plan Generation scoping
+
+The task parser SHALL render and count only the **latest plan generation**, not every task created in the session. A new generation SHALL begin when a `TaskCreate` event is folded while **all** currently-known tasks are `completed`; that event discards the prior generation and restarts task ids at `#1`. A `TaskCreate` folded while any task is still `pending` or `in_progress` SHALL append to the current generation. The resulting `done/total` count SHALL reflect only the latest generation.
+
+#### Scenario: New batch after completion starts a fresh generation
+
+- **WHEN** every task in the list is `completed` and a later `TaskCreate` is folded
+- **THEN** the prior tasks are dropped and the new task is `#1` of a fresh generation
+
+#### Scenario: Create while work is open appends to the current generation
+
+- **WHEN** a `TaskCreate` is folded while at least one task is still `pending` or `in_progress`
+- **THEN** the new task is appended to the current generation, keeping the existing tasks
+
+#### Scenario: Count reflects only the latest generation
+
+- **WHEN** earlier completed generations exist before the current one
+- **THEN** `done/total` counts only the tasks of the latest generation
+
+### Requirement: Per-task timing
+
+A **Task** SHALL carry `started_at` and `completed_at` (epoch seconds, or absent). On a `TaskUpdate` transitioning a task **to** `in_progress`, the parser SHALL set `started_at` to that event's timestamp and clear `completed_at`. On a `TaskUpdate` transitioning a task **to** `completed`, it SHALL set `completed_at`. A task's **Task Timer** SHALL read the live elapsed `now − started_at` while `in_progress`, the frozen duration `completed_at − started_at` while `completed`, and SHALL be absent for a `pending` task or any task that was never `in_progress`.
+
+#### Scenario: Timer starts when work begins
+
+- **WHEN** a task transitions to `in_progress`
+- **THEN** its `started_at` is the timestamp of that transition and its Task Timer counts up live from then
+
+#### Scenario: Timer freezes on completion
+
+- **WHEN** a task that was `in_progress` transitions to `completed`
+- **THEN** its Task Timer shows the frozen duration `completed_at − started_at` and no longer advances
+
+#### Scenario: Reopened task restarts its timer
+
+- **WHEN** a `completed` task transitions back to `in_progress`
+- **THEN** `started_at` is overwritten with the new timestamp, `completed_at` is cleared, and the live timer counts from the new start
+
+#### Scenario: Task that never started shows no duration
+
+- **WHEN** a task goes `pending → completed` with no intervening `in_progress`
+- **THEN** it has no `started_at` and renders no Task Timer
+
+### Requirement: Total Elapsed
+
+The checklist header SHALL show a **Total Elapsed** wall-clock span for the current generation: from the earliest task `started_at` to `now` while any task is `in_progress`, or to the latest `completed_at` once nothing is in progress. When no task in the generation has ever started, Total Elapsed SHALL be absent.
+
+#### Scenario: Total runs live while work is active
+
+- **WHEN** any task in the generation is `in_progress`
+- **THEN** Total Elapsed spans the earliest `started_at` to `now` and advances each render
+
+#### Scenario: Total freezes when the plan is done
+
+- **WHEN** no task is `in_progress`
+- **THEN** Total Elapsed spans the earliest `started_at` to the latest `completed_at`
+
+### Requirement: Active Window
+
+When rendered as a full list, the checklist SHALL show an **Active Window**: an active-anchored slice of at most **6 content rows, inclusive of any `+N done` / `+N more` collapse lines**. The window SHALL keep the `in_progress` item visible and bias toward upcoming `pending` items. Completed items above the window SHALL collapse into a `+N done` line and pending items below into a `+N more` line, each counting against the 6-row budget. With no `in_progress` task the window SHALL start at the first pending items; with all tasks completed it SHALL show the most recent completed items.
+
+#### Scenario: Long plan stays within the row budget
+
+- **WHEN** the generation has more tasks than fit the budget
+- **THEN** the rendered task rows (items plus any collapse lines) total at most 6, and the `in_progress` item is among them
+
+#### Scenario: Clipped completed and pending collapse into affordances
+
+- **WHEN** completed items fall above the window or pending items below it
+- **THEN** a `+N done` line and/or a `+N more` line represents the hidden counts, within the budget
+
+### Requirement: Pinned visibility while active
+
+The checklist SHALL remain visible while any task is `in_progress`, regardless of the freshness cap, so a long-running step's live timer is never hidden. When no task is `in_progress`, the existing freshness behaviour SHALL apply: hidden after the 120s cap since the last task event, with a 20s grace once all tasks are `completed`.
+
+#### Scenario: Long step keeps the list visible
+
+- **WHEN** a task has been `in_progress` longer than the freshness cap with no new task event
+- **THEN** the checklist stays visible and its live timer keeps counting
+
+#### Scenario: Finished plan still fades out
+
+- **WHEN** all tasks are `completed` and the grace period elapses
+- **THEN** the checklist is hidden
+
+### Requirement: Layout-specific rendering
+
+The checklist SHALL render the full header + Active Window in the **wide** and **medium** layouts. In the **narrow** layout it SHALL render a single compact line — the checklist glyph, `done/total`, and the active task's live timer when a task is `in_progress` — and no subject text. Each full-list item row SHALL show a state glyph (distinct constants for `pending`, `in_progress`, `completed`), the task subject truncated to fit, and a right-aligned Task Timer column; completed durations render dim, the in_progress live timer renders bright, pending rows show no timer. All column widths SHALL be measured with the visible-width helper, never `len()`. The wide checklist SHALL render into a content width supplied by the layout builder, and MAY appear as the left column of a side-by-side section when a subagent cohort is also present; in that case it renders into the narrower left-column width using the same header + Active Window structure.
+
+#### Scenario: Wide and medium show the full checklist
+
+- **WHEN** a wide or medium layout is built and the checklist is visible
+- **THEN** it renders the header (glyph + done/total + Total Elapsed) followed by the Active Window of item rows
+
+#### Scenario: Narrow shows the compact line
+
+- **WHEN** a narrow layout is built and the checklist is visible
+- **THEN** it renders one line of glyph + done/total + the active task's live timer (omitted if nothing is in_progress), with no per-item rows
+
+#### Scenario: Timers align in a trailing column
+
+- **WHEN** multiple item rows carry timers
+- **THEN** the timer values right-align in a fixed trailing column and subjects truncate with an ellipsis before that column
+
+#### Scenario: Checklist renders into a side-by-side left column
+
+- **WHEN** a wide layout composes a side-by-side section and the checklist is the left column
+- **THEN** the checklist renders its header + Active Window into the supplied left-column width, with subjects truncating to fit that width
+
+### Requirement: Timer formatting
+
+A duration SHALL be formatted as `m:ss` (for example `0:07`, `12:04`) and SHALL roll over to `h:mm:ss` once it reaches one hour. The same formatting SHALL apply to per-task Task Timers and to Total Elapsed.
+
+#### Scenario: Sub-hour durations use m:ss
+
+- **WHEN** a duration is under one hour
+- **THEN** it renders as `m:ss` with a zero-padded seconds field
+
+#### Scenario: Durations of an hour or more use h:mm:ss
+
+- **WHEN** a duration is one hour or more
+- **THEN** it renders as `h:mm:ss` with zero-padded minutes and seconds
+</content>
+</invoke>
+
+--- ARQUIVOS DO PR (12)
+modified  +1     -1     .claude-plugin/plugin.json
+modified  +29    -21    claude/yas/renderer.py   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-06-10-path-include-or-omit/.openspec.yaml
+added     +55    -0     openspec/changes/archive/2026-06-10-path-include-or-omit/design.md
+added     +38    -0     openspec/changes/archive/2026-06-10-path-include-or-omit/proposal.md
+added     +46    -0     openspec/changes/archive/2026-06-10-path-include-or-omit/specs/path-display/spec.md
+added     +23    -0     openspec/changes/archive/2026-06-10-path-include-or-omit/tasks.md
+added     +52    -0     openspec/specs/path-display/spec.md
+modified  +1     -1     pyproject.toml
+added     +168   -0     test/test_fit_path_ladder.py
+modified  +20    -11    test/test_path_git.py
+modified  +1     -1     uv.lock
+--- DIFF DO CÓDIGO LIGADO
+### claude/yas/renderer.py
+@@ -80,7 +80,7 @@
+ from yas.session import ContextWindow, RateBucket, RateLimits
+ from yas.info.subagents import RunningSubagent
+ from yas.info.tasks import TaskList
+-from yas.render.text import _middle_ellipsis, _visible_width, fmt_dur, fmt_tok
++from yas.render.text import _visible_width, fmt_dur, fmt_tok
+ from yas.tokens import TokenRate
+ 
+ if TYPE_CHECKING:
+@@ -308,7 +308,7 @@ def border_line(self, content: str, width: int, fill: float = 1.0, bg_lead: str
+ 
+     def path_git(
+         self, short_pwd: str, git: GitInfo,
+-        *, show_commit: bool = True, show_dirty: bool = True,
++        *, show_path: bool = True, show_commit: bool = True, show_dirty: bool = True,
+     ) -> str:
+         dirty = ''
+         if show_dirty:
+@@ -323,14 +323,26 @@ def path_git(
+             if dirty:
+                 dirty = ' ' + dirty
+         commit_part = f'{self.LABEL}/{self.R}{self.COMMIT}{git.commit}{self.R}' if show_commit else ''
++        # The cwd path is a whole unit: shown in full or omitted entirely (no
++        # middle-ellipsis). show_path=False yields the branch-only rung (glyph +
++        # arrow + branch) used as a width-degradation step below the path forms.
++        path_part = f'{self.PWD}{short_pwd}{self.R} ' if show_path else ''
+ 
+         return (
+-            f'{self.ICON_PATH}{GLYPH_FOLDER}  {self.PWD}{short_pwd}{self.R}'
+-            f' {self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
++            f'{self.ICON_PATH}{GLYPH_FOLDER}  {path_part}'
++            f'{self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
+             f' {self.BRANCH}{git.branch}{self.R}'
+             f'{commit_part}{dirty}'
+         )
+ 
++    def path_glyph_only(self) -> str:
++        """Presence-glyph floor: the folder glyph alone (1 visible column).
++
++        The overflow-safe terminal state of the path ladder — it can never
++        exceed the available width or disturb the box border math.
++        """
++        return f'{self.ICON_PATH}{GLYPH_FOLDER}{self.R}'
++
+     def path_git_compact(self, short_pwd: str, git: GitInfo) -> str:
+         return (
+             f'{self.ICON_PATH}  {self.PWD}{short_pwd}{self.R}'
+@@ -345,6 +357,11 @@ def fit_path(
+         def fits(s: str) -> bool:
+             return _visible_width(s) <= target_w
+ 
++        # Whole-unit include/omit ladder; first candidate that fits wins.
++        # full → drop commit → drop commit+dirty → compact path+branch →
++        # branch-only (path omitted) → glyph-only floor. The path is never
++        # middle-ellipsized: it is shown in full or dropped whole, and the
++        # branch outlives the path. compact_only enters at the compact rung.
+         if not compact_only:
+             for kwargs in (
+                 {},
+@@ -359,24 +376,15 @@ def fits(s: str) -> bool:
+         if fits(compact):
+             return compact
+ 
+-        # Ellipsis on short_pwd only
+-        for pwd_w in range(target_w - 1, 0, -1):
+-            trunc_pwd = _middle_ellipsis(short_pwd, pwd_w)
+-            candidate = self.path_git_compact(trunc_pwd, git)
+-            if fits(candidate):
+-                return candidate
+-
+-        # Ellipsis on both short_pwd and branch
+-        # Overhead of path_git_compact with empty strings is 5 visible chars.
+-        half = max(1, (target_w - 5) // 2)
+-        trunc_pwd    = _middle_ellipsis(short_pwd,  half)
+-        trunc_branch = _middle_ellipsis(git.branch, half)
+-        truncated_git = GitInfo(
+-            branch=trunc_branch, commit=git.commit,
+-            modified=git.modified, untracked=git.untracked,
+-            deleted=git.deleted, renamed=git.renamed,
++        # Path omitted whole, branch retained (glyph + arrow + branch).
++        branch_only = self.path_git(
++            short_pwd, git, show_path=False, show_commit=False, show_dirty=False,
+         )
+-        return self.path_git_compact(trunc_pwd, truncated_git)
++        if fits(branch_only):
++            return branch_only
++
++        # Glyph-only presence floor — 1 visible column, always within target.
++        return self.path_glyph_only()
+ 
+     def model_colour(self, model_name: str) -> str:
+         return self.theme.models[model_key(model_name)].label
+
+===== P223 | repo theoden8/webspace_app | PR #195: Web push notifications with background polling (issue #192) | capacidade: webspaces
+--- SPEC VIVA
+# Webspaces Feature Specification
+
+## Purpose
+
+The Webspaces feature allows users to organize their saved sites into separate workspaces, enabling better organization and context switching between different browsing contexts (e.g., Work, Personal, Research).
+
+## Status
+
+- **Implementation Date**: 2026-01-12
+- **Status**: Completed
+
+---
+
+## Requirements
+
+### Requirement: WEBSPACE-001 - Create Multiple Webspaces
+
+Users SHALL be able to create multiple webspaces to organize sites into logical groups.
+
+#### Scenario: Create a new webspace
+
+**Given** the user is on the webspaces list screen
+**When** the user taps "Create Webspace"
+**And** enters a name (e.g., "Work")
+**And** selects sites to include
+**And** taps the checkmark icon
+**Then** a new webspace is created with the specified name and sites
+
+---
+
+### Requirement: WEBSPACE-002 - Select Active Webspace
+
+Users SHALL be able to select and switch between webspaces to view filtered sites.
+
+#### Scenario: Select a webspace
+
+**Given** the user is viewing the webspaces list
+**When** the user taps on a webspace card
+**Then** that webspace becomes selected
+**And** the drawer shows only sites belonging to that webspace
+
+---
+
+### Requirement: WEBSPACE-003 - Visual Selection Indicator
+
+The system SHALL provide clear visual indication of which webspace is currently active.
+
+#### Scenario: Display selected webspace indicator
+
+**Given** a webspace is selected
+**When** the user views the webspaces list
+**Then** the selected webspace displays:
+- Green highlighted background
+- Check icon next to the name
+- Bold text
+- Higher card elevation
+
+---
+
+### Requirement: WEBSPACE-004 - Filtered Drawer Navigation
+
+The drawer SHALL only show sites belonging to the currently selected webspace.
+
+#### Scenario: Filter drawer by webspace
+
+**Given** the user has selected the "Work" webspace
+**And** "Work" contains sites A and B
+**And** "Personal" contains site C
+**When** the user opens the drawer
+**Then** only sites A and B are displayed
+**And** site C is not visible
+
+---
+
+### Requirement: WEBSPACE-005 - Persistent State
+
+Webspaces and selection state SHALL persist across app restarts.
+
+#### Scenario: Restore webspace selection on restart
+
+**Given** the user has selected "Work" webspace
+**When** the app is closed and reopened
+**Then** "Work" webspace remains selected
+**And** the drawer shows Work sites
+
+---
+
+### Requirement: WEBSPACE-006 - Edit Webspace
+
+Users SHALL be able to edit existing webspaces.
+
+#### Scenario: Modify webspace contents
+
+**Given** a webspace "Work" exists with sites A and B
+**When** the user taps the edit icon on the webspace card
+**And** adds site C and removes site A
+**And** saves changes
+**Then** "Work" now contains sites B and C
+
+---
+
+### Requirement: WEBSPACE-007 - Delete Webspace
+
+Users SHALL be able to delete webspaces.
+
+#### Scenario: Delete a webspace
+
+**Given** webspaces "Work" and "Personal" exist
+**And** "Work" is currently selected
+**When** the user taps delete on "Work"
+**And** confirms the deletion
+**Then** "Work" is removed
+**And** selection is cleared
+**And** user returns to webspaces list
+
+---
+
+### Requirement: WEBSPACE-008 - Back to Webspaces Navigation
+
+Users SHALL be able to return to the webspaces list from the drawer.
+
+#### Scenario: Navigate back to webspaces list
+
+**Given** the user is viewing sites in a selected webspace
+**When** the user opens the drawer
+**And** taps "Back to Webspaces"
+**Then** the webspaces list is displayed
+
+---
+
+### Requirement: WEBSPACE-009 - "All" Webspace
+
+The system SHALL provide a special "All" webspace that shows all sites.
+
+#### Scenario: View all sites via All webspace
+
+**Given** the user has multiple webspaces with various sites
+**When** the user selects the "All" webspace
+**Then** all sites are displayed in the drawer
+**And** the "All" webspace cannot be deleted or moved
+
+---
+
+### Requirement: WEBSPACE-010 - Automatic Index Updates on Site Deletion
+
+When a site is deleted, all webspace indices SHALL be automatically updated.
+
+#### Scenario: Delete site updates webspace indices
+
+**Given** site at index 2 is in webspaces "Work" (indices [0,2]) and "Personal" (indices [2,3])
+**When** site at index 2 is deleted
+**Then** "Work" indices become [0]
+**And** "Personal" indices become [2] (shifted from [3])
+
+---
+
+## Data Model
+
+### Webspace
+
+```dart
+class Webspace {
+  String id;              // UUID - unique identifier
+  String name;            // Display name (user-defined)
+  List<int> siteIndices;  // Indices of WebViewModels in this webspace
+}
+```
+
+## Persistence
+
+Stored in SharedPreferences:
+- `webspaces`: JSON array of all webspaces
+- `selectedWebspaceId`: ID of currently selected webspace
+
+---
+
+## Logic Engines
+
+Selection and index-update logic is extracted into pure-Dart engines so
+the rules can be exercised without a widget tree (same code runs in
+production):
+
+- [`WebspaceSelectionEngine`](../../../lib/services/webspace_selection_engine.dart):
+  - `filteredSiteIndices({selectedWebspaceId, webspaces, siteCount})` —
+    implements WEBSPACE-004 (filtered drawer) including the `All`
+    special-case and out-of-bounds filtering.
+  - `indicesToUnloadOnWebspaceSwitch({loadedIndices, previousWebspaceIndices,
+    newWebspaceIndices})` — returns the loaded sites that leave the
+    visible set on a webspace switch. The offline short-circuit
+    (preserve-all-loaded when disconnected) is a policy decision owned
+    by the caller, not the engine. The container-mode short-circuit
+    (sites stay resident across switches when isolated by their own
+    native container) lives in [`SiteUnloadEngine`](../../../lib/services/site_unload_engine.dart),
+    which delegates here in legacy mode.
+  - `cleanupWebspaceIndices({webspaces, siteCount})` — strips
+    out-of-bounds entries in place.
+- [`SiteUnloadEngine`](../../../lib/services/site_unload_engine.dart):
+  - `indicesToUnloadOnWebspaceSwitch({useContainers, ...})` — returns
+    `{}` under container mode (sites are isolated and stay loaded);
+    delegates to `WebspaceSelectionEngine` in legacy mode.
+  - `indicesToUnloadForProxyMismatch({targetIndex, models, loadedIndices,
+    proxyIsGlobal})` — on Android (process-global proxy), returns the
+    loaded sites whose effective proxy differs from the activating
+    site's. Their next request would silently route through the new
+    proxy (last-write-wins on `inapp.ProxyController`), so they are
+    force-unloaded on activation. Per-site DEFAULT resolves through the
+    app-global outbound proxy via `resolveEffectiveProxy`, so two
+    DEFAULT sites are equivalent regardless of the global value. Returns
+    `{}` on platforms with true per-site proxy (iOS 17+ / macOS 14+).
+  - `indicesToEvictForLruCap({targetIndex, loadedIndices, maxLoadedSites,
+    protectedIndices, preferKeepIndices})` — bounds the number of
+    concurrently loaded webviews at
+    [`kMaxLoadedSites`](../../../lib/services/site_unload_engine.dart)
+    (currently 20); treats `loadedIndices` as access-ordered (caller
+    bumps to end on activation). Two-tier eviction: out-of-keep
+    candidates first (oldest first), then in-keep candidates (oldest
+    first), with `protectedIndices` (typically the active site)
+    excluded entirely. The caller passes the active webspace's site
+    indices as `preferKeepIndices`, so context-relevant sites are
+    evicted last.
+  - `indexToEvictForMemoryPressure({loadedIndices, protectedIndices,
+    preferKeepIndices})` — picks one site to evict in response to an
+    OS memory pressure signal (`didHaveMemoryPressure`). Same two-tier
+    policy as `indicesToEvictForLruCap`. One victim per event lets the
+    OS clamp the loaded count to whatever the device can carry,
+    instead of guessing a target up front; if pressure persists the
+    callback fires again and the next victim is picked.
+- [`SiteLifecycleEngine.computeDeletionPatch`](../../../lib/services/site_lifecycle_engine.dart)
+  — returns the rewritten `siteIndices` for every affected webspace
+  when a site is removed from `_webViewModels`, implementing
+  WEBSPACE-010. The rewrite drops the deleted index and shifts every
+  `i > deletedIndex` down by one.
+
+Tests live in [test/webspace_selection_engine_test.dart](../../../test/webspace_selection_engine_test.dart),
+[test/site_unload_engine_test.dart](../../../test/site_unload_engine_test.dart),
+and [test/site_lifecycle_engine_test.dart](../../../test/site_lifecycle_engine_test.dart).
+
+---
+
+## Files
+
+### Created
+- `lib/webspace_model.dart` - Webspace data model
+- `lib/screens/webspaces_list.dart` - Main webspaces screen
+- `lib/screens/webspace_detail.dart` - Edit webspace screen
+- `lib/services/webspace_selection_engine.dart` - Filter + unload-on-switch logic
+- `lib/services/site_lifecycle_engine.dart` - Deletion-patch index rewrite
+- `test/webspace_model_test.dart` - Unit tests
+- `test/webspace_selection_engine_test.dart` - Selection/unload/cleanup tests
+- `test/site_lifecycle_engine_test.dart` - Deletion patch tests
+
+### Modified
+- `lib/main.dart` - Webspace state management and UI integration
+- `pubspec.yaml` - Added `uuid: ^4.5.1` dependency
+
+--- ARQUIVOS DO PR (27)
+modified  +2     -0     android/app/build.gradle
+modified  +1     -0     android/app/src/main/AndroidManifest.xml
+modified  +89    -37    lib/main.dart
+modified  +3     -0     lib/screens/inappbrowser.dart
+modified  +34    -0     lib/screens/settings.dart   <== código ligado à spec
+added     +18    -0     lib/services/foreground_poll_engine.dart
+added     +139   -0     lib/services/notification_service.dart
+modified  +50    -35    lib/services/site_lifecycle_promotion_engine.dart
+added     +30    -0     lib/services/site_retention_priority.dart
+modified  +60    -100   lib/services/site_unload_engine.dart
+modified  +77    -0     lib/services/webview.dart
+modified  +13    -4     lib/web_view_model.dart
+modified  +2     -0     macos/Flutter/GeneratedPluginRegistrant.swift
+added     +2     -0     openspec/changes/web-push-notifications/.openspec.yaml
+added     +183   -0     openspec/changes/web-push-notifications/design.md
+added     +136   -0     openspec/changes/web-push-notifications/proposal.md
+added     +30    -0     openspec/changes/web-push-notifications/specs/lazy-webview-loading/spec.md
+added     +342   -0     openspec/changes/web-push-notifications/specs/web-push-notifications/spec.md
+added     +142   -0     openspec/changes/web-push-notifications/tasks.md
+modified  +40    -0     pubspec.lock
+modified  +1     -0     pubspec.yaml
+modified  +14    -0     test/fixtures/README.md
+added     +285   -0     test/fixtures/notification_test.html
+added     +57    -0     test/foreground_poll_engine_test.dart
+added     +83    -0     test/notification_polyfill_test.dart
+added     +36    -0     test/notification_service_test.dart
+modified  +34    -0     test/web_view_model_test.dart   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### lib/screens/settings.dart
+@@ -86,6 +86,7 @@ class SettingsScreen extends StatefulWidget {
+   /// user script. Parent should dispose this site's webview so the next
+   /// render recreates it with the updated [initialUserScripts].
+   final VoidCallback? onScriptsChanged;
++  final bool useContainers;
+ 
+   SettingsScreen({
+     required this.webViewModel,
+@@ -95,6 +96,7 @@ class SettingsScreen extends StatefulWidget {
+     this.globalUserScripts = const [],
+     this.onGlobalUserScriptsChanged,
+     this.onScriptsChanged,
++    this.useContainers = false,
+   });
+ 
+   @override
+@@ -116,6 +118,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+   late bool _localCdnEnabled;
+   late bool _blockAutoRedirects;
+   late bool _fullscreenMode;
++  late bool _notificationsEnabled;
++  late bool _backgroundPoll;
+   String? _selectedLanguage;
+   bool _obscureProxyPassword = true;
+   bool _showProxyCredentials = false;
+@@ -172,6 +176,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+     _localCdnEnabled = widget.webViewModel.localCdnEnabled;
+     _blockAutoRedirects = widget.webViewModel.blockAutoRedirects;
+     _fullscreenMode = widget.webViewModel.fullscreenMode;
++    _notificationsEnabled = widget.webViewModel.notificationsEnabled;
++    _backgroundPoll = widget.webViewModel.backgroundPoll;
+     _selectedLanguage = widget.webViewModel.language;
+     // locationMode is derived from whether coords are present at save time;
+     // no separate UI state needed (see _buildLocationTile).
+@@ -360,6 +366,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
+       widget.webViewModel.localCdnEnabled = _localCdnEnabled;
+       widget.webViewModel.blockAutoRedirects = _blockAutoRedirects;
+       widget.webViewModel.fullscreenMode = _fullscreenMode;
++      widget.webViewModel.notificationsEnabled = _notificationsEnabled;
++      widget.webViewModel.backgroundPoll = _backgroundPoll;
+       widget.webViewModel.language = _selectedLanguage;
+       // locationMode is derived from the UI state:
+       // - `_isLiveLocation` → live (real device GPS forwarded through the shim)
+@@ -1138,6 +1146,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
+               });
+             },
+           ),
++          if (widget.useContainers)
++            SwitchListTile(
++              title: const Text('Notifications'),
++              subtitle: const Text('Allow this site to show system notifications'),
++              value: _notificationsEnabled,
++              onChanged: (bool value) {
++                setState(() {
++                  _notificationsEnabled = value;
++                });
++              },
++            ),
++          if (widget.useContainers)
++            SwitchListTile(
++              title: const Text('Background polling'),
++              subtitle: Text(
++                Platform.isIOS
++                    ? 'Check for updates periodically (~15-30 min while app is closed)'
++                    : 'Keep checking for updates while app is backgrounded',
++              ),
++              value: _backgroundPoll,
++              onChanged: (bool value) {
++                setState(() {
++                  _backgroundPoll = value;
++                });
++              },
++            ),
+           ..._buildLocationSection(),
+           if (widget.onClearCookies != null)
+             Padding(
+
+### test/web_view_model_test.dart
+@@ -24,6 +24,8 @@ void main() {
+       expect(model.contentBlockEnabled, isTrue);
+       expect(model.localCdnEnabled, isTrue);
+       expect(model.fullscreenMode, isFalse);
++      expect(model.notificationsEnabled, isFalse);
++      expect(model.backgroundPoll, isFalse);
+     });
+ 
+     test('should serialize to JSON correctly', () {
+@@ -246,6 +248,38 @@ void main() {
+       expect(restored.fullscreenMode, isTrue);
+     });
+ 
++    test('notificationsEnabled and backgroundPoll default to false when missing from JSON', () {
++      final json = {
++        'initUrl': 'https://example.com',
++        'currentUrl': 'https://example.com',
++        'cookies': [],
++        'proxySettings': {'type': 0, 'address': null},
++        'javascriptEnabled': true,
++        'userAgent': '',
++        'thirdPartyCookiesEnabled': false,
++      };
++
++      final model = WebViewModel.fromJson(json, null);
++      expect(model.notificationsEnabled, isFalse);
++      expect(model.backgroundPoll, isFalse);
++    });
++
++    test('notificationsEnabled and backgroundPoll true are preserved through serialization', () {
++      final model = WebViewModel(
++        initUrl: 'https://example.com',
++        notificationsEnabled: true,
++        backgroundPoll: true,
++      );
++
++      final json = model.toJson();
++      expect(json['notificationsEnabled'], equals(true));
++      expect(json['backgroundPoll'], equals(true));
++
++      final restored = WebViewModel.fromJson(json, null);
++      expect(restored.notificationsEnabled, isTrue);
++      expect(restored.backgroundPoll, isTrue);
++    });
++
+     test('location spoof fields default to off and null', () {
+       final model = WebViewModel(initUrl: 'https://example.com');
+       expect(model.locationMode, equals(LocationMode.off));
+

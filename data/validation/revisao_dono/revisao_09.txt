@@ -1,0 +1,517 @@
+===== P050 | deepcausality-rs/deep_causality PR #680 | capacidade do par: dec-ns-validation
+PR: feat(deep_causality): Preparing formalization
+arquivos ligados: deep_causality/src/traits/causable_graph/graph_reasoning/mod.rs;deep_causality/src/traits/causable_graph/graph_reasoning/stateful.rs;deep_causality/tests/traits/causable_graph/graph_reasoning/stateful_tests.rs;deep_causality_multivector/tests/extensions/iso_multifield/iso_multifield_tests.rs;deep_causality_num/src/lib.rs;deep_causality_num/tests/mod.rs;deep_causality_physics/src/kernels/fluids/governing.rs;deep_causality_sparse/src/extensions/ext_iso.rs;deep_causality_sparse/tests/extensions/ext_iso_tests.rs;deep_causality_topology/src/extensions/hkt_manifold/mod.rs;deep_causality_topology/src/traits/has_hodge_star.rs;deep_causality_topology/src/types/curvature_tensor/mod.rs;deep_causality_topology/src/types/hodge_decomposition/display.rs;deep_causality_topology/src/types/hodge_decomposition/getters.rs;deep_causality_topology/src/types/hodge_decomposition/mod.rs;deep_causality_topology/src/types/hodge_decomposition/part_eq.rs;deep_causality_topology/src/types/lattice_complex/mod.rs;deep_causality_topology/src/types/manifold/api/constructors.rs;deep_causality_topology/src/types/manifold/differential/leray.rs;deep_causality_topology/src/types/regge_geometry/mod.rs;deep_causality_topology/src/types/simplicial_complex/lazy_hodge_star.rs;deep_causality_topology/src/types/simplicial_complex/topology/chain_complex_impl.rs;deep_causality_uncertain/src/types/uncertain/uncertain_op_arithmetic.rs
+--- linhas alteradas (639; mostrando até 40)
+-use std::collections::VecDeque;
++use std::collections::{BTreeMap, BTreeSet};
+-use ultragraph::GraphTraversal;
++use ultragraph::{GraphTraversal, TopologicalGraphAlgorithms};
+-    /// Reasons over a subgraph by traversing all nodes reachable from a given start index,
+-    /// using a monadic approach.
++    /// Reasons over the acyclic sub-DAG reachable from a start index using a monadic approach.
+-    /// This method performs a Breadth-First Search (BFS) traversal of all descendants
+-    /// of the `start_index`. The `PropagatingEffect` is passed sequentially:
+-    /// the output effect of a parent node becomes the input effect for its child node.
+-    /// The traversal continues as long as no `CausalityError` is returned within the `PropagatingEffect`.
++    /// The frozen graph must be acyclic. Evaluation runs a Kahn-style topological schedule rather
++    /// than a breadth-first walk. A ready-set (a `BTreeSet` ordered by ascending node index) holds
++    /// the nodes whose reachable parents have all resolved. The scheduler pops the lowest-index
++    /// ready node, evaluates it once, and publishes its output effect to the wire slot of every
++    /// reachable child. A child becomes ready when its last pending wire resolves.
+-    /// ## Adaptive Reasoning
++    /// A reachability pre-pass first marks the start node and its descendants. A wire from a
++    /// non-descendant is therefore resolved `Inactive` up front and never counted as pending, which
++    /// keeps mid-graph starts and abandoned relay cones free of deadlock. A node reached by a single
++    /// fired parent passes that parent's effect through, because the join of one input is the
++    /// identity. A node reached by two or more fired parents is a reconvergence; the merge (∇) of
++    /// converging effects is not yet defined, so the evaluator fails loudly instead of silently
++    /// picking one parent.
+-    /// If a `Causaloid` returns a `RelayTo` command effect, the BFS traversal dynamically jumps to
+-    /// its `target` index, and the command's sub-program becomes the new input for the relayed path.
+-    /// This enables *adaptive reasoning* conditional to the deciding causaloid.
++    /// ## Acyclicity requirement
++    ///
++    /// A directed cycle is rejected with an error before any node runs. A Kahn-style ready-set would
++    /// otherwise silently skip the nodes trapped inside the cycle, so the frozen graph must be a DAG.
++    ///
++    /// ## Adaptive reasoning
++    ///
++    /// A `RelayTo(target, sub)` result ends the current round and starts a fresh round at `target`,
++    /// seeded with the command's sub-program. Rounds compose sequentially. The abandoned cone of the
++    /// relaying round simply stops and resolves `Inactive` implicitly. The relay is single-level.
+-    /// * `start_index` - The index of the node to start the traversal from.
+-    /// * `initial_effect` - The initial runtime effect to be passed to the starting node's evaluation function.
++    /// * `start_index` - The index of the node to start evaluation from.
+--- candidata: comonoid-graph-join [PR+termos]
+  | # comonoid-graph-join Specification
+  | ## Purpose
+  | TBD - created by archiving change comonoid-graph-join. Update Purpose after archive.
+  > # comonoid-graph-join Specification
+  > TBD - created by archiving change comonoid-graph-join. Update Purpose after archive.
+  > ### Requirement: Wire-slot topological sequencing replaces first-parent-wins
+  > The engine SHALL evaluate the reachable sub-DAG by resolving each node's in-wires and firing a node only after all of its in-wires are resolved, using a reachability pre-pass from the start node and a
+  > #### Scenario: Linear and tree graphs are bit-identical
+  > - **WHEN** every node has at most one parent
+  > - **THEN** evaluation results are identical to the previous engine
+  > #### Scenario: Mid-graph start does not deadlock
+--- candidata: stateful-causaloid-evaluation [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: StatefulMonadicCausable trait
+  | The `deep_causality` crate SHALL expose a public trait
+  > ### Requirement: StatefulMonadicCausable trait
+  > The `deep_causality` crate SHALL expose a public trait
+  > `StatefulMonadicCausable<I, O, S, C>` declaring exactly one method
+  > `evaluate_stateful(&self, incoming: &PropagatingProcess<I, S, C>) -> PropagatingProcess<O, S, C>`,
+  > re-exported at the crate root via `deep_causality::StatefulMonadicCausable`.
+  > #### Scenario: Trait is reachable from a downstream crate
+  > - **WHEN** a downstream crate writes
+  > `use deep_causality::StatefulMonadicCausable;`
+--- candidata: topology-realfield-generic [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Zero hardcoded `f64` or `f32` in the public API of `deep_causality_topology`
+  | The crate's public API SHALL contain no hardcoded `f64` or `f32` in any struct field, function/method signature, trait method, error variant, or trait bound. Every floating-point quantity SHALL be `R:
+  > ### Requirement: Zero hardcoded `f64` or `f32` in the public API of `deep_causality_topology`
+  > The crate's public API SHALL contain no hardcoded `f64` or `f32` in any struct field, function/method signature, trait method, error variant, or trait bound. Every floating-point quantity SHALL be `R:
+  > - **WHEN** the command `grep -rn -E '(\bf64\b|\bf32\b)' deep_causality_topology/src/ --include='*.rs'` is run and its output is filtered to lines representing public signatures, struct fields, trait m
+  > - **THEN** the filtered output SHALL be empty, with the documented exception of the one `<R as FromPrimitive>::from_f64(rng.random::<f64>()).expect("RNG sample fits")` call site in the Metropolis step
+  > - **WHEN** the crate's source is searched for the patterns `From<f64>`, `Into<f64>`, and `Mul<f64, Output`
+  > - **THEN** zero matches SHALL appear in any `impl` block or trait bound declaration
+  > ### Requirement: `ChainComplex::Metric` is a plain associated type; metric precision lives on the complex
+  > The `ChainComplex` trait SHALL declare its `Metric` associated type as a **plain associated type**, not a generic associated type:
+--- candidata: graph-reasoning-formalization [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Reasoning engine formalized as a Free::fold catamorphism over single-input arrows
+  | The formalization SHALL model the graph-reasoning engine as a catamorphism (`Free::fold`) over the canonical topological linearization of the frozen graph, composing **single-input** causaloid arrows 
+  > ### Requirement: Reasoning engine formalized as a Free::fold catamorphism over single-input arrows
+  > The formalization SHALL model the graph-reasoning engine as a catamorphism (`Free::fold`) over the canonical topological linearization of the frozen graph, composing **single-input** causaloid arrows 
+  > #### Scenario: Adaptive relay is a fold step
+  > - **WHEN** `Core/GraphReasoning.lean` is typechecked
+  > - **THEN** the `RelayTo` denotation is the `jump` algebra of the fold, and the bound Rust witness confirms the engine's single-level relay matches it
+  > #### Scenario: Nested relay folds structurally, not across nodes
+  > - **WHEN** a nested `RelayTo` program is folded
+  > - **THEN** the catamorphism resolves it structurally (`CausalEffect::fold`), consistent with the engine inlining a single-level jump and feeding the sub-program as the next node's input
+--- candidata: fluid-dynamics-kernels [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Typed vector and tensor newtype family
+  | The crate SHALL expose the following vector and rank-2 tensor newtypes under `deep_causality_physics::kernels::fluids::quantities`, alongside the existing scalar newtypes. Each typed wrapper SHALL be 
+  > The crate SHALL expose the following vector and rank-2 tensor newtypes under `deep_causality_physics::kernels::fluids::quantities`, alongside the existing scalar newtypes. Each typed wrapper SHALL be 
+  > `impl From<[raw]> for Self` SHALL be provided **only when the type's invariant is finiteness alone** (the four vector newtypes and `VelocityGradient`). For invariant-bearing tensors (`StrainRateTensor
+  > - `VorticityVector<R>` — vorticity vector `ω = ∇ × u` (1/s); semantically a pseudovector that flips sign under spatial reflection.
+  > - `AccelerationVector<R>` — acceleration (m/s²); the return type of momentum-equation RHS evaluators.
+  > - `StrainRateTensor<R>` — symmetric tensor `S = 0.5·(∇u + ∇uᵀ)`. Construction-time check: `|S_ij − S_ji| ≤ ε` for all `i ≠ j`.
+  > - `RotationRateTensor<R>` — antisymmetric tensor `Ω = 0.5·(∇u − ∇uᵀ)`. Construction-time check: `|Ω_ij + Ω_ji| ≤ ε` for all `i, j`.
+  > - `CauchyStress<R>` — symmetric stress tensor (Pa), positive-in-tension sign convention. Construction-time check: symmetric.
+  > Raw `[R; 3]` SHALL continue to be used for gradients of scalar fields (`grad_p`, `grad_rho`, `grad_phi`, `grad_T`) and for component-wise Laplacian results (`laplacian_u`, `laplacian_omega`). Raw `[[R
+
+===== P051 | HazelnutParadise/insyra PR #149 | capacidade do par: repl-engine
+PR: Enhance/stats
+arquivos ligados: cli/commands/hypothesis.go;cli/commands/pca.go;cli/commands/regression.go;cli/commands/stats_adv.go
+--- linhas alteradas (138; mostrando até 40)
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+--- candidata: dsl-commands [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Load data from file
+  | 系統 SHALL 提供 `load` 命令從檔案載入資料為 DataTable。
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`skewness`、`kurtosis`、`cov`。
+  > #### Scenario: Correlation
+  > - **THEN** 系統呼叫 `stats.Correlation()` 並顯示結果
+  > #### Scenario: Linear regression
+  > - **WHEN** 使用者執行 `regression linear y x1 x2`
+  > - **THEN** 系統呼叫 `stats.LinearRegression()` 並顯示迴歸結果
+  > - **THEN** 系統呼叫 `stats.PCA()` 取前 3 個主成份
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`kmeans`、`hclust`、`cutree`、`dbscan`、`silhouette`、`skewness`、`kurtosis`、`cov`。
+--- candidata: cli-entry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI entry point with cobra
+  | 系統 SHALL 提供 `cmd/insyra/main.go` 作為 CLI 程式入口，使用 cobra 框架建立 root command。
+--- candidata: env-management [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Environment create
+  | 系統 SHALL 提供 `env create <name>` 命令建立新環境。
+--- candidata: script-runner [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Script file execution
+  | 系統 SHALL 提供 `run` 命令執行 `.isr` 腳本檔。
+
+===== P052 | yazelin/ching-tech-os PR #2 | capacidade do par: code-editor
+PR: feat: 手機版 UI/UX 全面優化
+arquivos ligados: frontend/js/desktop.js
+--- linhas alteradas (35; mostrando até 40)
+-  let selectedIcon = null;
+-   * Handle icon click
++   * Handle icon click - directly open the app
+-    // Deselect previous icon
+-    if (selectedIcon) {
+-      selectedIcon.classList.remove('selected');
+-    }
+-    // Select current icon
+-    iconElement.classList.add('selected');
+-    selectedIcon = iconElement;
++    openApp(appId);
+-  /**
+-   * Handle icon double-click (open app)
+-   * @param {Event} event
+-   */
+-  function handleIconDoubleClick(event) {
+-    const iconElement = event.currentTarget;
+-    const appId = iconElement.dataset.appId;
+-    openApp(appId);
+-  }
+-  /**
+-   * Handle click on desktop area (deselect icons)
+-   * @param {Event} event
+-   */
+-  function handleDesktopClick(event) {
+-    if (event.target.classList.contains('desktop-area')) {
+-      if (selectedIcon) {
+-        selectedIcon.classList.remove('selected');
+-        selectedIcon = null;
+-      }
+-    }
+-  }
+-      iconElement.addEventListener('dblclick', handleIconDoubleClick);
+-    // Handle desktop area click
+-    desktopArea.addEventListener('click', handleDesktopClick);
+--- candidata: web-desktop [tasks+PR+termos]
+  | # Web Desktop Specification
+  | ## ADDED Requirements
+  | ### Requirement: Login Page
+  > # web-desktop Spec Delta
+  > - **WHEN** a user with `platform_admin` role clicks the "平台管理" icon on desktop
+  > - **WHEN** a user without `platform_admin` role views the desktop
+  > - **WHEN** platform admin clicks on a tenant row
+  > - **WHEN** platform admin clicks "停用租戶" for an active tenant and confirms
+  > - **WHEN** platform admin clicks "啟用租戶" for a suspended tenant
+  > - **WHEN** platform admin clicks remove on an admin and confirms
+  > - **THEN** the admin is removed from the tenant (account remains but loses admin role)
+--- candidata: md-converter-apps [tasks]
+  | # md-converter-apps Specification
+  | ## Purpose
+  | 提供 Markdown 轉換工具的桌面應用程式整合，讓使用者可以在 CTOS 桌面環境中使用 MD2PPT 和 MD2Doc 外部服務。
+  > - `web-desktop` - 桌面應用程式管理
+--- candidata: knowledge-base [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 知識庫視窗佈局
+  | 知識庫應用程式 SHALL 提供三欄式介面佈局。
+--- candidata: mobile-app-layout [PR] (sem texto no censo)
+--- candidata: design-system [termos]
+  | ## ADDED Requirements
+  | ### Requirement: CSS Design Token System
+  | 系統 SHALL 在 `main.css` 中定義完整的 CSS 變數（Design Tokens），涵蓋所有 UI 顏色。
+  > - **AND** apply the theme immediately to prevent flash of wrong colors
+  > - **AND** clicking the toggle SHALL switch between dark and light themes
+  > - **AND** apply the theme immediately to prevent flash of wrong colors
+  > - **AND** clicking the toggle SHALL switch between dark and light themes
+
+===== P054 | terwer/siyuan-plugin-picgo PR #677 | capacidade do par: picgo-headless-config-contract
+PR: feat(shell): improve PicGo plugin shell UX and reload notification 
+arquivos ligados: libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts
+--- linhas alteradas (56; mostrando até 40)
+-import { migrateV2WorkspacePicGoConfig, resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
++import { resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
+-      migrateV2WorkspacePicGoConfig(paths, this.logger)
+-    const that = this
+-    return new Promise<void>((resolve) => {
+-      let needUpdate = false
++    const initialState = picgo.getConfigMigrationState()
++    if (initialState.status === "running") {
++      siyuanApi.pushMsg({
++        msg: "检测到 PicGo 配置初始化或迁移任务，正在等待完成，请勿进行任何操作...",
++        timeout: 1000,
++      })
++      this.logger?.warn("检测到 PicGo 配置初始化或迁移任务，正在等待完成...")
++      await picgo.waitForConfigMigration()
++    }
+-      const checkConfig = () => {
+-        if (picgo.cfgUpdating) {
+-          needUpdate = true
+-          siyuanApi.pushMsg({
+-            msg: "检测到旧配置，正在迁移配置，请勿进行任何操作...",
+-            timeout: 1000,
+-          })
+-          that.logger?.warn("检测到旧配置，正在迁移配置，请勿进行任何操作...")
+-          setTimeout(checkConfig, 1000) // 递归检查
+-        } else {
+-          if (needUpdate) {
+-            siyuanApi.pushMsg({
+-              msg: "PicGO 图床历史配置迁移完成",
+-              timeout: 7000,
+-            })
+-            that.logger?.info("PicGO 图床历史配置迁移完成🎉")
+-          }
+-          that.logger?.info("PicGO instance is ready😄")
+-          resolve()
+-        }
+-      }
++    const finalState = picgo.getConfigMigrationState()
++    if (finalState.status === "failed") {
++      const errorText = finalState.error ? `，错误信息：${finalState.error}` : ""
++      siyuanApi.pushErrMsg({
+--- candidata: picgo-plugin-shell-ux [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 插件主界面使用轻量挂载式 shell
+  | `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > - **WHEN** 用户点击 PicGo 插件入口打开主界面
+  > - **AND** popup SHALL 显示在 PicGo 顶栏按钮附近
+  > - **AND** 该 shell SHALL 能够承载现有 PicGo 设置和操作界面
+  > - **WHEN** 用户重复点击 PicGo 插件入口
+  > - **WHEN** 用户关闭 PicGo shell 或插件被卸载/禁用
+  > PicGo 配置迁移和初始化检查 SHALL be idempotent and SHALL NOT run again merely because the main UI is opened.
+  > - **AND** 用户打开 PicGo 主界面
+--- candidata: picgo-unified-async-config-source [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  | PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  > PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > - **WHEN** PicGo 3.0 运行在 Kernel-backed Docker/Web 或 SiYuan workspace runtime
+  > - **THEN** PicGo main config、external/PicList config、SiYuan connection config、SiYuan integration behavior、plugin enable/config values、uploader config 和 uploader-owned state SHALL 通过 unified async faca
+  > - **AND** v2 中“只有 `picgo.cfg.json` 进入 Kernel storage”的规则 SHALL NOT 作为 3.0 限制
+  > - **WHEN** PicGo 3.0 区分 syncable user configuration 和 runtime artifacts
+  > - **THEN** third-party PicGo plugin packages、npm folders、`pluginBaseDir`、`zhiNpmPath`、logs、caches 和 build output SHALL 保持 PC/Electron-local artifacts
+  > ### Requirement: PicGo 3.0 使用统一 async 配置 facade
+--- candidata: picgo-product-library-boundary [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin product and library roles are explicit
+  | The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > - **WHEN** downstream code imports `universal-picgo`, `universal-picgo-store`, or `zhi-siyuan-picgo`
+  > - **THEN** the helper is exposed through a deliberate facade or moved to the product layer, and product code does not import library `src` paths directly
+  > The PicGo domain core SHALL avoid direct dependencies on product UI frameworks, SiYuan DOM state, Electron-only UI helpers, and implicit global runtime detection.
+  > The refactor SHALL make ownership of PicGo context, Siyuan API clients, configuration migration, event bus subscriptions, and plugin loader state explicit.
+  > - **WHEN** `SiyuanPicGo`, `picgoEventBus`, or `UniversalPicGo` lifecycle state is used
+  > - **WHEN** a PicGo core object is constructed by a library consumer
+  > - **THEN** construction does not implicitly perform unrelated product operations such as UI setup, host migration, npm plugin installation, or third-party plugin loading unless explicitly requested by
+--- candidata: picgo-public-contract-stability [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public API stability under internal refactor
+  | The plugin SHALL preserve its public API surface while internal modules are refactored.
+  > - **THEN** the exported symbols and module paths that form the public API remain available unless a separate breaking change is explicitly proposed
+  > The plugin SHALL continue to read and write existing user configuration, cache, and storage data without requiring migration that breaks current installs.
+  > - **THEN** the plugin continues writing data in the same externally compatible contract unless a separate migration is explicitly approved
+  > - **WHEN** the refactor is ready for review
+  > Docker/Web storage 持久化 SHALL 在不破坏既有桌面、本地文件和纯浏览器行为的前提下，让旧 localStorage PicGo 主配置具备可迁移路径。
+  > - **WHEN** Docker/Web 用户已有旧 localStorage PicGo 主配置且 Kernel 主配置文件不存在
+  > - **THEN** 系统 SHALL 将旧主配置迁移到 `data/storage/syp/picgo/picgo.cfg.json`
+  > - **WHEN** Kernel 主配置文件已存在且浏览器 localStorage 中也有旧 PicGo 主配置
+--- candidata: picgo-runtime-boundary-integrity [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Runtime capability boundaries are explicit
+  | The plugin SHALL define and enforce explicit runtime capability boundaries instead of relying on implicit Node/browser fallback behavior.
+  > #### Scenario: Browser target excludes Node escape paths
+  > - **THEN** the bundle does not include unapproved direct `eval`, `eval("require")`, `vm-browserify`, or Node polyfill escape paths
+  > - **THEN** the refactor records whether that artifact contains bundled polyfills, dynamic require, or generated eval paths before treating it as acceptable
+  > - **WHEN** the refactor is ready for review
+  > PicGo storage runtime capability SHALL 通过当前入口显式创建的 factory 或当前 JS realm 独立探测获得，不得由另一个 realm 中的隐式全局状态决定。
+  > - **WHEN** 设置页 iframe 初始化 PicGo 配置 UI
+  > - **WHEN** PicGo core 需要 filesystem、Kernel storage 或 localStorage 能力
+  > PicGo 3.0 runtime SHALL 将 unified async configuration facade 作为 user configuration access boundary。
+
+===== P055 | yexiyue/ratatui-kit PR #7 | capacidade do par: global-atoms
+PR: feat: 重写文档示例与内置组件体系
+arquivos ligados: examples/store.rs
+--- linhas alteradas (129; mostrando até 40)
+-use ratatui::{
+-    style::{Style, Stylize},
+-    text::Line,
+-};
+-use ratatui_kit::ratatui;
+-use ratatui_kit::{
+-    crossterm::event::{Event, KeyCode, KeyEventKind},
+-    prelude::tui_input::backend::crossterm::EventHandler,
+-    prelude::*,
+-    ratatui::layout::Constraint,
+-};
+-// 全局响应式原子（类 Jotai/Recoil）：模块级声明，零宏零结构。
+-// 跨页面共享，任何组件 use_atom 订阅，写入仅唤醒订阅者。
+-static COUNT: Atom<i32> = Atom::new(|| 0);
+-static VALUE: Atom<String> = Atom::new(String::new);
+-#[tokio::main]
+-async fn main() {
+-    let routes = routes! {
+-        "/" => HomePage,
+-        "/counter" => CounterPage,
+-        "/input" => InputPage,
+-    };
+-    element!(RouterProvider(
+-        routes:routes,
+-        index_path:"/",
+-    ))
+-    .fullscreen()
+-    .await
+-    .expect("Failed to run the application");
+-}
+-#[component]
+-fn HomePage(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+-    let count = hooks.use_atom(&COUNT);
+-    let value = hooks.use_atom(&VALUE);
+-    let mut navigate = hooks.use_navigate();
+-    hooks.use_events(move |event| {
+-        if let Event::Key(key_event) = event
+-            && key_event.kind == KeyEventKind::Press
+-        {
+-            match key_event.code {
+--- candidata: input-events [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 单一事件源与中央分发
+  | 终端 SHALL 退化为单一 raw event 源（异步、泛型签名 `Terminal::<T>::next_event(&mut self) -> Option<T::Event>`，`None` 表示事件流结束），不再向多个订阅者广播。渲染循环取到一个 raw event 后,MUST 经唯一的中央分发器 `InputRuntime::dispatch` 投递给当前帧登记的事件 handle
+  > 终端 SHALL 退化为单一 raw event 源（异步、泛型签名 `Terminal::<T>::next_event(&mut self) -> Option<T::Event>`，`None` 表示事件流结束），不再向多个订阅者广播。渲染循环取到一个 raw event 后,MUST 经唯一的中央分发器 `InputRuntime::dispatch` 投递给当前帧登记的事件 handle
+  > - **THEN** `Terminal::events()`/`Terminal::wait()`/`TerminalEvents`/`subscribers`、`use_events`/`use_local_events`、`UpdaterTerminal::events` 均不复存在
+  > `InputRuntime` 的层栈与 handler 表 SHALL 在每帧 update 开始时（`begin_frame`)清空并重建:每个本帧参与的组件在其 update 期间重新登记层与 handler。因此被卸载的组件、关闭（`open=false`）的弹窗 MUST 在下一帧自动退出活跃集,无需显式注销,且 MUST NOT 发生注册表泄漏或身份串号。
+  > ### Requirement: InputLayer 独占栈与 blocks_lower 互斥
+  > `InputRuntime` SHALL 维护一个按注册序（update 自顶向下 = z 序）排列的输入层栈。`dispatch` 计算活跃层集时 MUST 从栈顶向下,遇到第一个 `blocks_lower=true` 的层即截断:该层及其之上的层活跃,其下所有层（`Global` 除外)失活。
+  > ### Requirement: 事件消费 EventResult 截断传播
+  > 事件 handler SHALL 返回 `EventResult`（`Consumed` 或 `Ignored`,默认 `Ignored`)。`dispatch` 在有序投递过程中遇到 `Consumed` MUST 立即停止,不再投递给后续 handler;遇到 `Ignored` 则继续下一个。
+  > ### Requirement: 事件归属作用域 EventScope
+--- candidata: element-head-codegen [PR]
+  | ## ADDED Requirements
+  | ### Requirement: head 与 children 类型分离
+  | element 的「头部」（类型路径 + 可选 `(props)`）解析 SHALL 由独立的 `ParsedElementHead` 承载，该类型 MUST NOT 含 `children` 字段——使「头部解析阶段触及子节点块 `{}`」在类型层面无法表达，无需依赖注释约定。
+  > element 的「头部」（类型路径 + 可选 `(props)`）解析 SHALL 由独立的 `ParsedElementHead` 承载，该类型 MUST NOT 含 `children` 字段——使「头部解析阶段触及子节点块 `{}`」在类型层面无法表达，无需依赖注释约定。
+  > - **WHEN** 任意调用方解析一个 element 头部（`element!` 的 `Parse` 或 `routes!` 的 `ParsedRoute::parse`）
+  > - **THEN** 它得到的是仅含 ty + props 的 `ParsedElementHead`，`{}` 仍留在输入流中由调用方自行决定归属（`element!` 当 children、`routes!` 当子路由），头部类型本身没有承接 children 的字段
+  > ### Requirement: element codegen 单一真源
+  > `Element<Ty>` 的构造 codegen SHALL 仅由 `ParsedElementHead` 提供（单一真源）；`children` MUST 作为 codegen 的参数注入，而非从持有状态读取。`element!` 与 `routes!` MUST 经由同一 codegen 路径生成元素。
+  > #### Scenario: element! 与 routes! 共享同一 codegen
+  > - **WHEN** `element!(Comp(prop: v))` 与 `routes!{ "/x" => Comp(prop: v) }` 各自展开
+  > - **WHEN** codegen 需要为带子节点的 element 注入 children
+--- candidata: router-path-matching [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 动态路由尾部静态段按段边界匹配
+  | 对参数段后还有静态尾段的动态路由(如 `/users/:id/edit`),`Outlet` 匹配成功后 SHALL 校验剩余路径为空或以 `/` 起始(与静态段边界语义一致),MUST NOT 让尾段以前缀方式跨段误匹配。等价地,其匹配正则在尾部 SHALL 锚定段边界(`$` 或 `/`)。
+  > 路由匹配按 `routes!` 声明顺序取首个匹配项;该"声明顺序即优先级"语义 SHALL 在文档中明确(静态路由应声明在同前缀的动态路由之前,以免被遮蔽)。
+  > - **THEN** 不存在 `use_route_mut` 这种"看似可变实则丢弃"的 API;改用 `use_state`/`AtomState` 或 `use_route_state` + `push_with_state`
+  > # router-path-matching Specification
+  > 路由匹配按 `routes!` 声明顺序取首个匹配项;该"声明顺序即优先级"语义 SHALL 在文档中明确(静态路由应声明在同前缀的动态路由之前,以免被遮蔽)。
+  > - **THEN** 不存在 `use_route_mut` 这种"看似可变实则丢弃"的 API;改用 `use_state`/`AtomState` 或 `use_route_state` + `push_with_state`
+--- candidata: reactive-state-core [PR]
+  | ## ADDED Requirements
+  | ### Requirement: try_* 非阻塞且不忙等
+  | `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > ### Requirement: read/write 重入快速失败
+  > `read()`/`write()` 在无法借用时 SHALL 快速 panic(经 `try_*` 返回 `None` 后 `expect`),而非忙等或死锁。持守卫期间对同一 state 的重入读写属编程错误,SHALL 以 panic 快速暴露而非静默卡死。
+  > `State` 与 `AtomState` SHALL 继续使用 `SyncStorage` 并保持 `Send + Sync`,以支持在后台 `tokio::spawn` 任务中移动状态句柄并写入。本变更 MUST NOT 改为 `UnsyncStorage`,也 MUST NOT 移除 `Send + Sync`。
+  > - **WHEN** 在 `tokio::spawn` 的后台任务中持有 `State`/`AtomState` 句柄并写入
+  > `State`/`AtomState` 的 `try_read`/`try_write` SHALL 在无法立即获得借用时立即返回 `None`,MUST NOT 自旋重试(`loop`/`continue`)或阻塞当前线程。原先针对 `AlreadyBorrowedMut` 的重试循环 SHALL 被移除。
+  > ### Requirement: read/write 重入快速失败
+  > `read()`/`write()` 在无法借用时 SHALL 快速 panic(经 `try_*` 返回 `None` 后 `expect`),而非忙等或死锁。持守卫期间对同一 state 的重入读写属编程错误,SHALL 以 panic 快速暴露而非静默卡死。
+--- candidata: element-borrow-lifetimes [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 借用派生句柄绑定到借用期
+  | `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > - **WHEN** 从 `&'a mut AnyElement<'b>` 派生一个 `AnyElement`
+  > - **WHEN** trybuild 用例尝试让派生的借用 `AnyElement`/`AnyProps` 逃逸出源的可变借用作用域
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+  > - **WHEN** 从 `&'a mut AnyElement<'b>` 派生一个 `AnyElement`
+  > - **WHEN** trybuild 用例尝试让派生的借用 `AnyElement`/`AnyProps` 逃逸出源的可变借用作用域
+  > # element-borrow-lifetimes Specification
+  > `AnyProps::borrow` SHALL 返回生命周期绑定到 `&mut self` 借用期的句柄(签名形如 `fn borrow(&mut self) -> AnyProps<'_>`);`From<&'a mut AnyElement<'b>> for AnyElement` SHALL 产出借用期 `'a` 的 `AnyElement<'a>`,而非把借用放大到源的 `'b`。派生的
+
+===== P056 | pmcfadin/cqlite PR #2150 | capacidade do par: chunk-decompressor-cache
+PR: feat(#1706): one event facade — migrate cqlite-core log→tracing, drop log dep
+arquivos ligados: cqlite-core/src/storage/sstable/chunk_decompressor.rs
+--- linhas alteradas (14; mostrando até 40)
+-        log::debug!(
++        tracing::debug!(
+-            log::debug!(
++            tracing::debug!(
+-    log::info!("Loaded compression info:");
+-    log::info!("   Algorithm: {}", compression_info.algorithm);
+-    log::info!("   Chunk Length: {} bytes", compression_info.chunk_length);
+-    log::info!("   Data Length: {} bytes", compression_info.data_length);
+-    log::info!("   Chunk Count: {}", compression_info.chunk_offsets.len());
++    tracing::info!("Loaded compression info:");
++    tracing::info!("   Algorithm: {}", compression_info.algorithm);
++    tracing::info!("   Chunk Length: {} bytes", compression_info.chunk_length);
++    tracing::info!("   Data Length: {} bytes", compression_info.data_length);
++    tracing::info!("   Chunk Count: {}", compression_info.chunk_offsets.len());
+--- candidata: core-event-logging [PR]
+  | # core-event-logging
+  | ## ADDED Requirements
+  | ### Requirement: One event facade — `tracing`
+  > ### Requirement: One event facade — `tracing`
+  > `cqlite-core` SHALL emit all runtime log **events** through the `tracing` facade
+  > only. No `log::{warn,info,debug,error,trace}!` event macro SHALL remain in
+  > - **WHEN** `cqlite-core/src` is searched for `log::{warn,info,debug,error,trace}!`
+  > - **THEN** existing `tracing` spans are unchanged, and every migrated call keeps
+  > from `log::` to `tracing::` (facade-only; message content is owned by AG5 #1694).
+  > ### Requirement: Corruption events reach a bridge-less tracing subscriber
+  > Core events SHALL reach a `tracing` subscriber even when no `tracing-log`
+--- candidata: reader-consolidation [termos]
+  | ## ADDED Requirements
+  | ### Requirement: CompressionInfo.db is parsed exactly once per reader open
+  | The SSTable reader open path SHALL parse each `CompressionInfo.db` file at most once per open. It
+  > SHALL parse the file with a single parser (`compression_info::CompressionInfo::parse`) and derive the
+  > compression algorithm for the reader's `CompressionReader` from that single parsed result, rather than
+  > parsing the same file a second time with a separate parser solely to learn the algorithm. A
+  > #### Scenario: The derived algorithm matches the CompressionInfo.db contents
+  > - **THEN** the reader's compression algorithm equals the algorithm named in the parsed
+  > algorithm identification SHALL use only authoritative metadata (`SsTableDescriptor` and the parsed
+  > uncompressed SSTable (no `CompressionInfo.db`) opens with the compression reader absent
+  > `SchemaAwareReader` type and its module, the `ChunkedDataReader` type and its module, the
+--- candidata: write-span-levels [termos]
+  | # write-span-levels
+  | ## ADDED Requirements
+  | ### Requirement: Write-side spans emit at DEBUG, not INFO
+  > Write-side and compaction `#[tracing::instrument]` spans SHALL be emitted at
+  > DEBUG level, matching the read side's `debug_span!` discipline. Span names and
+  > - **GIVEN** a `tracing` subscriber installed at INFO (the CLI default)
+  > `compression.write_chunk`
+  > to before (only `level = "debug"` is added), so dashboards and docs that
+  > - **GIVEN** a `tracing` subscriber at INFO
+  > `tracing` subscriber installed at INFO (the CLI default posture), and SHALL
+  > subscriber-on number measured with a fmt/`tracing` subscriber at INFO
+--- candidata: chunk-decode-plane [termos]
+  | ## ADDED Requirements
+  | ### Requirement: A single chunk decode plane
+  | Chunk read → CRC → decompress → B1-cache SHALL be performed in exactly one module
+  > Chunk read → CRC → decompress → B1-cache SHALL be performed in exactly one module
+  > module in the query decode path SHALL call a compression `decompress` primitive or an inline
+  > - **WHEN** the same chunk index is read twice through `ChunkSource::chunk` with a warm `DecompressedChunkCache`
+  > - **THEN** the second call returns an `Arc` clone of the cached bytes, the process-global `DECOMPRESS_CALLS` counter is unchanged across the second call, and no file read is issued
+  > #### Scenario: CRC is verified before decompression
+  > - **WHEN** `ChunkSource::chunk` reads a chunk whose stored inline CRC32 does not match the computed CRC over its compressed bytes
+  > The CLI query path and the core query path SHALL decode through the same `ChunkSource`,
+  > producing identical rows. Neither SHALL reach `BulletproofReader` or `ChunkDecompressor`.

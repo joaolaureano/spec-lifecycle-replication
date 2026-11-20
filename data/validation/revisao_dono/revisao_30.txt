@@ -1,0 +1,349 @@
+===== P181 | koki-develop/Cork PR #33 | capacidade do par: recent-workspaces-picker
+PR: feat(updater): add in-app updater via tauri-plugin-updater
+arquivos ligados: src-tauri/src/menu.rs
+--- linhas alteradas (9; mostrando até 40)
++    let check_for_updates_item =
++        MenuItemBuilder::with_id("check_for_updates", "Check for Updates...").build(app)?;
++        .item(&check_for_updates_item)
++        "check_for_updates" => {
++            if let Some(window) = focused_webview_window(app) {
++                let target = EventTarget::webview_window(window.label());
++                let _ = app.emit_to(target, "menu:check-for-updates", ());
++            }
++        }
+--- candidata: updater [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: アプリは起動時に最新リリースを自動チェックする
+  | Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > - **THEN** その Window の `useUpdater` はマウント時にラベルが `main` 以外と判定するため、`check()` を一切呼ばない
+  > - **AND** 既存の `main` Window で auto-check 済みの場合の toast も追加 Window には表示されない
+  > - **AND** ただし `Cork > Check for Updates...` メニューによる手動チェックはこの追加 Window でも引き続き使用可能
+  > #### Scenario: `main` Window が auto-check 完了前に閉じられた
+  > - **WHEN** `main` Window で auto-check 進行中（`check()` の Promise resolve 前）にユーザーが `main` Window を閉じる
+  > - **AND** 次回起動時の auto-check で再試行される
+  > ユーザーは macOS メニュー `Cork > Check for Updates...`（`Cork` サブメニューの `about` 直後に配置）から、手動チェックを任意のタイミングで実行できなければならない (MUST)。手動チェックは自動チェックと異なり、結果が「最新」「更新あり」「エラー」のいずれであっても UI で明示的にフィードバックしなければならない (MUST)。
+--- candidata: multi-window [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: ユーザーは `File > New Window` メニューから新規ウィンドウを開ける
+  | アプリケーションメニューには `File` サブメニューがあり、その配下に `New Window` メニューアイテムが存在しなければならない (MUST)。`New Window` のアクセラレータは `CmdOrCtrl+Shift+N` でなければならない (MUST)。クリックまたはアクセラレータ押下のいずれかで新規 `WebviewWindow` が生成され、フォーカスを受け取り、ウィン
+  > - **THEN** メニューイベント `new_window` が発火する
+  > `Cmd+,` (Settings メニュー) で `menu:open-settings` イベントが発火するとき、イベントは `app.get_focused_window()` で取得した単一の `WebviewWindow` にのみ送られなければならない (MUST)。フォーカスを持たないウィンドウが Settings ダイアログを意図せず開いてしまってはならない (MUST NOT)。
+  > - **THEN** `app.get_focused_window()` は `None` を返す
+  > macOS で Tauri の `RunEvent::Reopen { has_visible_windows: false, .. }` ハンドラが発火したとき、システムは `app.webview_windows()` の現在のウィンドウ集合を取得し、次の通り分岐しなければならない (MUST):
+  > - **(A) `webview_windows().is_empty()` が true** (本当に 1 枚もウィンドウが存在しない、すべて `Cmd+W` で閉じられた): 新規 `WebviewWindow` を `state.next_window_label()` で採番した `workspace-<n>` ラベルで生成し、生成前 (build より前) に履歴の自動復元シード処理 (
+  > - **(B) `webview_windows()` に 1 件以上ある** (`Cmd+H` で隠した状態、または `Cmd+M` で最小化した状態): すべての既存ウィンドウに対し `unminimize()` → `show()` → `set_focus()` を呼んで再表示する (MUST)。新規ウィンドウを追加で生成してはならない (MUST NOT)。
+  > 起動経路 (`setup()` 内) を除き、`main` ラベルを再利用してはならない (MUST NOT)。`has_visible_windows: true` のリオープン (まだ見えるウィンドウがある状態でのアイコンクリック) では新規ウィンドウを生成してはならず、何もしない (macOS の標準フォアグラウンド復帰に委ねる) (MUST)。
+  > 履歴自動復元シードは `build()` を呼ぶ**前**に完了させなければならない (MUST)。これは、`WebviewWindowBuilder::build()` が webview を生成して同期 return した後、フロントエンドの JS ロードと `getWorkspaceDirectory()` 呼び出しが非同期で別スレッドで進行するため、build 後に seed すると「フロ
+--- candidata: mcp-server [termos]
+  | # mcp-server
+  | ## ADDED Requirements
+  | ### Requirement: MCP サーバはアプリ起動時に設定に従って起動する
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+  > #### Scenario: 複数 window でも設定は共通
+  > - **WHEN** Cork が複数 window を開いている状態でいずれかの window の Settings から `token` を変更する
+  > - **THEN** 変更は全 window に共通の MCP サーバインスタンスに反映される (window ごとに別 token で認証されることはない)
+  > - **AND** Toggle の `aria-checked` が `true` になる
+  > - **AND** Toggle の `aria-checked` は `true` のままで、OFF にバウンスバックしない
+  > - **THEN** 現在 Cork のいずれかの window で開かれている全 workspace に対応するエントリを含む `mcp.json` スニペットが表示される
+  > - **WHEN** Toggle が ON だがどの window でも workspace が選択されていない状態で SettingsDialog を開く
+
+===== P182 | Mic92/gitea-mq PR #5 | capacidade do par: webhook-receiver
+PR: Add three-level dashboard navigation and clickable commit status links 
+arquivos ligados: internal/gitea/client.go
+--- linhas alteradas (11; mostrando até 40)
++	"fmt"
++	"strings"
+-func MQStatus(state, description string) CommitStatus {
+-	return CommitStatus{Context: "gitea-mq", State: state, Description: description}
++func MQStatus(state, description, targetURL string) CommitStatus {
++	return CommitStatus{Context: "gitea-mq", State: state, Description: description, TargetURL: targetURL}
++}
++// DashboardPRURL constructs the dashboard URL for a specific PR.
++// The baseURL should be the GITEA_MQ_EXTERNAL_URL value.
++func DashboardPRURL(baseURL, owner, repo string, prNumber int64) string {
++	return strings.TrimRight(baseURL, "/") + fmt.Sprintf("/repo/%s/%s/pr/%d", owner, repo, prNumber)
+--- candidata: check-monitoring [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Commit status lifecycle reporting
+  | The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > - **WHEN** PR #42 in `gitea:org/app` is enqueued
+  > - **THEN** status is `pending` with description "Queued (position #3)" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** status is `pending` with description "Testing merge result" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** status is `success` with description "Merge queue passed" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** a `gitea-mq` check run is created with `status=queued`, summary "Queued (position #1)" and `details_url` set to `https://mq.example.com/repo/github/alice/tool/pr/7`
+  > - **WHEN** PR #42 in `gitea:org/app` is testing and check `ci/build` fails on the merge branch
+  > - **THEN** status is `failure` with description "Check failed: ci/build" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+--- candidata: web-dashboard [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Queue overview page
+  | The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > - **AND** `gitea:org/app` has 3 active PRs and `github:org/lib` has 1 active PR
+  > - **AND** `org/app` shows forge `gitea` and a badge with "3"
+  > - **WHEN** a user visits `/` and `gitea:org/app` is the only managed repo
+  > - **THEN** the next page load shows both `gitea:org/app` and `github:org/new-repo`
+  > - **WHEN** a user visits `/` and `gitea:org/app` and `gitea:org/old-repo` are managed
+  > - **AND** the discovery loop removes `gitea:org/old-repo` before the next page load
+  > - **THEN** the next page load shows only `gitea:org/app`
+--- candidata: pr-detail-page [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: PR detail page
+  | The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/43` and `gitea:org/app` is in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/99` and `gitea:org/app` is in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/unknown/pr/42` and `gitea:org/unknown` is not in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/abc`
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/-1`
+  > - **WHEN** a user visits `/repo/org/app/pr/42` and `gitea:org/app` is in the managed set
+  > - **THEN** the page is served as if the path were `/repo/gitea/org/app/pr/42`
+--- candidata: automerge-integration [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Discover PRs with automerge scheduled
+  | The system SHALL periodically poll each managed repo's forge to discover open PRs that currently have automerge enabled, using the repo's `Forge.ListAutoMergePRs` operation. The Gitea forge SHALL impl
+  > - **WHEN** the poller checks repo `gitea:org/app` and PR #42 has a `pull_scheduled_merge` timeline comment with no subsequent `pull_cancel_scheduled_merge`
+  > - **WHEN** the poller checks repo `gitea:org/app` and PR #42 has a `pull_scheduled_merge` followed by a `pull_cancel_scheduled_merge`
+  > - **WHEN** the discovery loop removes `gitea:org/old-repo` from the managed set
+  > - **THEN** the poller goroutine for `gitea:org/old-repo` is stopped (its context is cancelled)
+  > - **AND** no further polls occur for `gitea:org/old-repo`
+  > The system SHALL cancel a PR's automerge via the repo's forge when the PR is removed from the queue due to failure (check failure, timeout, or merge conflict). On Gitea this SHALL call `DELETE /repos/
+  > - **AND** sets the `gitea-mq` status to `failure` via the repo's forge
+  > - **AND** sets the `gitea-mq` status to `error` via the repo's forge
+
+===== P183 | rustyrazorblade/easy-db-lab PR #647 | capacidade do par: cassandra
+PR: feat(install): file-driven workload install and runner for K8s clusters
+arquivos ligados: src/main/kotlin/com/rustyrazorblade/easydblab/configuration/sidecar/SidecarManifestBuilder.kt
+--- linhas alteradas (12; mostrando até 40)
++        private const val LIVENESS_INITIAL_DELAY = 60
++        private const val LIVENESS_PERIOD = 20
++        private const val LIVENESS_FAILURE_THRESHOLD = 3
++        .withNewLivenessProbe()
++        .withNewHttpGet()
++        .withPath("/api/v1/cassandra/schema")
++        .withNewPort(SIDECAR_PORT)
++        .endHttpGet()
++        .withInitialDelaySeconds(LIVENESS_INITIAL_DELAY)
++        .withPeriodSeconds(LIVENESS_PERIOD)
++        .withFailureThreshold(LIVENESS_FAILURE_THRESHOLD)
++        .endLivenessProbe()
+--- candidata: spark-modules [PR+termos]
+  | # Spark Modules
+  | Spark job module organization, shared configuration, and independent deployable JARs for performance comparison.
+  | ## Requirements
+  > - **THEN** the module MUST parse and use those properties for database connectivity and schema setup
+  > - **THEN** both jobs MUST write to the same keyspace/table schema using the same data generator, enabling direct performance comparison
+  > - **THEN** the module MUST parse and use those properties for database connectivity and schema setup
+  > - **THEN** both jobs MUST write to the same keyspace/table schema using the same data generator, enabling direct performance comparison
+  > - **THEN** the module MUST parse and use those properties for database connectivity and schema setup
+  > - **THEN** both jobs MUST write to the same keyspace/table schema using the same data generator, enabling direct performance comparison
+  > - **THEN** the job MUST write to the same keyspace/table schema using the same data generator, with the only behavioral difference being the credential handoff to the sidecar
+  > All Spark job modules SHALL be Gradle subprojects under the `spark/` directory, using nested module paths. The cassandra-analytics source used to build bulk-writer modules SHALL be configurable via `s
+--- candidata: clickhouse-backup-restore [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: User can back up a running ClickHouse cluster
+  | The system SHALL back up the full schema and data of a running ClickHouse cluster to a named location in the account S3 bucket using ClickHouse's native BACKUP command.
+  > The system SHALL back up the full schema and data of a running ClickHouse cluster to a named location in the account S3 bucket using ClickHouse's native BACKUP command.
+  > The system SHALL restore schema and data into a running ClickHouse cluster from a named backup in the account S3 bucket.
+  > The system SHALL back up the full schema and data of a running ClickHouse cluster to a named location in the account S3 bucket using ClickHouse's native BACKUP command, invoked via `kubectl exec` into
+  > The system SHALL restore schema and data into a running ClickHouse cluster from a named backup in the account S3 bucket, invoked via `kubectl exec` into a running ClickHouse pod.
+  > The system SHALL back up the full schema and data of a running ClickHouse cluster to a named location in the account S3 bucket using ClickHouse's native BACKUP command.
+  > The system SHALL restore schema and data into a running ClickHouse cluster from a named backup in the account S3 bucket.
+--- candidata: generate-workload-skill [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: A Claude skill generates new workload configs interactively
+  | The repository SHALL include a Claude skill at `.claude/skills/generate-workload/` that, given a
+  > from the workload's CRD schema
+--- candidata: cassandra-analytics-source [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable cassandra-analytics source repo and branch
+  | The build script SHALL read the cassandra-analytics Git repository URL and branch from `spark/cassandra-analytics-source.properties` when that file exists, and fall back to the Apache upstream default
+  > ### Requirement: Configurable cassandra-analytics source repo and branch
+  > The build script SHALL read the cassandra-analytics Git repository URL and branch from `spark/cassandra-analytics-source.properties` when that file exists, and fall back to the Apache upstream default
+  > - **WHEN** `spark/cassandra-analytics-source.properties` contains `repo=https://github.com/apache/cassandra-analytics.git` and `branch=trunk`
+  > - **THEN** `bin/build-cassandra-analytics` MUST clone from that URL and check out that branch
+  > - **WHEN** `spark/cassandra-analytics-source.properties` contains a custom `repo` URL and `branch` value
+  > - **THEN** `bin/build-cassandra-analytics` MUST clone from the custom repo URL and check out the specified branch
+  > - **WHEN** `bin/build-cassandra-analytics --repo <url> --branch <branch>` is invoked with explicit flags
+  > - **WHEN** `bin/build-cassandra-analytics` starts
+--- candidata: containerized-sidecar [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Sidecar runs as a K3s DaemonSet on database nodes
+  | The system SHALL deploy the Cassandra sidecar as a K3s DaemonSet targeting all nodes with label `type=db`, using `hostNetwork: true` so the sidecar can connect to the local Cassandra instance.
+  > #### Scenario: Sidecar deployed on cassandra start
+  > - **WHEN** the user runs `cassandra start`
+  > - **THEN** a DaemonSet named `cassandra-sidecar` is applied to K3s and one sidecar pod runs on each database node
+  > #### Scenario: Sidecar pod runs as cassandra user
+  > - **THEN** each pod runs with `runAsUser: 999` and `runAsGroup: 999` (the cassandra user)
+  > The system SHALL accept a `--sidecar-image` option on `cassandra start` specifying the container image (registry, repository, and tag) to use for the sidecar DaemonSet. The default SHALL be `ghcr.io/a
+  > - **WHEN** the user runs `cassandra start` without `--sidecar-image`
+  > - **THEN** the DaemonSet uses `ghcr.io/apache/cassandra-sidecar:latest`
+
+===== P184 | localstack/lstk PR #367 | capacidade do par: cdk-proxy
+PR: Add global --json flag to `lstk`, so commands can support JSON output
+arquivos ligados: cmd/cdk.go;cmd/terraform.go
+--- linhas alteradas (6; mostrando até 40)
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+--- candidata: json-flag [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Global --json flag on built-in commands
+  | The root command SHALL register a persistent `--json` boolean flag, alongside `--non-interactive`, whose resolved value SHALL be exposed to every built-in command via `env.Env`.
+--- candidata: terraform-proxy [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: S3 backend redirection
+  | When the working directory declares a `terraform { backend "s3" {} }` block, the system SHALL redirect the backend to the running LocalStack AWS emulator so that Terraform state is read from and writt
+
+===== P185 | ChenChenyaqi/learn-anything PR #98 | capacidade do par: site-generator
+PR: refactor: decompose site components, composables, and utils
+arquivos ligados: packages/cli/site/src/composables/useI18n.ts;packages/cli/site/src/composables/useTopicData.ts;packages/cli/site/vite.config.ts
+--- linhas alteradas (380; mostrando até 40)
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++export type { I18nKey } from './locales/en';
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+--- candidata: site-theme [tasks+termos]
+  | ## ADDED Requirements
+  | > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  | ### Requirement: Dashboard page shows all topics as cards
+  > > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  > ### Requirement: Dashboard page shows all topics as cards
+  > The system SHALL render a Dashboard page at the site root (`/`) that scans `/topics/` for all topic directories via `import.meta.glob`, reads each topic's `state.json`, and displays each topic as a ca
+  > #### Scenario: Dashboard with multiple topics
+  > - **WHEN** `/topics/` contains subdirectories `javascript/` and `python/`, each with a valid `state.json`
+  > - **THEN** the Dashboard displays two cards, one for "JavaScript" with its progress and one for "Python" with its progress
+  > #### Scenario: Dashboard with no topics
+  > - **WHEN** `/topics/` exists but contains no topic subdirectories with valid `state.json` files
+--- candidata: quiz-results-summary [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Results display after quiz completion
+  | After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > ### Requirement: Results display after quiz completion
+  > After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > #### Scenario: Quiz completed
+  > - **WHEN** the user submits the final question
+  > - **AND** the results show a large score indicator (e.g., "7 / 8")
+  > - **AND** the results show a percentage (e.g., "87.5%")
+  > The results summary SHALL show each question's grading outcome with the user's answer, correct answer, and explanation.
+  > #### Scenario: Exact-match question graded correctly
+--- candidata: quiz-card-practice [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz modal container
+  | The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > - **WHEN** a quiz file is launched from the sidebar
+  > - **AND** the first question is displayed as a card
+  > - **THEN** the modal closes
+  > - **AND** any current quiz session state is discarded
+  > #### Scenario: Multiple choice question
+  > - **WHEN** the current question has type `multiple_choice`
+  > - **THEN** all options from `question.options[]` are rendered as radio buttons
+--- candidata: quiz-sidebar-tab [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz tab in topic sidebar
+  | The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > ### Requirement: Quiz tab in topic sidebar
+  > The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > #### Scenario: User is on a topic page
+  > - **WHEN** the sidebar context is `topic`
+  > - **THEN** three tabs are displayed: Topics, Exercises, Quizzes
+  > - **AND** the Quizzes tab label is "Quizzes" (English locale) or "测验" (Chinese locale)
+  > #### Scenario: User is on the dashboard
+  > - **WHEN** the sidebar context is `dashboard`
+--- candidata: site-cli [tasks]
+  | ## ADDED Requirements
+  | > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  | > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  > > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > ### Requirement: serve command generates files, installs dependencies, and starts Vite dev server
+  > The system SHALL provide a `learn-anything serve [path]` command that: (1) calls `SiteGenerator.generate()` to write template files to `.learn/`, (2) runs `npm install --prefix .learn` to install vue,
+  > #### Scenario: serve generates files before starting
+  > - **WHEN** user runs `learn-anything serve` in a project directory
+  > - **THEN** the system writes all site template files to `.learn/` before attempting npm install
+  > - **WHEN** user runs `learn-anything serve` and `.learn/package.json` exists
+
+===== P186 | atilladeniz/Kubeli PR #163 | capacidade do par: architecture
+PR: feat: structured error handling across Rust and frontend
+arquivos ligados: src/lib/tauri/commands/core.ts
+--- linhas alteradas (8; mostrando até 40)
++import { toKubeliError } from "../../types/errors";
+-  return tauriInvoke<T>(command, payload as Record<string, unknown> | undefined);
++  return tauriInvoke<T>(
++    command,
++    payload as Record<string, unknown> | undefined
++  ).catch((e: unknown) => {
++    throw toKubeliError(e);
++  });
+--- candidata: resource-management [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Resource Listing
+  | The system SHALL display Kubernetes resources in filterable list views with real-time updates. When resource fetching fails, the system SHALL display structured error information instead of generic fa
+  > labels?: Record<string, string>;
+  > annotations?: Record<string, string>;
+--- candidata: error-handling [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Structured error responses
+  | The system SHALL return structured error objects from all Tauri commands instead of plain strings. Each error object MUST include an error kind, human-readable message, retryable flag, and optional HT
+  > The system SHALL return structured error objects from all Tauri commands instead of plain strings. Each error object MUST include an error kind, human-readable message, retryable flag, and optional HT
+  > - **WHEN** a Tauri command receives a 403 Forbidden response from the Kubernetes API
+  > - **WHEN** a Tauri command receives a 401 Unauthorized response
+  > - **WHEN** a Tauri command fails due to a network error (connection refused, DNS failure, etc.)
+  > - **WHEN** a Tauri command times out
+  > - **WHEN** a Tauri command fails with an error that doesn't match known patterns
+  > The system SHALL deserialize structured error objects from Tauri command rejections. The invoke wrapper MUST parse JSON error responses and produce typed `KubeliError` objects. Unrecognized error form
+  > - **WHEN** a Tauri command rejects with a JSON-serialized error object
+--- candidata: crd-management [termos]
+  | # CRD Management Specification
+  | ## Purpose
+  | Enable browsing, viewing, and managing Custom Resource Definitions (CRDs) and their instances (Custom Resources) in Kubernetes clusters.
+  > labels?: Record<string, string>;
+  > annotations?: Record<string, string>;
+  > ├── commands/
+  > │   └── crd.rs          # Tauri command handlers
+--- candidata: ci-publish [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Publish workflow triggers on draft release creation
+  | The system SHALL provide a GitHub Actions workflow (`.github/workflows/publish.yml`) that triggers on the `release: [created]` event. The workflow SHALL only proceed when the release tag matches the `
+  > The workflow SHALL include a `build-linux` job running on `ubuntu-22.04` that builds a Tauri AppImage for `x86_64-unknown-linux-gnu`. The build SHALL install required system dependencies (`libwebkit2g

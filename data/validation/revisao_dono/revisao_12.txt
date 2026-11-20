@@ -1,0 +1,583 @@
+===== P070 | jdjingdian/StaticRouteHelper PR #14 | capacidade do par: os-conditional-persistence
+PR: feat(ui): refine desktop experience and codify ui style governance
+arquivos ligados: StaticRouter/View/LegacyRouteListView.swift
+--- linhas alteradas (40; mostrando até 40)
+-                    .font(.headline)
++                    .font(.title3.weight(.semibold))
++                    .padding(.horizontal, 10)
++                    .padding(.vertical, 4)
++                    .background(RouterTheme.subtleFill, in: Capsule())
++                        .font(.system(size: 13, weight: .semibold))
++                        .frame(width: 26, height: 22)
+-                .buttonStyle(.plain)
++                .buttonStyle(.borderedProminent)
++                .controlSize(.small)
+-            .padding(.vertical, 8)
++            .padding(.vertical, 10)
+-                            .frame(width: 22, height: 22)
++                            .frame(width: 24, height: 24)
+-                    .buttonStyle(.borderedProminent)
+-                    .tint(.green)
++                    .buttonStyle(LegacyRouteActionIconButtonStyle(tint: RouterTheme.accent))
+-                            .frame(width: 22, height: 22)
++                            .frame(width: 24, height: 24)
+-                    .buttonStyle(.borderedProminent)
+-                    .tint(.red)
++                    .buttonStyle(LegacyRouteActionIconButtonStyle(tint: RouterTheme.danger))
+-            .width(80)
++            .width(90)
++private struct LegacyRouteActionIconButtonStyle: ButtonStyle {
++    let tint: Color
++    func makeBody(configuration: Configuration) -> some View {
++        configuration.label
++            .foregroundStyle(configuration.isPressed ? tint.opacity(0.95) : tint)
++            .background(
++                RoundedRectangle(cornerRadius: 7, style: .continuous)
++                    .fill(configuration.isPressed ? tint.opacity(0.22) : tint.opacity(0.12))
++            )
++            .overlay(
++                RoundedRectangle(cornerRadius: 7, style: .continuous)
++                    .stroke(tint.opacity(0.26), lineWidth: 0.6)
++            )
++            .animation(.easeInOut(duration: 0.16), value: configuration.isPressed)
++    }
++}
+--- candidata: ui-style-governance [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: UI 设计规范文档必须作为后续 UI 开发基线
+  | The project MUST treat `design/STYLE_GUIDE.md` as the baseline for UI-related implementation decisions, including visual tokens, component patterns, hierarchy, and interaction behavior.
+  > - **THEN** the proposal/design artifacts MUST reference `design/STYLE_GUIDE.md` as the style baseline
+  > - **AND** the change description MUST explain alignment with existing style rules or explicitly list justified deviations
+  > The project MUST keep `design/README.md` and `design/STYLE_GUIDE.md` as the canonical documentation entry for UI style governance.
+  > - **THEN** they MUST use the `design/` documents as the primary reference instead of ad-hoc style choices
+  > Any change to core UI style rules (color tokens, control sizing patterns, interaction conventions, layout hierarchy) MUST update style documentation before or together with implementation changes.
+  > # ui-style-governance 规范
+  > - **THEN** the proposal/design artifacts MUST reference `design/STYLE_GUIDE.md` as the style baseline
+  > - **AND** the change description MUST explain alignment with existing style rules or explicitly list justified deviations
+--- candidata: os-conditional-observable [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: RouterService 条件式响应式框架
+  | `RouterService` SHALL 在 macOS 14.0 及以上使用 `@Observable`（Observation 框架），在 macOS 12–13 使用 `ObservableObject` + `@Published`。两条路径 SHALL 在同一个源文件中通过 `#if canImport(Observation)` + `@available(macOS 14, *)`
+  > - **THEN** `RouterService` 使用 `@Observable` 宏，`helperStatus`、`systemRoutes`、`lastError` 属性无需 `@Published` 标注，视图通过类型化 `@Environment(RouterService.self)` 接收实例
+  > - **THEN** `RouterService` 使用 `@Observable` 宏，`helperStatus`、`systemRoutes`、`lastError` 属性无需 `@Published` 标注，视图通过类型化 `@Environment(RouterService.self)` 接收实例
+--- candidata: router-service [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: RouterService 统一服务接口
+  | 系统 SHALL 提供 `RouterService` 作为所有路由操作和 Helper 通信的唯一入口。在 macOS 14+ 上 `RouterService` SHALL 遵循 `@Observable`（Observation 框架），通过类型化 `@Environment(RouterService.self)` 注入视图层级。在 macOS 12–13 上 SHALL 遵循 `Obse
+  > - `systemRoutes: [SystemRouteEntry]`
+  > - `systemRoutes: [SystemRouteEntry]`
+  > - `systemRoutes: [SystemRouteEntry]`（系统路由表缓存）
+  > - `systemRoutes: [SystemRouteEntry]`
+--- candidata: legacy-route-crud [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: macOS 12–13 路由规则 CRUD（基于 Core Data）
+  | 在 macOS 12–13 上，用户 SHALL 能够执行完整的路由规则增删改查操作，数据由 Core Data（`RouteRuleMO`）持久化：
+--- candidata: route-crud [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: 添加路由规则
+  | 用户 SHALL 能够通过路由列表视图中的 "添加路由" 按钮打开 Sheet 表单，输入路由信息并保存。
+
+===== P071 | mckinsey/agents-at-scale-ark PR #1567 | capacidade do par: namespaced-session-attribute
+PR: feat: simplify query conversation model
+arquivos ligados: ark/internal/controller/query_controller.go
+--- linhas alteradas (32; mostrando até 40)
+-	completions "mckinsey.com/ark/executors/completions"
++	"mckinsey.com/ark/internal/resolution"
+-		responseMessages := []completions.Message{completions.NewAssistantMessage(responseText)}
+-		rawJSON = serializeMessages(responseMessages)
++		rawJSON = buildFallbackRaw(responseText)
+-	inputMessages, err := completions.GetQueryInputMessages(ctx, query, k8sClient)
++	text, err := resolution.ResolveQueryInputText(ctx, query, k8sClient)
+-	return completions.ExtractUserMessageContent(inputMessages)
++	return text
+-func serializeMessages(messages []completions.Message) string {
+-	var actualMessages []interface{}
+-	for _, msg := range messages {
+-		switch {
+-		case msg.OfAssistant != nil:
+-			actualMessages = append(actualMessages, msg.OfAssistant)
+-		case msg.OfUser != nil:
+-			actualMessages = append(actualMessages, msg.OfUser)
+-		case msg.OfSystem != nil:
+-			actualMessages = append(actualMessages, msg.OfSystem)
+-		case msg.OfTool != nil:
+-			actualMessages = append(actualMessages, msg.OfTool)
+-		case msg.OfFunction != nil:
+-			actualMessages = append(actualMessages, msg.OfFunction)
+-		}
+-	}
+-	rawBytes, err := json.Marshal(actualMessages)
++func buildFallbackRaw(responseText string) string {
++	msg := []struct {
++		Role    string `json:"role"`
++		Content string `json:"content"`
++	}{{Role: "assistant", Content: responseText}}
++	rawBytes, err := json.Marshal(msg)
+--- candidata: a2a-conversation-threading [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Controller sends conversationId as A2A contextId
+  | The controller `sendQueryA2A()` SHALL send `query.Spec.ConversationId` as the A2A `Message.ContextID` field when dispatching to any engine (completions or named). When `conversationId` is empty, the m
+  > The controller `sendQueryA2A()` SHALL send `query.Spec.ConversationId` as the A2A `Message.ContextID` field when dispatching to any engine (completions or named). When `conversationId` is empty, the m
+  > #### Scenario: Query with conversationId dispatched to completions engine
+  > - **WHEN** the controller dispatches a query with `spec.conversationId: "conv-123"` to the completions engine
+  > - **WHEN** the controller dispatches a query with `spec.conversationId: "conv-456"` to a named execution engine
+  > - **WHEN** the controller dispatches a query with empty `spec.conversationId`
+  > The completions engine `setupExecution()` SHALL read the conversation ID from the incoming A2A message's `ContextID` field as the primary source. It SHALL fall back to `query.Spec.ConversationId` from
+  > - **WHEN** the completions engine receives an A2A message with `ContextID: "conv-123"`
+  > - **WHEN** the completions engine receives an A2A message without contextId and the Query CR has `spec.conversationId: "conv-fallback"`
+--- candidata: a2a-query-extension [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Query extension schema definition
+  | The system SHALL define a JSON Schema at `ark/api/extensions/query/v1/schema.json` as the single source of truth for the query extension contract. The schema SHALL define a QueryRef object with requir
+  > The system SHALL define a JSON Schema at `ark/api/extensions/query/v1/schema.json` as the single source of truth for the query extension contract. The schema SHALL define a QueryRef object with requir
+  > - **WHEN** a developer reads `ark/api/extensions/query/v1/schema.json`
+  > The controller `executeViaEngine` SHALL attach the query extension to A2A messages using the A2A v0.3.0 extension mechanism. The metadata key SHALL be `{extension-uri}/ref` containing `{ "name": <quer
+  > #### Scenario: Controller sends query to remote completions engine
+  > - **WHEN** the controller dispatches a query via `executeViaEngine`
+  > - **THEN** the A2A message includes the `X-A2A-Extensions` header with the query extension URI and metadata containing the QueryRef with the query's name and namespace
+  > #### Scenario: Controller sends query via executeDirectly
+  > - **WHEN** the controller dispatches a query via `executeDirectly` (in-process)
+--- candidata: query-input-simplification [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: OpenAI endpoints removed from ark-api
+  | The ark-api SHALL remove the `/openai/v1/chat/completions` POST endpoint, the `/openai/v1/models` GET endpoint, the `ChatCompletionRequest` model, the streaming proxy function, and the `/openai/v1/cha
+  > The ark-api SHALL remove the `/openai/v1/chat/completions` POST endpoint, the `/openai/v1/models` GET endpoint, the `ChatCompletionRequest` model, the streaming proxy function, and the `/openai/v1/cha
+  > #### Scenario: Client calls removed completions endpoint
+  > - **WHEN** a client sends a POST request to `/openai/v1/chat/completions`
+  > - **THEN** the middleware whitelist does not reference `/openai/v1/chat/completions`
+  > ### Requirement: Dashboard streams via query API and broker proxy
+  > The dashboard SHALL create queries via `POST /api/v1/queries/` with the streaming annotation (`ark.mckinsey.com/streaming-enabled: "true"`), then consume SSE via `GET /api/v1/broker/chunks?watch=true&
+  > - **THEN** the dashboard creates a query via `/api/v1/queries/` with the streaming annotation and streams results from `/api/v1/broker/chunks`
+  > - **THEN** the dashboard creates a query via `/api/v1/queries/` and polls for the result
+--- candidata: executor-developer-guide [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Executor developer guide exists
+  | The documentation site SHALL include a guide at `docs/content/developer-guide/building-execution-engines.mdx` that explains how to build an Ark execution engine using the Python SDK.
+  > The documentation site SHALL include a guide at `docs/content/developer-guide/building-execution-engines.mdx` that explains how to build an Ark execution engine using the Python SDK.
+  > The executor developer guide SHALL reference `ark/api/extensions/query/v1/` as the authoritative contract spec and link to its README.
+  > - **THEN** the guide explains that Ark uses the A2A v0.3.0 query extension to pass context and links to the schema location in the repo
+  > - **THEN** the imports work without needing to discover internal module paths
+  > The documentation site SHALL include a guide at `docs/content/developer-guide/building-execution-engines.mdx` that explains how to build an Ark execution engine using the Python SDK.
+  > The executor developer guide SHALL reference `ark/api/extensions/query/v1/` as the authoritative contract spec and link to its README.
+  > - **THEN** the guide explains that Ark uses the A2A v0.3.0 query extension to pass context and links to the schema location in the repo
+  > - **THEN** the imports work without needing to discover internal module paths
+--- candidata: mcp-auth-ark-api-orchestration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: ark-api exposes POST /auth/start to initiate an authorization flow
+  | ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > | 422 | MCPServer is `DiscoveryFailed`; OR `registrationEndpoint` is empty AND the Secret carries no cached `client_id` / `client_secret`; OR a Secret named `<server>-oauth` exists without the `ark.mc
+  > The four auth endpoints (`auth/start`, `auth/callback`, `auth/status`, `auth/logout`) SHALL NOT introduce a new inbound-authentication contract. They inherit the same trust boundary as every other rou
+  > - ark-api SHALL create the Secret in the resolved namespace with `type: Opaque`, an empty `data` block, and the label `ark.mckinsey.com/mcpserver: <mcp-server-name>`. If a Secret with the default name
+  > - If a Secret with the default name already exists WITHOUT the `ark.mckinsey.com/mcpserver: <mcp-server-name>` label, ark-api SHALL return HTTP 422 with a message naming the conflicting Secret and ins
+  > Rationale: at the point a client calls `auth/start`, the intent to begin OAuth is unambiguous — the user (or dashboard) chose to authorize an OAuth-protected MCPServer. Refusing because of a missing f
+  > - **THEN** ark-api SHALL create a Secret named `<name>-oauth` in the same namespace with `type: Opaque`, the `ark.mckinsey.com/mcpserver: <name>` label, and an empty `data` block
+  > - **AND** a Secret named `<name>-oauth` already exists in the same namespace with the `ark.mckinsey.com/mcpserver: <name>` label (possibly empty `data`, possibly partial DCR credentials from a prior f
+
+===== P072 | shitz/clutch PR #3 | capacidade do par: turtle-mode
+PR: chore: refactor large monolithic modules into smaller submodules
+arquivos ligados: src/profile.rs;src/rpc/api.rs;src/screens/main_screen.rs;src/screens/settings/draft.rs;src/screens/settings/update.rs;src/screens/settings/view.rs;src/theme.rs
+--- linhas alteradas (891; mostrando até 40)
+-    /// 2.6a – Valid TOML parses correctly.
++    /// Valid TOML parses correctly.
+-    /// 2.6b – Missing file yields empty defaults (simulated by parsing empty string).
++    /// Missing file input yields empty defaults when parsed from an empty string.
+-    /// 2.6c – Corrupt TOML fails to parse.
++    /// Corrupt TOML fails to parse.
+-    /// 5.1 – `torrent_set_file_wanted` with `wanted = true` sends `"files-wanted"`.
++    /// `torrent_set_file_wanted` with `wanted = true` sends `"files-wanted"`.
+-    /// 5.2 – `torrent_set_file_wanted` with `wanted = false` sends `"files-unwanted"`.
++    /// `torrent_set_file_wanted` with `wanted = false` sends `"files-unwanted"`.
+-    /// 5.3 – `torrent_add` with `files_unwanted` populated includes the array in the body.
++    /// `torrent_add` includes `files_unwanted` in the request body when provided.
+-    use crate::rpc::{RpcWork, TorrentBandwidthArgs, TorrentData};
++    use crate::rpc::{RpcWork, TorrentData};
++//! Editable draft types used by the settings connections tab.
++    /// Build a draft from an existing saved profile.
++    /// Build a draft for a newly created blank profile.
++    /// Convert the current draft into runtime credentials when the port is valid.
++//! Message handling for the settings screen.
++//! View rendering for the settings screen.
++    /// Render the settings screen and any active modal overlays.
+-                        |t: &iced::Theme, s| {
+-                            let p = t.extended_palette();
+-                            let (bg, hover) = (p.danger.base.color, p.danger.strong.color);
+-                            let bg = match s {
+-                                button::Status::Hovered | button::Status::Pressed => hover,
+-                                _ => bg,
+-                            };
+-                            button::Style {
+-                                background: Some(iced::Background::Color(bg)),
+-                                text_color: p.danger.base.text,
+-                                border: iced::Border {
+-                                    radius: 100.0.into(),
+-                                    ..Default::default()
+-                                },
+-                                ..Default::default()
+-                            }
+-                        }
++                        crate::theme::danger_pill_button
+-        .style(|t: &iced::Theme| {
+--- candidata: material-theme [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Material Design 3 theme
+  | The application SHALL support two built-in themes — Light and Dark — both derived from a Material Design 3 palette. Each theme SHALL be implemented as a custom `iced::Theme` with a `Palette` matching 
+  > ### Requirement: Material Design 3 theme
+  > The application SHALL support two built-in themes — Light and Dark — both derived from a Material Design 3 palette. Each theme SHALL be implemented as a custom `iced::Theme` with a `Palette` matching 
+  > #### Scenario: Default theme applied on launch
+  > - **THEN** the Dark Material theme is active
+  > #### Scenario: Light theme active when toggled
+  > - **WHEN** the user activates the light mode toggle
+  > - **THEN** all widgets are rendered using the Light Material palette
+  > #### Scenario: Dark theme active when toggled back
+--- candidata: m3-components [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Primary filled button helper
+  | The application SHALL provide an `m3_primary_button` style function in `src/theme.rs`. The style SHALL produce a solid primary-color background with white (on-primary) text and a fully rounded pill sh
+  > ### Requirement: Primary filled button helper
+  > The application SHALL provide an `m3_primary_button` style function in `src/theme.rs`. The style SHALL produce a solid primary-color background with white (on-primary) text and a fully rounded pill sh
+  > #### Scenario: Primary button renders with solid brand color
+  > - **WHEN** `m3_primary_button` style is applied to a button
+  > - **THEN** the button has the brand primary color as a solid background and white label text
+  > #### Scenario: Primary button responds to press
+  > - **WHEN** the user clicks the primary button
+  > - **THEN** the on_press message is dispatched
+--- candidata: connection-screen [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Connect action
+  | The screen SHALL provide a "Connect" button styled as a primary filled pill (`m3_primary_button`). In the Quick Connect tab, clicking it initiates a connection probe using the entered credentials and 
+  > The screen SHALL provide a "Connect" button styled as a primary filled pill (`m3_primary_button`). In the Quick Connect tab, clicking it initiates a connection probe using the entered credentials and 
+  > When the selected profile has an `encrypted_password` and `AppState.unlocked_passphrase` is `None`, clicking Connect SHALL NOT initiate a connection immediately. Instead it SHALL trigger the passphras
+  > #### Scenario: Button disabled during connection attempt
+  > - **WHEN** the user clicks Connect
+  > - **THEN** the Connect button becomes disabled until the attempt completes or fails
+  > #### Scenario: Successful connection transitions to torrent list
+  > - **THEN** the app transitions to the torrent list screen
+  > #### Scenario: Encrypted profile without unlocked passphrase triggers unlock dialog
+--- candidata: file-selection [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inspector Files tab shows per-file wanted checkboxes
+  | The inspector Files tab SHALL display a checkbox at the start of each file row. The displayed
+  > ### Requirement: Inspector Files tab shows per-file wanted checkboxes
+  > The inspector Files tab SHALL display a checkbox at the start of each file row. The displayed
+  > 1. If a pending optimistic override exists for index _i_ in `InspectorScreen::pending_wanted`,
+  > 2. Otherwise, show the `wanted` field from `TorrentFileStats[i]` (last received from the daemon).
+  > 3. If `TorrentFileStats` is absent for index _i_, default to checked (wanted = true).
+  > #### Scenario: All files wanted
+  > - **WHEN** all `fileStats[].wanted` values are `true`
+  > - **THEN** every checkbox in the Files tab is rendered as checked
+--- candidata: add-torrent [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Add Torrent toolbar entry points
+  | The main-screen toolbar SHALL provide two buttons: **Add Torrent** and **Add Link**. These are
+  > ### Requirement: Add Torrent toolbar entry points
+  > The main-screen toolbar SHALL provide two buttons: **Add Torrent** and **Add Link**. These are
+  > always visible and do not require a torrent to be selected.
+  > #### Scenario: Add Torrent button clicked
+  > - **WHEN** the user clicks "Add Torrent"
+  > - **THEN** a native file picker dialog filtered to `.torrent` files is opened
+  > #### Scenario: Add Link button clicked
+  > - **WHEN** the user clicks "Add Link"
+
+===== P073 | arabold/docs-mcp-server PR #431 | capacidade do par: subresource-blocklist
+PR: Fix embedding dimension resolution for custom models
+arquivos ligados: src/store/DocumentStore.test.ts
+--- linhas alteradas (152; mostrando até 40)
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+-import { loadConfig } from "../utils/config";
++import { loadConfig, markVectorDimensionSource } from "../utils/config";
+-import { EmbeddingModelChangedError } from "./errors";
++import { DimensionError, EmbeddingModelChangedError } from "./errors";
++const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
++const mockEmbeddingCalls = vi.hoisted(() => ({ query: 0, documents: 0 }));
++        mockEmbeddingCalls.query += 1;
+-        const embedding = new Array(1536).fill(0);
++        const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-            const index = (baseIndex + i) % 1536;
++            const index = (baseIndex + i) % mockEmbeddingDimension.value;
++        mockEmbeddingCalls.documents += 1;
+-          const embedding = new Array(1536).fill(0);
++          const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-              const index = (baseIndex + i) % 1536;
++              const index = (baseIndex + i) % mockEmbeddingDimension.value;
++    mockEmbeddingDimension.value = 1536;
++      mockEmbeddingDimension.value = 1536;
++  let tempDir: string;
++    mockEmbeddingDimension.value = 1536;
++    mockEmbeddingCalls.query = 0;
++    mockEmbeddingCalls.documents = 0;
++    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-store-"));
++    rmSync(tempDir, { recursive: true, force: true });
++    dbPath = ":memory:",
++      markVectorDimensionSource(cfg, true);
+-    const s = new DocumentStore(":memory:", cfg);
++    const s = new DocumentStore(dbPath, cfg);
++    it("should not throw after restarting with an auto-detected unknown model dimension", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model");
++      // Metadata was persisted with the resolved dimension, not the default config value.
++      expect(store.getEmbeddingMetadata().dimension).toBe("1024");
++      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
++    });
++    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
++      mockEmbeddingDimension.value = 1024;
+--- candidata: embedding-generation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Chunk Metadata Header
+  | The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > ### Requirement: Chunk Metadata Header
+  > The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > This enriches the embedding vector with document context to improve semantic search relevance. The header is prepended only for the embedding input; it is not stored as part of the chunk content in th
+  > **Code reference:** `src/store/DocumentStore.ts:1170-1173`
+  > - **THEN** the embedding input SHALL be prefixed with `<title>React Docs</title>\n<url>https://react.dev/learn</url>\n<path>Learn / Installation / Setup</path>\n`
+  > - **AND** the chunk content in the database SHALL remain unchanged (without the header)
+  > #### Scenario: Chunk with empty section path
+  > - **WHEN** a chunk has an empty section path `[]`
+--- candidata: embedding-model-change-safety [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Embedding Metadata Persistence
+  | The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > ### Requirement: Embedding Metadata Persistence
+  > The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > - `embedding_model`: The full model specification string (e.g., `openai:text-embedding-3-small`)
+  > - `embedding_dimension`: The configured vector dimension as a string (e.g., `"1536"`)
+  > The `metadata` table SHALL be created by a database migration with the schema `CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`.
+  > The metadata SHALL be written after successful embedding initialization during `DocumentStore.initialize()`. If embeddings are disabled (FTS-only mode), no embedding metadata SHALL be stored.
+  > #### Scenario: Metadata stored after successful embedding init
+  > - **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
+--- candidata: embedding-resolution [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Model Specification Parsing
+  | The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > **Supported providers:** `openai`, `vertex`, `gemini`, `aws`, `microsoft`, `sagemaker` (parse-only; model creation not yet implemented).
+  > **Code reference:** `src/store/embeddings/EmbeddingConfig.ts:290-317`
+  > #### Scenario: Model string without provider prefix
+  > - **WHEN** the model specification is `text-embedding-3-small` (no colon)
+  > - **THEN** the system SHALL use `openai` as the provider and `text-embedding-3-small` as the model name
+  > #### Scenario: Model string with provider prefix
+  > - **WHEN** the model specification is `gemini:embedding-001`
+--- candidata: configuration [tasks]
+  | # configuration Specification
+  | ## Purpose
+  | Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands.
+  > Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands.
+  > - **GIVEN** no custom configuration for `scraper.document.maxSize`
+  > The system SHALL support overriding any configuration setting via environment variables using a predictable naming convention.
+  > - **WHEN** the environment variable `DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE` is set
+  > - **WHEN** converted to environment variable format
+  > - **WHEN** converted to environment variable name
+  > The system SHALL apply configuration overrides in a defined priority order.
+  > - **AND** `--storePath=/cli/path` is passed
+
+===== P074 | ZanebonoAlter/Syntopica PR #14 | capacidade do par: board-management-api
+PR: V1.3.3
+arquivos ligados: backend-go/internal/domain/models/semantic_label.go
+--- linhas alteradas (55; mostrando até 40)
+-package models
+-import "time"
+-type SemanticLabel struct {
+-	ID             uint      `gorm:"primaryKey" json:"id"`
+-	Label          string    `gorm:"size:160;not null" json:"label"`
+-	Slug           string    `gorm:"size:160;not null;uniqueIndex:idx_semantic_labels_slug" json:"slug"`
+-	Embedding      *string   `gorm:"type:vector(4096);column:embedding" json:"-"`
+-	MergeEmbedding *string   `gorm:"type:vector(4096);column:merge_embedding" json:"-"`
+-	LabelType      string    `gorm:"size:20;not null;index:idx_semantic_labels_label_type" json:"label_type"`
+-	Aliases        []string  `gorm:"type:jsonb;serializer:json;default:'[]'" json:"aliases"`
+-	RefCount       int       `gorm:"not null;default:0" json:"ref_count"`
+-	Description    string    `gorm:"type:text" json:"description"`
+-	DisplayOrder   int       `gorm:"not null;default:0" json:"display_order"`
+-	Source         string    `gorm:"size:50;not null;default:llm_extract" json:"source"`
+-	Status         string    `gorm:"size:20;not null;default:active;index:idx_semantic_labels_status" json:"status"`
+-	Protected      bool      `gorm:"not null;default:false" json:"protected"`
+-	CreatedAt      time.Time `json:"created_at"`
+-	UpdatedAt      time.Time `json:"updated_at"`
+-}
+-func (SemanticLabel) TableName() string {
+-	return "semantic_labels"
+-}
+-type TopicTagSemanticLabel struct {
+-	TopicTagID      uint `gorm:"primaryKey;not null" json:"topic_tag_id"`
+-	SemanticLabelID uint `gorm:"primaryKey;not null" json:"semantic_label_id"`
+-	TopicTag      *TopicTag      `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
+-	SemanticLabel *SemanticLabel `gorm:"foreignKey:SemanticLabelID;constraint:OnDelete:CASCADE" json:"semantic_label,omitempty"`
+-}
+-func (TopicTagSemanticLabel) TableName() string {
+-	return "topic_tag_semantic_labels"
+-}
+-type TopicTagBoardLabel struct {
+-	TopicTagID      uint      `gorm:"primaryKey;not null" json:"topic_tag_id"`
+-	SemanticBoardID uint      `gorm:"primaryKey;not null" json:"semantic_board_id"`
+-	Score           float64   `gorm:"not null;default:0" json:"score"`
+-	MatchReason     string    `gorm:"type:text" json:"match_reason"`
+-	Downgraded      bool      `gorm:"not null;default:false" json:"downgraded"`
+-	DirectionMismatch bool    `gorm:"not null;default:false" json:"direction_mismatch"`
+-	CreatedAt       time.Time `json:"created_at"`
+-	UpdatedAt       time.Time `json:"updated_at"`
+--- candidata: tag-to-board-matching [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Embedding-based tag-to-board matching
+  | The system SHALL match tags to board concepts using cosine similarity of their embeddings against `board_concepts.embedding`. For event category tags, all embedding rows (semantic title + event_keywor
+  > ### Requirement: Embedding-based tag-to-board matching
+  > The system SHALL match tags to board concepts using cosine similarity of their embeddings against `board_concepts.embedding`. For event category tags, all embedding rows (semantic title + event_keywor
+  > #### Scenario: Non-event tag uses single embedding unchanged
+  > - **WHEN** keyword tag "人工智能" has embedding matched against concepts
+  > - **THEN** the single semantic embedding row SHALL be used for cosine similarity; no weighting applied
+  > ### Requirement: Embedding-based tag-to-board matching
+  > The system SHALL match eligible Tags and small abstract trees to active board concepts using cosine similarity of their embeddings against `board_concepts.embedding`. When a Tag matches a concept abov
+  > #### Scenario: Tag matches a board concept above threshold
+--- candidata: board-upgrade [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: 辅助标签聚类升级触发
+  | 系统 SHALL 在 ref_count ≥ semantic_board_upgrade_ref_count_threshold（默认 5）的未升级辅助标签数量达到阈值时，允许用户手动触发板块升级流程。系统 SHALL NOT 自动触发升级。
+  > 系统 SHALL 在 ref_count ≥ semantic_board_upgrade_ref_count_threshold（默认 5）的未升级辅助标签数量达到阈值时，允许用户手动触发板块升级流程。系统 SHALL NOT 自动触发升级。
+  > - **WHEN** 系统检测到 8 个 ref_count ≥ 5 的未升级辅助标签
+  > - **WHEN** 仅有 3 个 ref_count ≥ 5 的未升级辅助标签
+  > 系统 SHALL 在 LLM 判断前，对候选辅助标签（含已有 board）进行 embedding 预聚类，压缩为 8-10 个簇。聚类 SHALL 使用 cosine 距离，阈值约 0.7。
+  > - **WHEN** 有 50 个新候选辅助标签 + 15 个已有 board
+  > - **THEN** 系统 SHALL 通过 embedding 预聚类压缩为 8-10 个簇
+  > 系统 SHALL 为每个簇补充关联的 co-tag 事件作为 LLM 判断上下文。事件 SHALL 按以下规则筛选：(1) 时间窗口近 30 天；(2) 按共现频率排序取 top 20；(3) 事件间 embedding 相似度 >0.85 的去重；(4) 每簇硬上限 15 个事件。
+  > 系统 SHALL 在用户手动触发时，将每个簇的辅助标签列表 + co-tag 事件发送给 LLM，由 LLM 判断：merge_into_existing（候选归入已有 board）、create_new（升级为新 board）、skip（暂不升级）。LLM 结果 SHALL 作为建议返回，用户确认前不得写入 SemanticBoard 或 board_composition。
+--- candidata: daily-report-system [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: 日报时间线组件 BoardDailyReportTimeline
+  | 前端 SHALL 提供 `BoardDailyReportTimeline.vue` 组件。组件 SHALL 采用双态展示：默认收起态展示概要列表（日期 + summary 截断前 30 字 + 文章数 + status），点击概要卡片弹出全屏旧报纸弹窗展示单日完整内容。弹窗使用泛黄纸张底色 + 衬线字体排版，按章节分页（第 1 页 = 今日重点 + 板块动态，后续每页 = 一个叙事线索 sect
+  > ### Requirement: 日报时间线组件 BoardDailyReportTimeline
+  > 前端 SHALL 提供 `BoardDailyReportTimeline.vue` 组件。组件 SHALL 采用双态展示：默认收起态展示概要列表（日期 + summary 截断前 30 字 + 文章数 + status），点击概要卡片弹出全屏旧报纸弹窗展示单日完整内容。弹窗使用泛黄纸张底色 + 衬线字体排版，按章节分页（第 1 页 = 今日重点 + 板块动态，后续每页 = 一个叙事线索 sect
+  > - **WHEN** 选中 board "AI与机器学习"，该 board 有 3 天的日报
+  > - **THEN** BoardDailyReportTimeline SHALL 渲染 3 张概要卡片，按日期倒序
+  > #### Scenario: 叙事线索 status 颜色
+  > - **WHEN** 线索 status 为 emerging/continuing/splitting/merging/ending
+  > - **WHEN** 选中 board 但该 board 无日报
+  > 系统 SHALL 新建 `board_daily_reports` 和 `daily_report_sections` 两张表，独立于旧 `narrative_boards`/`narrative_summaries`。每个 SemanticBoard 每天至多一条 `BoardDailyReport` 记录。叙事线程 SHALL 存储在独立的 `daily_report_threads` 表中，
+--- candidata: board-direction-check [tasks]
+  | ## Purpose
+  | max_sim 规则的方向性校验：计算 tag identity embedding 与 board embedding 的 cosine 相似度，低于阈值时标记 direction_mismatch=true。仅对 max_sim 规则生效。
+  | ## ADDED Requirements
+  > max_sim 规则的方向性校验：计算 tag identity embedding 与 board embedding 的 cosine 相似度，低于阈值时标记 direction_mismatch=true。仅对 max_sim 规则生效。
+  > evaluateSemanticBoardMatches 在 max_sim 规则匹配成功后，计算 tag identity embedding 与 board embedding 的 cosine 相似度。当 cosine < DirectionSimThreshold（默认 0.5）时，标记 direction_mismatch=true。仅对 max_sim 规则生效，hit_rate、we
+  > - **WHEN** tag matches board via max_sim rule AND cosine(tag_identity_embedding, board_embedding) >= 0.5
+  > - **THEN** direction_mismatch=false, match recorded normally
+  > - **WHEN** tag matches board via max_sim rule AND cosine(tag_identity_embedding, board_embedding) < 0.5
+  > - **THEN** direction_mismatch=true, match still recorded with original score
+  > #### Scenario: tag or board embedding unavailable
+  > - **WHEN** tag identity embedding is NULL OR board embedding is NULL
+--- candidata: tag-embedding-management [PR]
+  | ## Purpose (Delta from `tag-embedding-management`)
+  | 优化 `parsePgVector` 调用，通过 board embeddings 缓存和 merge embeddings 缓存消除重复解析。
+  | ## Requirements
+  > ## Purpose (Delta from `tag-embedding-management`)
+  > 优化 `parsePgVector` 调用，通过 board embeddings 缓存和 merge embeddings 缓存消除重复解析。
+  > ### Requirement: Board Embeddings 缓存存储已解析数据
+  > Board embeddings 缓存 SHALL 存储 `map[uint][]float64`（已解析的 float64 切片），而非原始 pgvector 字符串。缓存加载时执行 `parsePgVector`，后续读取直接使用解析结果。
+  > - **WHEN** board embeddings 缓存首次加载（或失效后重新加载），DB 中有 200 个 board embeddings
+  > - **THEN** 系统 SHALL 调用 `parsePgVector` 恰好 200 次（每个 embedding 一次），结果存入缓存
+  > - **WHEN** 10 次 `MatchTopicTag` 调用发生在缓存有效期内
+  > - **THEN** 系统 SHALL NOT 为 board embeddings 调用 `parsePgVector`，直接使用缓存的 `[]float64`
+
+===== P075 | eduardohr-muniz/go_router_modular PR #20 | capacidade do par: events-bus
+PR: Organize
+arquivos ligados: lib/src/events/event_module.dart;lib/src/events/event_state.dart;lib/src/events/modular_event.dart;lib/src/events/modular_event_listener.dart;lib/src/events/modular_event_mixin.dart;test/event_module_test.dart
+--- linhas alteradas (324; mostrando até 40)
+-import 'package:go_router_modular/go_router_modular.dart';
++import 'dart:developer';
+-/// Abstract module that adds event support via [EventListenerMixin].
++import 'package:event_bus/event_bus.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router_modular/src/di/injector.dart';
++import 'package:go_router_modular/src/events/event_state.dart';
++import 'package:go_router_modular/src/events/modular_event.dart';
++import 'package:go_router_modular/src/module/module.dart';
++import 'package:go_router_modular/src/routing/modular_router_runtime.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
++bool get _debugLog => SetupModular.instance.debugLogEventBus;
++bool get _autoDisposeEvents => SetupModular.instance.autoDisposeEvents;
++BuildContext? get _navigatorContext => modularNavigatorKey.currentContext;
++final EventState _state = EventState.instance;
++/// Escopo de registro de ouvintes: identifica em qual `eventBusId` e em qual
++/// barramento as assinaturas devem ser gravadas. Permite que módulos compostos
++/// (registrados via `OutroEventModule().listen()`) herdem o escopo do host.
++class _EventRegistrationScope {
++  const _EventRegistrationScope(this.eventBusId, this.eventBus);
++  final int eventBusId;
++  final EventBus eventBus;
++}
++/// Módulo abstrato com suporte a eventos.
+-/// Override [listen] to register handlers with [on].
+-/// Override [eventImports] to add [ModularEventListener] instances.
+-abstract class EventModule extends Module with EventListenerMixin {
++/// Estende [Module] e incorpora diretamente a lógica de escuta: sobrescreva
++/// [listen] para registrar handlers com [on]. Para compor os ouvintes de outro
++/// módulo, chame `OutroEventModule().listen()` de forma síncrona dentro do
++/// próprio [listen] — os ouvintes do filho herdam o ciclo de vida deste host.
++abstract class EventModule extends Module {
+-  /// Listeners to register when the module initializes.
+-  List<ModularEventListener> eventImports() => [];
++  late final EventBus internalEventBus;
++  int get eventBusId => internalEventBus.hashCode + hashCode;
++  /// Escopo de host ativo durante a execução síncrona de [listen]. Quando um
++  /// módulo composto chama [on], as assinaturas são gravadas neste escopo.
++  static _EventRegistrationScope? _activeHostScope;
++  _EventRegistrationScope get _ownScope => _EventRegistrationScope(eventBusId, internalEventBus);
+--- candidata: events-listening [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: on registra ouvinte tipado com callback que recebe contexto opcional
+  | O sistema SHALL expor, via `EventListenerMixin`, o método `on<T>(void Function(T event, BuildContext? context) callback, {bool? autoDispose, @Deprecated bool? broadcast, bool exclusive = false})`. Cad
+  > ### Requirement: on registra ouvinte tipado com callback que recebe contexto opcional
+  > O sistema SHALL expor, via `EventListenerMixin`, o método `on<T>(void Function(T event, BuildContext? context) callback, {bool? autoDispose, @Deprecated bool? broadcast, bool exclusive = false})`. Cad
+  > Arquivos de referência: `lib/src/events/modular_event.dart` (`on`, `_registerRegularListener`).
+  > #### Scenario: Callback recebe o evento disparado
+  > - **WHEN** um módulo registra `on<MeuEvento>` e `MeuEvento` é disparado no barramento do módulo
+  > - **THEN** o callback é invocado com a instância de `MeuEvento`
+  > #### Scenario: Segundo registro do mesmo tipo substitui o anterior
+  > - **WHEN** um módulo registra `on<MeuEvento>` duas vezes com callbacks diferentes
+--- candidata: events-event-module [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: EventModule é um Module com suporte a eventos via mixin
+  | O sistema SHALL definir `EventModule` como classe abstrata que estende `Module` e aplica `EventListenerMixin`. O construtor MUST aceitar um `EventBus` opcional e atribuir `internalEventBus = eventBus 
+  > ### Requirement: EventModule é um Module com suporte a eventos via mixin
+  > O sistema SHALL definir `EventModule` como classe abstrata que estende `Module` e aplica `EventListenerMixin`. O construtor MUST aceitar um `EventBus` opcional e atribuir `internalEventBus = eventBus 
+  > Arquivos de referência: `lib/src/events/event_module.dart`, `lib/src/events/modular_event.dart` (mixin `EventListenerMixin`), `lib/src/core/module/module.dart`.
+  > #### Scenario: EventModule sem barramento usa o barramento global
+  > - **WHEN** uma subclasse de `EventModule` é instanciada sem passar `eventBus`
+  > - **THEN** `internalEventBus` é igual a `defaultModularEventBus`
+  > #### Scenario: EventModule com barramento customizado usa o barramento fornecido
+  > - **WHEN** uma subclasse de `EventModule` é instanciada com `EventModule(eventBus: customEventBus)`
+--- candidata: public-api-surface [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: O barril principal exporta a superfície pública por área
+  | O sistema SHALL expor sua API pública pelo barril `lib/go_router_modular.dart`, agrupada por área. O barril MUST exportar, no mínimo: o core (`bind.dart`, `go_router_modular_configure.dart`, `module.d
+  > ### Requirement: O barril principal exporta a superfície pública por área
+  > O sistema SHALL expor sua API pública pelo barril `lib/go_router_modular.dart`, agrupada por área. O barril MUST exportar, no mínimo: o core (`bind.dart`, `go_router_modular_configure.dart`, `module.d
+  > Arquivos de referência: `lib/go_router_modular.dart`.
+  > - **WHEN** um consumidor importa `package:go_router_modular/go_router_modular.dart`
+  > - **THEN** tipos como `Module`, `Bind`, `Injector`, `ChildRoute`, `ModuleRoute`, `ShellModularRoute`, `ModularApp` e `ModularException` ficam disponíveis sem importar arquivos de `src/`
+  > O sistema SHALL re-exportar pacotes externos pelo barril principal aplicando ocultação seletiva para evitar colisão com os tipos modulares. O barril MUST exportar `package:go_router/go_router.dart` co
+  > Arquivos de referência: `lib/go_router_modular.dart`.
+  > #### Scenario: Apenas símbolos públicos de eventos são expostos
+--- candidata: events-testing [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: clearEventModuleState reinicia o estado global entre testes
+  | O sistema SHALL expor `clearEventModuleState()` (anotado com `@visibleForTesting`) que delega para `EventState.instance.clearAll()`, cancelando todas as assinaturas e limpando todos os mapas de estado
+  > ### Requirement: clearEventModuleState reinicia o estado global entre testes
+  > O sistema SHALL expor `clearEventModuleState()` (anotado com `@visibleForTesting`) que delega para `EventState.instance.clearAll()`, cancelando todas as assinaturas e limpando todos os mapas de estado
+  > Arquivos de referência: `lib/src/events/modular_event.dart` (`clearEventModuleState`), `lib/src/events/event_state.dart` (`clearAll`).
+  > - **WHEN** um teste registra ouvintes e o `setUp` do próximo teste chama `clearEventModuleState()`
+  > - **THEN** nenhum ouvinte do teste anterior é acionado no teste seguinte
+  > #### Scenario: Limpeza sem ouvintes não falha
+  > - **WHEN** `clearEventModuleState()` é chamado sem nenhum ouvinte registrado
+  > - **THEN** a chamada completa sem lançar exceção
+--- candidata: documentation-site [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Paridade de conteúdo e navegação entre EN e PT
+  | O sistema SHALL manter a mesma árvore de páginas e a mesma estrutura de navegação nos dois idiomas, com textos traduzidos. Para cada documento em `content/en/` MUST existir o documento correspondente 
+  > O sistema SHALL manter a mesma árvore de páginas e a mesma estrutura de navegação nos dois idiomas, com textos traduzidos. Para cada documento em `content/en/` MUST existir o documento correspondente 
+  > - **WHEN** as árvores `content/en/` e `content/pt/` são comparadas por caminho relativo
+  > #### Scenario: A página de boas práticas de routing existe nos dois idiomas e na navegação
+  > ### Requirement: Página de boas práticas de routing documenta a convenção recomendada
+  > O sistema SHALL fornecer, na seção de routing, uma página de boas práticas (`routes/best-practices.mdx`) que documente a convenção recomendada do `go_router_modular`, alinhada à Agent Skill `go-router
+  > - **THEN** ela mostra a navegação por `MyRoute.of(context)` e marca como incorreto o uso de `context.go('/...')` com path cru
+  > #### Scenario: Cobre name no ChildRoute e módulos síncronos
+  > - **THEN** ela mostra `ChildRoute` com `name:` por constante e recomenda `binds`/`imports` síncronos, desaconselhando módulos assíncronos

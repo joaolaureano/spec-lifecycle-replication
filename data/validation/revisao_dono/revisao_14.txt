@@ -1,0 +1,507 @@
+===== P082 | exasol/exasol-personal PR #130 | capacidade do par: connect-sql-input
+PR: fix: Fix bug where results larger 1,000 rows were not fetched
+arquivos ligados: cmd/exasol/connect.go;internal/connect/connect.go
+--- linhas alteradas (52; mostrando até 40)
++	MaxRows:            connect.MaxRowsUnset,
++	connectCmd.Flags().IntVar(
++		&connectOpts.MaxRows,
++		"max-rows", connect.MaxRowsUnset,
++		"Maximum rows to display per query (0 = unlimited; "+
++			"default: 100 interactively, unlimited otherwise)",
++	)
++	// MaxRows caps the number of rows displayed per query. A negative value
++	// means "unset" (use the per-mode default); 0 means unlimited.
++	MaxRows int
++}
++// MaxRowsUnset is the sentinel for a MaxRows that was not set on the command
++// line, leaving the limit to be derived from the session mode.
++const MaxRowsUnset = -1
++// interactivePreviewMaxRows is the default row cap for interactive sessions.
++const interactivePreviewMaxRows = 100
++// effectiveMaxRows returns the explicit row limit when one was set, otherwise
++// the mode default. A negative requested value means "unset".
++func effectiveMaxRows(requested, modeDefault int) int {
++	if requested >= 0 {
++		return requested
++	}
++	return modeDefault
+-	if util.IsInteractiveStdin() {
++	interactive := util.IsInteractiveStdin()
++	modeDefault := 0
++	if interactive {
++		modeDefault = interactivePreviewMaxRows
++	}
++	maxRows := effectiveMaxRows(opts.MaxRows, modeDefault)
++	if interactive {
+-		queryResult, err := database.Exec(ctx, input)
++		queryResult, err := database.Exec(ctx, input, maxRows)
+-		return printer(output, queryResult)
++		if err := printer(output, queryResult); err != nil {
++			return err
++		}
++		if queryResult.Truncated() {
++			return printTruncationFooter(os.Stderr, len(queryResult.Rows()))
++		}
+--- candidata: connect-result-retrieval [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Retrieval of large result sets
+  | `exasol connect` SHALL retrieve query results regardless of size. When the database returns a result-set handle rather than complete inline data, the client SHALL fetch the rows it intends to display 
+  > `exasol connect` SHALL retrieve query results regardless of size. When the database returns a result-set handle rather than complete inline data, the client SHALL fetch the rows it intends to display 
+  > #### Scenario: Query result exceeds the inline limit
+  > - **WHEN** the user executes a query returning more rows than the websocket inline limit (e.g. `SELECT * FROM products`) with no effective row limit
+  > - **WHEN** the user executes a query whose full result arrives inline (at or below the inline limit)
+  > When `exasol connect` runs interactively (standard input is a terminal) and no explicit row limit is given, it SHALL limit displayed rows to a default preview limit of 100. When more rows are availabl
+  > #### Scenario: Interactive query exceeds the preview cap
+  > - **WHEN** an interactive user runs a query returning 1,000,000 rows with no `--max-rows` flag
+  > - **THEN** only the first 100 rows are fetched and printed
+--- candidata: connect-json-output [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Typed JSON Query Result Values
+  | `exasol connect --json` SHALL emit query result rows using JSON-compatible value types instead of converting every cell to a string.
+  > `exasol connect --json` SHALL emit query result rows using JSON-compatible value types instead of converting every cell to a string.
+  > - **WHEN** a query result contains numeric SQL values returned by the database driver as safely representable numeric values
+  > - **THEN** `exasol connect --json` emits those cells as JSON numbers
+  > - **WHEN** a query result contains boolean SQL values
+  > - **THEN** `exasol connect --json` emits those cells as JSON booleans
+  > - **WHEN** a query result contains SQL `NULL` values
+  > - **THEN** `exasol connect --json` emits those cells as JSON `null`
+  > - **WHEN** a query result contains text, date, timestamp, or other non-JSON-native values represented as strings
+--- candidata: deployment-directory-resolution [termos]
+  | ## ADDED Requirements
+  | ### Requirement: CLI SHALL resolve an active deployment directory
+  | Commands that operate on a deployment directory SHALL resolve exactly one active deployment directory before command-specific execution.
+  > Commands that operate on a deployment directory SHALL resolve exactly one active deployment directory before command-specific execution.
+  > - **WHEN** a user invokes a deployment command with `--deployment-dir <path>`
+  > - **AND** the CLI does not use the current working directory or default deployment directory for that command
+  > - **WHEN** a user invokes a deployment command without `--deployment-dir`
+  > - **WHEN** a user invokes a deployment command without `--deployment-dir`
+  > #### Scenario: Default directory message is shown
+  > - **WHEN** a deployment command resolves to the default deployment directory
+  > #### Scenario: JSON payload output remains parseable
+
+===== P083 | lueluelue12138/sharp-gui PR #16 | capacidade do par: local-photo-album-gallery
+PR: feat(video): 添加视频 3DGS 重建能力
+arquivos ligados: backend/paths.py;backend/security/access_control.py
+--- linhas alteradas (18; mostrando até 40)
++    video_reconstruction_folder: str
++    video_reconstruction_jobs_folder: str
++    video_reconstruction_folder = os.path.join(workspace_folder, ".video-reconstruction")
++    video_reconstruction_jobs_folder = os.path.join(video_reconstruction_folder, "jobs")
++        video_reconstruction_folder=video_reconstruction_folder,
++        video_reconstruction_jobs_folder=video_reconstruction_jobs_folder,
++    os.makedirs(paths.video_reconstruction_jobs_folder, exist_ok=True)
++    app.config["VIDEO_RECONSTRUCTION_FOLDER"] = paths.video_reconstruction_folder
++    app.config["VIDEO_RECONSTRUCTION_JOBS_FOLDER"] = paths.video_reconstruction_jobs_folder
+-    if path in {"/api/generate", "/api/photo-conversions"}:
++    if path == "/api/video-reconstructions/status":
++        return ACCESS_UNLOCKED
++    if path in {
++        "/api/generate",
++        "/api/photo-conversions",
++        "/api/video-reconstructions",
++        "/api/video-reconstructions/upload",
++    }:
+--- candidata: local-video-gallery-preview [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: The system SHALL discover supported local video files
+  | The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > ### Requirement: The system SHALL discover supported local video files
+  > The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > #### Scenario: Album contains supported video files
+  > - **WHEN** a configured album contains supported video files
+  > - **THEN** the album media listing SHALL include those videos with stable IDs, names, timestamps, sizes, media type, preview URL, download URL, and playback URL
+  > #### Scenario: Video playback URL is generated
+  > - **WHEN** the system returns a playback URL for a video item
+  > - **THEN** the URL SHALL use a path-style route with the video ID, a short-lived signed token, and a safe filename suffix
+--- candidata: backend-modular-architecture [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 后端 SHALL 保持现有入口兼容
+  | 后端模块化重构后，系统 SHALL 保持现有启动入口和 Flask 应用导入方式可用。
+  > - **WHEN** 远程已认证客户端提交 `/api/generate` 或 `/api/photo-conversions`
+  > - **WHEN** 远程客户端向 `POST /api/photo-albums/<album_id>/uploads` 上传照片
+  > - **WHEN** 系统扫描相册、解析 photo id、生成照片缩略图或更新照片元数据
+  > #### Scenario: 照片图库解析 photo id
+  > - **WHEN** 系统根据 photo id 提供照片列表、缩略图、原图、下载或转换
+  > - **WHEN** 系统接收 `POST /api/photo-albums/<album_id>/uploads` 的 multipart/form-data 文件
+  > - **AND** 系统 SHALL 保持现有批量上传上限和 `success`、`uploaded`、`failed`、`album`、`error` 响应字段语义
+  > - **THEN** 文档 SHALL 描述后端包结构、app factory、routes/services/security/config/paths 的职责
+--- candidata: video-3dgs-reconstruction [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 系统 SHALL 从本地视频创建重建任务
+  | 系统 SHALL 允许具备生成权限的用户从已配置本地相册中的受支持视频创建静态 3DGS 重建任务，并且不得向前端暴露源视频的绝对文件系统路径。
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+  > # video-3dgs-reconstruction Specification
+  > Define the local-video-to-3DGS reconstruction workflow, including task creation, runtime pipeline behavior, dependency diagnostics, output compatibility, and UI requirements.
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+--- candidata: windows-portable-release-packages [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Windows Release 必须提供按 GPU 目标区分的完整便携 ZIP 包
+  | Windows Release 必须提供 Windows x64 GPU 完整便携 ZIP 包的外部下载链接，并按支持的 NVIDIA 运行时目标拆分；便携包路径不得要求普通用户再运行在线依赖安装脚本。
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+  > - **WHEN** 用户在解压后的 `cu128-rtx50-video-recon` 包目录运行 `portable-run.bat`
+  > - **THEN** 启动器必须优先把包内 `.video-reconstruction-env\Scripts`、`.video-reconstruction-env\colmap\bin` 和包内 `ffmpeg/ffprobe` 目录加入 `PATH`
+  > - **WHEN** 用户把解压后的 `cu128-rtx50-video-recon` 包目录移动到另一个 Windows 路径或另一个 Windows 用户目录
+  > - **WHEN** 打包流程校验 `cu128-rtx50-video-recon` 包
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+--- candidata: feedforward-reconstruction-engine [PR]
+  | > **状态：已废弃（2026-06-24）**
+  | >
+  | > 本规格仅作为探索记录保留，不再作为当前实现要求。废弃原因：在目标 Windows + RTX 5070 Ti Laptop 12GB 环境验证中，Pi3/Pi3X 路线对多帧一次性推理的显存压力过高并出现 OOM；降低帧数后的 smoke 产物质量异常，无法达到稳定路线的可验收效果；长视频场景需要覆盖足够视角，当前方案的帧预算与质量目标矛盾；同时权重许可/分发要求不适合作为默认能力。当前分支回
+
+===== P084 | aserowy/yeet PR #312 | capacidade do par: devops
+PR: build(deps): bump the cargo group across 1 directory with 3 updates
+arquivos ligados: yeet-frontend/src/update/mode.rs;yeet-frontend/src/update/path.rs
+--- linhas alteradas (206; mostrando até 40)
+-                        &mut state.history,
+-                        &state.marks,
+-                        &state.qfix,
+-                        &state.modes.current,
++                        path::PathAddState {
++                            history: &mut state.history,
++                            marks: &state.marks,
++                            qfix: &state.qfix,
++                            mode: &state.modes.current,
++                            theme,
++                        },
+-                        theme,
+-                        &mut state.history,
+-                        &mut state.marks,
+-                        &mut state.qfix,
+-                        &mut state.junk,
+-                        &state.modes.current,
++                        path::PathRemoveState {
++                            history: &mut state.history,
++                            marks: &mut state.marks,
++                            qfix: &mut state.qfix,
++                            junk: &mut state.junk,
++                            mode: &state.modes.current,
++                        },
+-#[tracing::instrument(skip(app, theme, lua))]
++#[tracing::instrument(skip(state, app, lua))]
+-    history: &mut History,
+-    marks: &Marks,
+-    qfix: &QuickFix,
+-    mode: &Mode,
++    state: PathAddState<'_>,
+-    theme: &Theme,
++    let PathAddState {
++        history,
++        marks,
++        qfix,
++        mode,
++        theme,
++    } = state;
+-#[tracing::instrument(skip(junk, app))]
+--- candidata: theme-registry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Theme struct holds all color tokens
+  | The system SHALL maintain a `Theme` struct that maps named color tokens to resolved color values. Each token represents a single foreground color, background color, or text modifier for a specific UI 
+  > ### Requirement: Theme struct holds all color tokens
+  > The system SHALL maintain a `Theme` struct that maps named color tokens to resolved color values. Each token represents a single foreground color, background color, or text modifier for a specific UI 
+  > #### Scenario: Theme is populated from Lua assignments
+  > - **WHEN** `init.lua` contains `y.theme.StatusLineFg = '#ff5500'`
+  > - **THEN** the `Theme` struct contains the token `StatusLineFg` mapped to RGB(255, 85, 0)
+  > #### Scenario: Theme provides defaults for unset tokens
+  > - **THEN** the `Theme` struct returns the compiled-in default color for that token
+  > - Buffer: cursor line background, search highlight background, line number foreground, current line number foreground, sign column foreground
+--- candidata: internal-refactor [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: BufferTheme is created at point of use
+  | Functions that call `yeet_buffer::view()` SHALL create the `BufferTheme` locally via `theme.to_buffer_theme()` rather than receiving it as a threaded parameter from parent functions.
+  > ### Requirement: BufferTheme is created at point of use
+  > Functions that call `yeet_buffer::view()` SHALL create the `BufferTheme` locally via `theme.to_buffer_theme()` rather than receiving it as a threaded parameter from parent functions.
+  > #### Scenario: Intermediate layout functions do not accept BufferTheme
+  > - **THEN** its signature does not include a `BufferTheme` parameter
+  > #### Scenario: Leaf rendering functions create BufferTheme locally
+  > - **THEN** it creates a `BufferTheme` from the `&Theme` parameter and passes it to the view call
+  > ### Requirement: BufferTheme is created at point of use
+  > Functions that call `yeet_buffer::view()` SHALL create the `BufferTheme` locally via `theme.to_buffer_theme()` or `theme.to_buffer_theme_with_border()` rather than receiving it as a threaded parameter
+--- candidata: buffer-theme-injection [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: BufferTheme has no default construction
+  | The `yeet_buffer::BufferTheme` struct SHALL NOT implement `Default`. Callers MUST provide all field values explicitly when constructing a `BufferTheme`.
+  > ### Requirement: BufferTheme has no default construction
+  > The `yeet_buffer::BufferTheme` struct SHALL NOT implement `Default`. Callers MUST provide all field values explicitly when constructing a `BufferTheme`.
+  > - **WHEN** a consumer attempts `BufferTheme::default()`
+  > ### Requirement: Single view entry point requires a theme
+  > The `yeet_buffer` crate SHALL expose a single public `view()` function whose signature includes a `&BufferTheme` parameter. There SHALL NOT be a convenience variant that supplies a default theme inter
+  > #### Scenario: Buffer view with explicit theme
+  > - **WHEN** `yeet_buffer::view(viewport, mode, buffer, theme, frame)` is called with a valid `BufferTheme`
+  > - **THEN** the buffer is rendered using the colors from the provided theme
+--- candidata: dependency-update-compatibility [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Dependency updates preserve buildability
+  | The project SHALL compile successfully after automated package updates are accepted, using the repository's supported build tooling and current lock/configuration files, and compatibility fixes for th
+  > The project SHALL compile successfully after automated package updates are accepted, using the repository's supported build tooling and current lock/configuration files, and compatibility fixes for th
+  > - **THEN** existing user-facing behavior covered by current capabilities SHALL remain unchanged unless an intentional spec update documents the change
+  > The project SHALL compile successfully after automated package updates are accepted, using the repository's supported build tooling and current lock/configuration files.
+  > - **THEN** existing user-facing behavior covered by current capabilities SHALL remain unchanged unless an intentional spec update documents the change
+  > The project SHALL compile successfully after automated package updates are accepted, using the repository's supported build tooling and current lock/configuration files, and compatibility fixes for th
+  > - **THEN** existing user-facing behavior covered by current capabilities SHALL remain unchanged unless an intentional spec update documents the change
+--- candidata: help-command-dispatch [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Help buffer lines produce exactly one rendered line each
+  | Each line in the help buffer SHALL produce exactly one `ratatui::Line` when rendered. Syntax-highlighted content containing embedded newlines SHALL be split into separate `BufferLine`s so that each pr
+  > The system SHALL open a help index page when the user executes the `:help` command without arguments. The help index SHALL be displayed as a read-only buffer in a horizontal split below the current wi
+  > The system SHALL resolve `<topic>` against all three structural levels of help pages: page titles (`#`), section headings (`##`), and entry identifiers (`` ### `identifier` ``). The matching help page
+  > The system SHALL resolve `<topic>` against all three structural levels of help pages: page titles (`#`), section headings (`##`), and entry identifiers (`` ### `identifier` ``). The matching help page
+  > The system SHALL resolve `<topic>` against all three structural levels of help pages: page titles (`#`), section headings (`##`), and entry identifiers (`` ### `identifier` ``). Topic matching SHALL b
+
+===== P085 | halo-sigs/plugin-photos PR #77 | capacidade do par: theme-url-context
+PR: feat: add public read-only JSON API for SPA themes
+arquivos ligados: src/main/java/run/halo/photos/vo/PhotoVo.java
+--- linhas alteradas (30; mostrando até 40)
+-            .exif(photo.getExif())
++            .exif(cloneExifWithoutGps(photo.getExif()))
++    private static Photo.PhotoExif cloneExifWithoutGps(Photo.PhotoExif source) {
++        if (source == null) {
++            return null;
++        }
++        var copy = new Photo.PhotoExif();
++        copy.setMake(source.getMake());
++        copy.setModel(source.getModel());
++        copy.setLensModel(source.getLensModel());
++        copy.setSoftware(source.getSoftware());
++        copy.setDateTimeOriginal(source.getDateTimeOriginal());
++        copy.setFNumber(source.getFNumber());
++        copy.setExposureTime(source.getExposureTime());
++        copy.setIso(source.getIso());
++        copy.setFocalLength(source.getFocalLength());
++        copy.setFocalLengthIn35mm(source.getFocalLengthIn35mm());
++        copy.setFlash(source.getFlash());
++        copy.setWhiteBalance(source.getWhiteBalance());
++        copy.setExposureMode(source.getExposureMode());
++        copy.setExposureProgram(source.getExposureProgram());
++        copy.setMeteringMode(source.getMeteringMode());
++        copy.setImageWidth(source.getImageWidth());
++        copy.setImageHeight(source.getImageHeight());
++        // GPS fields intentionally nulled for privacy
++        copy.setGpsLatitude(null);
++        copy.setGpsLongitude(null);
++        copy.setGpsAltitude(null);
++        return copy;
++    }
+--- candidata: photo-exif [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: PhotoVo exposes the exif field for theme consumption
+  | `PhotoVo` SHALL include an `exif` field populated from `Photo.exif`, so that theme templates and the public API can access EXIF data via `photoFinder` or the `api.photo.halo.run/v1alpha1` endpoints.
+  > ### Requirement: PhotoVo exposes the exif field for theme consumption
+  > `PhotoVo` SHALL include an `exif` field populated from `Photo.exif`, so that theme templates and the public API can access EXIF data via `photoFinder` or the `api.photo.halo.run/v1alpha1` endpoints.
+  > The factory `PhotoVo.from(Photo)` SHALL produce a defensive copy of `Photo.exif` rather than aliasing the same instance, and SHALL force the GPS coordinate fields (`gpsLatitude`, `gpsLongitude`, `gpsA
+  > The underlying `Photo.PhotoExif` type and the values stored on the `Photo` extension SHALL remain unchanged. Consumers that serialize `Photo` directly (e.g. console endpoints under `console.api.photo.
+  > JSON serialization of `PhotoVo` SHALL omit the GPS fields entirely (relying on the system-wide `Include.NON_NULL` configuration); the JSON SHALL NOT contain `gpsLatitude`, `gpsLongitude`, or `gpsAltit
+  > #### Scenario: Theme retrieves photos with EXIF
+  > - **WHEN** a theme calls `photoFinder.listAll()` or similar methods to obtain a photo list
+  > - **THEN** each returned `PhotoVo` SHALL have its non-GPS `exif` fields set to the corresponding `Photo.exif` values
+--- candidata: public-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Public Photo List Effective-Time Sort Is Index-Backed
+  | `GET /apis/api.photo.halo.run/v1alpha1/photos` for the default ordering and for `sort=exif.dateTimeOriginal,(asc|desc)` SHALL be served by an index-backed query whose memory and CPU cost per request i
+  > ### Requirement: Public Photo List Effective-Time Sort Is Index-Backed
+  > `GET /apis/api.photo.halo.run/v1alpha1/photos` for the default ordering and for `sort=exif.dateTimeOriginal,(asc|desc)` SHALL be served by an index-backed query whose memory and CPU cost per request i
+  > The same guarantee SHALL apply to data flowing through `PhotoPublicQueryService.listPhotos(...)` regardless of whether the caller is the public endpoint, the `PhotoFinder` SPI, or the SSR `PhotoRouter
+  > - **WHEN** an anonymous client issues `GET /apis/api.photo.halo.run/v1alpha1/photos?page=1&size=20` (no `sort` parameter) against a gallery of 50 000 photos
+  > - **THEN** the server responds without first loading all 50 000 photos into memory for sorting
+  > - **WHEN** a Thymeleaf template calls `photoFinder.listAll()` against a gallery of 50 000 photos and `PhotoPublicQueryService.listAllPhotos(...)` iterates through pages of 500
+  > - **WHEN** an anonymous visitor requests `GET /photos/{name}` and `PhotoRouter` computes neighbour photos via `PhotoPublicQueryService.listAllPhotos(...)`
+  > ### Requirement: Public API Group Exists At api.photo.halo.run/v1alpha1
+--- candidata: photo-detail-page [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Theme-Side Photo List Route With Query-String Pagination
+  | The plugin SHALL register a theme-side `GET /photos` route that renders the gallery list. Pagination MUST use the query parameters `page` (1-based, default `1`) and `size` (default from `base.pageSize
+  > ### Requirement: Theme-Side Photo List Route With Query-String Pagination
+  > The plugin SHALL register a theme-side `GET /photos` route that renders the gallery list. Pagination MUST use the query parameters `page` (1-based, default `1`) and `size` (default from `base.pageSize
+  > - **WHEN** a visitor requests `GET /photos` with no query parameters
+  > - **THEN** the response renders the `photos` template with page 1 and the configured default page size, including all photos regardless of group
+  > - **WHEN** a visitor requests `GET /photos?page=3&size=20`
+  > - **WHEN** a visitor requests `GET /photos?group=trips`
+  > - **THEN** the response includes only photos whose `spec.groupName` equals `trips`, paginated using the default or supplied page parameters
+  > The plugin SHALL keep `GET /photos/page/{page}` resolvable by issuing a `301 Moved Permanently` response that points at `/photos?page={page}`. The redirect MUST NOT re-render the list template. The re
+--- candidata: admin-ui-polish [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Cohesive Toolbar Layout
+  | The admin photo console SHALL provide a cohesive toolbar where search, tag filtering, view switching, batch status, pagination context, and primary actions remain aligned, consistently spaced, and usa
+  > The admin photo console SHALL provide a cohesive toolbar where search, tag filtering, view switching, batch status, pagination context, and primary actions remain aligned, consistently spaced, and usa
+  > - **WHEN** the user opens the photo management console with at least one group and photos
+  > The admin photo console SHALL render photo groups with clear active, hover, drag, empty, loading, and action states that preserve the user's ability to scan and manage groups.
+  > - **THEN** the selected group is visually distinct from other groups and its photo count remains readable
+  > ### Requirement: Refined Photo Grid
+  > The admin photo console SHALL render grid photo cards with stable dimensions, readable names and tags, clear selection state, and explicit loading or deletion feedback.
+  > #### Scenario: Grid photo selected
+  > - **WHEN** the user selects one or more photos in grid mode
+
+===== P086 | rustyrazorblade/easy-db-lab PR #722 | capacidade do par: ami-building
+PR: feat(aws): AWS SSO support + reliable, cached AMI builds
+arquivos ligados: packer/base/install/install_cilium_cli.sh;packer/base/install/install_helm.sh
+--- linhas alteradas (16; mostrando até 40)
+-curl -fsSL --retry 3 \
++# Use the shared S3 download cache when present; otherwise download directly (local script
++# tests, or no cache configured).
++if [ -f /usr/local/lib/edl-cache.sh ]; then
++    # shellcheck disable=SC1091
++    source /usr/local/lib/edl-cache.sh
++else
++    cached_fetch() { echo "no S3 cache; downloading $1"; curl -fsSL --retry 3 "$1" -o "$3"; }
++fi
++cached_fetch \
+-    -o "${TARBALL}"
++    "cilium-cli/${CILIUM_CLI_VERSION}/${TARBALL}" \
++    "${TARBALL}"
++# Always fetch the checksum from origin and verify (validates cache integrity too)
+-curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" | DESIRED_VERSION="${HELM_VERSION}" bash
++curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" | DESIRED_VERSION="${HELM_VERSION}" bash >/tmp/helm-install.log 2>&
+--- candidata: setup [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AWS SSO credential resolution
+  | When a user profile is configured with the name of an AWS profile backed by an SSO session (IAM Identity Center), the system MUST resolve AWS credentials through that profile. The system MUST NOT requ
+  > When a user profile is configured with the name of an AWS profile backed by an SSO session (IAM Identity Center), the system MUST resolve AWS credentials through that profile. The system MUST NOT requ
+  > - **WHEN** a user configures an SSO-backed profile but has no active SSO login (no cached token)
+  > AMI building (which runs Packer in a container with its own credential resolution) MUST authenticate using credentials resolved through the same AWS credential provider as the rest of the tool, not st
+  > Applying the S3 bucket policy (whose principals are the just-created IAM roles) MUST be resilient to IAM eventual consistency. When S3 rejects the policy because a role is not yet visible ("Invalid pr
+  > - **THEN** the operation fails immediately without retrying
+  > The Packer AMI-build security group MUST allow SSH only from the developer's own public IP (a `/32`), not from `0.0.0.0/0`. This matches the cluster path and avoids managed-account governance tools (w
+  > Manages user profile creation, AWS credential configuration, and IAM resource initialization required before cluster provisioning.
+  > ### REQ-SU-002: AWS Resource Initialization
+--- candidata: container-wrapper [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Container image includes easy-db-lab executable at /usr/local/bin/easy-db-lab
+  | The jib-built container image SHALL include a shell script at `/usr/local/bin/easy-db-lab` that invokes the application JAR with the correct JVM flags. This script SHALL be executable.
+  > ### Requirement: Container image includes easy-db-lab executable at /usr/local/bin/easy-db-lab
+  > The jib-built container image SHALL include a shell script at `/usr/local/bin/easy-db-lab` that invokes the application JAR with the correct JVM flags. This script SHALL be executable.
+  > - **WHEN** a workload script running inside the container calls `${EASY_DB_LAB_EXEC}`
+  > - **THEN** no docker-compose process is started; OTel is configured via `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
+  > ### Requirement: Container entrypoint uses the wrapper script
+  > The jib container entrypoint SHALL be `["/usr/local/bin/easy-db-lab"]` rather than the implicit `java -cp` launcher derived from `mainClass`.
+  > - Container: `/usr/local/bin/easy-db-lab`
+  > The distinction is made by checking whether `/usr/local/bin/easy-db-lab` exists; if so, use it, otherwise use the apphome-relative path.
+--- candidata: ami-tooling [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Helm is installed on cluster nodes via AMI
+  | Helm SHALL be installed on all cluster nodes at AMI build time. The version SHALL be pinned in the packer install script. The binary SHALL be available at `/usr/local/bin/helm`.
+  > ### Requirement: Helm is installed on cluster nodes via AMI
+  > Helm SHALL be installed on all cluster nodes at AMI build time. The version SHALL be pinned in the packer install script. The binary SHALL be available at `/usr/local/bin/helm`.
+  > ### Requirement: kubectl is installed on cluster nodes via AMI
+  > kubectl SHALL be installed on all cluster nodes at AMI build time. The version SHALL be pinned. The binary SHALL be available in the system PATH.
+  > ### Requirement: Cilium CLI is installed on cluster nodes via AMI
+  > The cilium CLI SHALL be installed on all cluster nodes at AMI build time. The version SHALL be pinned to match the Cilium CNI version deployed on the cluster. The binary SHALL be available in the syst
+  > - **THEN** `cilium version` executes successfully on the control node via SSH
+  > ### Requirement: Cilium is installed via cilium CLI, not Helm
+--- candidata: install-command [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: install.yaml Descriptor
+  | Each workload directory SHALL contain an `install.yaml` descriptor. In addition to the existing
+  > ### Requirement: install.yaml Descriptor
+  > Each workload directory SHALL contain an `install.yaml` descriptor. In addition to the existing
+  > `name`, `description`, `collisionCheck`, and `args` fields, `install.yaml` SHALL support:
+  > - `version` (string, optional): the workload version being installed; shown in `--list` output
+  > - `dashboards` (list, optional): dashboard files to install after a successful `start` phase
+  > - `install`, `start`, `stop`, `uninstall` (list, optional): typed step sequences for each
+  > description: "Install ClickHouse via the Altinity operator"
+  > description: "ClickHouse replica count"
+--- candidata: observability [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: REQ-OB-001 Metrics collection (expanded)
+  | The system SHALL collect and store metrics from all infrastructure components, now including CloudWatch-sourced metrics via YACE for EMR, S3, EBS, EC2, and OpenSearch namespaces.
+  > The system SHALL collect and store metrics from all infrastructure components, now including CloudWatch-sourced metrics via YACE for EMR, S3, EBS, EC2, and OpenSearch namespaces.
+  > - **WHEN** YACE is deployed and AWS resources are active
+  > - **THEN** all CloudWatch-sourced metrics are included in the backup and queryable after restore
+  > The OTel Collector SHALL collect the following log sources:
+  > Each log source SHALL have a `source` attribute identifying its origin (`system`, `cassandra`, `systemd`). ClickHouse logs SHALL retain their existing `database: clickhouse` attribute.
+  > - **THEN** OTel Collector ingests the log entry and forwards it to VictoriaLogs with `source: system`
+  > - **THEN** OTel Collector ingests the log entry and forwards it to VictoriaLogs with `source: cassandra`
+  > - **THEN** OTel Collector ingests the entry and forwards it to VictoriaLogs with `source: systemd`
+
+===== P087 | clay-good/OpenLore PR #218 | capacidade do par: project
+PR: feat: refine the happy path — guided activation, legible surface, and the benchmark-cleared substrate default
+arquivos ligados: scripts/bench-preset-surface.ts
+--- linhas alteradas (148; mostrando até 40)
++/**
++ * Preset surface benchmark — the deterministic half of the DefaultSurfaceRevealsAllFaces
++ * gate (change: refine-happy-path-and-defaults).
++ *
++ * The proposal's gate for flipping the out-of-box default from `navigation` (read
++ * face only) to a face-complete surface (the `substrate` preset) is:
++ *   "move the default unless the evaluation shows a regression in SELECTION ACCURACY
++ *    or TOKEN ECONOMY."
++ *
++ * Two of those three quantities are deterministic and need no agent, and this harness
++ * measures them now:
++ *   - TOKEN ECONOMY — the upfront tools/list payload (bytes + estimated tokens) each
++ *     preset costs in the prompt prefix, using the exact measurement the budget guard
++ *     in mcp-presets.test.ts uses.
++ *   - FACE COVERAGE — which capability families (faces) each preset exposes, i.e.
++ *     whether the surface "reveals all faces" (navigate + remember + verify + change).
++ *
++ * The third quantity — SELECTION ACCURACY — requires a live agent making tool-choice
++ * decisions over a task corpus; this harness documents that protocol but cannot run it
++ * without an agent/key. So this is decision-SUPPORT, not the final verdict.
++ *
++ * Run: npx tsx scripts/bench-preset-surface.ts [--json]
++ * No LLM, no network, no analyzed repo required — pure surface arithmetic.
++ */
++import {
++  TOOL_DEFINITIONS,
++  TOOL_PRESETS,
++  selectActiveTools,
++  toolAnnotations,
++} from '../src/cli/commands/mcp.js';
++import { capabilityFamily, CAPABILITY_FAMILIES, type CapabilityFamily } from '../src/core/services/mcp-handlers/tool-contract.js';
++import { LEAN_DEFAULT_PRESET } from '../src/constants.js';
++/** The four faces the default surface should reveal (DefaultSurfaceRevealsAllFaces). */
++const HIGH_VALUE_FACES: CapabilityFamily[] = ['navigate', 'remember', 'verify', 'change'];
++/** Rough token estimate — bytes / 4, the standard heuristic for English/JSON. */
++function estTokens(bytes: number): number {
++  return Math.round(bytes / 4);
++}
++/** The exact tools/list payload measurement used by the mcp-presets budget guard. */
++function payloadBytes(preset: string): number {
+--- candidata: analyzer [PR+termos]
+  | # analyzer spec delta
+  | ## ADDED Requirements
+  | ### Requirement: PrecisionOrderConsistencyInvariant
+  > synthesized-provenance edges compared within their own class. Any violation SHALL be emitted as
+  > check SHALL be deterministic, local, and require no ground truth; it SHALL NOT run in any serving
+  > - **GIVEN** builds whose precise configurations only refine or remove edges
+  > The system SHALL maintain a dev-only calibration harness that measures call-edge recall per
+  > edge-confidence class against an execution-witnessed public benchmark, and SHALL publish the
+  > measured numbers in a committed document recording the benchmark commit hash. Wherever a
+  > calibrated recall number is cited, the system SHALL state (1) the coverage boundary — only the
+  > benchmark's Python and JavaScript suites apply; no TypeScript suite exists — and (2) that an
+--- candidata: cli [PR+termos]
+  | # CLI Specification
+  | > Generated by openlore on 2025-01-30
+  | > Source files: src/commands/spec.ts, src/commands/change.ts, src/commands/validate.ts, src/commands/schema.ts
+  > > Source files: src/commands/spec.ts, src/commands/change.ts, src/commands/validate.ts, src/commands/schema.ts
+  > Provides command-line interface for managing OpenSpec projects, including spec viewing, change management, validation, and schema inspection. Supports both interactive and non-interactive modes with m
+  > | noInteractive | boolean | Disable interactive prompts |
+  > - **AND** the JSON includes parsed requirements and scenarios
+  > The system SHALL support creating, listing, and viewing changes.
+  > - **WHEN** the user runs `openspec change my-feature`
+  > - **THEN** a directory `openspec/changes/my-feature/` is created
+  > - **AND** template files (proposal.md, etc.) are generated
+--- candidata: drift [PR]
+  | # drift spec delta
+  | ## ADDED Requirements
+  | ### Requirement: SpecLinkStatusNamesUnwantedAndPredated
+  > cannot express today: `spec-coverage-unwanted` — an anchored memory/decision or spec-linked symbol
+  > that no requirement requires (coverage a deleted or narrowed spec left behind) — and
+  > `spec-citation-predated` — a citation to a spec/decision revision newer than the indexed store
+  > knows. Both SHALL be deterministic lookups over the graph and store, emitted in the unified
+  > - **WHEN** coverage is audited
+  > - **THEN** it surfaces as `spec-coverage-unwanted`, not silently ignored
+  > - **GIVEN** a citation to a decision/spec revision the indexed store has not yet seen
+  > - **THEN** it surfaces as `spec-citation-predated`, distinct from a valid citation
+--- candidata: mcp-quality [termos]
+  | # mcp-quality spec delta
+  | ## ADDED Requirements
+  | ### Requirement: DataDependentFollowupHints
+  > Conclusion tool responses SHALL carry at most two deterministic follow-up hints, emitted only
+  > when a rule in a closed, source-declared rule table matches fields already present in that
+  > response's payload. Each hint SHALL name the suggested tool and cite the triggering field and its
+  > value (a receipt, not advice). Rules SHALL reference existing classifier outputs and constants
+  > only — a rule SHALL NOT introduce a new threshold or re-test an existing one downstream of the
+  > classifier that computed it. The rule table SHALL be guarded in CI so that a rule naming an
+  > unknown tool or a field absent from the target payload shape fails the build. Hints are the
+  > descriptions; they are advisory payload content and SHALL never gate or block. Hint emission

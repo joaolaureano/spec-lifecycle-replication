@@ -1,0 +1,2423 @@
+===== P055 | repo yexiyue/ratatui-kit | PR #7: feat: 重写文档示例与内置组件体系 | capacidade: global-atoms
+--- SPEC VIVA
+# global-atoms Specification
+
+## Purpose
+TBD - created by archiving change redesign-store. Update Purpose after archive.
+## Requirements
+### Requirement: Atom 惰性声明为模块级静态
+
+`Atom<T>` SHALL 可作模块级 `static` 声明（`Atom::new` 为 `const fn`，接受无捕获的 `fn() -> T` 初始化器）。其底层响应式状态 SHALL 在首次被 `use_atom`/读写时**惰性**创建（插入进程级全局 Owner），而非声明即建。
+
+#### Scenario: 静态声明且惰性初始化
+- **WHEN** 声明 `static COUNT: Atom<i32> = Atom::new(|| 0)` 且程序从未访问它
+- **THEN** 编译通过且不创建任何底层状态；首次 `use_atom(&COUNT)`/`COUNT.get()` 时才以 `0` 初始化
+
+### Requirement: use_atom 订阅并返回可跨线程句柄
+
+`use_atom(&'static Atom<T>)` SHALL 注册本组件的 waker 到该 atom，并返回一个 `Copy + Send` 的响应式句柄（`AtomState<T>`）。写入该句柄 SHALL 仅唤醒订阅了**该 atom** 的组件（细粒度）。
+
+#### Scenario: 细粒度重渲
+- **WHEN** 组件 A 订阅 `COUNT`、组件 B 订阅 `NAME`，随后写 `COUNT`
+- **THEN** 仅 A 重渲，B 不重渲
+
+#### Scenario: 句柄可移入 tokio::spawn
+- **WHEN** `let c = hooks.use_atom(&COUNT); tokio::spawn(async move { c.set(load().await) })`
+- **THEN** 后台任务写入后，订阅 `COUNT` 的组件被唤醒重渲
+
+### Requirement: 组件外直接读写
+
+`Atom<T>` SHALL 提供 `get`(T: Copy)/`set` 以在非组件代码（含后台任务持 `&'static Atom`）中直接读写，语义与经句柄读写一致。
+
+#### Scenario: 组件外写入触发订阅者重渲
+- **WHEN** 非组件代码调用 `COUNT.set(5)` 且有组件订阅了 `COUNT`
+- **THEN** 该组件被唤醒并读到 `5`
+
+### Requirement: 移除旧 store 机制
+
+`#[derive(Store)]`、`use_stores!`、`XXX_STORE` 静态生成 SHALL 移除。全局状态 MUST 只经 `Atom`/`use_atom` 表达。
+
+#### Scenario: 旧 API 不复存在
+- **WHEN** 检索 `derive(Store)`/`use_stores!`/`StoreState::new` 的对外用法
+- **THEN** 框架不再导出 `#[derive(Store)]`/`use_stores!`；全局状态示例改用 `Atom`
+
+### Requirement: State 与 AtomState 运算符不重复
+
+`State<T>` 与 `AtomState<T>` 的算术运算符重载（`Add/Sub/Mul/Div` 及 `*Assign`）SHALL 由单一 `macro_rules!` 生成，二者 MUST NOT 各自手抄一遍。
+
+#### Scenario: 运算符单一来源
+- **WHEN** 审视运算符 impl
+- **THEN** `State` 与 `AtomState` 经同一宏展开，无重复代码块
+
+--- ARQUIVOS DO PR (269)
+modified  +35    -0     Cargo.lock
+modified  +98    -0     Cargo.toml
+modified  +18    -12    README.md
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/asciinema-fallback-pipeline.png
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/counter-agg.gif
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/counter-vhs-preview.png
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/counter-vhs.gif
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/cover.png
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/vhs-artifact-derivation.png
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/vhs-drive-model.png
+added     +0     -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.assets/vhs-main-pipeline.png
+added     +251   -0     dev-notes/blog/2026-06-15-terminal-recording-from-zero.md
+modified  +173   -1     dev-notes/knowledge/hooks-and-state.md
+modified  +63    -1     dev-notes/knowledge/macros-and-props.md
+modified  +61    -1     dev-notes/knowledge/runtime-architecture.md
+modified  +74    -4     dev-notes/knowledge/toolchain.md
+modified  +21    -39    docs/README.md
+modified  +74    -9     docs/astro.config.mjs
+modified  +1     -0     docs/package.json
+modified  +807   -0     docs/pnpm-lock.yaml
+removed   +0     -0     docs/public/example/counter.gif
+removed   +0     -0     docs/public/example/modal.gif
+removed   +0     -0     docs/public/example/router.gif
+removed   +0     -0     docs/public/example/scrollview.gif
+removed   +0     -0     docs/public/example/store.gif
+removed   +0     -0     docs/public/example/textarea.gif
+added     +1     -0     docs/public/recordings/.gitkeep
+added     +0     -0     docs/public/recordings/alert-modal.gif
+added     +0     -0     docs/public/recordings/async-state.gif
+added     +0     -0     docs/public/recordings/atom-state.gif
+added     +0     -0     docs/public/recordings/confirm-modal.gif
+added     +0     -0     docs/public/recordings/control-flow.gif
+added     +0     -0     docs/public/recordings/counter.gif
+added     +0     -0     docs/public/recordings/custom-hook.gif
+added     +0     -0     docs/public/recordings/custom-provider.gif
+added     +0     -0     docs/public/recordings/custom-widget.gif
+added     +0     -0     docs/public/recordings/hello-world.gif
+added     +0     -0     docs/public/recordings/input.gif
+added     +0     -0     docs/public/recordings/input_mutex.gif
+added     +0     -0     docs/public/recordings/modal.gif
+added     +0     -0     docs/public/recordings/multi-select.gif
+added     +0     -0     docs/public/recordings/router.gif
+added     +0     -0     docs/public/recordings/scrollview.gif
+added     +0     -0     docs/public/recordings/search-input.gif
+added     +0     -0     docs/public/recordings/select.gif
+added     +0     -0     docs/public/recordings/shortcut-info-modal.gif
+added     +0     -0     docs/public/recordings/todo-app.gif
+added     +0     -0     docs/public/recordings/tree-select.gif
+added     +0     -0     docs/public/recordings/virtual-list.gif
+added     +0     -0     docs/public/recordings/virtual-multi-select.gif
+added     +0     -0     docs/public/recordings/wrapped-text.gif
+added     +131   -0     docs/src/components/Mermaid.astro
+added     +150   -0     docs/src/content/docs/advanced/custom-hook.mdx
+added     +118   -0     docs/src/content/docs/advanced/custom-provider.mdx
+added     +168   -0     docs/src/content/docs/advanced/custom-widget.mdx
+added     +57    -0     docs/src/content/docs/advanced/index.mdx
+added     +139   -0     docs/src/content/docs/apps/todo-app.mdx
+added     +90    -0     docs/src/content/docs/components/alert-modal.mdx
+added     +101   -0     docs/src/content/docs/components/confirm-modal.mdx
+added     +84    -0     docs/src/content/docs/components/index.mdx
+added     +91    -0     docs/src/content/docs/components/input.mdx
+added     +194   -0     docs/src/content/docs/components/layout-primitives.mdx
+added     +103   -0     docs/src/content/docs/components/modal.mdx
+added     +96    -0     docs/src/content/docs/components/multi-select.mdx
+added     +117   -0     docs/src/content/docs/components/scroll-view.mdx
+added     +98    -0     docs/src/content/docs/components/search-input.mdx
+added     +74    -0     docs/src/content/docs/components/select.mdx
+added     +109   -0     docs/src/content/docs/components/shortcut-info-modal.mdx
+added     +121   -0     docs/src/content/docs/components/tree-select.mdx
+added     +105   -0     docs/src/content/docs/components/virtual-list.mdx
+added     +122   -0     docs/src/content/docs/components/virtual-multi-select.mdx
+added     +117   -0     docs/src/content/docs/components/wrapped-text.mdx
+added     +228   -0     docs/src/content/docs/core/component-model.mdx
+added     +93    -0     docs/src/content/docs/core/control-flow.mdx
+added     +316   -0     docs/src/content/docs/core/declarative-syntax.mdx
+added     +311   -0     docs/src/content/docs/core/hooks.mdx
+added     +129   -0     docs/src/content/docs/core/input-layers.mdx
+added     +113   -0     docs/src/content/docs/core/routing.mdx
+added     +224   -0     docs/src/content/docs/core/state.mdx
+removed   +0     -57    docs/src/content/docs/example/counter.md
+removed   +0     -137   docs/src/content/docs/example/modal.md
+removed   +0     -217   docs/src/content/docs/example/router.md
+removed   +0     -94    docs/src/content/docs/example/scrollview.md
+removed   +0     -71    docs/src/content/docs/example/store.md
+removed   +0     -91    docs/src/content/docs/example/textarea.md
+added     +82    -0     docs/src/content/docs/examples/index.mdx
+removed   +0     -213   docs/src/content/docs/guides/component.md
+removed   +0     -69    docs/src/content/docs/guides/global-state.md
+removed   +0     -431   docs/src/content/docs/guides/hooks.md
+removed   +0     -57    docs/src/content/docs/guides/intro.md
+removed   +0     -62    docs/src/content/docs/guides/layout.md
+removed   +0     -92    docs/src/content/docs/guides/quick-start.md
+removed   +0     -133   docs/src/content/docs/guides/router.md
+modified  +1     -2     docs/src/content/docs/index.mdx
+added     +225   -0     docs/src/content/docs/internals/render-loop.mdx
+removed   +0     -127   docs/src/content/docs/principle/01-前言.md
+removed   +0     -308   docs/src/content/docs/principle/02-组件化.md
+removed   +0     -648   docs/src/content/docs/principle/03-渲染与布局.md
+removed   +0     -851   docs/src/content/docs/principle/04-组件更新.md
+removed   +0     -338   docs/src/content/docs/principle/05-Hook系统.md
+removed   +0     -429   docs/src/content/docs/principle/06-状态管理.md
+removed   +0     -349   docs/src/content/docs/principle/07-终端事件处理.md
+removed   +0     -395   docs/src/content/docs/principle/08-Context.md
+removed   +0     -399   docs/src/content/docs/principle/09-通过宏实现声明式.md
+removed   +0     -0     docs/src/content/docs/principle/前言.assets/image-20250624145726467.png
+removed   +0     -0     docs/src/content/docs/principle/渲染与布局.assets/image-20250625182233878.png
+removed   +0     -0     docs/src/content/docs/principle/渲染与布局.assets/image-20250625182400824.png
+removed   +0     -0     docs/src/content/docs/principle/状态管理.assets/20250630143554_rec_.gif
+removed   +0     -0     docs/src/content/docs/principle/组件更新.assets/image-20250628191408215.png
+added     +58    -0     docs/src/content/docs/start/index.mdx
+added     +103   -0     docs/src/content/docs/start/installation.mdx
+added     +51    -0     docs/src/content/docs/start/mental-model.mdx
+added     +112   -0     docs/src/content/docs/start/quick-start.mdx
+added     +92    -0     docs/src/content/docs/tutorials/async-state.mdx
+added     +116   -0     docs/src/content/docs/tutorials/atom-state.mdx
+added     +134   -0     docs/src/content/docs/tutorials/counter.mdx
+added     +141   -0     docs/src/content/docs/tutorials/input-mutex.mdx
+added     +148   -0     docs/src/content/docs/tutorials/router.mdx
+removed   +0     -10    docs/src/routeData.ts
+added     +31    -0     docs/tapes/alert-modal.tape
+added     +23    -0     docs/tapes/async-state.tape
+added     +29    -0     docs/tapes/atom-state.tape
+added     +33    -0     docs/tapes/confirm-modal.tape
+added     +21    -0     docs/tapes/control-flow.tape
+added     +17    -0     docs/tapes/counter.tape
+added     +34    -0     docs/tapes/custom-hook.tape
+added     +27    -0     docs/tapes/custom-provider.tape
+added     +27    -0     docs/tapes/custom-widget.tape
+added     +17    -0     docs/tapes/hello-world.tape
+added     +29    -0     docs/tapes/input.tape
+added     +31    -0     docs/tapes/input_mutex.tape
+added     +29    -0     docs/tapes/modal.tape
+added     +27    -0     docs/tapes/multi-select.tape
+added     +31    -0     docs/tapes/router.tape
+added     +25    -0     docs/tapes/scrollview.tape
+added     +33    -0     docs/tapes/search-input.tape
+added     +23    -0     docs/tapes/select.tape
+added     +33    -0     docs/tapes/shortcut-info-modal.tape
+added     +31    -0     docs/tapes/todo-app.tape
+added     +29    -0     docs/tapes/tree-select.tape
+added     +27    -0     docs/tapes/virtual-list.tape
+added     +31    -0     docs/tapes/virtual-multi-select.tape
+added     +25    -0     docs/tapes/wrapped-text.tape
+added     +341   -0     examples/advanced/custom_hook.rs
+added     +344   -0     examples/advanced/custom_provider.rs
+added     +242   -0     examples/advanced/custom_widget.rs
+added     +397   -0     examples/apps/todo_app.rs
+added     +174   -0     examples/components/alert_modal.rs
+added     +180   -0     examples/components/confirm_modal.rs
+added     +168   -0     examples/components/input.rs
+added     +238   -0     examples/components/modal.rs
+added     +141   -0     examples/components/multi_select.rs
+added     +245   -0     examples/components/scrollview.rs
+added     +192   -0     examples/components/search_input.rs
+added     +136   -0     examples/components/select.rs
+added     +225   -0     examples/components/shortcut_info_modal.rs
+added     +180   -0     examples/components/tree_select.rs
+added     +164   -0     examples/components/virtual_list.rs
+added     +114   -0     examples/components/virtual_multi_select.rs
+added     +101   -0     examples/components/wrapped_text.rs
+removed   +0     -67    examples/control_flow.rs
+added     +142   -0     examples/core/control_flow.rs
+removed   +0     -44    examples/counter.rs
+removed   +0     -91    examples/custom_list.rs
+removed   +0     -13    examples/hello_world.rs
+added     +112   -0     examples/hooks/async_state.rs
+added     +320   -0     examples/hooks/atom_state.rs
+removed   +0     -62    examples/input.rs
+added     +247   -0     examples/input/input_mutex.rs
+removed   +0     -60    examples/list.rs
+removed   +0     -118   examples/modal.rs
+removed   +0     -202   examples/router.rs
+added     +318   -0     examples/routing/router.rs
+removed   +0     -68    examples/scrollview.rs
+added     +74    -0     examples/start/counter.rs
+added     +53    -0     examples/start/hello_world.rs
+removed   +0     -137   examples/store.rs   <== código ligado à spec
+modified  +4     -9     examples/textarea.rs.disabled
+added     +2     -0     openspec/changes/archive/2026-06-15-extract-parsed-element-head/.openspec.yaml
+added     +82    -0     openspec/changes/archive/2026-06-15-extract-parsed-element-head/design.md
+added     +32    -0     openspec/changes/archive/2026-06-15-extract-parsed-element-head/proposal.md
+added     +51    -0     openspec/changes/archive/2026-06-15-extract-parsed-element-head/specs/element-head-codegen/spec.md
+added     +24    -0     openspec/changes/archive/2026-06-15-extract-parsed-element-head/tasks.md
+added     +2     -0     openspec/changes/harden-audit-findings/.openspec.yaml
+added     +113   -0     openspec/changes/harden-audit-findings/design.md
+added     +66    -0     openspec/changes/harden-audit-findings/proposal.md
+added     +25    -0     openspec/changes/harden-audit-findings/specs/component-tree-contracts/spec.md
+added     +33    -0     openspec/changes/harden-audit-findings/specs/element-borrow-lifetimes/spec.md
+added     +21    -0     openspec/changes/harden-audit-findings/specs/element-head-codegen/spec.md
+added     +25    -0     openspec/changes/harden-audit-findings/specs/hook-dependency-tracking/spec.md
+added     +33    -0     openspec/changes/harden-audit-findings/specs/reactive-state-core/spec.md
+added     +25    -0     openspec/changes/harden-audit-findings/specs/render-error-recovery/spec.md
+added     +37    -0     openspec/changes/harden-audit-findings/specs/router-path-matching/spec.md
+added     +29    -0     openspec/changes/harden-audit-findings/specs/scroll-view-layout/spec.md
+added     +75    -0     openspec/changes/harden-audit-findings/tasks.md
+added     +2     -0     openspec/changes/input-layer-event-system/.openspec.yaml
+added     +138   -0     openspec/changes/input-layer-event-system/design.md
+added     +35    -0     openspec/changes/input-layer-event-system/proposal.md
+added     +160   -0     openspec/changes/input-layer-event-system/specs/input-events/spec.md
+added     +52    -0     openspec/changes/input-layer-event-system/tasks.md
+added     +57    -0     openspec/specs/element-head-codegen/spec.md
+modified  +6     -6     packages/ratatui-kit-macros/src/adapter.rs
+modified  +118   -62    packages/ratatui-kit-macros/src/element.rs
+modified  +21    -5     packages/ratatui-kit-macros/src/router.rs
+modified  +10    -4     packages/ratatui-kit-macros/src/with_layout_style.rs
+modified  +4     -0     packages/ratatui-kit/Cargo.toml
+modified  +1     -1     packages/ratatui-kit/README.md
+modified  +22    -239   packages/ratatui-kit/src/atom/mod.rs
+modified  +7     -31    packages/ratatui-kit/src/atom/use_atom.rs
+modified  +7     -1     packages/ratatui-kit/src/component/component_helper.rs
+modified  +20    -14    packages/ratatui-kit/src/component/instantiated_component.rs
+modified  +13    -10    packages/ratatui-kit/src/component/mod.rs
+modified  +4     -4     packages/ratatui-kit/src/components/adapter/widget.rs
+added     +96    -0     packages/ratatui-kit/src/components/alert_modal.rs
+modified  +37    -19    packages/ratatui-kit/src/components/center.rs
+added     +226   -0     packages/ratatui-kit/src/components/confirm_modal.rs
+modified  +18    -15    packages/ratatui-kit/src/components/input.rs
+added     +57    -0     packages/ratatui-kit/src/components/list_state.rs
+modified  +30    -0     packages/ratatui-kit/src/components/mod.rs
+modified  +35    -2     packages/ratatui-kit/src/components/modal.rs
+added     +243   -0     packages/ratatui-kit/src/components/multi_select.rs
+modified  +86    -9     packages/ratatui-kit/src/components/router/history.rs
+modified  +156   -20    packages/ratatui-kit/src/components/router/mod.rs
+modified  +66    -39    packages/ratatui-kit/src/components/router/outlet.rs
+modified  +41    -30    packages/ratatui-kit/src/components/router/router_provider.rs
+modified  +167   -135   packages/ratatui-kit/src/components/scroll_view/mod.rs
+modified  +36    -20    packages/ratatui-kit/src/components/scroll_view/scrollbars.rs
+modified  +2     -2     packages/ratatui-kit/src/components/scroll_view/state.rs
+added     +247   -0     packages/ratatui-kit/src/components/search_input.rs
+added     +186   -0     packages/ratatui-kit/src/components/select.rs
+added     +166   -0     packages/ratatui-kit/src/components/shortcut_info_modal.rs
+modified  +0     -7     packages/ratatui-kit/src/components/text.rs
+modified  +44    -33    packages/ratatui-kit/src/components/textarea.rs
+modified  +215   -11    packages/ratatui-kit/src/components/tree_select.rs
+added     +327   -0     packages/ratatui-kit/src/components/virtual_list.rs
+added     +131   -0     packages/ratatui-kit/src/components/wrapped_text.rs
+modified  +74    -21    packages/ratatui-kit/src/context.rs
+modified  +5     -48    packages/ratatui-kit/src/element/any_element.rs
+modified  +53    -17    packages/ratatui-kit/src/element/element_ext.rs
+modified  +1     -1     packages/ratatui-kit/src/element/extend_with_elements.rs
+modified  +4     -50    packages/ratatui-kit/src/element/mod.rs
+modified  +7     -6     packages/ratatui-kit/src/hooks/mod.rs
+added     +70    -0     packages/ratatui-kit/src/hooks/use_async_state.rs
+modified  +28    -13    packages/ratatui-kit/src/hooks/use_context.rs
+modified  +41    -20    packages/ratatui-kit/src/hooks/use_effect.rs
+removed   +0     -107   packages/ratatui-kit/src/hooks/use_events.rs
+modified  +2     -4     packages/ratatui-kit/src/hooks/use_future.rs
+added     +121   -0     packages/ratatui-kit/src/hooks/use_input.rs
+modified  +1     -4     packages/ratatui-kit/src/hooks/use_insert_before.rs
+modified  +12    -21    packages/ratatui-kit/src/hooks/use_memo.rs
+modified  +51    -12    packages/ratatui-kit/src/hooks/use_router.rs
+modified  +48    -6     packages/ratatui-kit/src/hooks/use_size.rs
+modified  +33    -281   packages/ratatui-kit/src/hooks/use_state.rs
+added     +555   -0     packages/ratatui-kit/src/input/mod.rs
+modified  +4     -1     packages/ratatui-kit/src/lib.rs
+modified  +25    -8     packages/ratatui-kit/src/props.rs
+added     +515   -0     packages/ratatui-kit/src/reactive_handle.rs
+removed   +0     -82    packages/ratatui-kit/src/reactive_ops.rs
+modified  +247   -17    packages/ratatui-kit/src/render/harness.rs
+modified  +45    -23    packages/ratatui-kit/src/render/tree.rs
+modified  +11    -5     packages/ratatui-kit/src/render/updater.rs
+modified  +15    -119   packages/ratatui-kit/src/terminal/mod.rs
+added     +7     -0     packages/ratatui-kit/tests/ui/fail/any_element_borrow_escape.rs
+added     +7     -0     packages/ratatui-kit/tests/ui/fail/any_element_borrow_escape.stderr
+added     +7     -0     packages/ratatui-kit/tests/ui/fail/any_props_borrow_escape.rs
+added     +7     -0     packages/ratatui-kit/tests/ui/fail/any_props_borrow_escape.stderr
+added     +11    -0     packages/ratatui-kit/tests/ui/fail/with_layout_style_non_named.rs
+added     +11    -0     packages/ratatui-kit/tests/ui/fail/with_layout_style_non_named.stderr
+modified  +4     -0     todo.md
+--- DIFF DO CÓDIGO LIGADO
+### examples/store.rs
+@@ -1,137 +0,0 @@
+-use ratatui::{
+-    style::{Style, Stylize},
+-    text::Line,
+-};
+-use ratatui_kit::ratatui;
+-use ratatui_kit::{
+-    crossterm::event::{Event, KeyCode, KeyEventKind},
+-    prelude::tui_input::backend::crossterm::EventHandler,
+-    prelude::*,
+-    ratatui::layout::Constraint,
+-};
+-
+-// 全局响应式原子（类 Jotai/Recoil）：模块级声明，零宏零结构。
+-// 跨页面共享，任何组件 use_atom 订阅，写入仅唤醒订阅者。
+-static COUNT: Atom<i32> = Atom::new(|| 0);
+-static VALUE: Atom<String> = Atom::new(String::new);
+-
+-#[tokio::main]
+-async fn main() {
+-    let routes = routes! {
+-        "/" => HomePage,
+-        "/counter" => CounterPage,
+-        "/input" => InputPage,
+-
+-    };
+-
+-    element!(RouterProvider(
+-        routes:routes,
+-        index_path:"/",
+-    ))
+-    .fullscreen()
+-    .await
+-    .expect("Failed to run the application");
+-}
+-
+-#[component]
+-fn HomePage(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+-    let count = hooks.use_atom(&COUNT);
+-    let value = hooks.use_atom(&VALUE);
+-    let mut navigate = hooks.use_navigate();
+-    hooks.use_events(move |event| {
+-        if let Event::Key(key_event) = event
+-            && key_event.kind == KeyEventKind::Press
+-        {
+-            match key_event.code {
+-                KeyCode::Char('1') => navigate.push("/counter"),
+-                KeyCode::Char('2') => navigate.push("/input"),
+-
+-                _ => {}
+-            }
+-        }
+-    });
+-    element!(
+-        Border(
+-            style:Style::default().blue(),
+-            height:Constraint::Length(10),
+-            gap:1,
+-            top_title:Line::from("🏠 Atom 全局状态仪表盘").centered().bold(),
+-        ){
+-            Text(text: format!("全局计数: {}", count.get()))
+-            Text(text: format!("全局输入: {}", value.read().as_str()))
+-            Text(text: "1. 计数器页面 (Counter)")
+-            Text(text: "2. 文本输入页面")
+-        }
+-    )
+-}
+-
+-#[component]
+-fn CounterPage(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+-    let mut count = hooks.use_atom(&COUNT);
+-    let value = hooks.use_atom(&VALUE);
+-    let mut navigate = hooks.use_navigate();
+-    hooks.use_future(async move {
+-        loop {
+-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+-            count += 1;
+-        }
+-    });
+-    hooks.use_events(move |event| {
+-        if let Event::Key(key_event) = event
+-            && key_event.kind == KeyEventKind::Press
+-            && key_event.code == KeyCode::Esc
+-        {
+-            navigate.back();
+-        }
+-    });
+-    element!(
+-        Border(
+-            style:Style::default().green(),
+-            height:Constraint::Length(6),
+-            top_title:Line::from("计数器页面 (ESC 返回)").centered(),
+-        ){
+-            Text(text: format!("全局输入: {}", value.read().as_str()))
+-            Text(text: Line::styled(
+-                format!("Counter: {}", count.get()),
+-                Style::default().fg(ratatui::style::Color::Green).bold(),
+-            ).centered().bold().underlined())
+-        }
+-    )
+-}
+-
+-#[component]
+-fn InputPage(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
+-    let mut value = hooks.use_atom(&VALUE);
+-    let count = hooks.use_atom(&COUNT);
+-    // 注:TextArea 暂时下线,改用单行 Input;输入实时同步到全局 VALUE 原子。
+-    let input = hooks.use_state(tui_input::Input::default);
+-    let mut navigate = hooks.use_navigate();
+-    hooks.use_events(move |event| {
+-        if let Event::Key(key_event) = event
+-            && key_event.kind == KeyEventKind::Press
+-        {
+-            if key_event.code == KeyCode::Esc {
+-                navigate.back();
+-            } else {
+-                input.write().handle_event(&event);
+-                value.set(input.read().value().to_string());
+-            }
+-        }
+-    });
+-    element!(
+-        Border(
+-            style:Style::default().cyan(),
+-            height:Constraint::Length(7),
+-            top_title:Line::from("文本输入页面 (ESC 返回)").centered(),
+-        ){
+-            Text(text: format!("全局计数: {}", count.get()))
+-            Input(
+-                input: input.read().clone(),
+-                cursor_style: Style::default().on_cyan(),
+-                placeholder: "请输入内容...".to_string(),
+-                placeholder_style: Style::default().cyan(),
+-                hide_cursor: false,
+-            )
+-        }
+-    )
+-}
+
+===== P056 | repo pmcfadin/cqlite | PR #2150: feat(#1706): one event facade — migrate cqlite-core log→tracing, drop log dep | capacidade: chunk-decompressor-cache
+--- SPEC VIVA
+# chunk-decompressor-cache Specification
+
+## Purpose
+TBD - created by archiving change chunk-cache-no-clone-evict. Update Purpose after archive.
+## Requirements
+### Requirement: The CLI-path chunk cache returns hits by refcount bump, never by copying
+
+The `ChunkDecompressor` chunk cache SHALL store each decompressed chunk as a reference-counted byte buffer
+(`Arc<[u8]>`). A cache hit SHALL return a handle to the *same* underlying buffer (an `Arc::clone` /
+refcount bump), performing no chunk-sized allocation or memcpy of the cached bytes. The decompressed
+`Vec<u8>` SHALL be converted to the reference-counted buffer exactly once, on insert. Callers that require
+an owned `Vec` SHALL copy explicitly, so the copy is off the hit path.
+
+#### Scenario: A cache hit returns the same buffer without copying
+
+- **WHEN** a chunk is decompressed (populating the cache) and then the same chunk index is fetched again from the cache
+- **THEN** the second fetch returns a handle pointing to the same underlying buffer as the first (`Arc`-pointer-identity equal), with no chunk-sized allocation or copy
+
+### Requirement: Repeated reads of the same chunk skip re-decompression
+
+When a decompressed chunk is already resident in the `ChunkDecompressor` cache, the read path SHALL return
+it from the cache without re-invoking the decompressor. A decompress-work counter SHALL increment exactly
+once per actual chunk decompression (miss path only) and SHALL NOT increment on a cache hit, so a test can
+prove a repeated read of the same chunk performed exactly one decompression.
+
+#### Scenario: Reading the same chunk twice decompresses exactly once
+
+- **WHEN** the same byte range (within a single chunk) is read twice from the same `ChunkDecompressor` over a multi-chunk fixture
+- **THEN** both reads return the identical bytes AND the decompress-work counter increases by exactly 1 across the two reads (the second read is served from the cache)
+
+#### Scenario: A cold miss counts one decompression and populates the cache
+
+- **WHEN** a chunk not yet resident is read
+- **THEN** the compressed bytes are read and CRC-verified as today, the chunk is decompressed exactly once (counter +1), and the resulting buffer is inserted into the cache
+
+### Requirement: Eviction removes the genuinely least-recently-used chunk
+
+When the `ChunkDecompressor` cache is at capacity and a new chunk is inserted, it SHALL evict the entry
+that was least recently *accessed* (recency updated on every get and insert), not an arbitrary entry. The
+cache SHALL remain bounded by its configured capacity.
+
+#### Scenario: A, B, A, C at capacity two evicts B
+
+- **WHEN** the cache capacity is two and chunks are accessed in the order A, B, A, then C is inserted (exceeding capacity)
+- **THEN** B (the least recently used) is evicted while A (recently re-accessed) and C (just inserted) remain resident, so a subsequent read of B re-decompresses (counter increments) while reads of A and C are served from the cache (counter unchanged)
+
+#### Scenario: The cache never exceeds its configured capacity
+
+- **WHEN** more distinct chunks than the capacity are read in sequence
+- **THEN** the number of resident cache entries never exceeds the configured capacity
+
+### Requirement: The fix changes no read result and no public method signature
+
+Introducing `Arc<[u8]>` values and real LRU eviction SHALL NOT change any decompressed output or any read
+result: the CLI smoke / parity suite SHALL remain green. The public methods `read_data`, `read_all_data`,
+and `decompress_chunk_by_index` SHALL keep their existing `Result<Vec<u8>>` return types, and
+`cache_stats()` SHALL keep returning `(resident entry count, capacity)`.
+
+#### Scenario: CLI output parity unchanged
+
+- **WHEN** the CLI smoke suite reads every table after the change
+- **THEN** every table's output matches its pre-change output, byte-for-byte
+
+#### Scenario: Public signatures unchanged
+
+- **WHEN** an existing caller invokes `read_data`, `read_all_data`, `decompress_chunk_by_index`, or `cache_stats`
+- **THEN** it compiles and behaves as before (same return types and semantics), with only faster, non-copying cache hits internally
+
+
+--- ARQUIVOS DO PR (89)
+modified  +0     -1     cqlite-core/Cargo.toml
+modified  +1     -1     cqlite-core/src/lib.rs
+modified  +5     -5     cqlite-core/src/parser/enhanced_statistics_parser/encoding_stats.rs
+modified  +7     -7     cqlite-core/src/parser/enhanced_statistics_parser/header.rs
+modified  +2     -2     cqlite-core/src/parser/enhanced_statistics_parser/marshal_type.rs
+modified  +5     -5     cqlite-core/src/parser/enhanced_statistics_parser/mod.rs
+modified  +31    -31    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/mod.rs
+modified  +27    -27    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/schema.rs
+modified  +38    -38    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/sequential.rs
+modified  +7     -7     cqlite-core/src/parser/header.rs
+modified  +1     -1     cqlite-core/src/query/engine.rs
+modified  +1     -1     cqlite-core/src/query/executor.rs
+modified  +9     -9     cqlite-core/src/query/select_executor/execute.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/limit_pushdown/mod.rs
+modified  +3     -3     cqlite-core/src/query/select_executor/mod.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/row_build.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/streaming.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/value_ops.rs
+modified  +2     -2     cqlite-core/src/schema/discovery/analysis.rs
+modified  +1     -1     cqlite-core/src/storage/mod.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/bulletproof_reader.rs
+modified  +7     -7     cqlite-core/src/storage/sstable/chunk_decompressor.rs   <== código ligado à spec
+modified  +4     -4     cqlite-core/src/storage/sstable/directory/scan.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/directory/toc.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/directory/validation.rs
+modified  +5     -5     cqlite-core/src/storage/sstable/header_fix_functions.rs
+modified  +5     -5     cqlite-core/src/storage/sstable/index_reader.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/key_digest.rs
+modified  +28    -28    cqlite-core/src/storage/sstable/mod.rs
+modified  +27    -25    cqlite-core/src/storage/sstable/reader/block_io.rs
+modified  +29    -29    cqlite-core/src/storage/sstable/reader/component_loading.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/compression.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/data_access/big_point.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/data_access/big_promoted.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/data_access/bti.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/data_access/compaction.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/data_access/mod.rs
+modified  +45    -45    cqlite-core/src/storage/sstable/reader/data_access/sequential.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/delta_scan/scan.rs
+modified  +22    -22    cqlite-core/src/storage/sstable/reader/header.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/header_helpers.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/integrity.rs
+modified  +6     -4     cqlite-core/src/storage/sstable/reader/key_digest.rs
+modified  +21    -21    cqlite-core/src/storage/sstable/reader/mod.rs
+modified  +36    -36    cqlite-core/src/storage/sstable/reader/parsing/block_entries.rs
+modified  +8     -8     cqlite-core/src/storage/sstable/reader/parsing/key_parsing.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/mod.rs
+modified  +3     -3     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/block_emit.rs
+modified  +22    -22    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/block_emit_windowed.rs
+modified  +13    -13    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/cell_value.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/compaction.rs
+modified  +18    -18    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/complex_column.rs
+modified  +7     -7     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/frozen.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/mod.rs
+modified  +12    -12    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/raw_type_value.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/raw_value.rs
+modified  +17    -17    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/row_data.rs
+modified  +15    -15    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/row_framing.rs
+modified  +9     -9     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/udt.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/parsing/value_parsing.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/partition_lookup.rs
+modified  +3     -3     cqlite-core/src/storage/sstable/reader/registry_schema.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/scan_stream_windowed.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/source.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/row_cell_state_machine.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/statistics_reader.rs
+modified  +1     -1     cqlite-core/src/storage/sstable_data_manager.rs
+modified  +8     -8     cqlite-core/src/storage/write_engine/compaction.rs
+modified  +1     -1     cqlite-core/src/storage/write_engine/durability.rs
+modified  +12    -12    cqlite-core/src/storage/write_engine/export.rs
+modified  +3     -3     cqlite-core/src/storage/write_engine/maintenance.rs
+modified  +2     -2     cqlite-core/src/storage/write_engine/merge/fully_expired.rs
+modified  +11    -11    cqlite-core/src/storage/write_engine/merge/mod.rs
+modified  +55    -55    cqlite-core/src/storage/write_engine/mod.rs
+modified  +6     -6     cqlite-core/src/storage/write_engine/sweep.rs
+modified  +7     -7     cqlite-core/src/storage/write_engine/wal.rs
+modified  +1     -1     cqlite-core/tests/common/mod.rs
+modified  +1     -1     cqlite-core/tests/debug_schema_extraction.rs
+modified  +62    -35    cqlite-core/tests/issue_1694_data_safe_logging.rs
+modified  +1     -1     cqlite-core/tests/issue_237_row_size_offset_regression_test.rs
+added     +222   -0     cqlite-core/tests/logging_facade_tracing.rs
+modified  +1     -1     cqlite-core/tests/statistics_db_real_file_test.rs
+modified  +1     -1     cqlite-core/tests/stats_writer_roundtrip.rs
+modified  +1     -1     cqlite-core/tests/v5_compressed_legacy_integration_test.rs
+added     +66    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/design.md
+added     +52    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/proposal.md
+added     +64    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/specs/core-event-logging/spec.md
+added     +26    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/tasks.md
+added     +66    -0     openspec/specs/core-event-logging/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### cqlite-core/src/storage/sstable/chunk_decompressor.rs
+@@ -293,7 +293,7 @@ impl ChunkDecompressor {
+             )));
+         }
+ 
+-        log::debug!(
++        tracing::debug!(
+             "Reading chunk {} at offset {} ({} bytes compressed, CRC OK)",
+             chunk_index,
+             compressed_offset,
+@@ -305,7 +305,7 @@ impl ChunkDecompressor {
+         // CompressedSequentialWriter.java:160-177: if compressedLen >= maxCompressedLen, use raw buffer.
+         let max_compressed_length = self.compression_info.max_compressed_length as usize;
+         if compressed_len >= max_compressed_length {
+-            log::debug!(
++            tracing::debug!(
+                 "Chunk {} is incompressible (compressed_len={} >= max_compressed_length={}), returning raw bytes",
+                 chunk_index, compressed_len, max_compressed_length
+             );
+@@ -697,11 +697,11 @@ pub fn create_decompressor_from_file(
+     // and has been removed.  The standard parse() is authoritative for all supported files.)
+     let compression_info = CompressionInfo::parse(&compression_data)?;
+ 
+-    log::info!("Loaded compression info:");
+-    log::info!("   Algorithm: {}", compression_info.algorithm);
+-    log::info!("   Chunk Length: {} bytes", compression_info.chunk_length);
+-    log::info!("   Data Length: {} bytes", compression_info.data_length);
+-    log::info!("   Chunk Count: {}", compression_info.chunk_offsets.len());
++    tracing::info!("Loaded compression info:");
++    tracing::info!("   Algorithm: {}", compression_info.algorithm);
++    tracing::info!("   Chunk Length: {} bytes", compression_info.chunk_length);
++    tracing::info!("   Data Length: {} bytes", compression_info.data_length);
++    tracing::info!("   Chunk Count: {}", compression_info.chunk_offsets.len());
+ 
+     ChunkDecompressor::new(compression_info, CassandraVersion::V5_0Release)
+ }
+
+===== P057 | repo KouShenhai/KCloud-Platform-IoT | PR #6521: Dev | capacidade: network-management
+--- SPEC VIVA
+# Spec: network-management
+
+## Purpose
+
+本规格说明网络连接管理能力，提供对各类网络连接（MQTT Server、HTTP Server、MQTT Client、Kafka、RabbitMQ）的增删改查与控制台管理页面，支持多租户隔离、权限管控及幂等/乐观锁等生产级特性。
+
+## Requirements
+
+### Requirement: 网络连接分页查询与条件检索
+
+系统 SHALL 提供网络连接分页查询接口 `POST /network/api/v1/connections/page`，支持按连接名称（模糊匹配）、连接类型、启用状态、创建时间范围进行过滤，并返回分页结果（记录列表与总数）。该接口 MUST 要求 `read` 范围权限及 `network:connection:page` 授权。
+
+#### Scenario: 无条件分页查询
+
+- **WHEN** 已授权用户不带任何过滤条件调用 `/connections/page`
+- **THEN** 系统返回当前租户下未删除（`del_flag = 0`）的连接列表，按 `id` 倒序分页，并返回总记录数
+
+#### Scenario: 按连接名称模糊检索
+
+- **WHEN** 用户传入 `name` 过滤参数
+- **THEN** 系统对连接名称执行 LIKE 模糊匹配，仅返回名称包含该关键字的连接
+
+#### Scenario: 按连接类型检索
+
+- **WHEN** 用户传入 `type`（1 MQTT Server / 2 HTTP Server / 3 MQTT Client / 4 Kafka / 5 RabbitMQ）
+- **THEN** 系统按类型精确过滤，仅返回该类型的连接
+
+#### Scenario: 按启用状态检索
+
+- **WHEN** 用户传入 `enabled`（0 启用 / 1 停用）
+- **THEN** 系统按启用状态精确过滤，仅返回匹配的连接
+
+#### Scenario: 按创建时间范围检索
+
+- **WHEN** 用户传入开始日期与结束日期
+- **THEN** 系统仅返回创建时间落在该区间内的连接
+
+#### Scenario: 缺少权限
+
+- **WHEN** 未持有 `network:connection:page` 授权的用户调用该接口
+- **THEN** 系统拒绝请求并返回未授权错误
+
+### Requirement: 网络连接新增
+
+系统 SHALL 提供新增网络连接接口 `POST /network/api/v1/connections`，接收连接名称、连接类型、主机地址、端口、启用状态、类型特有配置（`config`，JSON 文本）、备注等字段。该接口 MUST 要求 `write` 范围权限及 `network:connection:save` 授权，并 MUST 支持基于 `request-id` 头的幂等控制。系统 MUST 校验连接名称非空、连接类型非空且取值 ∈ [1,5]、`config` 为合法 JSON。
+
+#### Scenario: 成功新增连接
+
+- **WHEN** 已授权用户在前端抽屉中选择连接类型、填写名称与该类型必填项并提交，且携带唯一 `request-id`
+- **THEN** 系统创建连接记录、将类型特有字段聚合为 `config` JSON 持久化，返回成功结果（`code = OK`），前端提示保存成功并刷新列表
+
+#### Scenario: 重复提交幂等
+
+- **WHEN** 用户以相同 `request-id` 重复提交同一新增请求
+- **THEN** 系统不重复创建记录
+
+#### Scenario: 缺少必填字段
+
+- **WHEN** 用户未填写连接名称或未选择连接类型即提交
+- **THEN** 前端表单校验阻止提交并提示对应必填文案；若绕过前端，后端 SHALL 拒绝并返回参数错误
+
+#### Scenario: 非法连接类型或非法配置
+
+- **WHEN** 提交的 `type` 不在 [1,5] 区间，或 `config` 不是合法 JSON
+- **THEN** 后端 SHALL 拒绝请求并返回参数错误，不创建记录
+
+### Requirement: 网络连接修改
+
+系统 SHALL 提供修改网络连接接口 `PUT /network/api/v1/connections`，按连接 ID 更新可编辑字段。该接口 MUST 要求 `write` 范围权限及 `network:connection:modify` 授权，并 MUST 通过版本号实现乐观锁，防止并发覆盖。连接类型 `type` 在修改时不可变更。
+
+#### Scenario: 成功修改连接
+
+- **WHEN** 已授权用户打开修改抽屉、变更字段并提交
+- **THEN** 系统按 ID 更新连接记录并递增版本号，返回成功结果，前端提示修改成功并刷新列表
+
+#### Scenario: 查看只读详情
+
+- **WHEN** 用户点击「查看」
+- **THEN** 系统按 `GET /connections/{id}` 返回连接详情（含 `config` 反序列化后的类型特有字段），前端以只读模式展示且隐藏提交按钮
+
+#### Scenario: 并发修改冲突
+
+- **WHEN** 两个用户基于同一版本号并发提交修改
+- **THEN** 系统仅接受首个提交，后者因版本号不匹配而失败，不发生覆盖
+
+### Requirement: 网络连接删除
+
+系统 SHALL 提供删除网络连接接口 `DELETE /network/api/v1/connections`，接收连接 ID 数组，支持单条与批量逻辑删除。该接口 MUST 要求 `write` 范围权限及 `network:connection:remove` 授权。
+
+#### Scenario: 删除单条连接
+
+- **WHEN** 用户在某行点击「删除」并在确认弹窗中确认
+- **THEN** 系统逻辑删除该连接（置 `del_flag = 1`），前端提示删除成功并刷新列表
+
+#### Scenario: 批量删除
+
+- **WHEN** 用户勾选多条记录后点击工具栏「删除」并确认
+- **THEN** 系统批量逻辑删除选中连接
+
+#### Scenario: 批量删除未选择记录
+
+- **WHEN** 用户未勾选任何记录即点击批量删除
+- **THEN** 前端提示「至少选择一条」且不发起请求
+
+### Requirement: 网络连接管理控制台页面
+
+系统 SHALL 在控制台 `/network/connection` 路由下提供网络连接管理页面，基于 Ant Design Pro `ProTable` 与 `DrawerForm` 实现，支持中英文国际化，并依据用户权限位（`canConnectionPage/GetDetail/Save/Modify/Remove`）显隐操作入口。新增/修改抽屉 MUST 根据所选连接类型动态渲染该类型的特有配置字段。
+
+#### Scenario: 进入网络管理菜单
+
+- **WHEN** 已授权用户从导航进入「网络管理」菜单
+- **THEN** 系统加载连接列表页，展示连接名称、连接类型、主机、端口、启用状态、创建时间等列及搜索区与操作按钮
+
+#### Scenario: 连接类型枚举选择与可读渲染
+
+- **WHEN** 用户在搜索区或抽屉中选择连接类型
+- **THEN** 系统提供「MQTT Server / HTTP Server / MQTT Client / Kafka / RabbitMQ」枚举项，并在列表中以可读文案展示类型
+
+#### Scenario: 按连接类型动态渲染配置表单
+
+- **WHEN** 用户在新增/修改抽屉中选择某一连接类型
+- **THEN** 表单 SHALL 渲染该类型对应的特有配置字段组（MQTT Server / HTTP Server / MQTT Client 复用既有配置项语义，Kafka / RabbitMQ 渲染各自的 Vertx 连接参数），切换类型时切换字段组
+
+#### Scenario: 配置字段与 config 的序列化
+
+- **WHEN** 用户提交表单
+- **THEN** 前端 SHALL 将类型特有字段聚合为 `config` JSON 字符串随请求提交；查看/修改时按 `config` 反序列化回显到对应字段
+
+#### Scenario: 按权限显隐操作
+
+- **WHEN** 用户不具备某操作授权（如 `network:connection:remove`）
+- **THEN** 前端不渲染对应的操作按钮
+
+--- ARQUIVOS DO PR (67)
+modified  +10    -43    doc/db/kcloud_platform.sql   <== código ligado à spec
+modified  +38    -0     doc/db/kcloud_platform_iot.sql   <== código ligado à spec
+modified  +85    -93    laokou-common/laokou-common-elasticsearch/src/main/java/org/laokou/common/elasticsearch/config/ElasticsearchRest5ClientConfig.java
+modified  +1     -1     laokou-common/laokou-common-elasticsearch/src/main/java/org/laokou/common/elasticsearch/config/SpringElasticsearchProperties.java
+modified  +5     -9     laokou-common/laokou-common-influxdb/src/main/java/org/laokou/common/influxdb/config/InfluxDBAutoConfig.java
+removed   +0     -1     laokou-common/laokou-common-influxdb/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+modified  +19    -0     laokou-common/laokou-common-storage/pom.xml
+renamed   +1     -1     laokou-common/laokou-common-storage/src/main/java/org/laokou/common/storage/tdengine/TDengine.java
+renamed   +1     -1     laokou-common/laokou-common-storage/src/main/java/org/laokou/common/storage/tdengine/TDengineConfig.java
+modified  +0     -5     laokou-common/laokou-common-tdengine/pom.xml
+removed   +0     -35    laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/annotation/Domain.java
+removed   +0     -35    laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/annotation/Generator.java
+removed   +0     -40    laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/annotation/Iot.java
+removed   +0     -40    laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/annotation/Master.java
+modified  +15    -5     laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/constant/DSConstants.java
+removed   +0     -40    laokou-common/laokou-common-tenant/src/main/java/org/laokou/common/tenant/convertor/SourceConvertor.java
+removed   +0     -44    laokou-common/laokou-common-tenant/src/main/resources/mapper/source/SourceMapper.xml
+renamed   +21    -20    laokou-service/laokou-iot/laokou-iot-adapter/src/main/java/org/laokou/iot/web/SourcesController.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceExportCmdExe.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceImportCmdExe.java
+renamed   +4     -4     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceModifyCmdExe.java
+renamed   +3     -3     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceRemoveCmdExe.java
+renamed   +4     -4     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceSaveCmdExe.java
+renamed   +4     -4     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/SourceTestCmdExe.java
+renamed   +5     -5     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/query/SourceGetQryExe.java
+renamed   +22    -9     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/command/query/SourcePageQryExe.java
+renamed   +19    -19    laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/service/SourcesServiceImpl.java
+added     +53    -0     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/service/validator/ModifySourceParamValidator.java
+added     +51    -0     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/service/validator/SaveSourceParamValidator.java
+added     +116   -0     laokou-service/laokou-iot/laokou-iot-app/src/main/java/org/laokou/iot/source/service/validator/SourceParamValidator.java
+renamed   +10    -10    laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/api/SourcesServiceI.java
+renamed   +1     -1     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceExportCmd.java
+renamed   +1     -1     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceGetQry.java
+renamed   +1     -1     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceImportCmd.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceModifyCmd.java
+renamed   +1     -1     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourcePageQry.java
+renamed   +1     -1     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceRemoveCmd.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceSaveCmd.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/SourceTestCmd.java
+renamed   +5     -5     laokou-service/laokou-iot/laokou-iot-client/src/main/java/org/laokou/iot/source/dto/clientobject/SourceCO.java
+renamed   +16    -21    laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/ability/SourceDomainService.java
+renamed   +2     -2     laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/gateway/SourceGateway.java
+added     +98    -0     laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/model/SourceA.java
+renamed   +24    -11    laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/model/entity/SourceE.java
+renamed   +5     -5     laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/model/enums/OperateType.java
+renamed   +7     -13    laokou-service/laokou-iot/laokou-iot-domain/src/main/java/org/laokou/iot/source/model/validator/SourceParamValidator.java
+modified  +5     -0     laokou-service/laokou-iot/laokou-iot-infrastructure/pom.xml
+modified  +2     -1     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/productCategory/gatewayimpl/database/dataobject/ProductCategoryDO.java
+renamed   +7     -5     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/source/convertor/SourceConvertor.java
+renamed   +6     -6     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/source/gatewayimpl/SourceGatewayImpl.java
+renamed   +2     -1     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/source/gatewayimpl/database/SourceMapper.java
+renamed   +12    -12    laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/source/gatewayimpl/database/dataobject/SourceDO.java
+modified  +2     -1     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/java/org/laokou/iot/thingModel/gatewayimpl/database/dataobject/ThingModelDO.java
+added     +81    -0     laokou-service/laokou-iot/laokou-iot-infrastructure/src/main/resources/mapper/source/SourceMapper.xml
+modified  +4     -4     openspec/changes/archive/2026-06-04-add-tenant-datasource-management/specs/tenant-datasource-management/spec.md
+modified  +4     -4     openspec/specs/tenant-datasource-management/spec.md
+modified  +7     -7     ui/config/routes.ts   <== código ligado à spec
+modified  +7     -7     ui/src/access.ts   <== código ligado à spec
+modified  +1     -1     ui/src/locales/en-US.ts   <== código ligado à spec
+modified  +1     -1     ui/src/locales/zh-CN.ts   <== código ligado à spec
+renamed   +1     -1     ui/src/pages/IoT/Device/SourceDrawer.tsx
+renamed   +11    -18    ui/src/pages/IoT/Device/source.tsx
+modified  +0     -2     ui/src/services/admin/index.ts
+modified  +0     -41    ui/src/services/admin/typings.d.ts
+modified  +3     -0     ui/src/services/iot/index.ts
+renamed   +8     -8     ui/src/services/iot/source.ts
+modified  +32    -4     ui/src/services/iot/typings.d.ts
+--- DIFF DO CÓDIGO LIGADO
+### doc/db/kcloud_platform.sql
+@@ -247,7 +247,7 @@ INSERT INTO "public"."sys_i18n_menu" VALUES (15, 1, 1, '2026-03-07 12:06:37', '2
+ INSERT INTO "public"."sys_i18n_menu" VALUES (9, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1,  'menu.iot.device.product', '产品');
+ INSERT INTO "public"."sys_i18n_menu" VALUES (7, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1,  'menu.iot.device.device', '设备');
+ INSERT INTO "public"."sys_i18n_menu" VALUES (16, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.sys.tenant', '租户管理');
+-INSERT INTO "public"."sys_i18n_menu" VALUES (17, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.sys.tenant.source', '数据源');
++INSERT INTO "public"."sys_i18n_menu" VALUES (17, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.iot.device.source', '数据源');
+ INSERT INTO "public"."sys_i18n_menu" VALUES (18, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.sys.tenant.package', '套餐');
+ INSERT INTO "public"."sys_i18n_menu" VALUES (19, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.sys.tenant.tenant', '租户');
+ INSERT INTO "public"."sys_i18n_menu" VALUES (20, 1, 1, '2026-03-07 12:06:37', '2026-03-07 12:06:37', 0, 0, 1, 1, 'menu.sys.base', '基础数据');
+@@ -314,9 +314,9 @@ COMMENT ON INDEX "public"."sys_menu_type_tenantId_idx" IS '菜单类型_租户ID
+ INSERT INTO "public"."sys_menu" VALUES (33, 1, 1, '2025-01-21 05:19:17', '2025-01-21 05:19:20', 0, 0, 1, 1, 1, NULL, 0, '集群管理', '/sys/cluster', NULL, 3, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (19, 1, 1, '2025-01-21 05:19:17', '2026-05-29 01:19:54.280534', 0, 1, 1, 1, 17, NULL, 0, '部门', '/sys/permission/dept', NULL, 2, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (6, 1, 1, '2024-09-17 18:36:56', '2026-06-13 16:09:10.335754', 0, 1, 1, 1, 2, NULL, 0, '通知日志', '/sys/log/notice', '', 1, 0, 0, NULL);
+-INSERT INTO "public"."sys_menu" VALUES (108, 1, 1, '2026-06-05 00:00:00', '2026-06-07 19:29:30.266887', 0, 1, 1, 1, 11, NULL, 0, '网络连接', '/iot/network/connection', NULL, 1, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (108, 1, 1, '2026-06-05 00:00:00', '2026-06-07 19:29:30.266887', 0, 1, 1, 1, 11, NULL, 0, '网络连接', '/iot/network/connection', NULL, 2, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (12, 1, 1, '2025-01-18 09:28:42', '2026-05-29 01:21:36.257117', 0, 1, 1, 1, 11, NULL, 0, '设备管理', '/iot/device', NULL, 1, 0, 0, NULL);
+-INSERT INTO "public"."sys_menu" VALUES (13, 1, 1, '2025-01-18 09:30:03', '2026-05-29 01:23:03.948971', 0, 1, 1, 1, 12, NULL, 0, '设备', '/iot/device/index', NULL, 4, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (13, 1, 1, '2025-01-18 09:30:03', '2026-05-29 01:23:03.948971', 0, 1, 1, 1, 12, NULL, 0, '设备', '/iot/device/index', NULL, 5, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (20, 1, 1, '2025-01-21 05:19:17', '2026-05-29 01:19:59.024113', 0, 1, 1, 1, 17, NULL, 0, '角色', '/sys/permission/role', NULL, 3, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (18, 1, 1, '2025-01-21 05:19:17', '2026-05-29 01:19:49.281629', 0, 1, 1, 1, 17, NULL, 0, '菜单', '/sys/permission/menu', NULL, 1, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (88, 1, 1, '2025-08-02 09:46:49.7142', '2026-05-29 01:21:22.080322', 0, 1, 1, 1, 1, NULL, 0, '系统配置', '/sys/config', '', 7, 0, 0, NULL);
+@@ -352,7 +352,7 @@ INSERT INTO "public"."sys_menu" VALUES (50, 1, 1, '2025-02-04 13:46:48.225873',
+ INSERT INTO "public"."sys_menu" VALUES (65, 1, 1, '2025-03-16 11:21:04.431009', '2025-03-16 11:21:04.431009', 0, 0, 1, 1, 16, 'iot:product-category:save', 1, '新增产品类别', NULL, NULL, 4, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (70, 1, 1, '2025-03-16 11:16:56.540728', '2025-03-16 11:18:02.393751', 0, 1, 1, 1, 15, 'iot:product:save', 1, '新增产品', NULL, NULL, 4, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (80, 1, 1, '2025-03-16 11:16:56.540728', '2025-03-16 11:18:02.393751', 0, 1, 1, 1, 31, 'sys:oss:save', 1, '新增OSS', NULL, NULL, 4, 0, 0, NULL);
+-INSERT INTO "public"."sys_menu" VALUES (23, 1, 1, '2025-01-21 05:19:17', '2026-06-13 16:08:45.733221', 0, 1, 1, 1, 22, NULL, 0, '数据源', '/sys/tenant/source', NULL, 3, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (23, 1, 1, '2025-01-21 05:19:17', '2026-06-13 16:08:45.733221', 0, 1, 1, 1, 12, NULL, 0, '数据源', '/iot/device/source', NULL, 3, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (27, 1, 1, '2025-01-21 05:19:17', '2026-05-29 01:19:35.730272', 0, 1, 1, 1, 26, NULL, 0, '数据字典', '/sys/base/dict', NULL, 2, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (28, 1, 1, '2024-09-15 12:56:07', '2026-06-13 16:09:20.618716', 0, 1, 1, 1, 2, NULL, 0, '操作日志', '/sys/log/operate', '', 3, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (106, 1, 1, '2026-06-04 00:00:00', '2026-06-04 00:00:00', 0, 0, 1, 1, 13, 'iot:device:export', 1, '导出设备', NULL, NULL, 7, 0, 0, NULL);
+@@ -397,7 +397,7 @@ INSERT INTO "public"."sys_menu" VALUES (69, 1, 1, '2025-03-16 11:17:16.858243',
+ INSERT INTO "public"."sys_menu" VALUES (79, 1, 1, '2025-03-16 11:17:16.858243', '2025-03-16 11:18:07.952616', 0, 1, 1, 1, 31, 'sys:oss:modify', 1, '修改OSS', NULL, NULL, 3, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (89, 1, 1, '2025-08-02 09:51:11', '2026-05-29 01:18:53.465782', 0, 2, 1, 1, 88, NULL, 0, '代码生成器', '/sys/config/generator', NULL, 1, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (16, 1, 1, '2025-01-18 09:39:31', '2026-05-29 01:22:48.423197', 0, 1, 1, 1, 12, NULL, 0, '产品类别', '/iot/device/productCategory', NULL, 2, 0, 0, NULL);
+-INSERT INTO "public"."sys_menu" VALUES (15, 1, 1, '2025-01-18 09:38:58', '2026-05-29 01:22:57.821007', 0, 1, 1, 1, 12, NULL, 0, '产品', '/iot/device/product', NULL, 3, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (15, 1, 1, '2025-01-18 09:38:58', '2026-05-29 01:22:57.821007', 0, 1, 1, 1, 12, NULL, 0, '产品', '/iot/device/product', NULL, 4, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (82, 1, 1, '2025-03-15 12:15:37.277552', '2025-03-15 12:15:37.278549', 0, 0, 1, 1, 31, 'sys:oss:upload', 1, '上传文件', NULL, NULL, 5, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (90, 1, 1, '2026-05-20 07:08:34', '2026-05-29 01:19:03.585621', 0, 2, 1, 1, 88, NULL, 0, 'API文档', '/sys/config/apiDoc', NULL, 2, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (14, 1, 1, '2025-01-18 09:37:53', '2026-05-29 01:22:42.9652', 0, 1, 1, 1, 12, NULL, 0, '物模型', '/iot/device/thingModel', NULL, 1, 0, 0, NULL);
+@@ -425,6 +425,11 @@ INSERT INTO "public"."sys_menu" VALUES (103, 1, 1, '2026-06-19 18:24:58.966455',
+ INSERT INTO "public"."sys_menu" VALUES (91, 1, 1, '2026-06-19 18:24:58.966455', '2026-06-19 18:24:58.966455', 0, 0, 1, 1, 27, 'sys:dict:detail', 1, '查看字典', NULL, NULL, 1, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (97, 1, 1, '2026-06-19 18:24:58.966455', '2026-06-19 18:24:58.966455', 0, 0, 1, 1, 27, 'sys:dict:export', 1, '导出字典', NULL, NULL, 7, 0, 0, NULL);
+ INSERT INTO "public"."sys_menu" VALUES (95, 1, 1, '2026-06-19 18:24:58.966455', '2026-06-19 18:24:58.966455', 0, 0, 1, 1, 27, 'sys:dict:page', 1, '分页查询字典列表', NULL, NULL, 5, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (125, 1, 1, '2026-07-04 11:36:48.737692', '2026-07-04 11:36:48.83058', 0, 0, 1, 1, 23, 'iot:source:detail', 1, '查看数据源', NULL, NULL, 1, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (126, 1, 1, '2026-07-04 11:37:38.934619', '2026-07-04 11:37:38.973142', 0, 0, 1, 1, 23, 'iot:source:remove', 1, '删除数据源', NULL, NULL, 2, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (127, 1, 1, '2026-07-04 11:37:59.70739', '2026-07-04 11:37:59.724989', 0, 0, 1, 1, 23, 'iot:source:modify', 1, '修改数据源', NULL, NULL, 3, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (128, 1, 1, '2026-07-04 11:38:17.37193', '2026-07-04 11:38:17.412162', 0, 0, 1, 1, 23, 'iot:source:save', 1, '保存数据源', NULL, NULL, 4, 0, 0, NULL);
++INSERT INTO "public"."sys_menu" VALUES (129, 1, 1, '2026-07-04 11:38:38.21395', '2026-07-04 11:38:38.232894', 0, 0, 1, 1, 23, 'iot:source:page', 1, '分页查询数据源列表', NULL, NULL, 5, 0, 0, NULL);
+ 
+ -- ----------------------------
+ -- -------------菜单套餐------------
+@@ -680,44 +685,6 @@ CREATE UNIQUE INDEX "sys_role_menu_roleId_menuId_idx" ON "public"."sys_role_menu
+ );
+ COMMENT ON INDEX "public"."sys_role_menu_roleId_menuId_idx" IS '角色ID_菜单ID_唯一索引';
+ 
+--- ----------------------------
+--- -------------数据源------------
+--- ----------------------------
+-DROP TABLE IF EXISTS "public"."sys_source";
+-CREATE TABLE "public"."sys_source" (
+-	"id" int8 NOT NULL GENERATED BY DEFAULT AS IDENTITY,
+-	"creator" int8 NOT NULL DEFAULT 0,
+-	"editor" int8 NOT NULL DEFAULT 0,
+-	"create_time" timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-	"update_time" timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-	"del_flag" int2 NOT NULL DEFAULT 0,
+-	"version" int4 NOT NULL DEFAULT 0,
+-	"tenant_id" int8 NOT NULL DEFAULT 1,
+-	"dept_id" int8 NOT NULL DEFAULT 1,
+-	"name" varchar(50) NOT NULL,
+-	"driver_class_name" varchar(100) NOT NULL,
+-	"url" varchar(500) NOT NULL,
+-	"username" varchar(100) NOT NULL,
+-	"password" varchar(100) NOT NULL
+-);
+-COMMENT ON COLUMN "public"."sys_source"."id" IS 'ID';
+-COMMENT ON COLUMN "public"."sys_source"."creator" IS '创建人';
+-COMMENT ON COLUMN "public"."sys_source"."editor" IS '编辑人';
+-COMMENT ON COLUMN "public"."sys_source"."create_time" IS '创建时间';
+-COMMENT ON COLUMN "public"."sys_source"."update_time" IS '修改时间';
+-COMMENT ON COLUMN "public"."sys_source"."del_flag" IS '删除标识 0未删除 1已删除';
+-COMMENT ON COLUMN "public"."sys_source"."version" IS '版本号';
+-COMMENT ON COLUMN "public"."sys_source"."tenant_id" IS '租户ID';
+-COMMENT ON COLUMN "public"."sys_source"."dept_id" IS '部门ID';
+-COMMENT ON COLUMN "public"."sys_source"."name" IS '数据源名称';
+-COMMENT ON COLUMN "public"."sys_source"."driver_class_name" IS '数据源的驱动名称';
+-COMMENT ON COLUMN "public"."sys_source"."url" IS '数据源的连接信息';
+-COMMENT ON COLUMN "public"."sys_source"."username" IS '数据源的用户名';
+-COMMENT ON COLUMN "public"."sys_source"."password" IS '数据源的密码';
+-COMMENT ON TABLE "public"."sys_source" IS '数据源';
+-
+-ALTER TABLE "public"."sys_source" ADD CONSTRAINT "sys_source_pkey" PRIMARY KEY ("id");
+-
+ -- ----------------------------
+ -- -------------租户------------
+ -- ----------------------------
+
+### doc/db/kcloud_platform_iot.sql
+@@ -295,3 +295,41 @@ COMMENT ON COLUMN "public"."iot_product_model"."product_id" IS '产品ID';
+ COMMENT ON COLUMN "public"."iot_product_model"."model_id" IS '模型ID';
+ COMMENT ON TABLE "public"."iot_product_model" IS '产品模型';
+ ALTER TABLE "public"."iot_product_model" ADD CONSTRAINT "iot_product_model_pkey" PRIMARY KEY ("id");
++
++-- ----------------------------
++-- -------------数据源------------
++-- ----------------------------
++DROP TABLE IF EXISTS "public"."iot_source";
++CREATE TABLE "public"."iot_source" (
++   "id" int8 NOT NULL GENERATED BY DEFAULT AS IDENTITY,
++   "creator" int8 NOT NULL DEFAULT 0,
++   "editor" int8 NOT NULL DEFAULT 0,
++   "create_time" timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++   "update_time" timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++   "del_flag" int2 NOT NULL DEFAULT 0,
++   "version" int4 NOT NULL DEFAULT 0,
++   "tenant_id" int8 NOT NULL DEFAULT 1,
++   "dept_id" int8 NOT NULL DEFAULT 1,
++   "name" varchar(50) NOT NULL,
++   "type" varchar(50) NOT NULL,
++   "endpoint" varchar(500) NOT NULL,
++   "username" varchar(100) NOT NULL,
++   "password" varchar(100) NOT NULL
++);
++COMMENT ON COLUMN "public"."iot_source"."id" IS 'ID';
++COMMENT ON COLUMN "public"."iot_source"."creator" IS '创建人';
++COMMENT ON COLUMN "public"."iot_source"."editor" IS '编辑人';
++COMMENT ON COLUMN "public"."iot_source"."create_time" IS '创建时间';
++COMMENT ON COLUMN "public"."iot_source"."update_time" IS '修改时间';
++COMMENT ON COLUMN "public"."iot_source"."del_flag" IS '删除标识 0未删除 1已删除';
++COMMENT ON COLUMN "public"."iot_source"."version" IS '版本号';
++COMMENT ON COLUMN "public"."iot_source"."tenant_id" IS '租户ID';
++COMMENT ON COLUMN "public"."iot_source"."dept_id" IS '部门ID';
++COMMENT ON COLUMN "public"."iot_source"."name" IS '数据源名称';
++COMMENT ON COLUMN "public"."iot_source"."type" IS '数据源类型';
++COMMENT ON COLUMN "public"."iot_source"."endpoint" IS '数据源地址';
++COMMENT ON COLUMN "public"."iot_source"."username" IS '数据源的用户名';
++COMMENT ON COLUMN "public"."iot_source"."password" IS '数据源的密码';
++COMMENT ON TABLE "public"."iot_source" IS '数据源';
++
++ALTER TABLE "public"."iot_source" ADD CONSTRAINT "iot_source_pkey" PRIMARY KEY ("id");
+
+### ui/config/routes.ts
+@@ -77,13 +77,7 @@ export default [
+ 						title: 'menu.sys.tenant.tenant',
+ 						path: '/sys/tenant/tenant',
+ 						component: './Sys/Tenant/tenant',
+-					},
+-					{
+-						name: 'menu.sys.tenant.source',
+-						title: 'menu.sys.tenant.source',
+-						path: '/sys/tenant/source',
+-						component: './Sys/Tenant/source',
+-					},
++					}
+ 				],
+ 			},
+ 			{
+@@ -193,6 +187,12 @@ export default [
+ 						path: '/iot/device/productCategory',
+ 						component: './IoT/Device/productCategory',
+ 					},
++					{
++						name: 'menu.iot.device.source',
++						title: 'menu.iot.device.source',
++						path: '/iot/device/source',
++						component: './IoT/Device/source',
++					},
+ 					{
+ 						name: 'menu.iot.device.product',
+ 						title: 'menu.iot.device.product',
+
+### ui/src/access.ts
+@@ -115,29 +115,29 @@ export default (initialState: any) => {
+ 			scopes?.includes('write'),
+ 
+ 		canSourceGetDetail:
+-			permissions?.includes('sys:source:detail') &&
++			permissions?.includes('iot:source:detail') &&
+ 			scopes?.includes('read'),
+ 
+ 		canSourcePage:
+-			permissions?.includes('sys:source:page') && scopes?.includes('read'),
++			permissions?.includes('iot:source:page') && scopes?.includes('read'),
+ 
+ 		canSourceModify:
+-			permissions?.includes('sys:source:modify') &&
++			permissions?.includes('iot:source:modify') &&
+ 			scopes?.includes('write'),
+ 
+ 		canSourceRemove:
+-			permissions?.includes('sys:source:remove') &&
++			permissions?.includes('iot:source:remove') &&
+ 			scopes?.includes('write'),
+ 
+ 		canSourceSave:
+-			permissions?.includes('sys:source:save') && scopes?.includes('write'),
++			permissions?.includes('iot:source:save') && scopes?.includes('write'),
+ 
+ 		canSourceImport:
+-			permissions?.includes('sys:source:import') &&
++			permissions?.includes('iot:source:import') &&
+ 			scopes?.includes('write'),
+ 
+ 		canSourceExport:
+-			permissions?.includes('sys:source:export') &&
++			permissions?.includes('iot:source:export') &&
+ 			scopes?.includes('write'),
+ 
+ 		canDeptGetDetail:
+
+### ui/src/locales/en-US.ts
+@@ -593,7 +593,7 @@ export default {
+ 	'menu.sys.tenant': 'Tenants',
+ 	'menu.sys.tenant.package': 'Packages',
+ 	'menu.sys.tenant.tenant': 'Tenants',
+-	'menu.sys.tenant.source': 'Sources',
++	'menu.iot.device.source': 'Sources',
+ 	'menu.sys.base': 'Basic Data',
+ 	'menu.sys.base.dict': 'Dicts',
+ 	'menu.sys.base.i18n-menu': 'I18n Menu',
+
+### ui/src/locales/zh-CN.ts
+@@ -593,7 +593,7 @@ export default {
+ 	'menu.sys.tenant': '租户管理',
+ 	'menu.sys.tenant.package': '套餐',
+ 	'menu.sys.tenant.tenant': '租户',
+-	'menu.sys.tenant.source': '数据源',
++	'menu.iot.device.source': '数据源',
+ 	'menu.sys.base': '基础数据',
+ 	'menu.sys.base.dict': '数据字典',
+ 	'menu.sys.base.i18n-menu': '国际化菜单',
+
+===== P058 | repo koki-develop/Cork | PR #33: feat(updater): add in-app updater via tauri-plugin-updater | capacidade: per-workspace-statuses
+--- SPEC VIVA
+# per-workspace-statuses Specification
+
+## Purpose
+
+TBD - created by archiving change per-workspace-statuses. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: statuses 設定は作業ディレクトリ直下の `.cork.json` に保存される
+
+statuses 設定はグローバル `settings.json` ではなく、現在選択中の作業ディレクトリ直下の `.cork.json` ファイルに保存される。`.cork.json` のスキーマは JSON オブジェクト形式で、`statuses` キーに `{ "label": string }` 要素の配列を保持する。Cork は statuses 設定の永続化先として `.cork.json` のみを使用し、他のパスを使用してはならない (MUST)。
+
+#### Scenario: 作業ディレクトリ A と B で独立した statuses 構成を持てる
+
+- **GIVEN** ユーザーが作業ディレクトリ A で `Backlog / Doing / Done` を、作業ディレクトリ B で `Todo / In Progress / Review / Done` を保存している
+- **WHEN** ユーザーが Cork を作業ディレクトリ A に切り替える
+- **THEN** Board と設定パネルには A の `Backlog / Doing / Done` が表示される
+- **AND** B に切り替えると Board と設定パネルには `Todo / In Progress / Review / Done` が表示される
+
+#### Scenario: `.cork.json` のスキーマ
+
+- **WHEN** Cork が statuses を作業ディレクトリに永続化する
+- **THEN** 作業ディレクトリ直下に `.cork.json` というファイルが作成され、内容は `{"statuses": [{"label": "..."}, ...]}` 形式の JSON である
+- **AND** ファイルは人間が読める 2 スペースインデントの整形 JSON で書かれ、末尾改行を含む
+
+### Requirement: グローバル `settings.json` の `statuses` キーは廃止される
+
+`tauri_plugin_store` 経由のグローバル `settings.json` に `statuses` を読み書きするコードパスは存在してはならない (MUST NOT)。`get_statuses` / `save_statuses` / `list_tasks` のデフォルトステータス読み出しはすべて `.cork.json` ベースに置き換わる (SHALL)。
+
+#### Scenario: グローバル `settings.json` に `statuses` が書き込まれない
+
+- **WHEN** ユーザーが設定パネルで statuses を編集・追加・削除・並び替えする
+- **THEN** OS のアプリデータディレクトリにあるグローバル `settings.json` の `statuses` キーは更新されない（存在しないまま）
+- **AND** 変更内容は作業ディレクトリの `.cork.json` にのみ書き込まれる
+
+#### Scenario: 既存ユーザーのグローバル `statuses` 設定は無視される
+
+- **GIVEN** 旧バージョンの Cork を使っていたユーザーのグローバル `settings.json` に過去の `statuses` 配列が残っている
+- **WHEN** 新バージョンの Cork が起動する
+- **THEN** その旧データは読み込まれず、`.cork.json` が存在しなければフロントエンドのデフォルト `Todo / Doing / Done` が表示される
+
+### Requirement: `get_statuses` は作業ディレクトリの `.cork.json` を読み出す
+
+`get_statuses` Tauri コマンドは現在の `AppState.workspace_dir` 配下の `.cork.json` を読み、`statuses` キーの配列を返さなければならない (MUST)。ファイル不在 / JSON パース失敗 / `statuses` キー欠落 / 配列型でない場合 / `workspace_dir` 未設定の場合は、いずれも空配列を返す (SHALL)。
+
+#### Scenario: 正常な `.cork.json` を読み出す
+
+- **GIVEN** 作業ディレクトリ直下に有効な `.cork.json`（`{"statuses": [{"label": "A"}, {"label": "B"}]}`）が存在する
+- **WHEN** フロントエンドが `get_statuses` を invoke する
+- **THEN** `[{"label": "A"}, {"label": "B"}]` が返る
+
+#### Scenario: `.cork.json` が存在しない
+
+- **GIVEN** 作業ディレクトリ直下に `.cork.json` が存在しない
+- **WHEN** フロントエンドが `get_statuses` を invoke する
+- **THEN** 空配列 `[]` が返る
+- **AND** ファイルは自動生成されない（後続の `save_statuses` でのみ生成される）
+
+#### Scenario: `.cork.json` が JSON パース失敗する
+
+- **GIVEN** 作業ディレクトリ直下の `.cork.json` が JSON として不正である（中括弧の対応が壊れている等）
+- **WHEN** フロントエンドが `get_statuses` を invoke する
+- **THEN** 空配列 `[]` が返る
+- **AND** バックエンドのプロセス標準エラー出力にパース失敗の旨が出力される
+
+#### Scenario: `.cork.json` の `statuses` キーが欠落 / 型不一致
+
+- **GIVEN** `.cork.json` は JSON として valid だが、`statuses` キーが存在しないか、配列以外の値が入っている
+- **WHEN** フロントエンドが `get_statuses` を invoke する
+- **THEN** 空配列 `[]` が返る
+
+#### Scenario: 作業ディレクトリが未選択
+
+- **GIVEN** `AppState.workspace_dir` が `None`
+- **WHEN** フロントエンドが `get_statuses` を invoke する
+- **THEN** 空配列 `[]` が返る（エラーにはしない）
+
+### Requirement: `save_statuses` は作業ディレクトリの `.cork.json` に書き込む
+
+`save_statuses` Tauri コマンドは現在の `AppState.workspace_dir` 配下の `.cork.json` に統一フォーマット（`{"statuses": [...]}` + 2 スペースインデント整形 + 末尾改行）で書き込まなければならない (MUST)。`workspace_dir` 未設定時はエラーを返し、ファイルシステムへの副作用を起こしてはならない (MUST NOT)。
+
+#### Scenario: 新規に `.cork.json` を作成する
+
+- **GIVEN** 作業ディレクトリ直下に `.cork.json` がまだ存在しない
+- **WHEN** フロントエンドが `save_statuses` に `[{"label": "Todo"}, {"label": "Done"}]` を渡して invoke する
+- **THEN** 作業ディレクトリ直下に `.cork.json` が新規作成される
+- **AND** 内容は `{"statuses": [{"label": "Todo"}, {"label": "Done"}]}` を 2 スペースインデントで整形した JSON である
+
+#### Scenario: 既存の `.cork.json` を更新する
+
+- **GIVEN** 作業ディレクトリ直下に有効な `.cork.json` が存在する
+- **WHEN** フロントエンドが `save_statuses` に新しい配列を渡して invoke する
+- **THEN** `.cork.json` の `statuses` キーが新しい配列で完全に上書きされる
+- **AND** `.cork.json` 内に存在する `statuses` 以外のキー（将来の拡張用）はそのまま残る
+
+#### Scenario: 作業ディレクトリが未選択での保存
+
+- **GIVEN** `AppState.workspace_dir` が `None`
+- **WHEN** フロントエンドが `save_statuses` を invoke する
+- **THEN** `Err("No directory selected")` 相当のエラーが返る
+- **AND** ファイルシステムに副作用は無い
+
+### Requirement: frontmatter に `status` を持たない `.md` ファイルは `list_tasks` に含めない
+
+frontmatter に `status` キーを持たない `.md` ファイルは Cork の管理対象外とみなし、`list_tasks` の結果に含めてはならない (MUST NOT)。従来の「`.cork.json` の先頭ステータスをデフォルトとして割り当てる」挙動は廃止される。
+
+frontmatter に `status` キーが存在するが、その値が `.cork.json` に定義されたいずれのステータスラベルとも一致しない場合は、タスクはその値を持ったまま `list_tasks` の結果に含めなければならず (MUST)、board 上では Unknown レーン（別途定義）に表示される。
+
+#### Scenario: `status:` なしのファイルが除外される
+
+- **GIVEN** 作業ディレクトリに `---\ntitle: Hello\n---\n` という内容の `hello.md` が存在する（frontmatter はあるが `status:` キーがない）
+- **WHEN** フロントエンドが `list_tasks` を invoke する
+- **THEN** 戻り値の配列に `hello.md` に対応する要素は含まれない
+
+#### Scenario: frontmatter 自体がないファイルが除外される
+
+- **GIVEN** 作業ディレクトリに frontmatter を持たない `readme.md` が存在する
+- **WHEN** フロントエンドが `list_tasks` を invoke する
+- **THEN** 戻り値の配列に `readme.md` に対応する要素は含まれない
+
+#### Scenario: 未定義ステータス値を持つタスクは結果に含まれる
+
+- **GIVEN** `.cork.json` の statuses が `[{"label": "Todo"}, {"label": "Done"}]`
+- **AND** 作業ディレクトリに `---\nstatus: Doing\n---\n` の `task.md`（`Doing` は定義済みステータスに存在しない）
+- **WHEN** フロントエンドが `list_tasks` を invoke する
+- **THEN** 戻り値の配列に `task.md` に対応する要素が含まれる
+- **AND** その要素の `status` は `"Doing"` である
+
+### Requirement: `.cork.json` の外部編集は即時 UI に反映される
+
+`useWorkspace` の watch ループは作業ディレクトリ直下の `.cork.json` の変更・作成・削除イベントを検知しなければならず (MUST)、検知時に `loadStatuses` と `loadTasks` の両方を再実行しなければならない (MUST)。
+
+#### Scenario: Cork 外のエディタで `.cork.json` を編集する
+
+- **GIVEN** ユーザーが Cork を開いた状態で、別エディタで作業ディレクトリの `.cork.json` を書き換えて保存する
+- **WHEN** ファイル変更イベントが発火する
+- **THEN** 設定パネルと Board の statuses 表示は新しい `.cork.json` の内容に追従して更新される
+- **AND** デフォルトステータス変更によって所属列が変わるタスクの表示も更新される
+
+#### Scenario: `.cork.json` をエディタで削除する
+
+- **GIVEN** Cork が開いた状態で、ユーザーが `.cork.json` を削除する
+- **WHEN** ファイル削除イベントが発火する
+- **THEN** Cork は `get_statuses` の応答が空配列になるためフロントエンドの `DEFAULT_STATUSES`（`Todo / Doing / Done`）に戻る
+
+#### Scenario: `.md` ファイル変更時は statuses を再ロードしない
+
+- **GIVEN** Cork が開いた状態で、ユーザーが `.md` ファイルだけを編集する（`.cork.json` には触れない）
+- **WHEN** ファイル変更イベントが発火する
+- **THEN** `loadTasks` のみが実行され、`loadStatuses` は実行されない
+
+### Requirement: 作業ディレクトリ切替時に対応する `.cork.json` を読み直す
+
+`useWorkspace.dir` が変化した時、Cork は新しいディレクトリの `.cork.json` から statuses を読み直さなければならない (MUST)。ファイル監視ループも新しいディレクトリを対象とした watch に切り替えなければならない (MUST)。
+
+#### Scenario: 設定パネルで別の作業ディレクトリに切り替える
+
+- **GIVEN** ユーザーが作業ディレクトリ A を開いて statuses が `[Backlog, Done]` 表示されている
+- **WHEN** 設定パネルからディレクトリ B に切り替える
+- **THEN** Cork は B の `.cork.json` を読み直し、Board と設定パネルが B の statuses 構成で再描画される
+- **AND** ファイル監視ループも B を対象とした watch に切り替わる
+
+--- ARQUIVOS DO PR (31)
+modified  +39    -1     .github/workflows/release-please.yml
+modified  +6     -0     bun.lock
+added     +2     -0     openspec/changes/archive/2026-06-26-in-app-updater/.openspec.yaml
+added     +278   -0     openspec/changes/archive/2026-06-26-in-app-updater/design.md
+added     +83    -0     openspec/changes/archive/2026-06-26-in-app-updater/proposal.md
+added     +204   -0     openspec/changes/archive/2026-06-26-in-app-updater/specs/updater/spec.md
+added     +209   -0     openspec/changes/archive/2026-06-26-in-app-updater/tasks.md
+added     +210   -0     openspec/specs/updater/spec.md
+modified  +2     -0     package.json
+modified  +2     -0     scripts/build-cask.ts
+added     +78    -0     scripts/build-update-manifest.ts
+modified  +1     -1     src-tauri/AGENTS.md
+modified  +376   -5     src-tauri/Cargo.lock
+modified  +2     -0     src-tauri/Cargo.toml
+modified  +3     -1     src-tauri/capabilities/default.json
+modified  +2     -0     src-tauri/src/lib.rs   <== código ligado à spec
+modified  +10    -0     src-tauri/src/menu.rs
+modified  +11    -1     src-tauri/tauri.conf.json
+modified  +17    -0     src/App.tsx
+modified  +2     -1     src/api/AGENTS.md
+modified  +2     -1     src/api/index.ts
+modified  +3     -0     src/api/menu.ts
+added     +24    -0     src/api/updater.ts
+modified  +1     -0     src/components/organisms/shell/AGENTS.md
+added     +194   -0     src/components/organisms/shell/UpdaterToast.tsx
+modified  +1     -0     src/components/organisms/shell/index.ts
+modified  +1     -0     src/hooks/AGENTS.md
+added     +161   -0     src/hooks/useUpdater.ts
+modified  +1     -0     src/types/AGENTS.md
+modified  +1     -0     src/types/index.ts
+added     +13    -0     src/types/updater.ts
+--- DIFF DO CÓDIGO LIGADO
+### src-tauri/src/lib.rs
+@@ -40,6 +40,8 @@ pub fn run() {
+         .plugin(tauri_plugin_opener::init())
+         .plugin(tauri_plugin_fs::init())
+         .plugin(tauri_plugin_store::Builder::default().build())
++        .plugin(tauri_plugin_updater::Builder::new().build())
++        .plugin(tauri_plugin_process::init())
+         .manage(AppState::new())
+         .invoke_handler(tauri::generate_handler![
+             workspace::pick_directory,
+
+===== P059 | repo UseJunior/safe-docx | PR #527: feat(docx-mcp): add read-only get_document_outline tool | capacidade: docx-primitives
+--- SPEC VIVA
+# docx-primitives Specification
+
+## Purpose
+Define behavior guarantees for the docx-primitives-ts library: deterministic text matching with fallback modes, list label extraction, semantic tag handling, OOXML layout mutations, XML round-trip fidelity, and paragraph bookmark identity.
+## Requirements
+### Requirement: Unique Substring Matching with Fallback Modes
+The matching engine SHALL find a unique substring match in paragraph text using a prioritized chain of fallback modes: exact → quote_normalized → flexible_whitespace → quote_optional.
+
+#### Scenario: exact match found for literal substring
+- **GIVEN** paragraph text containing the needle as a literal substring exactly once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `unique` and mode `exact`
+- **AND** `matchedText` SHALL equal the needle verbatim
+
+#### Scenario: not_found when needle is absent
+- **WHEN** `findUniqueSubstringMatch` is called with a needle not present in any fallback mode
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: multiple when needle appears more than once
+- **GIVEN** paragraph text containing the needle more than once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `multiple` with an accurate `matchCount`
+
+#### Scenario: not_found for empty needle
+- **WHEN** `findUniqueSubstringMatch` is called with an empty string needle
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: quote_normalized matches curly quotes against straight quotes
+- **GIVEN** paragraph text containing curly double or single quotes
+- **WHEN** the needle uses straight quote equivalents and no exact match exists
+- **THEN** the result SHALL have status `unique` and mode `quote_normalized`
+
+#### Scenario: exact mode preferred over quote_normalized when both match
+- **GIVEN** paragraph text that matches the needle exactly AND via quote normalization
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have mode `exact`
+
+#### Scenario: flexible_whitespace matches across spacing variance
+- **GIVEN** paragraph text with extra spaces, tabs, or newlines between words
+- **WHEN** the needle uses single-space equivalents and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `flexible_whitespace`
+
+#### Scenario: quote_optional matches quoted and unquoted term references
+- **GIVEN** paragraph text containing quoted terms
+- **WHEN** the needle omits the quotes and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `quote_optional`
+
+### Requirement: List Label Extraction and Stripping
+The list label engine SHALL detect and extract structured list labels from paragraph text, supporting letter, roman, number, section, article, and numbered heading patterns.
+
+#### Scenario: extract parenthesized letter labels
+- **GIVEN** paragraph text starting with a parenthesized letter like `(a)` or `(A)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER` and the full label including parentheses
+
+#### Scenario: single-char roman-like letters classified as LETTER not ROMAN
+- **GIVEN** paragraph text starting with `(i)` or `(v)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER`
+
+#### Scenario: extract multi-char roman numeral labels
+- **GIVEN** paragraph text starting with a multi-character roman numeral like `(ii)`, `(iv)`, `(xiii)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ROMAN`
+
+#### Scenario: extract section labels with sub-paragraph support
+- **GIVEN** paragraph text starting with `Section 1`, `Section 1.2`, or `Section 3.1(a)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `SECTION` with the full section reference
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract article labels with roman numeral support
+- **GIVEN** paragraph text starting with `Article 1` or `Article IV`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ARTICLE`
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract numbered heading labels
+- **GIVEN** paragraph text starting with `1.`, `1.1`, or `2.3.1` followed by a space
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `NUMBERED_HEADING`
+
+#### Scenario: null label for plain text without list patterns
+- **GIVEN** paragraph text without any recognized list label pattern
+- **WHEN** `extractListLabel` is called
+- **THEN** `label` and `label_type` SHALL be `null`
+
+#### Scenario: stripListLabel removes label and leading whitespace
+- **GIVEN** paragraph text with a recognized list label
+- **WHEN** `stripListLabel` is called
+- **THEN** the result SHALL contain `stripped_text` with the label and leading whitespace removed
+- **AND** `result.label` SHALL contain the extracted label
+
+### Requirement: Semantic Tag Emission and Stripping
+The semantic tag engine SHALL emit/strip `<highlighting>` and `<font>` tags for formatting visibility and support `stripAllInlineTags` for removing all known inline tags.
+
+#### Scenario: strip highlight tags leaves content intact
+- **GIVEN** text containing `<highlighting>` tags
+- **WHEN** `stripHighlightTags` is called
+- **THEN** the tag wrappers SHALL be removed and the inner content preserved
+
+### Requirement: OOXML Layout Mutations
+The layout engine SHALL perform deterministic OOXML mutations for paragraph spacing, table row height, and table cell padding, creating missing container elements as needed.
+
+#### Scenario: setParagraphSpacing creates missing pPr and spacing containers
+- **GIVEN** a paragraph element without `w:pPr` or `w:spacing` children
+- **WHEN** `setParagraphSpacing` is called with `beforeTwips`, `afterTwips`, `lineTwips`, and `lineRule`
+- **THEN** the engine SHALL create `w:pPr` and `w:spacing` elements
+- **AND** SHALL set the requested attributes in twip units
+
+#### Scenario: setParagraphSpacing preserves unrelated formatting nodes
+- **GIVEN** a paragraph with existing `w:pPr` children (e.g., `w:jc` for justification)
+- **WHEN** `setParagraphSpacing` is called
+- **THEN** existing `w:pPr` children SHALL be preserved
+- **AND** a `w:spacing` element SHALL be added or updated
+
+#### Scenario: setTableRowHeight reports missing indexes
+- **WHEN** `setTableRowHeight` is called with table or row indexes that do not exist in the document
+- **THEN** the result SHALL report `missingTableIndexes` and `missingRowIndexes`
+- **AND** SHALL only apply mutations to existing rows
+
+#### Scenario: setTableCellPadding creates tcPr and tcMar containers
+- **GIVEN** a table cell without `w:tcPr` or `w:tcMar` children
+- **WHEN** `setTableCellPadding` is called with directional padding values
+- **THEN** the engine SHALL create the container elements and set padding in `dxa` units
+- **AND** untargeted cells SHALL NOT be modified
+
+### Requirement: XML Round-Trip Fidelity
+The XML engine SHALL parse and serialize OOXML without data loss, preserving elements, attributes, namespaces, and text content through round-trips.
+
+#### Scenario: parse and serialize preserves element structure
+- **WHEN** valid XML is parsed and immediately serialized
+- **THEN** the output SHALL contain all original elements, attributes, and text content
+
+#### Scenario: namespaced XML preserved through round-trip
+- **GIVEN** XML using OOXML namespaces (e.g., `w:document`, `w:body`)
+- **WHEN** the XML is parsed and serialized
+- **THEN** namespace prefixes and URIs SHALL be preserved
+
+#### Scenario: textContent returns concatenated text of nested elements
+- **GIVEN** an element containing nested child elements with text
+- **WHEN** `textContent` is called
+- **THEN** the result SHALL be the concatenated text content of all descendants
+
+#### Scenario: textContent returns empty string for null or undefined input
+- **WHEN** `textContent` is called with `null` or `undefined`
+- **THEN** the result SHALL be an empty string
+
+### Requirement: Paragraph Bookmark Identity
+The bookmark engine SHALL mint and persist stable `_bk_*` identifiers for paragraphs, ensuring unique addressability and idempotent allocation.
+
+#### Scenario: insertParagraphBookmarks mints IDs matching expected pattern
+- **WHEN** `insertParagraphBookmarks` is called on a document with paragraphs lacking bookmarks
+- **THEN** each paragraph SHALL receive a `_bk_*` identifier matching the pattern `_bk_[0-9a-f]{12}`
+
+#### Scenario: getParagraphBookmarkId retrieves minted ID
+- **GIVEN** a paragraph with a previously minted `_bk_*` bookmark
+- **WHEN** `getParagraphBookmarkId` is called
+- **THEN** the result SHALL return the stable identifier
+
+### Requirement: Comparator Round-Trip Semantic Invariants
+
+The comparator SHALL enforce semantic round-trip invariants using the package read-text surface and structural diagnostics.
+
+#### Scenario: Accept-all and reject-all preserve semantic read-text parity
+- **GIVEN** a comparison output document with tracked changes
+- **WHEN** `Accept All` is applied to the output
+- **THEN** the read-text output SHALL match the revised input document
+- **AND** when `Reject All` is applied, the read-text output SHALL match the original input document
+
+#### Scenario: Structural diagnostics remain equivalent across round-trip projections
+- **GIVEN** a comparison output document with numbering, notes, and bookmarks
+- **WHEN** `Accept All` and `Reject All` projections are computed
+- **THEN** numbering, footnote/endnote, and bookmark integrity diagnostics SHALL remain equivalent to the revised and original baselines respectively
+
+### Requirement: Inplace Bookmark Safety Uses Semantic Parity
+
+The inplace reconstruction safety gate SHALL compare bookmark semantics rather than strict bookmark ID identity.
+
+#### Scenario: Inplace remains valid when bookmark IDs are remapped but semantics are preserved
+- **GIVEN** a corpus pair where bookmark IDs may differ after reconstruction
+- **WHEN** bookmark names, bookmark-reference targets, unresolved-reference sets, and start/end integrity diagnostics match
+- **THEN** inplace reconstruction SHALL be accepted
+- **AND** the comparator SHALL NOT downgrade to rebuild mode for bookmark-ID mismatch alone
+
+#### Scenario: Inplace downgrades when semantic bookmark parity fails
+- **GIVEN** a corpus pair where round-trip checks fail
+- **WHEN** semantic bookmark parity or other round-trip safety checks do not hold
+- **THEN** the comparator SHALL downgrade from inplace to rebuild mode
+- **AND** the fallback reason SHALL be `round_trip_safety_check_failed`
+
+### Requirement: Inplace Paragraph-Boundary Bookmark Preservation
+
+When inplace reconstruction creates paragraphs for deleted or moved-source atoms, paragraph-boundary bookmark markers SHALL be preserved.
+
+#### Scenario: Created inplace paragraphs retain bookmark boundary markers
+- **GIVEN** source paragraphs that contain boundary `w:bookmarkStart` and `w:bookmarkEnd` markers
+- **WHEN** inplace reconstruction emits created paragraphs for deleted or moved-source content
+- **THEN** leading and trailing bookmark markers SHALL be preserved in the created output paragraphs
+- **AND** bookmark start/end integrity diagnostics SHALL remain valid after reconstruction
+
+### Requirement: Tracked Change Acceptance Engine
+The docx-primitives library SHALL programmatically accept all tracked changes in OOXML document body content, resolving each revision type into its accepted state.
+
+#### Scenario: accept insertions by unwrapping w:ins wrappers
+- **GIVEN** a document body containing `w:ins` elements wrapping inserted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:ins` wrapper elements SHALL be removed
+- **AND** their child content SHALL be promoted to the parent element in place
+
+#### Scenario: accept deletions by removing w:del elements and content
+- **GIVEN** a document body containing `w:del` elements wrapping deleted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:del` elements and their children SHALL be removed entirely
+
+#### Scenario: accept property changes by removing change records
+- **GIVEN** a document body containing property change records (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** the change record elements SHALL be removed
+- **AND** the current formatting properties SHALL be preserved
+
+#### Scenario: accept moves by keeping destination and removing source
+- **GIVEN** a document body containing `w:moveFrom` and `w:moveTo` pairs
+- **WHEN** the acceptance engine processes the document
+- **THEN** `w:moveFrom` elements and their children SHALL be removed
+- **AND** `w:moveTo` wrapper elements SHALL be removed with child content promoted to the parent
+
+#### Scenario: bottom-up processing resolves nested revisions
+- **GIVEN** nested tracked changes (e.g., a `w:del` inside a `w:ins`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** inner revisions SHALL be resolved before outer revisions
+- **AND** no orphaned elements SHALL remain
+
+#### Scenario: orphaned moves handled with safe fallback
+- **GIVEN** a `w:moveFrom` without a corresponding `w:moveTo` (or vice versa)
+- **WHEN** the acceptance engine processes the document
+- **THEN** orphaned `w:moveFrom` SHALL be treated as `w:del` (removed)
+- **AND** orphaned `w:moveTo` SHALL be treated as `w:ins` (unwrapped)
+
+### Requirement: Run Merging with Safety Barriers
+The docx-primitives library SHALL merge adjacent format-identical runs to reduce XML fragmentation, while enforcing safety barriers that prevent merges across structural boundaries.
+
+#### Scenario: merge adjacent runs with equivalent formatting
+- **GIVEN** a paragraph containing adjacent runs with identical effective run properties
+- **WHEN** `merge_runs` is called
+- **THEN** the adjacent runs SHALL be consolidated into a single run
+- **AND** the merged run SHALL preserve the original visible text and formatting
+
+#### Scenario: never merge across field boundaries
+- **GIVEN** a paragraph containing runs separated by `fldChar` or `instrText` elements
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across the field boundary
+- **AND** field structure SHALL remain intact
+
+#### Scenario: never merge across comment range boundaries
+- **GIVEN** a paragraph containing runs separated by `commentRangeStart` or `commentRangeEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across comment range boundaries
+
+#### Scenario: never merge across bookmark boundaries
+- **GIVEN** a paragraph containing runs separated by `bookmarkStart` or `bookmarkEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across bookmark boundaries
+
+#### Scenario: never merge across tracked-change wrapper boundaries
+- **GIVEN** a paragraph containing runs inside different tracked-change wrappers (`w:ins`, `w:del`, `w:moveFrom`, `w:moveTo`)
+- **WHEN** `merge_runs` is called
+- **THEN** runs in different tracked-change wrappers SHALL NOT be merged
+
+### Requirement: Redline Simplification with Author Constraint
+The docx-primitives library SHALL consolidate adjacent tracked-change wrappers of the same type and author to reduce XML verbosity, without altering document semantics.
+
+#### Scenario: merge adjacent same-author same-type tracked-change wrappers
+- **GIVEN** adjacent `w:ins` (or `w:del`) wrappers attributed to the same author
+- **WHEN** `simplify_redlines` is called
+- **THEN** the adjacent wrappers SHALL be consolidated into a single wrapper
+- **AND** the merged wrapper SHALL preserve all child content
+
+#### Scenario: never merge wrappers from different authors
+- **GIVEN** adjacent tracked-change wrappers attributed to different authors
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+- **AND** author attribution SHALL be preserved
+
+#### Scenario: never merge across different change types
+- **GIVEN** adjacent tracked-change wrappers of different types (e.g., `w:ins` followed by `w:del`)
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+
+### Requirement: Table Context in Document View
+
+The document view pipeline SHALL derive table structure context for each paragraph inside a body-level table. The `TableContext` type SHALL include: `table_id` (body-level index string like `_tbl_0`), `table_index` (0-based), `row_index`, `col_index` (grid-aware, accounting for `gridSpan`), `col_header` (text from header row), `total_rows`, `total_cols`, `is_header_row` (true for row index 0), `para_in_cell`, and `cell_para_count`.
+
+Table context derivation SHALL use ancestor-based DOM walking from each paragraph to find the enclosing `w:tc`, `w:tr`, and `w:tbl` elements. Only body-level tables (direct children of `w:body`) SHALL be indexed. Paragraphs inside nested tables SHALL receive the context of their enclosing body-level table cell.
+
+The paragraph set and ordering produced by `buildDocumentView()` SHALL remain identical to the existing `getParagraphs()` traversal. Empty table cell paragraphs SHALL be preserved (not skipped) to maintain structural completeness.
+
+#### Scenario: [SDX-TABLE-01] Simple table produces correct table context
+- **WHEN** a document contains a 2-row x 3-column table
+- **THEN** each cell paragraph has `table_context` with correct `row_index`, `col_index`, `total_rows`, `total_cols`, and `is_header_row`
+
+#### Scenario: [SDX-TABLE-02] gridSpan produces grid-aware column indices
+- **WHEN** a table cell has `w:gridSpan val="2"`
+- **THEN** subsequent cells in the row have `col_index` offset by the span value
+
+#### Scenario: [SDX-TABLE-03] Tracked-change wrapped rows are included
+- **WHEN** a `w:tr` element is wrapped in `w:ins`
+- **THEN** paragraphs in the wrapped row receive table context with the correct `row_index`
+
+#### Scenario: [SDX-TABLE-04] Nested table paragraphs get outer cell context
+- **WHEN** a cell contains a nested `w:tbl`
+- **THEN** paragraphs inside the nested table receive the context of the outer body-level table cell
+
+#### Scenario: [SDX-TABLE-05] Empty cells are preserved
+- **WHEN** a table cell contains only an empty `w:p`
+- **THEN** the empty paragraph is included in document view nodes with `table_context` set
+
+### Requirement: Table-Aware Toon Rendering
+
+`renderToon()` SHALL emit `#TABLE` and `#END_TABLE` structural markers around table content. The `#TABLE` marker format SHALL be: `#TABLE {table_id} | {rows} rows × {cols} cols`. Column headers are NOT repeated in the marker — they appear exactly once in the `th(0,N)` data rows which carry editable `_bk_*` IDs. The `#END_TABLE` marker SHALL be emitted when leaving a table.
+
+Table cell paragraphs SHALL use `th(row,col)` (header row) or `td(row,col)` (data rows) in the style column instead of the paragraph style.
+
+`formatToonDataLine()` SHALL be exported as a standalone helper for per-node rendering with table-aware styles.
+
+#### Scenario: [SDX-TABLE-06] Toon output includes table markers
+- **WHEN** `renderToon()` is called with nodes containing `table_context`
+- **THEN** `#TABLE` appears before the first table node and `#END_TABLE` after the last
+
+#### Scenario: [SDX-TABLE-07] Style column uses th/td notation
+- **WHEN** a node has `table_context` with `is_header_row=true`
+- **THEN** the style column shows `th(row_index,col_index)` instead of the paragraph style
+
+### Requirement: Shared DOM Helpers
+
+`isW()` and `getDirectChildrenByName()` SHALL be exported from `dom-helpers.ts` for namespace-aware element checks and direct-child queries across primitives modules.
+
+#### Scenario: [SDX-TABLE-08] isW checks namespace and localName
+- **WHEN** `isW(el, 'tbl')` is called on a WordprocessingML element
+- **THEN** it returns true only if the element has the correct namespace URI and local name
+
+
+--- ARQUIVOS DO PR (9)
+added     +29    -0     openspec/changes/add-document-outline-tool/proposal.md
+added     +19    -0     openspec/changes/add-document-outline-tool/specs/mcp-server/spec.md
+added     +29    -0     openspec/changes/add-document-outline-tool/tasks.md
+modified  +13    -0     packages/docx-mcp/docs/tool-reference.generated.md
+modified  +3     -0     packages/docx-mcp/src/server.ts
+modified  +23    -0     packages/docx-mcp/src/tool_catalog.ts   <== código ligado à spec
+added     +151   -0     packages/docx-mcp/src/tools/get_document_outline.test.ts
+added     +89    -0     packages/docx-mcp/src/tools/get_document_outline.ts
+modified  +4     -0     packages/safe-docx-mcpb/manifest.json
+--- DIFF DO CÓDIGO LIGADO
+### packages/docx-mcp/src/tool_catalog.ts
+@@ -20,6 +20,12 @@ const FILE_FIELD_OPTIONAL = {
+   file_path: z.string().optional().describe('Path to the DOCX or ODT file.'),
+ };
+ 
++// DOCX-only tools reject `.odt` paths with UNSUPPORTED_FOR_ODF, so their
++// file_path description must not advertise ODT support.
++const FILE_FIELD_OPTIONAL_DOCX_ONLY = {
++  file_path: z.string().optional().describe('Path to the DOCX file.'),
++};
++
+ const GOOGLE_DOC_ID_FIELD = {
+   google_doc_id: z.string().optional().describe(
+     'Google Doc ID or URL (alternative to file_path). ' +
+@@ -65,6 +71,23 @@ export const SAFE_DOCX_TOOL_CATALOG = [
+     }),
+     annotations: { readOnlyHint: true, destructiveHint: false },
+   },
++  {
++    name: 'get_document_outline',
++    description:
++      'Get a compact structural map of a document\'s headings (DOCX only). Returns one entry per heading paragraph with its text, outline level, source, and stable `_bk_*` paragraph_id — so an agent can read the cheap outline first, then scope a targeted read_file/replace_text to the right section instead of scanning the whole body. Style-based (Word HeadingN) headings only by default; set include_heuristic_headings=true to also include heuristic titles/run-in headers. Read-only.',
++    input: z.object({
++      ...FILE_FIELD_OPTIONAL_DOCX_ONLY,
++      format: z
++        .enum(['json', 'markdown'])
++        .optional()
++        .describe("Output format: 'json' (default, structured outline array) or 'markdown' (indented ATX outline under `content`)."),
++      include_heuristic_headings: z
++        .boolean()
++        .optional()
++        .describe('When true, also include heuristically-detected headings (manual title / run-in / centered-caps) alongside Word HeadingN styles. Default: false (style-based only).'),
++    }),
++    annotations: { readOnlyHint: true, destructiveHint: false },
++  },
+   {
+     name: 'grep',
+     description: 'Search paragraphs with regex. Use file_path for session-based search, file_paths for stateless multi-file search, or google_doc_id for Google Docs. ODT supported via file_path (single-file) only.',
+
+===== P060 | repo Mic92/gitea-mq | PR #54: batch: bors-style batch merge queue | capacidade: automerge-integration
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Discover PRs with automerge scheduled
+The system SHALL periodically poll the Gitea API to discover open PRs that have automerge scheduled. Discovery SHALL be done by querying each managed repo's open PRs and checking their timeline for `pull_scheduled_merge` and `pull_cancel_scheduled_merge` comment types. A PR is considered automerge-scheduled if its most recent automerge-related timeline comment is `pull_scheduled_merge`. Poller goroutines SHALL be started dynamically as repos are added to the managed set and stopped when repos are removed.
+
+#### Scenario: PR has automerge scheduled
+- **WHEN** the poller checks repo `org/app` and PR #42 has a `pull_scheduled_merge` timeline comment with no subsequent `pull_cancel_scheduled_merge`
+- **AND** PR #42 is not already in the merge queue
+- **THEN** the system enqueues PR #42
+
+#### Scenario: PR had automerge scheduled then cancelled
+- **WHEN** the poller checks repo `org/app` and PR #42 has a `pull_scheduled_merge` followed by a `pull_cancel_scheduled_merge`
+- **THEN** the system does NOT enqueue PR #42
+
+#### Scenario: PR already in queue
+- **WHEN** the poller discovers PR #42 has automerge scheduled
+- **AND** PR #42 is already in the merge queue
+- **THEN** the system takes no action (no duplicate enqueue)
+
+#### Scenario: Poller starts for dynamically discovered repo
+- **WHEN** the discovery loop adds `org/new-repo` to the managed set
+- **THEN** a poller goroutine is started for `org/new-repo` with the configured poll interval
+- **AND** the first poll runs immediately
+
+#### Scenario: Poller stops for removed repo
+- **WHEN** the discovery loop removes `org/old-repo` from the managed set
+- **THEN** the poller goroutine for `org/old-repo` is stopped (its context is cancelled)
+- **AND** no further polls occur for `org/old-repo`
+
+### Requirement: Detect automerge cancellation
+The system SHALL detect when a user cancels automerge on a queued PR. On the next poll cycle, if a previously-queued PR no longer has automerge scheduled, the system SHALL remove it from the queue.
+
+#### Scenario: User cancels automerge while PR is queued
+- **WHEN** PR #42 is in the merge queue
+- **AND** the poller detects a `pull_cancel_scheduled_merge` comment newer than the last `pull_scheduled_merge`
+- **THEN** the system removes PR #42 from the queue
+- **AND** if PR #42 was head-of-queue, cleans up the merge branch and advances to the next PR
+
+### Requirement: Cancel automerge on failure
+The system SHALL cancel a PR's automerge via the Gitea API (`DELETE /repos/{owner}/{repo}/pulls/{index}/merge`) when the PR is removed from the queue due to failure (check failure, timeout, or merge conflict). The system SHALL also post a comment on the PR explaining why.
+
+#### Scenario: Check failure cancels automerge
+- **WHEN** a required check fails for head-of-queue PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining which check failed
+- **AND** sets `gitea-mq` commit status to `failure`
+
+#### Scenario: Timeout cancels automerge
+- **WHEN** the check timeout is exceeded for head-of-queue PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining the timeout
+- **AND** sets `gitea-mq` commit status to `error`
+
+#### Scenario: Merge conflict cancels automerge
+- **WHEN** the merge branch cannot be created due to conflicts for PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining the merge conflict
+- **AND** sets `gitea-mq` commit status to `failure`
+
+### Requirement: Set gitea-mq commit status to gate merge
+The system SHALL post a `gitea-mq` commit status on the PR's head commit. When the PR is enqueued, the status SHALL be `pending`. When the merge branch CI passes, the status SHALL be `success` — which allows Gitea's automerge to proceed with the actual merge.
+
+#### Scenario: PR enqueued — pending status
+- **WHEN** PR #42 is enqueued
+- **THEN** the system posts a `gitea-mq` commit status of `pending` with description "Queued (position #N)"
+
+#### Scenario: PR becomes head-of-queue — testing status
+- **WHEN** PR #42 becomes head-of-queue and the merge branch is created
+- **THEN** the system updates the `gitea-mq` commit status to `pending` with description "Testing merge result"
+
+#### Scenario: Merge branch CI passes — success status
+- **WHEN** all required checks pass on the merge branch for PR #42
+- **THEN** the system posts a `gitea-mq` commit status of `success` with description "Merge queue passed"
+- **AND** Gitea's automerge will detect all required checks (including `gitea-mq`) have passed and perform the merge
+
+### Requirement: Detect new push to queued PR
+The system SHALL detect when new commits are pushed to a queued PR by comparing the PR's current head SHA (from the API) against the stored head SHA. If they differ, the PR SHALL be removed from the queue with automerge cancelled.
+
+#### Scenario: Head SHA changes for queued PR
+- **WHEN** PR #42 was enqueued with head SHA `abc123`
+- **AND** the poller fetches PR #42 and sees head SHA `def456`
+- **THEN** the system removes PR #42 from the queue
+- **AND** cancels automerge on PR #42
+- **AND** posts a comment explaining the PR was removed due to new commits
+
+### Requirement: Pause when Gitea is unavailable
+The system SHALL pause all queue processing when the Gitea API is unreachable. No queue advances, merge branch creations, or state changes SHALL occur while Gitea is down. The system SHALL resume normal operation when the API becomes reachable again.
+
+#### Scenario: Gitea API returns errors
+- **WHEN** the poller attempts to poll and the Gitea API returns connection errors or 5xx responses
+- **THEN** the system logs the error
+- **AND** pauses all queue processing
+- **AND** retries on the next poll cycle
+
+#### Scenario: Gitea API recovers
+- **WHEN** the Gitea API becomes reachable again after being down
+- **THEN** the system resumes normal polling and queue processing
+- **AND** reconciles queue state against current Gitea state
+
+### Requirement: Handle deleted or transferred repository
+The system SHALL detect when a managed repository no longer exists (API returns 404). The system SHALL remove the repository from its managed set, clean up any queue entries, and log a warning.
+
+#### Scenario: Managed repo deleted
+- **WHEN** the poller attempts to poll repo `org/app` and the Gitea API returns 404
+- **THEN** the system removes `org/app` from its managed repos
+- **AND** cleans up any active queue entries and merge branches for `org/app`
+- **AND** logs a warning that the repository no longer exists
+
+### Requirement: Auto-configure Gitea on startup
+The system SHALL automatically configure each managed repository: ensure `gitea-mq` is in the branch protection's required status checks, and ensure a webhook for `status` events is pointed at this service's webhook endpoint. Auto-configuration SHALL run both at startup for initially-managed repos AND when new repos are added to the managed set by the discovery loop.
+
+#### Scenario: Branch protection missing gitea-mq check
+- **WHEN** the service starts and repo `org/app` has branch protection on `main` but `gitea-mq` is not in `status_check_contexts`
+- **THEN** the system adds `gitea-mq` to the branch protection's required status checks via `PATCH /repos/org/app/branch_protections/{name}`
+
+#### Scenario: Branch protection already has gitea-mq
+- **WHEN** the service starts and repo `org/app` already has `gitea-mq` in required status checks
+- **THEN** the system takes no action
+
+#### Scenario: No branch protection exists
+- **WHEN** the service starts and repo `org/app` has no branch protection on its default branch
+- **THEN** the system logs a warning that branch protection should be configured
+- **AND** continues operating (automerge can still be used, but merges won't be gated by branch protection)
+
+#### Scenario: Webhook not configured
+- **WHEN** the service starts and repo `org/app` has no webhook pointing at this service
+- **THEN** the system creates a webhook for `status` events with the configured shared secret
+
+#### Scenario: Webhook already exists
+- **WHEN** the service starts and repo `org/app` already has a webhook pointing at this service
+- **THEN** the system takes no action
+
+#### Scenario: Newly discovered repo auto-configured
+- **WHEN** the discovery loop finds `org/new-repo` with the matching topic
+- **AND** `org/new-repo` is not yet managed
+- **THEN** the system runs auto-configuration for `org/new-repo` (branch protection + webhook setup)
+- **AND** starts a poller goroutine for `org/new-repo`
+
+### Requirement: Configurable poll interval
+The system SHALL support a configurable poll interval (via environment variable) for checking automerge state. The default poll interval SHALL be 30 seconds.
+
+#### Scenario: Default poll interval
+- **WHEN** no poll interval is configured
+- **THEN** the system polls every 30 seconds
+
+#### Scenario: Custom poll interval
+- **WHEN** `GITEA_MQ_POLL_INTERVAL` is set to `15s`
+- **THEN** the system polls every 15 seconds
+
+--- ARQUIVOS DO PR (46)
+modified  +27    -0     README.md
+modified  +3     -0     cmd/gitea-mq/main.go
+added     +567   -0     internal/batch/batch.go
+added     +503   -0     internal/batch/batch_test.go
+added     +51    -0     internal/batch/monitor.go
+added     +12    -0     internal/batch/testdb_test.go
+modified  +26    -0     internal/config/config.go
+modified  +33    -0     internal/config/config_test.go
+modified  +47    -0     internal/forge/forge.go   <== código ligado à spec
+modified  +27    -0     internal/forge/mock.go   <== código ligado à spec
+modified  +15    -0     internal/gitea/client.go   <== código ligado à spec
+modified  +59    -1     internal/gitea/forge.go   <== código ligado à spec
+modified  +47    -0     internal/gitea/forge_test.go   <== código ligado à spec
+modified  +152   -1     internal/gitea/http.go
+modified  +31    -0     internal/gitea/mock.go
+modified  +71    -0     internal/github/forge.go   <== código ligado à spec
+modified  +58    -0     internal/github/forge_test.go   <== código ligado à spec
+modified  +47    -1     internal/github/ghfake/server.go   <== código ligado à spec
+added     +200   -0     internal/integration/gitea_batch_test.go
+added     +166   -0     internal/integration/gitea_ff_test.go
+added     +128   -0     internal/integration/github_batch_test.go
+modified  +7     -3     internal/merge/merge.go
+modified  +2     -2     internal/merge/merge_test.go
+modified  +28    -2     internal/monitor/monitor.go
+modified  +23    -0     internal/monitor/monitor_test.go
+modified  +81    -5     internal/poller/poller.go
+added     +175   -0     internal/queue/batch.go
+modified  +50    -13    internal/registry/registry.go
+modified  +1     -1     internal/store/pg/db.go
+added     +36    -0     internal/store/pg/migrations/004_batches.sql
+modified  +65    -1     internal/store/pg/models.go
+modified  +59    -0     internal/store/pg/query.sql
+modified  +358   -7     internal/store/pg/query.sql.go
+modified  +3     -1     internal/testutil/gitea.go
+modified  +65    -2     internal/web/handler.go
+modified  +5     -0     internal/web/templates/pr.html
+modified  +9     -1     internal/web/templates/repo.html
+modified  +6     -0     internal/web/templates/style.css
+added     +202   -0     openspec/changes/batch-merge-queue/design.md
+added     +32    -0     openspec/changes/batch-merge-queue/proposal.md
+added     +24    -0     openspec/changes/batch-merge-queue/specs/check-monitoring/spec.md
+added     +35    -0     openspec/changes/batch-merge-queue/specs/forge-abstraction/spec.md
+added     +12    -0     openspec/changes/batch-merge-queue/specs/pr-detail-page/spec.md
+added     +112   -0     openspec/changes/batch-merge-queue/specs/queue-management/spec.md
+added     +12    -0     openspec/changes/batch-merge-queue/specs/web-dashboard/spec.md
+added     +50    -0     openspec/changes/batch-merge-queue/tasks.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/forge/forge.go
+@@ -5,12 +5,45 @@ package forge
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"strings"
+ 
+ 	"github.com/Mic92/gitea-mq/internal/store/pg"
+ )
+ 
++// ErrNotFastForward is returned by FastForward when sha is not a descendant
++// of the branch's current tip. Callers treat it as "target moved, rebuild".
++var ErrNotFastForward = errors.New("forge: not a fast-forward")
++
++// PushDeniedError is returned by FastForward when the push is rejected by
++// branch protection / ruleset. Carries the forge's message so the user gets
++// an actionable hint (e.g. which whitelist to add the token user to).
++type PushDeniedError struct {
++	Branch  string
++	Message string
++}
++
++// MergeStep is the per-head outcome of a StackMerges call.
++type MergeStep struct {
++	Conflict bool
++	Err      error // non-conflict failure for this head; the stacker continues
++}
++
++// MergeStacker is optionally implemented by a Forge that can build a stack of
++// merge commits in one repository checkout. The batch engine type-asserts for
++// it and falls back to CreateMergeBranch + MergeInto otherwise. A returned
++// error is a whole-operation failure (clone/push); per-head outcomes are in
++// steps. tip is the branch SHA after the last successful merge, or "" when
++// every head conflicted/failed.
++type MergeStacker interface {
++	StackMerges(ctx context.Context, owner, repo, base string, heads []string, branch string) (tip string, steps []MergeStep, err error)
++}
++
++func (e *PushDeniedError) Error() string {
++	return fmt.Sprintf("forge: push to %s denied: %s", e.Branch, e.Message)
++}
++
+ // Kind identifies the hosting forge of a repository.
+ type Kind string
+ 
+@@ -166,6 +199,20 @@ type Forge interface {
+ 	Comment(ctx context.Context, owner, name string, number int64, body string) error
+ 
+ 	EnsureRepoSetup(ctx context.Context, owner, name string, cfg SetupConfig) error
++
++	// MergeInto merges headSHA into an existing branch and returns the new
++	// tip. conflict=true (err=nil) on merge conflict. Used to stack batch
++	// members onto the batch branch after CreateMergeBranch seeded it.
++	MergeInto(ctx context.Context, owner, name, branch, headSHA string) (sha string, conflict bool, err error)
++
++	// FastForward updates branch to sha without force. Returns
++	// ErrNotFastForward when sha is not a descendant of the current tip,
++	// *PushDeniedError when branch protection rejects the push.
++	FastForward(ctx context.Context, owner, name, branch, sha string) error
++
++	// ClosePR closes an open PR without merging. Idempotent on
++	// already-closed/merged.
++	ClosePR(ctx context.Context, owner, name string, number int64) error
+ }
+ 
+ // UnknownForgeError is returned by Set.For when no adapter is registered for
+
+### internal/forge/mock.go
+@@ -34,6 +34,9 @@ type MockForge struct {
+ 	CancelAutoMergeFn   func(ctx context.Context, owner, name string, number int64) error
+ 	CommentFn           func(ctx context.Context, owner, name string, number int64, body string) error
+ 	EnsureRepoSetupFn   func(ctx context.Context, owner, name string, cfg SetupConfig) error
++	MergeIntoFn         func(ctx context.Context, owner, name, branch, headSHA string) (string, bool, error)
++	FastForwardFn       func(ctx context.Context, owner, name, branch, sha string) error
++	ClosePRFn           func(ctx context.Context, owner, name string, number int64) error
+ }
+ 
+ var _ Forge = (*MockForge)(nil)
+@@ -183,3 +186,27 @@ func (m *MockForge) EnsureRepoSetup(ctx context.Context, owner, name string, cfg
+ 	}
+ 	return nil
+ }
++
++func (m *MockForge) MergeInto(ctx context.Context, owner, name, branch, headSHA string) (string, bool, error) {
++	m.record("MergeInto", owner, name, branch, headSHA)
++	if m.MergeIntoFn != nil {
++		return m.MergeIntoFn(ctx, owner, name, branch, headSHA)
++	}
++	return "", false, nil
++}
++
++func (m *MockForge) FastForward(ctx context.Context, owner, name, branch, sha string) error {
++	m.record("FastForward", owner, name, branch, sha)
++	if m.FastForwardFn != nil {
++		return m.FastForwardFn(ctx, owner, name, branch, sha)
++	}
++	return nil
++}
++
++func (m *MockForge) ClosePR(ctx context.Context, owner, name string, number int64) error {
++	m.record("ClosePR", owner, name, number)
++	if m.ClosePRFn != nil {
++		return m.ClosePRFn(ctx, owner, name, number)
++	}
++	return nil
++}
+
+### internal/gitea/client.go
+@@ -215,8 +215,23 @@ type Client interface {
+ 
+ 	// MergeBranches merges head into base and pushes the result as branchName.
+ 	// Returns the merge commit SHA, or a MergeConflictError if there are conflicts.
++	// When base == branchName the existing branch is advanced in place.
+ 	MergeBranches(ctx context.Context, owner, repo, base, head, branchName string) (*MergeResult, error)
+ 
++	// StackMerges builds branch from base with each head merged on top in one
++	// clone. See HTTPClient.StackMerges.
++	StackMerges(ctx context.Context, owner, repo, base string, heads []string, branch string) (string, []StackStep, error)
++
++	// FastForwardRef pushes sha to branch with a non-force refspec via git
++	// smart-HTTP (Gitea has no REST ref-update). Returns NotFastForwardError
++	// when the server rejects the update as non-ff, ProtectedBranchError
++	// when branch protection denies the push.
++	FastForwardRef(ctx context.Context, owner, repo, branch, sha string) error
++
++	// EditIssueState sets the state ("open"/"closed") of an issue or PR.
++	// PATCH /repos/{owner}/{repo}/issues/{index}
++	EditIssueState(ctx context.Context, owner, repo string, index int64, state string) error
++
+ 	// ListBranchProtections lists all branch protection rules for a repository.
+ 	// GET /repos/{owner}/{repo}/branch_protections
+ 	ListBranchProtections(ctx context.Context, owner, repo string) ([]BranchProtection, error)
+
+### internal/gitea/forge.go
+@@ -2,6 +2,7 @@ package gitea
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"strings"
+ 
+@@ -25,7 +26,23 @@ func NewForge(client Client, baseURL string) forge.Forge {
+ 	}
+ }
+ 
+-var _ forge.Forge = (*giteaForge)(nil)
++var (
++	_ forge.Forge        = (*giteaForge)(nil)
++	_ forge.MergeStacker = (*giteaForge)(nil)
++)
++
++// StackMerges builds the batch branch in one clone instead of one per member.
++func (f *giteaForge) StackMerges(ctx context.Context, owner, repo, base string, heads []string, branch string) (string, []forge.MergeStep, error) {
++	tip, steps, err := f.client.StackMerges(ctx, owner, repo, base, heads, branch)
++	if err != nil {
++		return "", nil, err
++	}
++	out := make([]forge.MergeStep, len(steps))
++	for i, s := range steps {
++		out[i] = forge.MergeStep{Conflict: s.Conflict, Err: s.Err}
++	}
++	return tip, out, nil
++}
+ 
+ func (f *giteaForge) Kind() forge.Kind { return forge.KindGitea }
+ 
+@@ -155,6 +172,47 @@ func (f *giteaForge) CreateMergeBranch(ctx context.Context, owner, name, base, h
+ 	return res.SHA, false, nil
+ }
+ 
++func (f *giteaForge) MergeInto(ctx context.Context, owner, name, branch, headSHA string) (string, bool, error) {
++	// MergeBranches with base==branchName clones the existing branch,
++	// merges headSHA, and pushes back to the same ref.
++	res, err := f.client.MergeBranches(ctx, owner, name, branch, headSHA, branch)
++	if err != nil {
++		if IsMergeConflict(err) {
++			return "", true, nil
++		}
++		return "", false, err
++	}
++	return res.SHA, false, nil
++}
++
++func (f *giteaForge) FastForward(ctx context.Context, owner, name, branch, sha string) error {
++	err := f.client.FastForwardRef(ctx, owner, name, branch, sha)
++	if err == nil {
++		return nil
++	}
++	var nff *NotFastForwardError
++	if errors.As(err, &nff) {
++		return forge.ErrNotFastForward
++	}
++	var pbe *ProtectedBranchError
++	if errors.As(err, &pbe) {
++		return &forge.PushDeniedError{Branch: branch, Message: pbe.Message}
++	}
++	return err
++}
++
++func (f *giteaForge) ClosePR(ctx context.Context, owner, name string, number int64) error {
++	if err := f.client.EditIssueState(ctx, owner, name, number, "closed"); err != nil {
++		// Gitea returns 404 for PRs already merged via the pulls endpoint;
++		// either way the PR is no longer open.
++		if IsNotFound(err) {
++			return nil
++		}
++		return err
++	}
++	return nil
++}
++
+ func (f *giteaForge) IsUpToDate(ctx context.Context, owner, name, base, headSHA string) (bool, error) {
+ 	// Gitea's compare only reports commits on the right side; swap so it
+ 	// counts commits on base that head is missing.
+
+### internal/gitea/forge_test.go
+@@ -2,6 +2,7 @@ package gitea_test
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"slices"
+ 	"testing"
+ 
+@@ -119,6 +120,52 @@ func TestForge_CreateMergeBranch(t *testing.T) {
+ 	}
+ }
+ 
++func TestForge_MergeInto_DelegatesToMergeBranches(t *testing.T) {
++	var gotBase, gotBranch string
++	f := newForge(&gitea.MockClient{
++		MergeBranchesFn: func(_ context.Context, _, _, base, _, branch string) (*gitea.MergeResult, error) {
++			gotBase, gotBranch = base, branch
++			return &gitea.MergeResult{SHA: "tip"}, nil
++		},
++	})
++	sha, conflict, err := f.MergeInto(context.Background(), "o", "r", "gitea-mq/batch/1", "sha")
++	if err != nil || conflict || sha != "tip" {
++		t.Fatalf("got (%q,%v,%v)", sha, conflict, err)
++	}
++	// MergeInto on Gitea is MergeBranches with base==branchName so the existing
++	// branch is cloned, merged into, and pushed back.
++	if gotBase != "gitea-mq/batch/1" || gotBranch != "gitea-mq/batch/1" {
++		t.Fatalf("base=%q branch=%q, want both gitea-mq/batch/1", gotBase, gotBranch)
++	}
++}
++
++func TestForge_FastForward_MapsErrors(t *testing.T) {
++	for _, tc := range []struct {
++		name string
++		in   error
++		want func(error) bool
++	}{
++		{"ok", nil, func(e error) bool { return e == nil }},
++		{
++			"non-ff", &gitea.NotFastForwardError{Branch: "main", SHA: "x"},
++			func(e error) bool { return errors.Is(e, forge.ErrNotFastForward) },
++		},
++		{
++			"protected", &gitea.ProtectedBranchError{Branch: "main", Message: "denied"},
++			func(e error) bool { var d *forge.PushDeniedError; return errors.As(e, &d) },
++		},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			f := newForge(&gitea.MockClient{
++				FastForwardRefFn: func(_ context.Context, _, _, _, _ string) error { return tc.in },
++			})
++			if err := f.FastForward(context.Background(), "o", "r", "main", "sha"); !tc.want(err) {
++				t.Fatalf("err = %v", err)
++			}
++		})
++	}
++}
++
+ func TestForge_GetCheckStates_MapsCombinedStatus(t *testing.T) {
+ 	mock := &gitea.MockClient{
+ 		GetCombinedCommitStatusFn: func(_ context.Context, _, _, _ string) (*gitea.CombinedStatus, error) {
+
+### internal/github/forge.go
+@@ -209,6 +209,77 @@ func (f *githubForge) CreateMergeBranch(ctx context.Context, owner, name, base,
+ 	return commit.GetSHA(), false, nil
+ }
+ 
++func (f *githubForge) MergeInto(ctx context.Context, owner, name, branch, headSHA string) (string, bool, error) {
++	c, err := f.app.ClientForRepo(owner, name)
++	if err != nil {
++		return "", false, err
++	}
++	commit, resp, err := c.Repositories.Merge(ctx, owner, name, &gh.RepositoryMergeRequest{
++		Base: gh.Ptr(branch),
++		Head: gh.Ptr(headSHA),
++	})
++	if err != nil {
++		if resp != nil && resp.StatusCode == http.StatusConflict {
++			return "", true, nil
++		}
++		return "", false, fmt.Errorf("merge %s into %s: %w", headSHA, branch, err)
++	}
++	if commit.GetSHA() == "" {
++		// 204: head already in branch — ask the ref for the current tip.
++		ref, _, err := c.Git.GetRef(ctx, owner, name, "heads/"+branch)
++		if err != nil {
++			return "", false, fmt.Errorf("resolve %s after no-op merge: %w", branch, err)
++		}
++		return ref.GetObject().GetSHA(), false, nil
++	}
++	return commit.GetSHA(), false, nil
++}
++
++func (f *githubForge) FastForward(ctx context.Context, owner, name, branch, sha string) error {
++	c, err := f.app.ClientForRepo(owner, name)
++	if err != nil {
++		return err
++	}
++	_, resp, err := c.Git.UpdateRef(ctx, owner, name, "heads/"+branch,
++		gh.UpdateRef{SHA: sha, Force: gh.Ptr(false)})
++	if err == nil {
++		return nil
++	}
++	var ghErr *gh.ErrorResponse
++	if errors.As(err, &ghErr) {
++		msg := strings.ToLower(ghErr.Message)
++		if strings.Contains(msg, "fast forward") || strings.Contains(msg, "fast-forward") {
++			return forge.ErrNotFastForward
++		}
++		// Ruleset / branch-protection rejections come back as 422 or 403
++		// with assorted phrasings.
++		if resp != nil && (resp.StatusCode == http.StatusForbidden ||
++			(resp.StatusCode == http.StatusUnprocessableEntity &&
++				(strings.Contains(msg, "protected branch") || strings.Contains(msg, "ruleset")))) {
++			return &forge.PushDeniedError{Branch: branch, Message: ghErr.Message}
++		}
++	}
++	return fmt.Errorf("fast-forward %s to %s: %w", branch, sha, err)
++}
++
++func (f *githubForge) ClosePR(ctx context.Context, owner, name string, number int64) error {
++	c, err := f.app.ClientForRepo(owner, name)
++	if err != nil {
++		return err
++	}
++	_, _, err = c.PullRequests.Edit(ctx, owner, name, int(number), &gh.PullRequest{State: gh.Ptr("closed")})
++	if err != nil {
++		var ghErr *gh.ErrorResponse
++		if errors.As(err, &ghErr) && ghErr.Response != nil &&
++			ghErr.Response.StatusCode == http.StatusUnprocessableEntity {
++			// Already closed/merged.
++			return nil
++		}
++		return err
++	}
++	return nil
++}
++
+ func (f *githubForge) IsUpToDate(ctx context.Context, owner, name, base, headSHA string) (bool, error) {
+ 	c, err := f.app.ClientForRepo(owner, name)
+ 	if err != nil {
+
+### internal/github/forge_test.go
+@@ -2,6 +2,7 @@ package github_test
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"slices"
+ 	"strings"
+ 	"testing"
+@@ -143,6 +144,63 @@ func TestForge_IsUpToDate(t *testing.T) {
+ 	}
+ }
+ 
++func TestForge_MergeInto(t *testing.T) {
++	srv, f := newTestForge(t)
++	repo := srv.Repo("org", "app")
++	repo.Refs["gitea-mq/batch/1"] = "base"
++	repo.ConflictOn["sha-conflict"] = true
++	ctx := context.Background()
++
++	sha, conflict, err := f.MergeInto(ctx, "org", "app", "gitea-mq/batch/1", "sha-a")
++	if err != nil || conflict || sha != "merge(base,sha-a)" {
++		t.Fatalf("clean: sha=%q conflict=%v err=%v", sha, conflict, err)
++	}
++	if repo.Refs["gitea-mq/batch/1"] != sha {
++		t.Fatalf("branch not advanced to %q", sha)
++	}
++
++	_, conflict, err = f.MergeInto(ctx, "org", "app", "gitea-mq/batch/1", "sha-conflict")
++	if err != nil || !conflict {
++		t.Fatalf("conflict: conflict=%v err=%v", conflict, err)
++	}
++}
++
++func TestForge_FastForward(t *testing.T) {
++	srv, f := newTestForge(t)
++	repo := srv.Repo("org", "app")
++	repo.Refs["main"] = "base"
++	ctx := context.Background()
++
++	if err := f.FastForward(ctx, "org", "app", "main", "merge(base,sha)"); err != nil {
++		t.Fatalf("descendant: %v", err)
++	}
++	if repo.Refs["main"] != "merge(base,sha)" {
++		t.Fatalf("main not updated, got %q", repo.Refs["main"])
++	}
++
++	if err := f.FastForward(ctx, "org", "app", "main", "unrelated"); !errors.Is(err, forge.ErrNotFastForward) {
++		t.Fatalf("non-ff: err=%v, want ErrNotFastForward", err)
++	}
++
++	repo.ProtectedRefs["main"] = true
++	err := f.FastForward(ctx, "org", "app", "main", "merge(merge(base,sha),sha2)")
++	var denied *forge.PushDeniedError
++	if !errors.As(err, &denied) {
++		t.Fatalf("protected: err=%v, want PushDeniedError", err)
++	}
++}
++
++func TestForge_ClosePR(t *testing.T) {
++	srv, f := newTestForge(t)
++	srv.AddPR("org", "app", ghfake.PR{Number: 5, BaseRef: "main"})
++	if err := f.ClosePR(context.Background(), "org", "app", 5); err != nil {
++		t.Fatal(err)
++	}
++	if srv.Repo("org", "app").PRs[5].State != "closed" {
++		t.Fatalf("state = %q, want closed", srv.Repo("org", "app").PRs[5].State)
++	}
++}
++
+ // 409 from the merge endpoint must surface as (conflict=true, err=nil).
+ func TestForge_CreateMergeBranch_Conflict(t *testing.T) {
+ 	srv, f := newTestForge(t)
+
+### internal/github/ghfake/server.go
+@@ -76,6 +76,10 @@ type Repo struct {
+ 	// Settings tracks PATCH /repos/{o}/{r} keys.
+ 	Settings map[string]any
+ 
++	// ProtectedRefs[branch]=true makes a non-force PATCH on that ref return
++	// 403, simulating a ruleset/branch-protection rejection.
++	ProtectedRefs map[string]bool
++
+ 	// RequiredChecks[branch] feeds /rules/branches/{b} as a synthetic
+ 	// required_status_checks rule, decoupled from Rulesets so tests can
+ 	// stub rule evaluation directly.
+@@ -163,6 +167,7 @@ func (s *Server) AddRepo(owner, name string) *Repo {
+ 		CheckRuns:      map[string][]*CheckRun{},
+ 		BehindBy:       map[string]int{},
+ 		ConflictOn:     map[string]bool{},
++		ProtectedRefs:  map[string]bool{},
+ 		Settings:       map[string]any{},
+ 		RequiredChecks: map[string][]string{},
+ 	}
+@@ -222,6 +227,7 @@ func (s *Server) routes(mux *http.ServeMux) {
+ 	mux.HandleFunc("GET "+apiV3+"/repos/{o}/{r}/pulls", s.hListPRs)
+ 	mux.HandleFunc("POST "+apiV3+"/repos/{o}/{r}/pulls", s.hCreatePR)
+ 	mux.HandleFunc("GET "+apiV3+"/repos/{o}/{r}/pulls/{n}", s.hGetPR)
++	mux.HandleFunc("PATCH "+apiV3+"/repos/{o}/{r}/pulls/{n}", s.hEditPR)
+ 
+ 	// Issues (comments).
+ 	mux.HandleFunc("POST "+apiV3+"/repos/{o}/{r}/issues/{n}/comments", s.hCreateComment)
+@@ -407,6 +413,31 @@ func (s *Server) hGetPR(w http.ResponseWriter, r *http.Request) {
+ 	writeJSON(w, 200, prJSON(rp.Owner, rp.Name, p))
+ }
+ 
++func (s *Server) hEditPR(w http.ResponseWriter, r *http.Request) {
++	rp, ok := s.repo(r)
++	if !ok {
++		http.NotFound(w, r)
++		return
++	}
++	n, _ := strconv.ParseInt(r.PathValue("n"), 10, 64)
++	var body struct {
++		State string `json:"state"`
++	}
++	_ = json.NewDecoder(r.Body).Decode(&body)
++	s.mu.Lock()
++	p := rp.PRs[n]
++	if p == nil {
++		s.mu.Unlock()
++		http.NotFound(w, r)
++		return
++	}
++	if body.State != "" {
++		p.State = body.State
++	}
++	s.mu.Unlock()
++	writeJSON(w, 200, prJSON(rp.Owner, rp.Name, p))
++}
++
+ func (s *Server) hCreatePR(w http.ResponseWriter, r *http.Request) {
+ 	rp, ok := s.repo(r)
+ 	if !ok {
+@@ -607,11 +638,26 @@ func (s *Server) hUpdateRef(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	_ = json.NewDecoder(r.Body).Decode(&body)
+ 	s.mu.Lock()
+-	if _, exists := rp.Refs[branch]; !exists {
++	old, exists := rp.Refs[branch]
++	if !exists {
+ 		s.mu.Unlock()
+ 		writeJSON(w, 422, map[string]any{"message": "Reference does not exist"})
+ 		return
+ 	}
++	if !body.Force {
++		if rp.ProtectedRefs[branch] {
++			s.mu.Unlock()
++			writeJSON(w, 403, map[string]any{"message": "Changes must be made through a pull request. (protected branch)"})
++			return
++		}
++		// hMerge encodes lineage as merge(old,head); a SHA that does not
++		// contain the current tip's text is treated as non-fast-forward.
++		if old != body.SHA && !strings.Contains(body.SHA, old) {
++			s.mu.Unlock()
++			writeJSON(w, 422, map[string]any{"message": "Update is not a fast forward"})
++			return
++		}
++	}
+ 	rp.Refs[branch] = body.SHA
+ 	s.mu.Unlock()
+ 	writeJSON(w, 200, map[string]any{"ref": "refs/heads/" + branch, "object": map[string]any{"sha": body.SHA}})
+

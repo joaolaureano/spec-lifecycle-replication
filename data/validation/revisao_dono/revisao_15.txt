@@ -1,0 +1,428 @@
+===== P088 | atilladeniz/Kubeli PR #163 | capacidade do par: cluster-management
+PR: feat: structured error handling across Rust and frontend
+arquivos ligados: src/lib/types/kubernetes.ts
+--- linhas alteradas (4; mostrando até 40)
++import type { KubeliError } from "./errors";
+-  | { type: "Error"; data: string }
++  | { type: "Error"; data: KubeliError }
++  errors: string[];
+--- candidata: error-handling [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Structured error responses
+  | The system SHALL return structured error objects from all Tauri commands instead of plain strings. Each error object MUST include an error kind, human-readable message, retryable flag, and optional HT
+  > The system SHALL deserialize structured error objects from Tauri command rejections. The invoke wrapper MUST parse JSON error responses and produce typed `KubeliError` objects. Unrecognized error form
+  > - **THEN** the invoke wrapper parses it into a `KubeliError` with all fields preserved
+  > - **THEN** the invoke wrapper wraps it as a `KubeliError` with kind `Unknown`, the string as `message`, and retryable `true`
+  > The system SHALL deserialize structured error objects from Tauri command rejections. The invoke wrapper MUST parse JSON error responses and produce typed `KubeliError` objects. Unrecognized error form
+  > - **THEN** the invoke wrapper parses it into a `KubeliError` with all fields preserved
+  > - **THEN** the invoke wrapper wraps it as a `KubeliError` with kind `Unknown`, the string as `message`, and retryable `true`
+--- candidata: resource-management [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Resource Listing
+  | The system SHALL display Kubernetes resources in filterable list views with real-time updates. When resource fetching fails, the system SHALL display structured error information instead of generic fa
+
+===== P089 | lehuygiang28/vkara PR #2 | capacidade do par: youtube-playlist-details
+PR: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates
+arquivos ligados: apps/api/src/youtubei.ts;apps/web/src/services/youtube-api.ts
+--- linhas alteradas (68; mostrando até 40)
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++import { env } from './env';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+--- candidata: platform-redis [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Single Redis options factory
+  | The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > #### Scenario: API redis client uses factory
+  > - **WHEN** `apps/api/src/redis.ts` creates the shared ioredis client
+  > - **THEN** it MUST use `createRedisOptions` from `@vkara/redis` with validated env
+  > - **THEN** they MUST use the same `createRedisOptions` output as the main API client
+  > - **AND** MUST NOT duplicate inline `REDIS_HOST` / `REDIS_PORT` parsing
+  > `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` MUST be declared in `redisEnv()` with defaults matching current behavior (`localhost`, `6379`, optional password).
+  > - **THEN** `createRedisOptions` MUST target `localhost:6379` with no password
+--- candidata: platform-env [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Centralized environment validation
+  | The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > - **WHEN** the API process starts with required Redis and server variables set correctly
+  > `@vkara/env` MUST export domain factories (at minimum `embedEnv()`, `redisEnv()`, `serverEnv()` for API and `webPublicEnv()` for web) that apps compose using `createEnv({ extends: [...] })`.
+  > #### Scenario: API composes embed and redis env
+  > - **THEN** it MUST `extends` embed and redis presets so `VKARA_EMBED_*` and `REDIS_*` variables are available on `env`
+  > Base parsers `parseEnvFlag` and `parseEnvPositiveInt` MUST live in `@vkara/env` and preserve existing semantics: flags accept `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` (case-insensitive); invalid f
+  > ### Requirement: No ad-hoc process.env in application code
+  > After migration, application modules in `apps/api` and `apps/web` MUST NOT read `process.env` directly except inside env definition files (`src/env.ts`, `next.config.ts` edge cases documented in desig
+--- candidata: platform-redis-cache [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Redis cache plumbing package
+  | The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > YouTube cache modules MUST continue to own key prefixes, TTL constants, and response validation logic. `@vkara/cache-redis` MUST NOT hard-code `youtube-embed:` or playlist key shapes.
+  > - **THEN** keys MUST remain `youtube-embed:{videoId}` with values `1` or `0`
+  > - **THEN** keys MUST remain `youtube-playlist-details:{listId}:{scope}` with TTL 3600 seconds
+  > - **THEN** keys MUST remain `youtube-channel:{channelId}` with TTL 86400 seconds
+  > ### Requirement: In-memory youtube continuation cache excluded
+  > Process-local `Map` caches for search/related continuations in `apps/api/src/modules/youtube/cache.ts` MUST NOT move into `@vkara/cache-redis` in this change.
+  > #### Scenario: Search continuation stays in-process
+--- candidata: platform-feature-flags [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: VKARA feature flags are env-backed
+  | Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > `VKARA_EMBED_PREFILTER_AT_LIST` MUST default to disabled (falsy) when unset, preserving current list endpoint behavior per `youtube-embed-playability` spec.
+  > - **THEN** it MUST use the shared embed env helper or `env` field produced by `@vkara/env`
+  > The system MUST define `VKARA_EXPERIMENTS` in `@vkara/env` with `FLAG_DOCS` metadata (default falsy, scope `both`, description for TikTok experiments gating).
+  > API code MUST use a typed helper (e.g. `isExperimentsEnabled()`) to mount TikTok plugins and MUST NOT register `POST /tiktok/search` when the flag is falsy.
+  > - **THEN** the TikTok Elysia plugin MUST NOT be mounted
+  > - **THEN** the TikTok search routes MUST be registered on the API server
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+--- candidata: monorepo-package-boundaries [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Package layers and dependency direction
+  | Internal packages MUST follow dependency direction: **apps → domain → platform → tooling**. Domain packages MUST NOT depend on apps. Platform packages MUST NOT depend on domain packages.
+  > #### Scenario: Env package has no youtube imports
+  > - **WHEN** `@vkara/env` is typechecked
+  > - **THEN** it MUST NOT import from `@vkara/youtube`, `@vkara/room`, or deleted `shared-*` packages
+  > ### Requirement: shared packages removed at completion
+  > The packages `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` MUST be deleted from the workspace when this change is archived. No production code MAY import them.
+  > #### Scenario: Zero shared imports before archive
+  > - **THEN** ripgrep for `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` across `apps/` and `packages/` MUST return zero matches
+  > - **THEN** they MUST NOT reference workspace dependencies on deleted `shared-*` packages
+
+===== P090 | Hedgehogues/awesome-claude PR #3 | capacidade do par: sdd-propose-merge-dialog
+PR: v0.6.2 — Reliable Archiving
+arquivos ligados: skills/sdd/scripts/_sdd_yaml.py
+--- linhas alteradas (23; mostrando até 40)
++class IndentedDumper(yaml.Dumper):
++    def increase_indent(self, flow=False, indentless=False):
++        return super().increase_indent(flow, indentless=False)
+-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
++        yaml.dump(data, f, Dumper=IndentedDumper, sort_keys=False, allow_unicode=True)
++def cmd_update_index_description(index_path: str, capability: str, description: str) -> int:
++    if not os.path.exists(index_path):
++        print(f"ERROR: index file not found: {index_path}", file=sys.stderr)
++        return 2
++    with open(index_path, encoding="utf-8") as f:
++        data = yaml.safe_load(f) or {}
++    specs = data.get("specs") or []
++    for entry in specs:
++        if entry.get("capability") == capability:
++            entry["description"] = description
++            with open(index_path, "w", encoding="utf-8") as f:
++                yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
++            print(f"updated description for capability '{capability}'")
++            return 0
++    print(f"ERROR: capability '{capability}' not found in index", file=sys.stderr)
++    return 2
++    if cmd == "update-index-description" and len(sys.argv) == 5:
++        return cmd_update_index_description(sys.argv[2], sys.argv[3], sys.argv[4])
+--- candidata: archive-merges-into-support [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: sdd:archive верифицирует merges-into capabilities
+  | `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > - **THEN** для каждой capability из `merges-into` выполняется L1/L2/L3 верификация против `openspec/specs/<cap>/spec.md`
+  > - **THEN** вердикт (passed / gaps_found / human_needed) учитывается наравне с `creates`
+  > - **WHEN** L1/L2/L3 для capability из `merges-into` возвращает `gaps_found`
+  > При verify-ok `sdd:archive` SHALL обновить запись capability в `openspec/specs/index.yaml` для каждого имени из `.sdd.yaml.merges-into` через команду `_sdd_yaml.py update-index-description`. Значение 
+  > - **THEN** `index.yaml` содержит обновлённое `description: <новое описание>` для `existing-cap`
+  > ### Requirement: _sdd_yaml.py предоставляет команду update-index-description
+  > `_sdd_yaml.py update-index-description <index-yaml-path> <capability> <description>` SHALL найти запись с `capability: <capability>` в секции `specs:` YAML-файла и обновить поле `description`. При отс
+--- candidata: sdd-ownership [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Owner поле в .sdd.yaml
+  | `.sdd.yaml` каждого change'а SHALL содержать поле `owner:` со строковым значением (email) — единственный владелец change'а. MUST быть инициализировано при `/sdd:propose` через identity-resolver.
+  > - **THEN** `identity.py` выводит ошибку на stderr и завершается с ненулевым кодом
+  > Поле `owner:` SHALL храниться только в `.sdd.yaml` внутри change-директории. После архивации change'а директория уезжает в `archive/`, owner сохраняется как историческая запись. Live spec'ы в `openspe
+  > - **THEN** `.sdd.yaml` в архиве по-прежнему содержит `owner: a@x`; spec'ы из этого change в `openspec/specs/` не имеют поля owner
+  > - **THEN** `identity.py` выводит ошибку на stderr и завершается с ненулевым кодом
+  > Поле `owner:` SHALL храниться только в `.sdd.yaml` внутри change-директории. После архивации change'а директория уезжает в `archive/`, owner сохраняется как историческая запись. Live spec'ы в `openspe
+  > - **THEN** `.sdd.yaml` в архиве по-прежнему содержит `owner: a@x`; spec'ы из этого change в `openspec/specs/` не имеют поля owner
+  > - **GIVEN** `.sdd.yaml` содержит `creates: [my-capability]`
+  > - **THEN** файл содержит строку `  - my-capability` (2 пробела + дефис)
+--- candidata: structured-apply-output [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Three SDD workflow skills produce a fixed-order user-facing report
+  | The skills `sdd:apply`, `sdd:contradiction`, and `sdd:archive` SHALL each produce a final user-facing report whose blocks appear in this exact canonical order, top-to-bottom:
+  > No content SHALL appear below `## Вопросы к пользователю`. The block order is identical across the three skills, with the exception that `## Как проверить` exists only in `sdd:apply`.
+  > - **THEN** `## Технические статусы` lists facts only (file paths, test results, exit codes, index.yaml updates), no prose
+  > - **THEN** `## Реализованные фичи` lists each capability from `.sdd.yaml.creates` with status `done` or `partial`
+  > - **THEN** `## Архивированные артефакты` lists each archived capability from `.sdd.yaml.creates` with paths to `openspec/specs/<capability>/spec.md` and `openspec/specs/<capability>/test-plan.md`
+  > The `sdd:apply` skill SHALL render a mandatory block `## Как проверить` immediately after `## Реализованные фичи` and before any optional block. The block SHALL provide concrete verification guidance 
+  > - **THEN** for each capability listed in `## Реализованные фичи` there is at least one numbered entry in `## Как проверить`
+  > - **THEN** every entry contains all three fields: «Что:», «Где:», «Как:»
+  > - **WHEN** the skill's run yields exactly one user-only fork (e.g. "rename capability X to Y — both options are valid, your call?")
+--- candidata: sdd-archive-cases [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: cases/sdd/archive.md содержит сценарии inline spec-verify
+  | `skills/skill/cases/sdd/archive.md` SHALL дополнительно содержать три сценария для inline L1/L2/L3 spec-verify, который теперь часть `/sdd:archive` (приехало из удалённой capability `sdd-spec-verify-c
+  > `skills/skill/cases/sdd/archive.md` SHALL дополнительно содержать три сценария для inline L1/L2/L3 spec-verify, который теперь часть `/sdd:archive` (приехало из удалённой capability `sdd-spec-verify-c
+  > 3. **archive-fail с red-banner** — spec-verify обнаружил `missing` Requirement после merge specs, `/sdd:archive` выводит red-banner и останавливается без авто-rollback, state остаётся `archive-failed`
+  > - **WHEN** spec-verify обнаружил `missing` Requirement после merge specs в `openspec/specs/`
+  > - **THEN** output содержит red-banner с текстом `🔴 SPECS MODIFIED — manual rollback required` и инструкциями `git restore openspec/specs/` или `/sdd:propose`
+  > - **THEN** файлы в `openspec/specs/` НЕ откатываются автоматически
+  > ### Requirement: cases/sdd/archive.md exists with at least three cases
+  > `skills/skill/cases/sdd/archive.md` SHALL exist and contain at least three cases: blocking when `test-plan.md` is missing, happy-path archiving without copying `test-plan.md` to `specs/` (per Modified
+  > #### Scenario: archive succeeds without copying test-plan.md to specs/
+--- candidata: sdd-state [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: State-file location
+  | `.sdd-state.yaml` SHALL располагаться в директории change'а: `openspec/changes/<change-name>/.sdd-state.yaml` — рядом с `proposal.md`, `tasks.md`, `.sdd.yaml`. Файл MUST быть один на change.
+  > - **THEN** файл содержит как минимум `stage`, `last_step_at`, `owner`; парсится через `yaml.safe_load` без ошибок
+  > Все операции чтения и записи `.sdd-state.yaml` SHALL выполняться через `skills/sdd/scripts/state.py`. Скрипт MUST поддерживать команды: `read <path>`, `update <path> <field> <value>`, `transition <pat
+  > - **THEN** файл содержит как минимум `stage`, `last_step_at`, `owner`; парсится через `yaml.safe_load` без ошибок
+  > - **THEN** hook выводит stderr message и exit 0 (не валит harness)
+  > - **THEN** файл содержит как минимум `stage`, `last_step_at`, `owner`; парсится через `yaml.safe_load` без ошибок
+  > Все операции чтения и записи `.sdd-state.yaml` SHALL выполняться через `skills/sdd/scripts/state.py`. Скрипт MUST поддерживать команды: `read <path>`, `update <path> <field> <value>`, `transition <pat
+  > - **THEN** exit code 1, stderr содержит сообщение об ошибке перехода
+
+===== P091 | mckinsey/agents-at-scale-marketplace PR #179 | capacidade do par: claude-agent-observability
+PR: feat: OpenAI responses executor
+arquivos ligados: docs/content/executors/_meta.js
+--- linhas alteradas (3; mostrando até 40)
+-  'claude-agent-sdk': 'Claude Agent SDK Executor'
++  'claude-agent-sdk': 'Claude Agent SDK Executor',
++  'openai-responses': 'OpenAI Responses Executor'
+--- candidata: openai-responses-executor [PR+termos]
+  | ## Requirements: OpenAI Responses API Executor
+  | ### Requirement: Execute agent via OpenAI Responses API
+  | The executor SHALL accept A2A requests and call `POST /v1/responses` using the OpenAI Python SDK,
+  > ## Requirements: OpenAI Responses API Executor
+  > ### Requirement: Execute agent via OpenAI Responses API
+  > The executor SHALL accept A2A requests and call `POST /v1/responses` using the OpenAI Python SDK,
+  > - **THEN** the executor SHALL call `client.responses.create()` with `model`, `instructions`, and
+  > - **THEN** the executor SHALL call `client.responses.create()` with `previous_response_id` set to
+  > The executor SHALL read the OpenAI model ID from `request.agent.model.name` and the API key from
+  > `request.agent.model.config["openai"]["apiKey"]`.
+  > - **WHEN** a request arrives with a valid Model CRD referencing provider `openai`
+--- candidata: claude-agent-execution [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Execute user input via ClaudeSDKClient
+  | The executor SHALL accept A2A requests containing `userInput.content` and `conversationId`, create or resume a Claude Agent SDK session, and return the agent's response as a single Message.
+  > ### Requirement: Execute user input via ClaudeSDKClient
+  > The executor SHALL accept A2A requests containing `userInput.content` and `conversationId`, create or resume a Claude Agent SDK session, and return the agent's response as a single Message.
+  > - **THEN** the executor SHALL create `/data/sessions/<conversationId>/`, initialize a new `ClaudeSDKClient` with `cwd` set to that directory, send the user input via `client.query()`, collect the resp
+  > - **THEN** the executor SHALL initialize `ClaudeSDKClient` with `resume` targeting the existing session and `cwd` set to the session directory, send the new user input, and return the response
+  > Each conversation SHALL have its own isolated filesystem directory at `/data/sessions/<conversationId>/`. The Claude Agent SDK's built-in tools (Read, Write, Edit, Bash, Grep, Glob) SHALL operate with
+  > - **WHEN** an agent in session A creates a file via the Write tool
+  > Session state SHALL be stored on a PersistentVolumeClaim mounted at `/data/sessions/`. The SDK's internal session data (stored under `.claude/` within the session directory) SHALL survive pod restarts
+  > The executor SHALL read the Anthropic model name from the `ANTHROPIC_MODEL` environment variable, defaulting to `claude-sonnet-4-20250514` if not set.
+--- candidata: executor-broker-streaming [termos]
+  | ## ADDED Requirements
+  | ### Requirement: openai-responses executor streams tokens to broker
+  | The `openai-responses` executor SHALL call `await self.stream_chunk(token)` for each token received from the OpenAI Responses API streaming loop inside `execute_agent()`.
+  > ### Requirement: openai-responses executor streams tokens to broker
+  > The `openai-responses` executor SHALL call `await self.stream_chunk(token)` for each token received from the OpenAI Responses API streaming loop inside `execute_agent()`.
+  > #### Scenario: openai-responses streams tokens during execution
+  > - **WHEN** `execute_agent()` is called and the OpenAI Responses API returns a streaming response
+  > - **AND** the full accumulated response is still returned from `execute_agent()`
+  > #### Scenario: openai-responses falls back when streaming unavailable
+  > - **WHEN** `execute_agent()` is called and the model is configured for non-streaming
+  > - **THEN** no `stream_chunk()` calls are made and the single-chunk fallback in `ExecutorApp` handles broker delivery
+
+===== P092 | PsychQuant/che-ical-mcp PR #79 | capacidade do par: eventkit-handler-test-harness
+PR: cluster: Wave 3 simple verify-followups (#67, #69, #71, #72, #77)
+arquivos ligados: Sources/CheICalMCP/EventKit/EventKitManager.swift;Sources/CheICalMCP/Server.swift
+--- linhas alteradas (48; mostrando até 40)
++                //
++                // #69: defensive symmetry with R7's trusted-branch carve-out
++                // at writeFailureLog. Note the rationale differs here: R3
++                // binds to `sanitize(_:)` directly (NOT `sanitizeForResponse`)
++                // so trusted errors at this site receive a framework-style
++                // code (e.g. "error_unknown") that does NOT equal `rawLog`.
++                // The gate is therefore forward-compat hardening — if a
++                // future caller of `deleteRemindersBatch` propagates a
++                // `TrustedErrorMessage` conformer through this path, the
++                // stderr-amplification window stays closed by construction.
++                // In practice today, `eventStore.remove(reminder:commit:)`
++                // only throws NSError, so the gate doesn't fire on hot paths.
+-                let safeId = EventKitErrorSanitizer.escapeForStderr(id)
+-                let safeRawLog = EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog)
+-                FileHandle.standardError.write(
+-                    Data("deleteRemindersBatch(\(safeId)) failed: \(safeRawLog)\n".utf8)
+-                )
++                if !(error is TrustedErrorMessage) {
++                    let safeId = EventKitErrorSanitizer.escapeForStderr(id)
++                    let safeRawLog = EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog)
++                    FileHandle.standardError.write(
++                        Data("deleteRemindersBatch(\(safeId)) failed: \(safeRawLog)\n".utf8)
++                    )
++                }
+-            // means the operator's last debug channel is stderr. #39 carve-out:
+-            // only write stderr for non-trusted errors. Trusted errors carry
+-            // identical text on the wire (`code == rawLog`) so duplicating to
+-            // stderr would just amplify noise; framework errors hide their
+-            // localizedDescription from the wire (sanitized to a code) so
+-            // stderr is the only place to surface it.
+-            let sanitized = EventKitErrorSanitizer.sanitizeForResponse(error)
+-            if !(error is TrustedErrorMessage) {
+-                FileHandle.standardError.write(
+-                    Data("handleToolCall(\(EventKitErrorSanitizer.escapeForStderr(name))) failed: \(EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog))\n
+-                )
+-            }
+-            return CallTool.Result(content: [.text("Error: \(sanitized.code)")], isError: true)
++            // means the operator's last debug channel is stderr. Delegates to
++            // `writeFailureLog` (#72) so the #41 / R7 trusted-branch carve-out,
++            // `escapeForStderr`, and any future hardening (#73 ANSI/NUL,
+--- candidata: eventkit-error-sanitization [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: cleanup_completed_reminders response reflects sanitized codes end-to-end
+  | The `cleanup_completed_reminders` MCP tool handler SHALL, when invoked in binding mode with `dry_run: false`, pass `failures` tuples from `BatchDeleteResult` into the response `failures[]` array with 
+  > ### Requirement: cleanup_completed_reminders response reflects sanitized codes end-to-end
+  > The `cleanup_completed_reminders` MCP tool handler SHALL, when invoked in binding mode with `dry_run: false`, pass `failures` tuples from `BatchDeleteResult` into the response `failures[]` array with 
+  > As a consequence of this requirement and "deleteRemindersBatch catch block routes errors through the sanitizer", `failures[].error` in any response produced by `cleanup_completed_reminders` SHALL sati
+  > - Equal the literal string `"error_unknown"`
+  > This invariant applies to the `sanitize(_:)` API only. Other MCP tool handlers that consume `sanitizeForResponse(_:)` (defined in a later requirement) accept a broader value domain that includes verba
+  > #### Scenario: End-to-end sanitized code reaches response
+  > - **GIVEN** a `FakeEventKitManager` scripted to return `BatchDeleteResult(successCount: 0, failedCount: 1, failures: [("r1", "eventkit_error_3")])` for `deleteRemindersBatch`
+  > - **AND** a `CheICalMCPServer` initialized with `reminderCleanupSource` = that fake
+--- candidata: setup-permission-flow [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Interactive --setup presents TCC dialogs from a foreground app context
+  | When `--setup` runs in an interactive session, the binary SHALL request Calendar and Reminders full access from inside a foreground `NSApplication` (regular activation policy with a running main run l
+  > #### Scenario: Framework error during a request is sanitized
+  > - **WHEN** an EventKit request throws an error during interactive setup
+  > - **THEN** the binary prints the entity's access line with the error text passed through control-character sanitization
+  > - **AND** the run is treated as failed (non-zero exit)
+  > When `--setup` runs in a session detected as non-interactive, the binary SHALL report each entity's authorization status headlessly and exit, and SHALL NOT enter the foreground `NSApplication` run loo
+  > #### Scenario: Non-interactive session skips the would-block request
+  > ### Requirement: Permission-denied responses surface the resolvable binary path and --setup command
+  > When a tool call fails because Calendar or Reminders access is insufficient, and when the startup banner detects that access is not granted, the output SHALL include the resolved absolute path of the 
+--- candidata: self-hosted-plugin-marketplace [termos]
+  | ## ADDED Requirements
+  | ### Requirement: che-ical-mcp repo hosts its own Claude Code marketplace
+  | The che-ical-mcp repository SHALL contain a `.claude-plugin/marketplace.json` at its root that defines a marketplace listing the `che-ical-mcp` plugin. Adding the repository as a marketplace via git S
+  > ### Requirement: che-ical-mcp repo hosts its own Claude Code marketplace
+  > The che-ical-mcp repository SHALL contain a `.claude-plugin/marketplace.json` at its root that defines a marketplace listing the `che-ical-mcp` plugin. Adding the repository as a marketplace via git S
+  > #### Scenario: User adds the repo as a marketplace and installs the plugin
+  > - **WHEN** a user runs `/plugin marketplace add kiki830621/che-ical-mcp`
+  > - **THEN** Claude Code loads the marketplace from the repo root `.claude-plugin/marketplace.json`
+  > - **AND** the marketplace lists a plugin named `che-ical-mcp`
+  > #### Scenario: Marketplace entry resolves the co-located plugin via same-repo source
+  > - **WHEN** the marketplace entry's `source` is a same-repo relative path to the co-located plugin directory
+
+===== P093 | huytdps13400/react-native-ssl-manager PR #5 | capacidade do par: ios-urlsession-documentation
+PR: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI
+arquivos ligados: scripts/postinstall.js
+--- linhas alteradas (36; mostrando até 40)
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+--- candidata: expo-plugin [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Expo Plugin Registration
+  | The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > - **THEN** the plugin uses `ssl_config.json` from the project root
+  > - **WHEN** the plugin is added as `["react-native-ssl-manager", { "sslConfigPath": "./custom/path.json" }]`
+  > The Expo plugin SHALL automatically add the `ssl_config.json` file to the iOS Xcode project bundle resources during prebuild.
+  > The Expo plugin SHALL automatically copy the `ssl_config.json` file to the Android `assets` directory and ensure the INTERNET permission is present in `AndroidManifest.xml` during prebuild.
+  > The Expo config plugin and build scripts SHALL allow the Network Security Config
+  > - **WHEN** the plugin is configured with `pinExpiration: "2027-12-31"`
+  > - **THEN** the generated `network_security_config.xml` uses that expiration date
+--- candidata: ssl-pinning-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Set SSL Pinning State
+  | The library SHALL export a `setUseSSLPinning(usePinning: boolean): Promise<void>` function that enables or disables SSL certificate pinning at runtime by persisting the state to native storage (UserDe
+  > #### Scenario: App restart required
+  > - `SslPinningConfig`: an interface with a `sha256Keys` property mapping domain strings to arrays of SHA-256 pin strings
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > ### Requirement: TrustKit initialized at most once per process
+  > The iOS implementation SHALL initialize TrustKit at most once per process and
+  > optional `enforcePinning` flag so pinning can degrade gracefully and avoid a
+  > - **WHEN** `enforcePinning` is `false`
+--- candidata: android-network-security-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: XML Generation from SSL Config
+  | The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > #### Scenario: Generate XML from valid ssl_config.json
+  > - **WHEN** `ssl_config.json` contains domains with SHA-256 pins
+  > - **THEN** the library generates `res/xml/network_security_config.xml` with corresponding `<domain-config>` and `<pin-set>` entries
+  > - **WHEN** `ssl_config.json` contains `api.example.com` with 2 pins and `api.dev.example.com` with 1 pin
+  > - **THEN** the generated XML contains two `<domain-config>` blocks, one for each domain
+  > - **WHEN** XML is generated
+  > #### Scenario: ssl_config.json not found
+--- candidata: android-pinned-client-api [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public Pinned OkHttpClient Singleton
+  | The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`

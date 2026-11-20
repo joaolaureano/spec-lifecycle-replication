@@ -1,0 +1,500 @@
+===== P100 | dotnetfactory/fluid-calendar PR #208 | capacidade do par: task-list-filtering
+PR: fix(tasks): sort Priority and Energy columns by semantic rank (#131)
+arquivos ligados: src/components/tasks/TaskList.tsx;src/components/tasks/utils/task-list-utils.ts
+--- linhas alteradas (88; mostrando até 40)
++  compareTaskEnergyLevel,
++  compareTaskPriority,
+-          if (!a.priority) return 1;
+-          if (!b.priority) return -1;
+-          return direction * a.priority.localeCompare(b.priority);
++          // Sort by semantic rank (low < medium < high, no-priority last), not
++          // the alphabetical order of the labels. See task-list-utils.
++          return compareTaskPriority(a, b, direction);
+-          if (!a.energyLevel) return 1;
+-          if (!b.energyLevel) return -1;
+-          return direction * a.energyLevel.localeCompare(b.energyLevel);
++          // Sort by semantic rank (low < medium < high), not alphabetically.
++          return compareTaskEnergyLevel(a, b, direction);
++// Semantic rank for the Priority column so the Tasks list sorts by meaning
++// (low < medium < high) instead of alphabetically by the enum label.
++// Priority.NONE is intentionally omitted: the app represents "no priority" as
++// BOTH null (an untouched modal) and the literal "none" (explicit select), so
++// both must bucket last together rather than "none" sorting among real values.
++// An omitted key makes rankOf return undefined, which compareRanks sorts last.
++export const PRIORITY_SORT_RANK: Partial<Record<Priority, number>> = {
++  [Priority.LOW]: 1,
++  [Priority.MEDIUM]: 2,
++  [Priority.HIGH]: 3,
++};
++// Semantic rank for the Energy column (low < medium < high).
++export const ENERGY_LEVEL_SORT_RANK: Partial<Record<EnergyLevel, number>> = {
++  [EnergyLevel.LOW]: 1,
++  [EnergyLevel.MEDIUM]: 2,
++  [EnergyLevel.HIGH]: 3,
++};
++// Look up a value's rank in a rank map, returning undefined for missing values
++// AND for any value not present in the map. The DB stores priority/energyLevel
++// as plain strings, so a stale or externally-imported value (e.g. "urgent")
++// can reach the comparator; we treat such unknown values like a missing value
++// rather than producing NaN.
++const rankOf = (
++  value: string | null | undefined,
++  ranks: Partial<Record<string, number>>
++): number | undefined => {
++  if (value == null) return undefined;
+--- candidata: task-list-sorting [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Priority column sorts by semantic rank
+  | When the task list is sorted by the Priority column, the system SHALL order tasks by the semantic rank of their priority (`none` < `low` < `medium` < `high`) rather than alphabetically by the priority
+  > ### Requirement: Priority column sorts by semantic rank
+  > When the task list is sorted by the Priority column, the system SHALL order tasks by the semantic rank of their priority (`none` < `low` < `medium` < `high`) rather than alphabetically by the priority
+  > #### Scenario: Ascending priority order
+  > - **WHEN** the task list is sorted by Priority in ascending direction
+  > - **THEN** tasks appear in the order none, low, medium, high (least intense first)
+  > #### Scenario: Descending priority order
+  > - **WHEN** the task list is sorted by Priority in descending direction
+  > - **THEN** tasks appear in the order high, medium, low, none (most intense first)
+--- candidata: caldav-task-import [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Discover CalDAV task collections
+  | FluidCalendar SHALL list a connected CalDAV account's task collections by querying the account's calendar collections and keeping only those whose advertised component set includes `VTODO`. Each task 
+  > FluidCalendar SHALL list a connected CalDAV account's task collections by querying the account's calendar collections and keeping only those whose advertised component set includes `VTODO`. Each task 
+  > - **AND** the `VTODO` collection's task-list id equals its CalDAV URL and its name equals its display name
+  > ### Requirement: Import VTODO items as tasks
+  > FluidCalendar SHALL read the `VTODO` components from a chosen CalDAV task collection and expose each as an external task. A `VTODO` without a `UID` SHALL be skipped (a stable identifier is required fo
+  > - **WHEN** the provider reads tasks from a collection whose iCalendar payload contains two valid `VTODO` components
+  > - **THEN** the provider returns two external tasks
+  > - **AND** each external task's id equals the corresponding `VTODO` `UID`
+  > When converting a `VTODO` to a task, FluidCalendar SHALL map: `SUMMARY` to title (defaulting to a non-empty placeholder when absent), `DESCRIPTION` to description, `DUE` to due date, `DTSTART` to star
+--- candidata: caldav-account-connection [termos]
+  | ## ADDED Requirements
+  | ### Requirement: CalDAV account identity is scoped by server URL
+  | A connected CalDAV account SHALL be uniquely identified by `(user, provider, username, server URL)`, not by `(user, provider, username)` alone. A user SHALL be able to connect multiple CalDAV servers,
+  > ### Requirement: Adding a CalDAV calendar is scoped to the selected account
+  > Because a user can now have multiple CalDAV accounts, and CalDAV calendar URLs/hrefs are account-local server data, the add-calendar endpoint SHALL look up an existing feed scoped to the selected `acc
+  > - **AND** a new feed is created under account B rather than returning account A's feed
+  > The change to CalDAV identity SHALL NOT weaken uniqueness for OAuth providers. For `GOOGLE` and `OUTLOOK` accounts (where the CalDAV server URL is null), a user SHALL still be limited to one connected
+  > - **THEN** it locates any existing account by `(userId, provider, email)` and updates it, otherwise creates a new one
+  > - **AND** if a concurrent first-time callback creates the row first, the unique-constraint error is caught and the existing row is updated instead (idempotent)
+  > The stored CalDAV server URL SHALL have its origin canonicalized so trivial textual variants of the same endpoint do not bypass the duplicate guard and create duplicate accounts. Canonicalization SHAL
+  > #### Scenario: Host/scheme/port variant is treated as the same server
+
+===== P101 | ChenChenyaqi/learn-anything PR #98 | capacidade do par: site-cli
+PR: refactor: decompose site components, composables, and utils
+arquivos ligados: packages/cli/site/src/composables/useI18n.ts;packages/cli/site/src/composables/useTopicData.ts;packages/cli/site/vite.config.ts
+--- linhas alteradas (380; mostrando até 40)
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++export type { I18nKey } from './locales/en';
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+--- candidata: site-theme [tasks+termos]
+  | ## ADDED Requirements
+  | > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  | ### Requirement: Dashboard page shows all topics as cards
+  > > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  > ### Requirement: Dashboard page shows all topics as cards
+  > The system SHALL render a Dashboard page at the site root (`/`) that scans `/topics/` for all topic directories via `import.meta.glob`, reads each topic's `state.json`, and displays each topic as a ca
+  > #### Scenario: Dashboard with multiple topics
+  > - **WHEN** `/topics/` contains subdirectories `javascript/` and `python/`, each with a valid `state.json`
+  > - **THEN** the Dashboard displays two cards, one for "JavaScript" with its progress and one for "Python" with its progress
+  > #### Scenario: Dashboard with no topics
+  > - **WHEN** `/topics/` exists but contains no topic subdirectories with valid `state.json` files
+--- candidata: quiz-results-summary [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Results display after quiz completion
+  | After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > ### Requirement: Results display after quiz completion
+  > After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > #### Scenario: Quiz completed
+  > - **WHEN** the user submits the final question
+  > - **AND** the results show a large score indicator (e.g., "7 / 8")
+  > - **AND** the results show a percentage (e.g., "87.5%")
+  > The results summary SHALL show each question's grading outcome with the user's answer, correct answer, and explanation.
+  > #### Scenario: Exact-match question graded correctly
+--- candidata: quiz-card-practice [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz modal container
+  | The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > - **WHEN** a quiz file is launched from the sidebar
+  > - **AND** the first question is displayed as a card
+  > - **THEN** the modal closes
+  > - **AND** any current quiz session state is discarded
+  > #### Scenario: Multiple choice question
+  > - **WHEN** the current question has type `multiple_choice`
+  > - **THEN** all options from `question.options[]` are rendered as radio buttons
+--- candidata: quiz-sidebar-tab [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz tab in topic sidebar
+  | The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > ### Requirement: Quiz tab in topic sidebar
+  > The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > #### Scenario: User is on a topic page
+  > - **WHEN** the sidebar context is `topic`
+  > - **THEN** three tabs are displayed: Topics, Exercises, Quizzes
+  > - **AND** the Quizzes tab label is "Quizzes" (English locale) or "测验" (Chinese locale)
+  > #### Scenario: User is on the dashboard
+  > - **WHEN** the sidebar context is `dashboard`
+--- candidata: site-generator [tasks]
+  | ## ADDED Requirements
+  | > **Status: Pending implementation.** The dev project at `packages/cli/site/` is complete and the build script generates `SITE_FILES`, but the `SiteGenerator` class that writes those files to `.learn/
+  | > **Note:** The original spec referenced VitePress paths (`.vitepress/config.mts`, `pages/`). The actual implementation uses Vue 3 + Vite paths (`src/components/`, `vite.config.ts`, etc.). The require
+  > > **Status: Pending implementation.** The dev project at `packages/cli/site/` is complete and the build script generates `SITE_FILES`, but the `SiteGenerator` class that writes those files to `.learn/
+  > > **Note:** The original spec referenced VitePress paths (`.vitepress/config.mts`, `pages/`). The actual implementation uses Vue 3 + Vite paths (`src/components/`, `vite.config.ts`, etc.). The require
+  > ### Requirement: SiteGenerator writes all template files on first generation
+  > The system SHALL write all site template files (Vue components, composables, styles, router, config files, package.json) to the `.learn/` directory when the `SiteGenerator.generate()` method is called
+  > #### Scenario: First generation creates complete directory structure
+  > - **WHEN** `SiteGenerator.generate()` is called and `.learn/src/` does not exist
+  > - **THEN** the system creates `.learn/package.json`, `.learn/index.html`, `.learn/vite.config.ts`, `.learn/tsconfig.json`, `.learn/src/main.ts`, `.learn/src/App.vue`, `.learn/src/router/index.ts`, all
+  > #### Scenario: First generation writes theme components
+
+===== P102 | b0x42/prizm PR #37 | capacidade do par: detail-card-view
+PR: feat: accessibility baseline + tier 2 — VoiceOver, contrast, reduce motion, error suggestions
+arquivos ligados: Prizm/Presentation/Components/CardBackground.swift
+--- linhas alteradas (4; mostrando até 40)
++    @Environment(\.colorSchemeContrast) private var contrast
+-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
++                    .stroke(Color.primary.opacity(Opacity.cardBorder(contrast)), lineWidth: 0.5)
++                    .accessibilityAddTraits(.isHeader)
+--- candidata: accessibility-contrast [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Background tint colours SHALL meet WCAG non-text contrast ratio
+  | All custom `Color.opacity()` values used as background tints on banners, borders, and interactive indicators SHALL produce a minimum 3:1 contrast ratio against the adjacent background in both light an
+  > ### Requirement: Background tint colours SHALL meet WCAG non-text contrast ratio
+  > All custom `Color.opacity()` values used as background tints on banners, borders, and interactive indicators SHALL produce a minimum 3:1 contrast ratio against the adjacent background in both light an
+  > #### Scenario: Sync error banner background meets contrast
+  > - **THEN** the yellow background tint SHALL have a minimum 3:1 contrast ratio against the content column background
+  > #### Scenario: Card border meets contrast
+  > - **THEN** the border stroke SHALL be visible with a minimum 3:1 contrast ratio against the card and window backgrounds
+  > #### Scenario: Trash banner background meets contrast
+  > - **THEN** the secondary background tint SHALL have a minimum 3:1 contrast ratio against the detail pane background
+--- candidata: voiceover-labels [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Icon-only buttons SHALL have accessibility labels
+  | Every `Button` whose visible content is only an `Image(systemName:)` SHALL have an `.accessibilityLabel` that describes the action. The label SHALL match the existing `.help()` tooltip text where one 
+  > Section header labels in the detail view (e.g. "Credentials", "Websites", "Notes", "Attachments", "Custom Fields") SHALL have `.accessibilityAddTraits(.isHeader)` so VoiceOver users can navigate by he
+  > Section header labels in the detail view (e.g. "Credentials", "Websites", "Notes", "Attachments", "Custom Fields") SHALL have `.accessibilityAddTraits(.isHeader)` so VoiceOver users can navigate by he
+--- candidata: accessibility-conformance [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Accessibility conformance statement SHALL exist at repo root
+  | The project SHALL include an `ACCESSIBILITY.md` file at the repository root documenting the current accessibility conformance level against EN 301 549 Chapter 11 (which maps WCAG 2.1 criteria to nativ
+  > - **THEN** the status SHALL be "Partially Supports" with a remark that a formal contrast audit has not been performed
+  > - **THEN** the status SHALL be "Partially Supports" with a remark that a formal contrast audit has not been performed
+--- candidata: vault-browser-ui [PR]
+  | ## Requirements
+  | ### Requirement: User can log in to a self-hosted Bitwarden or Vaultwarden server
+  | The system SHALL provide a login screen with a server URL field, email field, and master password field. The server URL field SHALL be empty by default with a placeholder ("https://vault.example.com")
+  > The system SHALL provide a persistent search bar that filters the item list in real time on every keystroke. Search SHALL be scoped to the currently selected sidebar category. The search term SHALL be
+  > - **SC-008**: Search results update within 100ms of each keystroke for vaults up to 1,000 items.
+  > The system SHALL provide search via the native `.searchable(text:placement:prompt:)` modifier with `.sidebar` placement on the content column. Search SHALL filter the item list in real time on every k
+  > The system SHALL provide search via the native `.searchable(text:placement:prompt:)` modifier with `.sidebar` placement on the content column. Search SHALL filter the item list in real time on every k
+--- candidata: accessibility-error-suggestions [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Error messages SHALL include corrective suggestions where actionable
+  | Error messages displayed to the user SHALL include a brief suggestion for how to resolve the issue when a corrective action is known.
+
+===== P103 | reason-healthcare/rh PR #49 | capacidade do par: fsh-parser
+PR: Expand rh-fsh SUSHI conformance coverage
+arquivos ligados: apps/rh-cli/src/fsh.rs
+--- linhas alteradas (116; mostrando até 40)
+-use rh_fsh::{compile_fsh_files, FshParser, FshTank};
++use rh_fsh::{compile_fsh_files_with_project_config, FshParser, FshTank};
+-use crate::output::{Envelope, OutputContext, OutputFormat};
++use crate::output::{Envelope, EnvelopeError, OutputContext, OutputFormat};
++#[derive(Serialize)]
++struct FshCompileOutput {
++    resources: Vec<serde_json::Value>,
++    diagnostics: Vec<FshDiagnostic>,
++    #[serde(skip_serializing_if = "Vec::is_empty")]
++    output_files: Vec<WrittenResource>,
++}
++#[derive(Serialize)]
++struct FshDiagnostic {
++    severity: &'static str,
++    message: String,
++}
++#[derive(Serialize)]
++struct WrittenResource {
++    resource_type: String,
++    id: String,
++    file: String,
++}
+-            let package = compile_fsh_files(&paths)?;
+-            if !package.errors.is_empty() {
+-                for e in &package.errors {
+-                    warn!("{e}");
++            let package = compile_fsh_files_with_project_config(&paths)?;
++            let diagnostics: Vec<FshDiagnostic> = package
++                .errors
++                .iter()
++                .map(|e| FshDiagnostic {
++                    severity: "warning",
++                    message: e.to_string(),
++                })
++                .collect();
++            if !diagnostics.is_empty() {
++                for e in &diagnostics {
++                    warn!("{}", e.message);
++            let mut output_files = Vec::new();
++                let mut used_names = std::collections::HashMap::new();
+--- candidata: fsh-cli [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Provide `rh fsh compile` command for FSH → FHIR JSON
+  | The CLI SHALL provide a `rh fsh compile <files...>` subcommand that accepts one or more FSH file paths, compiles them using `FshCompiler`, and writes FHIR JSON output files to a specified or default o
+  > ### Requirement: Provide `rh fsh compile` command for FSH → FHIR JSON
+  > The CLI SHALL provide a `rh fsh compile <files...>` subcommand that accepts one or more FSH file paths, compiles them using `FshCompiler`, and writes FHIR JSON output files to a specified or default o
+  > - **WHEN** `rh fsh compile patient-profile.fsh --output ./fhir/` is run
+  > - **THEN** FHIR JSON files are written to `./fhir/` and the command exits with code 0
+  > - **WHEN** `rh fsh compile *.fsh --output ./fhir/` is run with multiple FSH files
+  > - **THEN** all entities from all files are compiled and written as separate JSON files
+  > - **THEN** the command prints the error with file name, line, and column, and exits with a non-zero code
+  > ### Requirement: Provide `rh fsh parse` command for AST inspection
+--- candidata: fsh-export [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Export Profiles and Extensions as FHIR StructureDefinitions
+  | The exporter SHALL convert each `Profile` and `Extension` entity in the resolved `FshTank` into a FHIR `StructureDefinition` JSON resource containing a `differential` section built from the entity's r
+  > The exporter SHALL convert each `Profile` and `Extension` entity in the resolved `FshTank` into a FHIR `StructureDefinition` JSON resource containing a `differential` section built from the entity's r
+  > - **THEN** the output StructureDefinition JSON contains a `differential.element` entry for `subject` with `min: 1` and `max: "1"`
+  > - **THEN** the output StructureDefinition JSON contains a differential element for `code` with `mustSupport: true`
+  > - **THEN** the output StructureDefinition JSON contains a differential element for `status` with `binding.strength: "required"` and `binding.valueSet` referencing `StatusVS`
+  > - **THEN** the output StructureDefinition JSON contains a differential element for `value[x]` with `type` restricted to `Quantity`
+  > - **THEN** the output JSON has `id`, `title`, and `description` fields matching the FSH metadata
+  > - **THEN** the output StructureDefinition has `type: "Extension"` and `baseDefinition` pointing to the FHIR Extension base
+  > - **THEN** the output JSON contains `"status": "active"`
+--- candidata: fsh-tank [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Collect parsed documents into an indexed FshTank
+  | The system SHALL provide a `FshTank` that accepts one or more `FshDocument` values and indexes all entities by name. All 11 entity types SHALL be stored in separate `IndexMap` collections preserving d
+  > ### Requirement: Collect parsed documents into an indexed FshTank
+  > The system SHALL provide a `FshTank` that accepts one or more `FshDocument` values and indexes all entities by name. All 11 entity types SHALL be stored in separate `IndexMap` collections preserving d
+  > - **WHEN** a `FshDocument` containing a Profile and a ValueSet is added to an empty `FshTank`
+  > - **WHEN** multiple `FshDocument` values (from separate files) are added to a `FshTank`
+  > The `FshTank` SHALL provide a `fish(name)` method that returns a reference to an entity matching the given name, searching across all entity type collections.
+  > The `FshResolver` SHALL expand `ParamRuleSet` references by substituting named parameters into rule paths and values before inlining.
+  > ### Requirement: Resolve dependency package StructureDefinitions for FSH compilation
+  > The `FshTank` or compile pipeline SHALL make dependency package StructureDefinitions available for profile parent and instance base resource resolution.
+--- candidata: fsh-sushi-conformance [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Compare rh-fsh output against project-level SUSHI output
+  | The system SHALL provide a project-level conformance runner that compiles real IG FSH source with both reference `fsh-sushi` and `rh-fsh`, then compares generated resources by `(resourceType, id)`.
+  > ### Requirement: Compare rh-fsh output against project-level SUSHI output
+  > The system SHALL provide a project-level conformance runner that compiles real IG FSH source with both reference `fsh-sushi` and `rh-fsh`, then compares generated resources by `(resourceType, id)`.
+  > - **WHEN** both tools successfully compile a project
+  > - **THEN** the report includes missing resource count, extra resource count, mismatch count, and first-difference paths for mismatched resources
+  > - **THEN** the runner marks that project as skipped rather than reporting a compiler failure
+  > - **WHEN** a mismatch is isolated to canonical URL, title, description, status, version, count, or generated ImplementationGuide metadata
+--- candidata: publish-lifecycle-hooks [termos]
+  | # publish-lifecycle-hooks
+  | ## Purpose
+  | Defines the lifecycle hook system for `rh package build` and `rh package pack`, including configuration via `publisher.toml`, supported pipeline stages, processor registration, execution ordering, and
+  > Defines the lifecycle hook system for `rh package build` and `rh package pack`, including configuration via `publisher.toml`, supported pipeline stages, processor registration, execution ordering, and
+  > A `publisher.toml` file in the source directory SHALL be read by `rh package build` and `rh
+  > - **THEN** `rh package build` runs the `snapshot` processor then the `validate` processor before assembling output
+  > - **THEN** `rh package build` runs with no hook processors and emits an informational message
+  > - `after_build`: runs after the expanded output directory is written
+  > #### Scenario: after_build processor sees completed output directory
+  > - **THEN** it receives a context in which the expanded output directory has been fully written
+  > - **THEN** it runs after the build output directory exists but before the `.tgz` is created
+
+===== P104 | abapify/adt-cli PR #110 | capacidade do par: adt-cli
+PR: docs: AWS ABAP Accelerator feature parity spec and implementation plan
+arquivos ligados: packages/adt-mcp/src/lib/tools/update-source.ts
+--- linhas alteradas (22; mostrando até 40)
+-import { connectionShape } from './shared-schemas';
++import { sessionOrConnectionShape } from './shared-schemas';
++import { resolveClient } from './session-helpers';
+-      ...connectionShape,
++      ...sessionOrConnectionShape,
+-    async (args) => {
+-      const client = ctx.getClient(args);
++    async (args, extra) => {
++      let client;
++      try {
++        ({ client } = await resolveClient(ctx, args, extra ?? {}));
++      } catch (error) {
++        return {
++          isError: true,
++          content: [
++            {
++              type: 'text' as const,
++              text: `Update source failed: ${error instanceof Error ? error.message : String(error)}`,
++            },
++          ],
++        };
++      }
+--- candidata: adt-mcp [PR+termos]
+  | # Delta — `adt-mcp` capability
+  | ## MODIFIED Requirements
+  | ### Requirement: Stateless server — connection-per-call
+  > > "Each tool call creates its own AdtClient via ctx.getClient(args). The
+  > > server holds no session, no cached client, and no credentials between
+  > - **Streamable HTTP transport** — session-scoped state. Each MCP session
+  > session close (explicit `DELETE /mcp`, `sap_disconnect`, or idle TTL).
+  > Across sessions and processes no state persists; credentials are never
+  > - **THEN** each call performs its own SAP security-session handshake and
+  > no state is shared between the calls.
+  > #### Scenario: HTTP session caches the SAP client
+--- candidata: abap-lint [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Lint ABAP source locally
+  | The system SHALL lint ABAP source code offline using `@abaplint/core` without requiring a live SAP connection, returning structured diagnostics (line, column, severity, message, rule name).
+  > ### Requirement: Lint ABAP source locally
+  > The system SHALL lint ABAP source code offline using `@abaplint/core` without requiring a live SAP connection, returning structured diagnostics (line, column, severity, message, rule name).
+  > #### Scenario: Lint clean source returns no issues
+  > - **WHEN** the user provides syntactically valid ABAP source with no rule violations
+  > #### Scenario: Lint source with violations returns diagnostics
+  > - **WHEN** the user provides ABAP source that violates abaplint rules (e.g. mixed-case keywords)
+  > - **THEN** the tool returns one diagnostic entry per violation with line, column, severity (`error` | `warning` | `info`), message text, and rule name
+  > #### Scenario: Lint and fix returns corrected source
+--- candidata: code-completion [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Request code completion proposals at cursor position
+  | The system SHALL provide a `get_completions` MCP tool that requests ABAP code completion proposals at a given line/column cursor position from the ADT code-assistance endpoint (`/sap/bc/adt/codeassist
+  > - **WHEN** the user provides source code with cursor positioned after a partial symbol (e.g. `ZCL_OR`) and specifies `line` and `column`
+  > - **THEN** the tool returns `isError: true` with a message indicating the endpoint is not available on this system
+  > The tool SHALL require `objectName`, `objectType`, `line` (1-based), `column` (1-based), and optionally the `sourceCode` of the object as parameters.
+--- candidata: method-surgery [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Edit a single method without sending the full class source
+  | The system SHALL extend `update_source` with an `action: "editMethod"` variant and extend `adt source write` with `--method <methodName>` that replaces only the body of the named method in an existing
+  > ### Requirement: Edit a single method without sending the full class source
+  > The system SHALL extend `update_source` with an `action: "editMethod"` variant and extend `adt source write` with `--method <methodName>` that replaces only the body of the named method in an existing
+  > - **THEN** the system fetches the full class source, splices in the new body between the existing `METHOD PROCESS.` and `ENDMETHOD.` lines, and writes the modified full source back to SAP
+  > - **WHEN** the specified `methodName` does not exist in the class source
+  > - **THEN** the tool returns `isError: true` with message "Method <name> not found in <class>"
+  > - **THEN** it uses the existing `LockService.lock`, PUT `/source/main`, `LockService.unlock` sequence — no new lock protocol
+  > - **WHEN** the class source contains `  METHOD process.` followed later by `  ENDMETHOD.`
+--- candidata: short-dumps [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Retrieve ABAP runtime short dumps
+  | The system SHALL provide a `get_short_dumps` MCP tool and `adt diagnose dumps` CLI command that retrieves recent ABAP runtime error short dumps from the SAP system via the ADT dumps endpoint (`/sap/bc
+  > - **THEN** the tool returns `isError: true` with a message explaining the BTP limitation
+
+===== P105 | epam/ai-dial-chat PR #7623 | capacidade do par: sticky-code-block-header
+PR: feat(chat): update code block download button (Issue #7589)
+arquivos ligados: apps/chat/src/components/Markdown/CodeBlock.tsx
+--- linhas alteradas (64; mostrando até 40)
+-import { IconCheck, IconCopy } from '@tabler/icons-react';
+-import { CSSProperties, FC, memo, useCallback } from 'react';
++import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
++import { CSSProperties, FC, memo, useCallback, useState } from 'react';
+-import { getDownLoadCurrentDate } from '@/src/utils/app/import-export';
++import { triggerDownload } from '@/src/utils/app/file';
++import { getDefaultExportFileName } from '@/src/utils/app/import-export';
+-import Download from '@/public/images/icons/download.svg';
++import { ChangeDownloadFileNameModal } from '@/src/components/Markdown/ChangeDownloadFileNameModal';
++    const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+-    const downloadAsFile = useCallback(() => {
+-      // languageExtensionMapping allows set empty extension
+-      const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
+-      // use the specific filename if it exists in languageFilenameMapping
+-      const suggestedFileName =
+-        languageFilenameMapping[displayLanguage] ??
+-        `ai-chat-code-${getDownLoadCurrentDate()}${fileExtension}`;
+-      const fileName = window.prompt(
+-        t(MarkdownI18nKeys.EnterFileName),
+-        suggestedFileName,
+-      );
+-      if (!fileName) {
+-        // User pressed cancel on prompt
+-        return;
+-      }
+-      const blob = new Blob([value], { type: 'attachment/plain' });
+-      const url = URL.createObjectURL(blob);
+-      const link = document.createElement('a');
+-      link.download = fileName;
+-      link.href = url;
+-      link.style.display = 'none';
+-      document.body.appendChild(link);
+-      link.click();
+-      document.body.removeChild(link);
+-      URL.revokeObjectURL(url);
+-    }, [displayLanguage, t, value]);
++    // languageExtensionMapping allows set empty extension
++    const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
++    const suggestedFileName =
++      languageFilenameMapping[displayLanguage] ??
+--- candidata: codeblock-download [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code block download button uses standard icon
+  | The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > ### Requirement: Code block download button uses standard icon
+  > The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > #### Scenario: Download icon is visible in code block toolbar
+  > - **THEN** the download button SHALL display the `IconDownload` tabler icon (not the custom SVG)
+  > ### Requirement: Code block download opens in-app filename dialog
+  > When the user clicks the download button in a code block, the system SHALL open an in-app modal dialog (`ChangeDownloadFileNameModal`) for filename input instead of a native browser prompt.
+  > #### Scenario: Download button click opens modal
+  > - **WHEN** the user clicks the download button in a code block toolbar
+--- candidata: export [PR]
+  | ## Purpose
+  | Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  | ## Requirements
+  > Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  > ### Requirement: Export filenames SHALL use a zero-padded ISO date prefix
+  > #### Scenario: Conversation export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `2026-07-03_` (not `2026-7-3_`)
+  > #### Scenario: Conversations history export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `YYYY-MM-DD_` with zero-padded month and day
+  > #### Scenario: Prompt export filename uses zero-padded date
+  > - **WHEN** the user exports a single prompt
+--- candidata: markdown-table [termos]
+  | ## Purpose
+  | Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  | ## Requirements
+  > Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  > A toolbar SHALL be rendered above each markdown table in a chat message, offering one-click copy of the table data as CSV, plain text (TXT), and Markdown.
+  > - **WHEN** the user clicks the "Copy as CSV" toolbar button
+  > - **WHEN** the user clicks the "Copy as TXT" toolbar button
+  > #### Scenario: Copy as Markdown places a GFM table on the clipboard
+  > - **WHEN** the user clicks the "Copy as MD" toolbar button
+  > - **THEN** the table data SHALL be written to the clipboard as a GitHub-Flavored Markdown table, including a separator row with alignment markers
+  > - **WHEN** the user clicks any copy toolbar button
+--- candidata: edit-message-save-tooltip [termos]
+  | # Specification: Edit Message Save & Submit Tooltip
+  | ## Overview
+  | The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > ### Requirement: Save & Submit tooltip displays when button is disabled
+  > The system SHALL display a tooltip on the Save & Submit button explaining why the button is disabled. The tooltip text SHALL be contextual based on the disable condition.
+  > - **WHEN** user is editing a message and a file attachment is in the uploading state
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Wait for attachment to load"
+  > #### Scenario: Message content is empty
+  > - **WHEN** user is editing a message and the message content is empty (no text and no attachments)
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Please type message"

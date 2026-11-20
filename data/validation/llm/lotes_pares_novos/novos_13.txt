@@ -1,0 +1,4019 @@
+===== P144 | repo rozx/Tsukuyomi | PR #82: Feat/embedding chapters | capacidade: translation-memory-visibility
+--- SPEC VIVA
+# Capability: Translation Memory Visibility
+
+## Overview
+
+Show which memories were referenced during AI translation to provide transparency and build user trust.
+
+## User Stories
+
+- As a user, I want to see which memories the AI used when translating a paragraph
+- As a user, I want to understand why a translation turned out a certain way
+- As a user, I want to verify that important context was considered by the AI
+- As a user, I want to click on a referenced memory to view its details
+
+## Functional Requirements
+
+### Display in Translation Context
+
+- [ ] Show reference panel below translation result
+- [ ] Display count: "参考了 X 条记忆"
+- [ ] Expandable list of memory summaries
+- [ ] Each memory shows: icon + summary + click to view
+
+### Memory Reference Data
+
+- [ ] Track which memories are accessed during translation
+- [ ] Store: memoryId, summary (snapshot), timestamp
+- [ ] Persist with translation result
+- [ ] Update when translation is regenerated
+
+### Reference Types
+
+- [ ] Explicit references: AI called `get_memory` or `search_memory_by_keywords`
+- [ ] Implicit references: Memories attached to entities in context
+- [ ] Distinguish between search results and actually used memories
+
+### UI States
+
+- [ ] Loading: Show spinner while translating
+- [ ] Success: Show reference list
+- [ ] No references: Show "未参考记忆" message
+- [ ] Error: Show error state
+
+## Technical Requirements
+
+### Data Structure
+
+```typescript
+interface MemoryReference {
+  memoryId: string;
+  summary: string; // Snapshot at translation time
+  accessedAt: number;
+  toolName: 'get_memory' | 'search_memory_by_keywords';
+}
+
+interface TranslationResult {
+  // ... existing fields
+  referencedMemories: MemoryReference[];
+}
+```
+
+### Tracking Implementation
+
+```typescript
+// Wrap memory tools to track access
+function createTrackedMemoryTools(onMemoryAccess: (ref: MemoryReference) => void) {
+  return memoryTools.map((tool) => ({
+    ...tool,
+    handler: async (args: any, ctx: ToolContext) => {
+      const result = await tool.handler(args, ctx);
+
+      // Track access
+      if (tool.name === 'get_memory' && args.memory_id) {
+        onMemoryAccess({
+          memoryId: args.memory_id,
+          summary: extractSummaryFromResult(result),
+          accessedAt: Date.now(),
+          toolName: 'get_memory',
+        });
+      } else if (tool.name === 'search_memory_by_keywords') {
+        const memories = extractMemoriesFromResult(result);
+        memories.forEach((m) =>
+          onMemoryAccess({
+            memoryId: m.id,
+            summary: m.summary,
+            accessedAt: Date.now(),
+            toolName: 'search_memory_by_keywords',
+          }),
+        );
+      }
+
+      return result;
+    },
+  }));
+}
+```
+
+### Component Interface
+
+```typescript
+interface MemoryReferencePanelProps {
+  references: MemoryReference[];
+  bookId: string;
+  loading?: boolean;
+}
+
+interface MemoryReferencePanelEmits {
+  'view-memory': (memoryId: string) => void;
+}
+```
+
+### Storage
+
+- [ ] Store references in paragraph.translations[n].referencedMemories
+- [ ] Update on each translation regeneration
+- [ ] Include in export/import
+
+## UI/UX Requirements
+
+### Reference Panel Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 译文：                                                       │
+│ 在这个魔法世界中，主角开始学习...                             │
+│                                                             │
+│ 💡 AI 参考了 3 条记忆                              [查看 ▼]  │
+│ ┌─────────────────────────────────────────────────────┐    │
+│ │ • 📌 世界观-魔法系统                                 │    │
+│ │ • 📌 主角背景设定                                    │    │
+│ │ • 📌 魔法学院介绍                                    │    │
+│ └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Collapsed State
+
+```
+💡 AI 参考了 3 条记忆  [展开 ▼]
+```
+
+### Empty State
+
+```
+💡 未参考记忆
+```
+
+### Loading State
+
+```
+💡 检索记忆中...
+```
+
+### Interaction
+
+- [ ] Click memory opens MemoryDetailDialog
+- [ ] Expand/collapse with smooth animation
+- [ ] Hover shows tooltip with memory preview
+
+## Integration Points
+
+### ParagraphCard.vue
+
+```vue
+<template>
+  <!-- ... existing content ... -->
+
+  <MemoryReferencePanel
+    v-if="translation.referencedMemories?.length > 0"
+    :references="translation.referencedMemories"
+    :book-id="bookId"
+    @view-memory="openMemoryDetail"
+  />
+</template>
+```
+
+### Translation Service
+
+- [ ] Modify translation task to track memory access
+- [ ] Pass tracked references to result
+- [ ] Handle errors gracefully
+
+## Acceptance Criteria
+
+- [ ] User can see which memories were referenced
+- [ ] Reference list shows memory summaries
+- [ ] User can click to view memory details
+- [ ] References persist with translation
+- [ ] Works for both new and regenerated translations
+- [ ] Handles cases where memory is deleted after reference
+
+## Dependencies
+
+- MemoryService (existing)
+- MemoryDetailDialog component (new)
+- ParagraphCard.vue (modification)
+- Translation service (modification)
+- Memory tools (wrap for tracking)
+
+## Non-Goals
+
+- Real-time memory usage analytics
+- Memory effectiveness scoring
+- Automatic memory suggestions based on references
+
+--- ARQUIVOS DO PR (117)
+modified  +1     -0     CLAUDE.md
+added     +2     -0     openspec/changes/improve-query-chapter-hybrid-scoring/.openspec.yaml
+added     +296   -0     openspec/changes/improve-query-chapter-hybrid-scoring/design.md
+added     +61    -0     openspec/changes/improve-query-chapter-hybrid-scoring/proposal.md
+added     +292   -0     openspec/changes/improve-query-chapter-hybrid-scoring/specs/chapter-embedding-search/spec.md
+added     +129   -0     openspec/changes/improve-query-chapter-hybrid-scoring/tasks.md
+added     +2     -0     openspec/changes/replace-chapter-summary-with-embeddings/.openspec.yaml
+added     +167   -0     openspec/changes/replace-chapter-summary-with-embeddings/design.md
+added     +58    -0     openspec/changes/replace-chapter-summary-with-embeddings/proposal.md
+added     +37    -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/ai-context-building/spec.md
+added     +178   -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/chapter-embedding-search/spec.md
+added     +25    -0     openspec/changes/replace-chapter-summary-with-embeddings/specs/chapter-summary/spec.md
+added     +85    -0     openspec/changes/replace-chapter-summary-with-embeddings/tasks.md
+added     +2     -0     openspec/changes/sync-force-push-mode/.openspec.yaml
+added     +103   -0     openspec/changes/sync-force-push-mode/design.md
+added     +47    -0     openspec/changes/sync-force-push-mode/proposal.md
+added     +141   -0     openspec/changes/sync-force-push-mode/specs/data-sync/spec.md
+added     +54    -0     openspec/changes/sync-force-push-mode/tasks.md
+modified  +1     -1     package.json
+modified  +10    -6     src/__tests__/book-service.test.ts
+added     +181   -0     src/__tests__/chapter-embedding-backlog-title.test.ts
+added     +370   -0     src/__tests__/chapter-embedding-hybrid-scoring.test.ts
+added     +333   -0     src/__tests__/chapter-embedding-identifier-boost.test.ts
+added     +324   -0     src/__tests__/chapter-embedding-idf.test.ts
+added     +235   -0     src/__tests__/chapter-embedding-migration-v11.test.ts
+added     +407   -0     src/__tests__/chapter-embedding-proper-noun-boost.test.ts
+added     +533   -0     src/__tests__/chapter-embedding-service.test.ts
+added     +224   -0     src/__tests__/chapter-embedding-title-chunk.test.ts
+modified  +15    -9     src/__tests__/context-builder.test.ts   <== código ligado à spec
+modified  +329   -0     src/__tests__/embedding-queue.test.ts   <== código ligado à spec
+modified  +166   -10    src/__tests__/embedding-service.test.ts   <== código ligado à spec
+added     +47    -0     src/__tests__/local-embedding.test.ts
+modified  +427   -9     src/__tests__/memory-scoring.test.ts   <== código ligado à spec
+modified  +3     -2     src/__tests__/memory-service-queue.test.ts
+added     +178   -0     src/__tests__/query-chapter-tool.test.ts
+modified  +5     -2     src/__tests__/responsive-constants.test.ts
+modified  +2     -140   src/__tests__/sync-data-service.test.ts
+added     +280   -0     src/__tests__/sync-force-mode.test.ts
+modified  +0     -57    src/__tests__/task-status-tools.test.ts
+modified  +1     -16    src/__tests__/todo-workflow.test.ts
+added     +52    -0     src/__tests__/tool-registry-embedding-gate.test.ts
+modified  +0     -2     src/__tests__/translation-service.workflow-status.test.ts
+modified  +1     -1     src/__tests__/translation-tools.test.ts
+modified  +1     -1     src/__tests__/upsert-memory-for-sync.test.ts
+modified  +5     -2     src/auto-components.d.ts
+modified  +1     -1     src/components/dialogs/AIModelDialog.vue
+added     +374   -0     src/components/dialogs/BatchEmbeddingsTestQueryDialog.vue
+modified  +10    -10    src/components/layout/AppHeader.vue
+added     +559   -0     src/components/novel/BatchEmbeddingsPanel.vue
+removed   +0     -328   src/components/novel/BatchSummaryPanel.vue
+modified  +0     -35    src/components/novel/ChapterContentPanel.vue
+modified  +4     -0     src/components/novel/CharacterSettingPanel.vue
+modified  +5     -3     src/components/novel/MemoryCard.vue
+modified  +3     -3     src/components/novel/MemoryDetailDialog.vue
+modified  +6     -2     src/components/novel/MemoryPanel.vue   <== código ligado à spec
+modified  +60    -63    src/components/novel/MemoryReferencePanel.vue
+modified  +4     -0     src/components/novel/TerminologyPanel.vue
+modified  +0     -15    src/components/novel/VolumesList.vue
+modified  +1     -1     src/components/settings/AIModelSettingsTab.vue
+renamed   +186   -67    src/components/settings/EmbeddingSettingsTab.vue
+modified  +29    -5     src/components/settings/SyncSettingsTab.vue
+added     +70    -0     src/components/sync/ForceSyncToggle.vue
+modified  +23    -5     src/components/sync/SyncStatusBody.vue
+modified  +14    -1     src/components/sync/SyncStatusPanel.vue
+added     +10    -0     src/components/sync/sync-panel-injection.ts
+modified  +1     -90    src/composables/book-details/useBookDetailsPage.ts
+modified  +6     -0     src/composables/chat/useChatSession.ts
+modified  +15    -1     src/composables/main-layout/useMainLayoutShell.ts
+modified  +30    -15    src/composables/settings-page/useSettingsPage.ts
+added     +67    -0     src/composables/useForceSync.ts
+modified  +57    -1     src/composables/useGistUploadWithConflictCheck.ts
+modified  +260   -40    src/composables/useSyncExecutor.ts
+modified  +0     -2     src/constants/ai/index.ts
+modified  +1     -1     src/constants/version.ts
+modified  +2     -0     src/layouts/MainLayout.vue
+added     +33    -0     src/models/chapter-embedding.ts
+modified  +2     -2     src/models/memory.ts   <== código ligado à spec
+modified  +0     -1     src/models/novel.ts   <== código ligado à spec
+modified  +15    -1     src/models/settings.ts   <== código ligado à spec
+modified  +8     -0     src/models/sync.ts
+modified  +0     -2     src/pages/book-details/BookDetailsDesktop.vue
+modified  +9     -120   src/pages/settings-page/SettingsPageDesktop.vue
+modified  +3     -3     src/pages/settings-page/SettingsPageMobile.vue
+modified  +43    -5     src/pages/settings-page/SettingsPageTablet.vue
+modified  +168   -2     src/services/ai/tasks/assistant-service.ts
+removed   +0     -270   src/services/ai/tasks/chapter-summary-service.ts
+modified  +10    -2     src/services/ai/tasks/prompts/assistant.ts
+removed   +0     -31    src/services/ai/tasks/prompts/chapter-summary.ts
+modified  +19    -6     src/services/ai/tasks/prompts/common.ts   <== código ligado à spec
+modified  +0     -1     src/services/ai/tasks/prompts/index.ts
+modified  +2     -21    src/services/ai/tasks/prompts/runner.ts
+modified  +3     -3     src/services/ai/tasks/prompts/single-paragraph-polish.ts
+modified  +3     -3     src/services/ai/tasks/prompts/single-paragraph-proofreading.ts
+modified  +6     -1     src/services/ai/tasks/prompts/translation.ts
+modified  +0     -1     src/services/ai/tasks/translation-service.ts   <== código ligado à spec
+modified  +36    -65    src/services/ai/tasks/utils/context-builder.ts   <== código ligado à spec
+modified  +1     -15    src/services/ai/tasks/utils/task-types.ts
+modified  +2     -28    src/services/ai/tasks/utils/text-task-processor.ts
+modified  +0     -1     src/services/ai/tasks/utils/todo-helper.ts
+modified  +0     -10    src/services/ai/tasks/utils/todo-workflow.ts
+modified  +91    -88    src/services/ai/tools/book-tools.ts
+modified  +26    -2     src/services/ai/tools/index.ts
+modified  +6     -5     src/services/ai/tools/memory-tools.ts   <== código ligado à spec
+modified  +0     -8     src/services/ai/tools/task-status-tools.ts
+modified  +4     -3     src/services/book-service.ts
+modified  +40    -2     src/services/chapter-content-service.ts
+added     +907   -0     src/services/chapter-embedding-service.ts
+modified  +331   -83    src/services/embedding-queue.ts   <== código ligado à spec
+modified  +166   -20    src/services/embedding-service.ts   <== código ligado à spec
+modified  +398   -21    src/services/memory-scoring.ts   <== código ligado à spec
+modified  +52    -22    src/services/memory-service.ts   <== código ligado à spec
+modified  +3     -100   src/services/sync-data-service.ts   <== código ligado à spec
+modified  +0     -1     src/stores/ai-processing.ts
+modified  +53    -104   src/stores/settings.ts   <== código ligado à spec
+added     +77    -0     src/utils/chapter-embedding-debouncer.ts
+modified  +71    -1     src/utils/indexed-db.ts   <== código ligado à spec
+added     +37    -0     src/utils/local-embedding.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/__tests__/context-builder.test.ts
+@@ -87,20 +87,23 @@ describe('context-builder - getRelatedMemoriesForChunk (打分路径)', () => {
+     expect(highPos).toBeLessThan(lowPos);
+   });
+ 
+-  test('所有记忆低于阈值时兜底 getRecentMemories', async () => {
++  test('所有记忆低于 minScore 时严格返回空(不做 LRU 兜底)', async () => {
++    // 严格阈值策略:minScore 以下的记忆一律不注入,UI 和翻译侧都会看到空结果。
++    // 这是刻意的 — 让"无足够相关记忆"成为一个清晰信号,而不是用低分噪声凑数。
+     const veryOldMemory = makeMemory('old', {
+       summary: '完全无关的远古记忆',
+-      lastAccessedAt: 100, // 极旧
++      lastAccessedAt: 100,
+       createdAt: 100,
+     });
+-    spyOn(MemoryService, 'getAllBookMemories').mockResolvedValue([veryOldMemory]);
+-    spyOn(EmbeddingService, 'isReady').mockReturnValue(false);
+-
+-    const fallbackMemory = makeMemory('fallback', {
+-      summary: '近期记忆',
++    const recentMemory = makeMemory('recent', {
++      summary: '近期但也无关的记忆',
+       lastAccessedAt: Date.now(),
+     });
+-    spyOn(MemoryService, 'getRecentMemories').mockResolvedValue([fallbackMemory]);
++    spyOn(MemoryService, 'getAllBookMemories').mockResolvedValue([
++      veryOldMemory,
++      recentMemory,
++    ]);
++    spyOn(EmbeddingService, 'isReady').mockReturnValue(false);
+ 
+     const result = await getRelatedMemoriesForChunk(
+       'book-1',
+@@ -111,7 +114,10 @@ describe('context-builder - getRelatedMemoriesForChunk (打分路径)', () => {
+       [],
+     );
+ 
+-    expect(result).toContain('[fallback]');
++    // 两条 memory 都无 keyword 命中,FALLBACK_WEIGHTS 下 total = kw × 0.75 + rec × 0.25:
++    //   recent 条:0 + 1 × 0.25 = 0.25 < 0.38 → 过滤
++    //   old 条:0 + ≈0 × 0.25 ≈ 0 → 过滤
++    expect(result).toBe('');
+   });
+ 
+   test('getAllBookMemories 抛异常时退回 legacy 路径', async () => {
+
+### src/__tests__/embedding-queue.test.ts
+@@ -1,10 +1,13 @@
+ /* eslint-disable @typescript-eslint/require-await */
+ import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+ import './setup';
++import { createPinia, setActivePinia } from 'pinia';
+ 
+ import { EmbeddingQueue } from 'src/services/embedding-queue';
+ import { EmbeddingService, MODEL_VERSION } from 'src/services/embedding-service';
+ import { MemoryService } from 'src/services/memory-service';
++import { ChapterEmbeddingService } from 'src/services/chapter-embedding-service';
++import { useSettingsStore } from 'src/stores/settings';
+ import type { Memory } from 'src/models/memory';
+ 
+ function makeMemory(id: string, overrides: Partial<Memory> = {}): Memory {
+@@ -33,6 +36,9 @@ async function waitForIdle(timeoutMs = 2000): Promise<void> {
+ 
+ describe('EmbeddingQueue - 入队与批处理', () => {
+   beforeEach(() => {
++    setActivePinia(createPinia());
++    // 总开关默认为 false,测试默认打开以复用既有断言
++    useSettingsStore().settings.enableLocalEmbedding = true;
+     EmbeddingQueue.__resetForTesting();
+     // 默认让 service "已就绪"
+     spyOn(EmbeddingService, 'isReady').mockReturnValue(true);
+@@ -97,6 +103,89 @@ describe('EmbeddingQueue - 入队与批处理', () => {
+     expect((embedBatchSpy.mock.calls[1]?.[0] as string[]).length).toBe(2);
+   });
+ 
++  test('总开关在处理过程中被关闭时:当前批次完成后立即停,剩余 pending 保留', async () => {
++    useSettingsStore().settings.enableLocalEmbedding = true;
++    spyOn(MemoryService, 'getMemoryByIdOnly').mockImplementation(async (id: string) =>
++      makeMemory(id),
++    );
++    spyOn(MemoryService, 'updateMemoryEmbeddingOnly').mockResolvedValue(undefined);
++
++    // 第一批 memory 的 embedBatch 在返回前把总开关关闭。两个 chapter 在它之后入队,
++    // 应该被循环里新增的"每轮重读开关"守卫挡下,不会进入处理。
++    const embedBatchSpy = spyOn(EmbeddingService, 'embedBatch').mockImplementation(
++      async (texts: string[]) => {
++        useSettingsStore().settings.enableLocalEmbedding = false;
++        return texts.map(() => new Float32Array([0.1]));
++      },
++    );
++    const embedChapterSpy = spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(
++      undefined,
++    );
++
++    EmbeddingQueue.enqueueMemory('a');
++    EmbeddingQueue.enqueueChapter('ch-1');
++    EmbeddingQueue.enqueueChapter('ch-2');
++
++    // 等待 run() 结束(processing 回到 false)。pending 不会清空,所以不能用 waitForIdle
++    const start = Date.now();
++    while (EmbeddingQueue.isRunning()) {
++      if (Date.now() - start > 2000) throw new Error('run did not stop');
++      await new Promise((r) => setTimeout(r, 5));
++    }
++    await new Promise((r) => setTimeout(r, 5)); // 让 finalizer 跑一圈
++
++    // 第一批(memory 'a')完成了;循环里的守卫生效,章节批一个都没启动
++    expect(embedBatchSpy).toHaveBeenCalledTimes(1);
++    expect(embedChapterSpy).not.toHaveBeenCalled();
++    // 两个 chapter 仍在 pending 里等用户重新开启
++    expect(EmbeddingQueue.getProgress().breakdown.chapter.pending).toBe(2);
++  });
++
++  test('tryResume 在重新开启后消费之前被停下的 pending', async () => {
++    // 关闭状态下入队两条,确认不处理
++    useSettingsStore().settings.enableLocalEmbedding = false;
++    spyOn(MemoryService, 'getMemoryByIdOnly').mockImplementation(async (id: string) =>
++      makeMemory(id),
++    );
++    spyOn(MemoryService, 'updateMemoryEmbeddingOnly').mockResolvedValue(undefined);
++    const embedBatchSpy = spyOn(EmbeddingService, 'embedBatch').mockImplementation(
++      async (texts: string[]) => texts.map(() => new Float32Array([0.1])),
++    );
++
++    EmbeddingQueue.enqueueMemory('m1');
++    EmbeddingQueue.enqueueMemory('m2');
++    await new Promise((r) => setTimeout(r, 20));
++    expect(embedBatchSpy).not.toHaveBeenCalled();
++    expect(EmbeddingQueue.getProgress().pending).toBe(2);
++
++    // 重新开启 + tryResume → 之前积压的 pending 自动消费
++    useSettingsStore().settings.enableLocalEmbedding = true;
++    EmbeddingQueue.tryResume();
++    await waitForIdle();
++
++    expect(embedBatchSpy).toHaveBeenCalledTimes(1);
++    expect((embedBatchSpy.mock.calls[0]?.[0] as string[]).length).toBe(2);
++    expect(EmbeddingQueue.getProgress().pending).toBe(0);
++  });
++
++  test('总开关关闭时:不处理 pending,也不调用 embedBatch', async () => {
++    useSettingsStore().settings.enableLocalEmbedding = false;
++    const getMemSpy = spyOn(MemoryService, 'getMemoryByIdOnly').mockResolvedValue(makeMemory('a'));
++    const embedBatchSpy = spyOn(EmbeddingService, 'embedBatch').mockResolvedValue([
++      new Float32Array([0.1]),
++    ]);
++
++    EmbeddingQueue.enqueue('a');
++    // 给 scheduleRun 一点时间(microtask + 若干 tick)
++    await new Promise((r) => setTimeout(r, 30));
++
++    // 总电源关,run 直接退出 → 依赖服务链一个都不该被调用
++    expect(embedBatchSpy).not.toHaveBeenCalled();
++    expect(getMemSpy).not.toHaveBeenCalled();
++    // pending 保留,等用户开总开关后再 resume/scheduleRun 消费
++    expect(EmbeddingQueue.getProgress().pending).toBe(1);
++  });
++
+   test('cancel 从 pending 中移除并使进度前进', async () => {
+     // 阻塞 embedBatch,让队列保持运行中
+     let release!: () => void;
+@@ -251,3 +340,243 @@ describe('EmbeddingQueue - 入队与批处理', () => {
+     expect(EmbeddingQueue.getProgress().pending).toBe(1);
+   });
+ });
++
++describe('EmbeddingQueue - chapter kind', () => {
++  beforeEach(() => {
++    EmbeddingQueue.__resetForTesting();
++    spyOn(EmbeddingService, 'isReady').mockReturnValue(true);
++    spyOn(EmbeddingService, 'init').mockResolvedValue(undefined);
++  });
++
++  afterEach(() => {
++    EmbeddingQueue.__resetForTesting();
++    mock.restore();
++  });
++
++  test('enqueueChapter 入队后调用 ChapterEmbeddingService.embedChapter', async () => {
++    const embedSpy = spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(undefined);
++
++    EmbeddingQueue.enqueueChapter('ch-1');
++    await waitForIdle();
++
++    expect(embedSpy).toHaveBeenCalledTimes(1);
++    expect(embedSpy.mock.calls[0]?.[0]).toBe('ch-1');
++  });
++
++  test('重复 enqueueChapter 同一 id 不会重复处理', async () => {
++    const embedSpy = spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(undefined);
++
++    EmbeddingQueue.enqueueChapter('ch-dup');
++    EmbeddingQueue.enqueueChapter('ch-dup');
++    EmbeddingQueue.enqueueChapter('ch-dup');
++    await waitForIdle();
++
++    expect(embedSpy).toHaveBeenCalledTimes(1);
++  });
++
++  test('cancelChapter 从 pending 中移除', async () => {
++    // 阻塞 embedChapter 让队列保持运行
++    let release!: () => void;
++    const block = new Promise<void>((r) => {
++      release = r;
++    });
++    spyOn(ChapterEmbeddingService, 'embedChapter').mockImplementation(async () => {
++      await block;
++    });
++
++    EmbeddingQueue.enqueueChapter('ch-0');
++    EmbeddingQueue.enqueueChapter('ch-1');
++    EmbeddingQueue.enqueueChapter('ch-2');
++
++    await new Promise((r) => setTimeout(r, 5));
++    // ch-0 被取走正在处理,ch-1 / ch-2 在 pending
++    expect(EmbeddingQueue.getProgress().breakdown.chapter.pending).toBe(2);
++
++    EmbeddingQueue.cancelChapter('ch-1');
++    expect(EmbeddingQueue.getProgress().breakdown.chapter.pending).toBe(1);
++
++    release();
++    await waitForIdle();
++  });
++
++  test('chapter 与 memory 混合入队时 memory 合批,chapter 单独处理', async () => {
++    spyOn(MemoryService, 'getMemoryByIdOnly').mockImplementation(async (id: string) =>
++      makeMemory(id),
++    );
++    spyOn(MemoryService, 'updateMemoryEmbeddingOnly').mockResolvedValue(undefined);
++    const embedBatchSpy = spyOn(EmbeddingService, 'embedBatch').mockResolvedValue([
++      new Float32Array([0.1]),
++    ]);
++    const embedChapterSpy = spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(
++      undefined,
++    );
++
++    // chapter 在前,memory 在后,memory 应独立合批
++    EmbeddingQueue.enqueueChapter('ch-A');
++    EmbeddingQueue.enqueueMemory('m1');
++    EmbeddingQueue.enqueueMemory('m2');
++    EmbeddingQueue.enqueueChapter('ch-B');
++    EmbeddingQueue.enqueueMemory('m3');
++
++    await waitForIdle();
++
++    // chapter 各处理一次(两次)
++    expect(embedChapterSpy).toHaveBeenCalledTimes(2);
++    // memory 之间被合批,而 ch-B 隔开第一批和第三批:ch-A → [m1,m2] → ch-B → [m3]
++    expect(embedBatchSpy).toHaveBeenCalledTimes(2);
++    expect((embedBatchSpy.mock.calls[0]?.[0] as string[]).length).toBe(2);
++    expect((embedBatchSpy.mock.calls[1]?.[0] as string[]).length).toBe(1);
++  });
++
++  test('breakdown 字段分别统计 memory / chapter', async () => {
++    // 阻塞两类处理
++    let release!: () => void;
++    const block = new Promise<void>((r) => {
++      release = r;
++    });
++    spyOn(MemoryService, 'getMemoryByIdOnly').mockImplementation(async (id: string) =>
++      makeMemory(id),
++    );
++    spyOn(MemoryService, 'updateMemoryEmbeddingOnly').mockResolvedValue(undefined);
++    spyOn(EmbeddingService, 'embedBatch').mockImplementation(async (texts: string[]) => {
++      await block;
++      return texts.map(() => new Float32Array([0.1]));
++    });
++    spyOn(ChapterEmbeddingService, 'embedChapter').mockImplementation(async () => {
++      await block;
++    });
++
++    EmbeddingQueue.enqueueMemory('m1');
++    EmbeddingQueue.enqueueMemory('m2');
++    EmbeddingQueue.enqueueChapter('ch-1');
++    EmbeddingQueue.enqueueChapter('ch-2');
++
++    const progress = EmbeddingQueue.getProgress();
++    expect(progress.breakdown.memory.total).toBe(2);
++    expect(progress.breakdown.chapter.total).toBe(2);
++    expect(progress.breakdown.memory.pending + progress.breakdown.chapter.pending).toBe(4);
++
++    release();
++    await waitForIdle();
++  });
++
++  test('enqueueChapterBacklog 只入队需要嵌入的章节', async () => {
++    spyOn(ChapterEmbeddingService, 'findChaptersNeedingEmbedding').mockResolvedValue([
++      'ch-need-1',
++      'ch-need-2',
++    ]);
++    const embedSpy = spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(undefined);
++
++    const added = await EmbeddingQueue.enqueueChapterBacklog('book-1');
++    expect(added).toBe(2);
++    await waitForIdle();
++
++    expect(embedSpy).toHaveBeenCalledTimes(2);
++    const calledIds = (embedSpy.mock.calls.map((c) => c[0]) as string[]).sort();
++    expect(calledIds).toEqual(['ch-need-1', 'ch-need-2']);
++  });
++
++  test('enqueueChapterBacklog 已在 pending 中的 id 不重复入队', async () => {
++    spyOn(ChapterEmbeddingService, 'findChaptersNeedingEmbedding').mockResolvedValue([
++      'ch-A',
++      'ch-B',
++    ]);
++    spyOn(ChapterEmbeddingService, 'embedChapter').mockResolvedValue(undefined);
++
++    // 先暂停队列,手动入队 ch-A,此时 ch-A 在 pending 中
++    EmbeddingQueue.pause();
++    EmbeddingQueue.enqueueChapter('ch-A');
++    expect(EmbeddingQueue.getProgress().breakdown.chapter.pending).toBe(1);
++
++    // backlog 扫描发现 ch-A 已在 pending,只应新增 ch-B
++    const added = await EmbeddingQueue.enqueueChapterBacklog('book-1');
++    expect(added).toBe(1);
++    expect(EmbeddingQueue.getProgress().breakdown.chapter.pending).toBe(2);
++
++    EmbeddingQueue.resume();
++    await waitForIdle();
++  });
++
++  test('不同 bookId 的 memory 不会合批', async () => {
++    spyOn(MemoryService, 'getMemoryByIdOnly').mockImplementation(async (id: string) => {
++      // m1,m2 属于 book-1;m3,m4 属于 book-2
++      const bookId = id === 'm1' || id === 'm2' ? 'book-1' : 'book-2';
++      return makeMemory(id, { bookId });
++    });
++    spyOn(MemoryService, 'updateMemoryEmbeddingOnly').mockResolvedValue(undefined);
++    const embedBatchSpy = spyOn(EmbeddingService, 'embedBatch').mockImplementation(
++      async (texts: string[]) => texts.map(() => new Float32Array([0.1])),
++    );
++
++    // 交叉入队 —— 应被切成两批(book-1 的 [m1,m2] 和 book-2 的 [m3,m4])
++    EmbeddingQueue.enqueueMemory('m1');
++    EmbeddingQueue.enqueueMemory('m2');
++    EmbeddingQueue.enqueueMemory('m3');
++    EmbeddingQueue.enqueueMemory('m4');
++
++    await waitForIdle();
++
++    // 两批,每批各自包含同书的两条
++    expect(embedBatchSpy).toHaveBeenCalledTimes(2);
++    const batch1 = embedBatchSpy.mock.calls[0]?.[0] as string[];
++    const batch2 = embedBatchSpy.mock.calls[1]?.[0] as string[];
++    expect(batch1.length).toBe(2);
++    expect(batch2.length).toBe(2);
+
+### src/__tests__/embedding-service.test.ts
+@@ -30,7 +30,7 @@ function makeFloat32(values: number[]): Float32Array {
+ }
+ 
+ /**
+- * 构造 mean-pooled 的模拟输出:形状 [batch, 768]。
++ * 构造 mean-pooled 的模拟输出:形状 [batch, 768](gte-multilingual-base 原生维度)。
+  * 前几维为 fill,其余为 0。
+  */
+ function fakePooledOutput(batch: number, fill: number) {
+@@ -146,7 +146,7 @@ describe('EmbeddingService - embed / embedBatch', () => {
+     mockPipelineImpl = async () => fakePooledOutput(1, 0.5);
+     await EmbeddingService.init();
+ 
+-    const vec = await EmbeddingService.embed('测试文本');
++    const vec = await EmbeddingService.embed('测试文本', 'document');
+     expect(vec).not.toBeNull();
+     expect(vec).toBeInstanceOf(Float32Array);
+     expect(vec!.length).toBe(DIMENSIONS);
+@@ -160,13 +160,13 @@ describe('EmbeddingService - embed / embedBatch', () => {
+   test('embed 空文本返回 null', async () => {
+     mockPipelineImpl = async () => fakePooledOutput(1, 0.5);
+     await EmbeddingService.init();
+-    expect(await EmbeddingService.embed('')).toBeNull();
+-    expect(await EmbeddingService.embed('   ')).toBeNull();
++    expect(await EmbeddingService.embed('', 'document')).toBeNull();
++    expect(await EmbeddingService.embed('   ', 'document')).toBeNull();
+   });
+ 
+   test('未就绪时 embed 返回 null(不会抛异常)', async () => {
+     // 未 init
+-    const vec = await EmbeddingService.embed('hello');
++    const vec = await EmbeddingService.embed('hello', 'document');
+     expect(vec).toBeNull();
+   });
+ 
+@@ -175,7 +175,7 @@ describe('EmbeddingService - embed / embedBatch', () => {
+       throw new Error('inference crash');
+     };
+     await EmbeddingService.init();
+-    const vec = await EmbeddingService.embed('hello');
++    const vec = await EmbeddingService.embed('hello', 'document');
+     expect(vec).toBeNull();
+   });
+ 
+@@ -186,7 +186,7 @@ describe('EmbeddingService - embed / embedBatch', () => {
+     };
+     await EmbeddingService.init();
+ 
+-    const vecs = await EmbeddingService.embedBatch(['a', 'b', 'c']);
++    const vecs = await EmbeddingService.embedBatch(['a', 'b', 'c'], 'document');
+     expect(vecs).toHaveLength(3);
+     vecs.forEach((v) => {
+       expect(v).toBeInstanceOf(Float32Array);
+@@ -201,17 +201,88 @@ describe('EmbeddingService - embed / embedBatch', () => {
+     };
+     await EmbeddingService.init();
+ 
+-    const vecs = await EmbeddingService.embedBatch(['a', '', 'c']);
++    const vecs = await EmbeddingService.embedBatch(['a', '', 'c'], 'document');
+     expect(vecs).toHaveLength(3);
+     expect(vecs[0]).not.toBeNull();
+     expect(vecs[1]).toBeNull();
+     expect(vecs[2]).not.toBeNull();
+   });
+ 
+   test('embedBatch 未就绪时全部返回 null', async () => {
+-    const vecs = await EmbeddingService.embedBatch(['a', 'b']);
++    const vecs = await EmbeddingService.embedBatch(['a', 'b'], 'document');
+     expect(vecs).toEqual([null, null]);
+   });
++
++  test('embed 与 embedBatch 对同一文本 + task 产出一致向量(防 pooling 漂移)', async () => {
++    // 回归测试:历史上 embed 用 mean pooling 而 embedBatch 误用 last_token,
++    // 导致 query 向量(单条)和 document 向量(批量)落到不同 embedding 空间,
++    // 余弦相似度退化成噪声。这里拦截 pipeline 调用,断言两条路径传入的 pooling
++    // 选项一致,并且同文本输出向量完全相同。
++    const capturedOptions: Array<Record<string, unknown>> = [];
++    mockPipelineImpl = async (input: unknown, options?: unknown) => {
++      capturedOptions.push((options ?? {}) as Record<string, unknown>);
++      const texts = Array.isArray(input) ? (input as string[]) : [input as string];
++      const hidden = 768;
++      const data = new Float32Array(texts.length * hidden);
++      for (let b = 0; b < texts.length; b++) {
++        const t = texts[b] ?? '';
++        for (let i = 0; i < hidden; i++) {
++          data[b * hidden + i] = i < 10 ? (t.length + i) * 0.01 : 0;
++        }
++      }
++      return { data, dims: [texts.length, hidden] };
++    };
++    await EmbeddingService.init();
++
++    const single = await EmbeddingService.embed('hello world', 'document');
++    const batch = await EmbeddingService.embedBatch(['hello world'], 'document');
++
++    expect(single).not.toBeNull();
++    expect(batch[0]).not.toBeNull();
++
++    // 两处传入的 pooling 必须一致 — 这是 embedding 空间身份的组成部分
++    expect(capturedOptions).toHaveLength(2);
++    expect(capturedOptions[0]!.pooling).toBe(capturedOptions[1]!.pooling);
++    expect(capturedOptions[0]!.pooling).toBe('mean');
++
++    // 同文本 + 同 task 下,两条路径必须产出完全相同的向量
++    expect(batch[0]!.length).toBe(single!.length);
++    for (let i = 0; i < single!.length; i++) {
++      expect(batch[0]![i]).toBeCloseTo(single![i]!, 6);
++    }
++  });
++
++  test('不同 task 对同一文本得到不同向量(验证前缀生效)', async () => {
++    // mock 会把输入文本回传,我们用它构造基于前缀长度差异的输出
++    mockPipelineImpl = async (input: unknown) => {
++      const texts = Array.isArray(input) ? (input as string[]) : [input as string];
++      const hidden = 768;
++      const data = new Float32Array(texts.length * hidden);
++      for (let b = 0; b < texts.length; b++) {
++        const t = texts[b] ?? '';
++        // 前 10 维用文本长度做简单映射,确保不同前缀 → 不同向量
++        for (let i = 0; i < 10; i++) {
++          data[b * hidden + i] = (t.length + i) * 0.01;
++        }
++      }
++      return { data, dims: [texts.length, hidden] };
++    };
++    await EmbeddingService.init();
++
++    const vQuery = await EmbeddingService.embed('hello', 'query');
++    const vDoc = await EmbeddingService.embed('hello', 'document');
++    expect(vQuery).not.toBeNull();
++    expect(vDoc).not.toBeNull();
++    // 前缀不同 → 至少一个维度必定不同
++    let anyDifferent = false;
++    for (let i = 0; i < vQuery!.length; i++) {
++      if (vQuery![i] !== vDoc![i]) {
++        anyDifferent = true;
++        break;
++      }
++    }
++    expect(anyDifferent).toBe(true);
++  });
+ });
+ 
+ describe('EmbeddingService - cosineSimilarity', () => {
+@@ -247,7 +318,92 @@ describe('EmbeddingService - cosineSimilarity', () => {
+ 
+ describe('EmbeddingService - 常量', () => {
+   test('MODEL_VERSION 与 DIMENSIONS 与 spec 一致', () => {
+-    expect(MODEL_VERSION).toBe('embeddinggemma-300m@256');
++    expect(MODEL_VERSION).toBe('gte-multilingual-base@256@mean');
+     expect(DIMENSIONS).toBe(256);
+   });
+ });
++
++describe('EmbeddingService - cleanupLegacyModelCache', () => {
++  // 用一个简易的内存 caches 替身替换 globalThis.caches,精确断言删除行为
++  type FakeReq = { url: string };
++  interface FakeCache {
++    name: string;
++    entries: FakeReq[];
++    keys: () => Promise<FakeReq[]>;
++    delete: (req: FakeReq) => Promise<boolean>;
++  }
++
++  function installFakeCaches(caches: FakeCache[]): () => void {
++    const original = (globalThis as { caches?: unknown }).caches;
++    (globalThis as { caches: unknown }).caches = {
++      keys: async () => caches.map((c) => c.name),
++      open: async (name: string) => {
++        const cache = caches.find((c) => c.name === name);
++        if (!cache) throw new Error(`cache not found: ${name}`);
++        return cache;
++      },
++    };
++    return () => {
++      if (original === undefined) delete (globalThis as { caches?: unknown }).caches;
++      else (globalThis as { caches: unknown }).caches = original;
++    };
++  }
++
++  function makeCache(name: string, urls: string[]): FakeCache {
++    const entries: FakeReq[] = urls.map((url) => ({ url }));
++    return {
++      name,
++      entries,
++      keys: async () => [...entries],
++      delete: async (req) => {
++        const idx = entries.findIndex((e) => e.url === req.url);
++        if (idx < 0) return false;
++        entries.splice(idx, 1);
++        return true;
++      },
++    };
++  }
++
++  test('删除所有匹配历史模型 URL 片段的条目,保留当前模型', async () => {
++    const cache = makeCache('transformers-cache', [
++      'https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/onnx/model_q4.onnx',
++      'https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/tokenizer.json',
++      'https://huggingface.co/onnx-community/Qwen3-Embedding-0.6B-ONNX/resolve/main/onnx/model_q4f16.onnx',
++      'https://huggingface.co/onnx-community/gte-multilingual-base/resolve/main/onnx/model_q4f16.onnx',
++    ]);
++    const restore = installFakeCaches([cache]);
++    try {
++      const deleted = await EmbeddingService.cleanupLegacyModelCache();
++      expect(deleted).toBe(3); // 2 条 embeddinggemma + 1 条 qwen3
++      expect(cache.entries).toHaveLength(1);
++      expect(cache.entries[0]!.url).toContain('gte-multilingual');
++    } finally {
++      restore();
++    }
++  });
++
++  test('没有匹配项时返回 0 不抛错', async () => {
++    const cache = makeCache('transformers-cache', [
++      'https://huggingface.co/onnx-community/gte-multilingual-base/resolve/main/onnx/model_q4f16.onnx',
++    ]);
++    const restore = installFakeCaches([cache]);
++    try {
++      const deleted = await EmbeddingService.cleanupLegacyModelCache();
++      expect(deleted).toBe(0);
++      expect(cache.entries).toHaveLength(1);
++    } finally {
++      restore();
++    }
++  });
++
++  test('caches API 不可用时返回 0', async () => {
++    const original = (globalThis as { caches?: unknown }).caches;
++    delete (globalThis as { caches?: unknown }).caches;
++    try {
++      const deleted = await EmbeddingService.cleanupLegacyModelCache();
++      expect(deleted).toBe(0);
++    } finally {
++      if (original !== undefined) (globalThis as { caches: unknown }).caches = original;
++    }
++  });
++});
+
+### src/__tests__/memory-scoring.test.ts
+@@ -4,15 +4,25 @@ import {
+   calculateKeywordHitRatio,
+   calculateRecencyFactor,
+   calculateSemanticSim,
++  calculateQueryKeywordScore,
+   scoreMemory,
++  scoreMemoriesBatch,
+   selectByBudget,
++  filterByRelativeRanking,
+   SCORING_WEIGHTS,
+   FALLBACK_WEIGHTS,
+   MAX_TOTAL_SCORE,
+   DEFAULT_MIN_SCORE,
++  SPREAD_FLOOR,
+ } from 'src/services/memory-scoring';
+ import type { ScoredMemory } from 'src/services/memory-scoring';
+ 
++// 部分测试只关心"绝对阈值 / 预算 / hardCap"这一层,不测相对排名收缩。
++// 用这两个参数关掉默认的 top-K + delta 收缩,避免 test fixture 的大幅分差
++// 被相对窗口过滤掉。新行为由专门的 describe 块覆盖。
++const LOOSE_TOPK = 999;
++const LOOSE_DELTA = 999;
++
+ const MS_PER_DAY = 24 * 60 * 60 * 1000;
+ 
+ function makeMemory(overrides: Partial<Memory> = {}): Memory {
+@@ -164,7 +174,7 @@ describe('memory-scoring - scoreMemory', () => {
+     expect(breakdown.total).toBeCloseTo(MAX_TOTAL_SCORE, 5);
+   });
+ 
+-  test('缺失 embedding 时 semantic=0, 使用降级权重 keyword/recency 仍生效', () => {
++  test('缺失 embedding 时 semantic=0,使用 FALLBACK_WEIGHTS 让分数回到 1.0 量级', () => {
+     const now = 1_000_000_000;
+     const memory = makeMemory({
+       summary: '小明',
+@@ -176,11 +186,11 @@ describe('memory-scoring - scoreMemory', () => {
+       now,
+     });
+ 
+-    // memory 没有 embedding,无法计算语义相似度,使用降级权重
++    // memory 没有 embedding,使用 FALLBACK_WEIGHTS:keyword=0.75、recency=0.25。
++    // 目的是让有/无嵌入两种模式的分数量级一致,用户的 minScore 阈值在两种模式下都可用。
+     expect(breakdown.semantic).toBe(0);
+     expect(breakdown.keyword).toBeCloseTo(1, 5);
+     expect(breakdown.recency).toBeCloseTo(1, 5);
+-    // 降级权重: keyword=0.75, recency=0.25, 总分 = 0.75 + 0.25 = 1.0
+     expect(breakdown.total).toBeCloseTo(
+       FALLBACK_WEIGHTS.keyword + FALLBACK_WEIGHTS.recency,
+       5,
+@@ -239,7 +249,7 @@ describe('memory-scoring - selectByBudget', () => {
+ 
+   test('全部低于阈值返回空数组', () => {
+     const list = [scored('a', 'x', 0.1), scored('b', 'y', 0.2)];
+-    expect(selectByBudget(list, 2000, 25, 0.3)).toEqual([]);
++    expect(selectByBudget(list, 2000, 25, 0.3, LOOSE_TOPK, LOOSE_DELTA)).toEqual([]);
+   });
+ 
+   test('按分数降序返回', () => {
+@@ -248,7 +258,7 @@ describe('memory-scoring - selectByBudget', () => {
+       scored('high', 'bb', 5.0),
+       scored('mid', 'cc', 3.0),
+     ];
+-    const result = selectByBudget(list, 2000, 25, 0.3);
++    const result = selectByBudget(list, 2000, 25, 0.3, LOOSE_TOPK, LOOSE_DELTA);
+     expect(result.map((m) => m.id)).toEqual(['high', 'mid', 'low']);
+   });
+ 
+@@ -259,7 +269,7 @@ describe('memory-scoring - selectByBudget', () => {
+       scored('c', 'z'.repeat(60), 3.0),
+     ];
+     // 预算 100,只能装第一条(60),第二条会使总量到 120 超预算
+-    const result = selectByBudget(list, 100, 25, 0.3);
++    const result = selectByBudget(list, 100, 25, 0.3, LOOSE_TOPK, LOOSE_DELTA);
+     expect(result).toHaveLength(1);
+     expect(result[0]?.id).toBe('a');
+   });
+@@ -268,7 +278,7 @@ describe('memory-scoring - selectByBudget', () => {
+     const list = Array.from({ length: 30 }, (_, i) =>
+       scored(`m${i}`, 's', 5.0 - i * 0.1),
+     );
+-    const result = selectByBudget(list, 100_000, 5, 0.3);
++    const result = selectByBudget(list, 100_000, 5, 0.3, LOOSE_TOPK, LOOSE_DELTA);
+     expect(result).toHaveLength(5);
+     expect(result.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4']);
+   });
+@@ -279,13 +289,421 @@ describe('memory-scoring - selectByBudget', () => {
+       scored('b', 's', 0.25), // 低于默认阈值
+       scored('c', 's', 1.0),
+     ];
+-    const result = selectByBudget(list, 2000, 25, 0.3);
++    const result = selectByBudget(list, 2000, 25, 0.3, LOOSE_TOPK, LOOSE_DELTA);
+     expect(result.map((m) => m.id)).toEqual(['a', 'c']);
+   });
+ 
+   test('首条就超预算时仍选入(避免空返回)', () => {
+     const list = [scored('big', 'x'.repeat(5000), 5.0)];
+-    const result = selectByBudget(list, 100, 25, 0.3);
++    const result = selectByBudget(list, 100, 25, 0.3, LOOSE_TOPK, LOOSE_DELTA);
+     expect(result).toHaveLength(1);
+   });
++
++  test('默认参数下 top-K + delta 收缩压制"全员高分"', () => {
++    // 模拟 mean-pooled 向量噪声地板高的场景:所有记忆分数都在 0.6+
++    // 但 top 1 明显高于其它 — 期望只留下靠近 top 的少数几条
++    const list = [
++      scored('a', 's', 0.85),
++      scored('b', 's', 0.82),
++      scored('c', 's', 0.70), // 距 top 0.15 > 默认 delta 0.08
++      scored('d', 's', 0.66),
++      scored('e', 's', 0.60),
++    ];
++    const result = selectByBudget(list);
++    // a、b 在 0.08 窗口内被保留;c、d、e 被挤出
++    expect(result.map((m) => m.id)).toEqual(['a', 'b']);
++  });
++});
++
++describe('memory-scoring - filterByRelativeRanking', () => {
++  function scored(id: string, total: number): ScoredMemory {
++    return {
++      memory: makeMemory({ id }),
++      breakdown: {
++        semantic: 0,
++        keyword: 0,
++        recency: 0,
++        semanticWeighted: 0,
++        keywordWeighted: 0,
++        recencyWeighted: 0,
++        total,
++      },
++    };
++  }
++
++  test('空候选返回空数组', () => {
++    expect(filterByRelativeRanking([])).toEqual([]);
++  });
++
++  test('top-K 硬上限限制返回数量', () => {
++    const list = Array.from({ length: 20 }, (_, i) => scored(`m${i}`, 5.0 - i * 0.001));
++    // delta 足够大以禁用窗口过滤,仅考察 top-K
++    const result = filterByRelativeRanking(list, 5, 999);
++    expect(result).toHaveLength(5);
++    expect(result.map((s) => s.memory.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4']);
++  });
++
++  test('relativeDelta 窗口剔除远低于 top 的条目', () => {
++    const list = [
++      scored('a', 0.85),
++      scored('b', 0.80), // 距 top 0.05,在 delta=0.08 内
++      scored('c', 0.70), // 距 top 0.15,被剔除
++      scored('d', 0.50),
++    ];
++    const result = filterByRelativeRanking(list, 999, 0.08);
++    expect(result.map((s) => s.memory.id)).toEqual(['a', 'b']);
++  });
++
++  test('所有分数都接近 top 时保留所有(质量均衡)', () => {
++    const list = [scored('a', 0.80), scored('b', 0.79), scored('c', 0.78)];
++    const result = filterByRelativeRanking(list, 999, 0.08);
++    expect(result).toHaveLength(3);
++  });
++
++  test('top-K 与 delta 同时生效:先截 top-K 再在窗口内收缩', () => {
++    const list = [
++      scored('a', 0.90),
++      scored('b', 0.85),
++      scored('c', 0.80), // top-K=3 边界
++      scored('d', 0.79), // 被 top-K 切掉
++    ];
++    // topK=3 先切到 [a,b,c],delta=0.08 窗口内 a(0.90)、b(0.85 在 0.82 以上)、c(0.80 低于 0.82 剔除)
++    const result = filterByRelativeRanking(list, 3, 0.08);
++    expect(result.map((s) => s.memory.id)).toEqual(['a', 'b']);
++  });
++
++  test('不修改输入数组', () => {
++    const list = [scored('a', 0.5), scored('b', 0.9), scored('c', 0.7)];
++    const snapshot = list.map((s) => s.memory.id);
++    filterByRelativeRanking(list);
++    expect(list.map((s) => s.memory.id)).toEqual(snapshot);
++  });
++});
++
++describe('memory-scoring - scoreMemoriesBatch', () => {
++  // 构造一个"抱团"场景:8 条记忆的 embedding 都和 query 余弦 ≈ 0.93(差异 <0.005)。
++  // 这是 mean-pooled 多语言 BERT 对同书同领域 memory 的典型表现 —
++  // 期望整批降级到 FALLBACK_WEIGHTS,由 keyword 和 recency 来区分。
++  function makeEmbedding(values: number[]): number[] {
++    // L2 归一化
++    let norm = 0;
++    for (const v of values) norm += v * v;
++    norm = Math.sqrt(norm);
++    return values.map((v) => v / (norm || 1));
++  }
++
++  test('stddev 低于 SPREAD_FLOOR 时整批降级到 FALLBACK_WEIGHTS', () => {
++    // query 向量固定
++    const query = makeEmbedding([1, 0, 0, 0]);
++    // 8 条 memory 向量都和 query 极其接近(cosine ≈ 1.0,互相差异 <0.001)
++    const tightCluster = [
++      makeEmbedding([1, 0.001, 0, 0]),
++      makeEmbedding([1, 0.002, 0, 0]),
++      makeEmbedding([1, 0.003, 0, 0]),
++      makeEmbedding([1, 0.001, 0.001, 0]),
++      makeEmbedding([1, 0, 0.002, 0]),
++      makeEmbedding([1, 0.001, 0.001, 0.001]),
++      makeEmbedding([1, 0.002, 0.001, 0]),
++      makeEmbedding([1, 0.001, 0.002, 0.001]),
++    ];
++    const memories: Memory[] = tightCluster.map((_, i) =>
++      makeMemory({
++        id: `m${i}`,
++        summary: i === 3 ? '包含关键词小明' : '普通内容',
++        // 最后一条设成很旧
++        lastAccessedAt: i === 7 ? 0 : 1_000_000_000,
++      }),
++    );
++    memories.forEach((m, i) => (m.embedding = tightCluster[i]!));
++
++    const result = scoreMemoriesBatch(memories, {
++      chunkEntities: [{ name: '小明' }],
++      chunkEmbedding: query,
++      now: 1_000_000_000,
++    });
++
++    // 整批语义信号被判为不可用,每条 semantic 都是 0
++    result.forEach((s) => {
++      expect(s.breakdown.semantic).toBe(0);
++      expect(s.breakdown.semanticWeighted).toBe(0);
++    });
++
++    // 整批降级 → keyword 用 FALLBACK_WEIGHTS.keyword(0.75)加权
++    const m3 = result.find((s) => s.memory.id === 'm3')!;
++    expect(m3.breakdown.keywordWeighted).toBeCloseTo(FALLBACK_WEIGHTS.keyword, 5);
++
++    // m3 应该是排名最高的(有 keyword 命中 + recency 高)
++    result.sort((a, b) => b.breakdown.total - a.breakdown.total);
++    expect(result[0]!.memory.id).toBe('m3');
++
++    // 旧 memory(m7)因 recency 衰减,应该排在末尾
++    expect(result[result.length - 1]!.memory.id).toBe('m7');
++  });
++
++  test('spread 足够时启用 z-score 归一化', () => {
++    const query = makeEmbedding([1, 0, 0]);
++    // 3 条 memory:一条高相关、一条中、一条低相关(余弦差距足够大)
++    const high = makeEmbedding([1, 0.1, 0]);
++    const mid = makeEmbedding([0.5, 0.5, 0]);
++    const low = makeEmbedding([0, 1, 0]);
++    const memories: Memory[] = [
++      makeMemory({ id: 'high' }),
++      makeMemory({ id: 'mid' }),
++      makeMemory({ id: 'low' }),
++    ];
++    memories[0]!.embedding = high;
++    memories[1]!.embedding = mid;
++    memories[2]!.embedding = low;
++
++    const result = scoreMemoriesBatch(memories, {
++      chunkEntities: [],
++      chunkEmbedding: query,
++      now: Date.now(),
++    });
++
++    // 语义区分度足够,没有整批降级 — semantic 值应该拉开
++    const resultById = new Map(result.map((s) => [s.memory.id, s]));
++    const highSem = resultById.get('high')!.breakdown.semantic;
++    const lowSem = resultById.get('low')!.breakdown.semantic;
++    expect(highSem).toBeGreaterThan(lowSem + 0.3); // 归一化后差距至少 0.3
++
++    // 归一化值必须在 [0, 1]
++    result.forEach((s) => {
++      expect(s.breakdown.semantic).toBeGreaterThanOrEqual(0);
++      expect(s.breakdown.semantic).toBeLessThanOrEqual(1);
++    });
++
++    // 不变式:semantic * WEIGHT === semanticWeighted
++    result.forEach((s) => {
++      expect(s.breakdown.semanticWeighted).toBeCloseTo(
++        s.breakdown.semantic * SCORING_WEIGHTS.semantic,
++        6,
++      );
++    });
++  });
++
++  test('无 chunkEmbedding 时整批 semantic=0,keyword 走 FALLBACK_WEIGHTS', () => {
++    const memories: Memory[] = [
++      makeMemory({ id: 'a', summary: '小明' }),
++      makeMemory({ id: 'b', summary: '小红' }),
++    ];
++    const result = scoreMemoriesBatch(memories, {
++      chunkEntities: [{ name: '小明' }],
++      now: Date.now(),
++    });
++
++    result.forEach((s) => {
++      expect(s.breakdown.semantic).toBe(0);
++      expect(s.breakdown.semanticWeighted).toBe(0);
++    });
++    const a = result.find((s) => s.memory.id === 'a')!;
++    expect(a.breakdown.keywordWeighted).toBeCloseTo(FALLBACK_WEIGHTS.keyword, 5);
+
+### src/components/novel/MemoryPanel.vue
+@@ -19,7 +19,7 @@ import { SettingsService } from 'src/services/settings-service';
+ import { EmbeddingQueue } from 'src/services/embedding-queue';
+ import type { EmbeddingQueueProgress } from 'src/services/embedding-queue';
+ import { useToastWithHistory } from 'src/composables/useToastHistory';
+-import { MODEL_VERSION } from 'src/services/embedding-service';
++import { isMemoryEmbeddingStale } from 'src/services/memory-service';
+ 
+ const props = defineProps<{
+   book: Novel | null;
+@@ -67,7 +67,7 @@ const hasActiveFilters = computed(() => {
+ });
+ 
+ function isMemoryUnembedded(memory: Memory): boolean {
+-  return !memory.embedding || memory.embeddingModel !== MODEL_VERSION;
++  return isMemoryEmbeddingStale(memory);
+ }
+ 
+ // 混合搜索结果（异步）
+@@ -870,6 +870,10 @@ const handleFileSelect = async (event: Event) => {
+   padding: 1rem 1.5rem;
+ }
+ 
++.panel-message {
++  margin-top: 0.75rem;
++}
++
+ /* 工具栏布局 */
+ .toolbar-row {
+   display: flex;
+
+### src/models/memory.ts
+@@ -1,6 +1,6 @@
+ /**
+  * Memory 模型
+- * 用于存储 AI 记忆的大块内容（如背景设定、章节摘要等）
++ * 用于存储 AI 记忆的大块内容（如背景设定、关键情节、角色关系等）
+  */
+ export interface Memory {
+   id: string; // 短 ID（8 位十六进制字符串）
+@@ -10,5 +10,5 @@ export interface Memory {
+   createdAt: number; // 创建时间戳
+   lastAccessedAt: number; // 最后访问时间戳（用于 LRU）
+   embedding?: number[]; // 语义向量（256 维 Matryoshka 截断，L2 归一化）
+-  embeddingModel?: string; // 生成该向量的模型版本标识，例如 "embeddinggemma-300m@256"
++  embeddingModel?: string; // 生成该向量的模型版本标识，例如 "gte-multilingual-base@256"
+ }
+
+### src/models/novel.ts
+@@ -114,7 +114,6 @@ export interface Chapter {
+         translation: Translation;
+       };
+   webUrl?: string | undefined; // 网络地址
+-  summary?: string | undefined; // 章节摘要
+ 
+   /**
+    * 章节内容（懒加载）
+
+### src/models/settings.ts
+@@ -27,7 +27,7 @@ export interface MemoryInjectionSettings {
+   enableSemantic: boolean;
+   /**
+    * 最低分数阈值：低于此分的记忆不会被注入
+-   * 默认值：0.38（最大得分 1.0）
++   * 默认值：0.3（最大得分 1.0）
+    */
+   minScoreThreshold: number;
+   /**
+@@ -140,6 +140,20 @@ export interface AppSettings {
+    * 记忆注入相关设置
+    */
+   memoryInjection?: MemoryInjectionSettings;
++  /**
++   * 全局开关:是否启用本地嵌入(Transformers.js + gte-multilingual-base)。
++   * 默认值:false(用户主动开启,避免首次启动就触发 ~340-465MB 模型下载)
++   *
++   * 关闭时:
++   * - 应用启动不 warmup / 不下载嵌入模型
++   * - EmbeddingQueue 收到的任务保留但不处理,等开启后再消费
++   * - `query_chapter` 工具直接返回"功能未启用"错误
++   * - 记忆检索降级为纯关键词 + 时间衰减(不走语义打分)
++   *
++   * 此开关是"总电源",作用域覆盖记忆 + 章节两类嵌入;`memoryInjection.enableSemantic`
++   * 只是记忆注入打分管线里的语义信号子开关,在总开关为 true 时才有意义。
++   */
++  enableLocalEmbedding?: boolean;
+ }
+ 
+ export interface Settings {
+
+### src/services/ai/tasks/prompts/common.ts
+@@ -4,6 +4,15 @@ export { MAX_TRANSLATION_BATCH_SIZE };
+ import type { TaskType, TaskStatus } from '../utils';
+ import { getTaskStateWorkflowText, TASK_TYPE_LABELS } from '../utils';
+ 
++/**
++ * 判断本次请求是否提供了 `query_chapter` 工具。
++ * 用于条件性拼接提示词里的"章节语义搜索"段落 —— 本地嵌入关闭 / 手机端时,
++ * 工具集合里不会出现 query_chapter,提示词也就不该再教模型去用它。
++ */
++export function hasQueryChapterTool(tools?: AITool[]): boolean {
++  return tools?.some((t) => t.function.name === 'query_chapter') ?? false;
++}
++
+ /**
+  * 工具范围规则：严格限制 AI 只能调用本次请求提供的 tools
+  */
+@@ -39,7 +48,7 @@ export function getSymbolFormatRules(): string {
+ /**
+  * 获取规划阶段描述
+  */
+-function getPlanningStateDescription(taskLabel: string, isBriefPlanning?: boolean): string {
++function getPlanningStateDescription(_taskLabel: string, isBriefPlanning?: boolean): string {
+   if (isBriefPlanning) {
+     return `**当前状态：简短规划阶段 (planning)**
+ 已继承前一部分的规划上下文。如需补充信息可调用工具。
+@@ -68,9 +77,6 @@ function getWorkingStateDescription(taskType: TaskType): string {
+     case 'translation':
+       focusDesc = '1:1翻译，敬语按流程处理';
+       break;
+-    case 'chapter_summary':
+-      focusDesc = '生成章节摘要，概括主要情节';
+-      break;
+     case 'polish':
+       focusDesc = '语气词优化、摆脱翻译腔、节奏调整';
+       break;
+@@ -102,7 +108,7 @@ ${dataWriteRestrictionLine}- 使用 \`add_translation_batch\` 提交结果 ${onl
+ /**
+  * 获取复核阶段描述
+  */
+-function getReviewStateDescription(taskLabel: string): string {
++function getReviewStateDescription(_taskLabel: string): string {
+   return `**当前状态：复核阶段 (review)**
+ 按待办清单逐项检查，发现问题可直接用 \`add_translation_batch\` 修正。
+ 可创建/更新术语、角色、记忆。
+@@ -311,11 +317,18 @@ export function getToolUsageInstructions(
+   const askUserLine = !skipAskUser
+     ? '- **询问**: 当有需要用户确认/做决定时，用 `ask_user_batch` 一次性解决所有疑问\n'
+     : '';
++  const queryChapterLine = hasQueryChapterTool(tools)
++    ? '- **章节混合检索**：需要跨章节回忆剧情/场景/人物关系/设定时，用 `query_chapter`（语义 + 标题/正文关键词 + IDF 稀有词加权 + 章号/卷号 identifier 强匹配），返回章节 ID、标题、匹配度、前 200 字预览；再按需调 `get_chapter_info` 读全文。\n' +
++      '  - **三类最稳 query**：① 标题/系列名直搜（"第二王女" / "深渊之森攻略" / "星天 ⑥"）；② 人物+身份+具体动作+独特细节（"夏洛特紧张到胃痛接近芬恩"）；③ 事件锚点（"吻痕被发现后开始审问"）。\n' +
++      '  - **较弱**：抽象读后感（"后宫气氛成形"）→ 改成具体场面；仅人名无动作 → 补动作/细节；不存在的系列词 → 改用 `list_chapters` 看真实标题。\n' +
++      '  - **中文转述日文标题**：字面差异大时不稳，**优先用原文标题词**或加更强锚点（人物+动作）。\n' +
++      '  - **把它当候选定位器**：Top1 未必最佳，默认看 Top3-5；不确定时 `limit` 调到 8-10。\n'
++    : '';
+   return `${getToolScopeRules(tools)}
+ 
+ 【工具使用建议】
+ - 用途：获取上下文、维护术语/角色/记忆、查询历史翻译、查询待办事项。
+ - 优先用本地数据，网络工具仅用于外部知识
+-${askUserLine}- 最小必要：拿到信息后立刻回到${taskLabel}输出
++${queryChapterLine}${askUserLine}- 最小必要：拿到信息后立刻回到${taskLabel}输出
+ - ${getTodoToolsDescription(taskType)}`;
+ }
+
+### src/services/ai/tasks/translation-service.ts
+@@ -239,7 +239,6 @@ export class TranslationService {
+         buildSystemPrompt,
+         onParagraphsExtracted,
+         onTitleExtracted,
+-        enableChapterSummary: true,
+         enablePreviousChapter: true,
+         enableBriefPlanning: true,
+       },
+
+### src/services/ai/tasks/utils/context-builder.ts
+@@ -9,14 +9,14 @@ import { ChapterContentService } from 'src/services/chapter-content-service';
+ import { MemoryService } from 'src/services/memory-service';
+ import type { Memory } from 'src/models/memory';
+ import {
+-  scoreMemory,
++  scoreMemoriesBatch,
+   selectByBudget,
+   DEFAULT_CHAR_BUDGET,
+   HARD_ITEM_CAP,
+   DEFAULT_MIN_SCORE,
+   type ScoredMemory,
+ } from 'src/services/memory-scoring';
+-import { EmbeddingService } from 'src/services/embedding-service';
++import { EmbeddingService, MODEL_VERSION } from 'src/services/embedding-service';
+ import { useSettingsStore } from 'src/stores/settings';
+ import { TASK_TYPE_LABELS, type TaskType, MAX_DESC_LEN } from './task-types';
+ import { getPostToolCallReminder } from './todo-helper';
+@@ -68,7 +68,6 @@ export function buildMaintenanceReminder(taskType: TaskType): string {
+     translation: `\n[提示] 空段落已过滤（无需输出/无需补回）。`,
+     proofreading: `\n[提示] 空段落已过滤；只需返回有变化的段落（无变化可直接结束）。`,
+     polish: `\n[提示] 空段落已过滤；只需返回有变化的段落（无变化可直接结束）。`,
+-    chapter_summary: '',
+   };
+   return reminders[taskType];
+ }
+@@ -91,23 +90,14 @@ export function buildChapterContextSection(chapterId?: string, chapterTitle?: st
+ }
+ 
+ /**
+- * 构建前一个章节的上下文信息（用于系统提示词）
++ * 构建前一个章节的上下文信息(仅标题,保持时序感知)。
++ * 章节摘要字段已移除,AI 如需前一章具体内容可调用 `query_chapter` / `get_chapter_info`。
+  * @param title 前一章节标题
+- * @param summary 前一章节摘要
+- * @returns 格式化的前文信息，如果都没有则返回空字符串
++ * @returns 格式化的前文信息,无 title 时返回空字符串
+  */
+-export function buildPreviousChapterSection(title?: string, summary?: string): string {
+-  if (!title && !summary) return '';
+-
+-  const parts: string[] = [];
+-  if (title) {
+-    parts.push(`**前一章节标题**: ${title}`);
+-  }
+-  if (summary) {
+-    parts.push(`**前一章节摘要**: ${summary}`);
+-  }
+-
+-  return `\n\n【前文信息】\n${parts.join('\n')}\n`;
++export function buildPreviousChapterSection(title?: string): string {
++  if (!title) return '';
++  return `\n\n【前文信息】\n**前一章节标题**: ${title}\n`;
+ }
+ 
+ /**
+@@ -316,7 +306,7 @@ async function computeChunkEmbedding(chunkText: string): Promise<Float32Array |
+   if (cached !== undefined) return cached;
+ 
+   try {
+-    const vec = await EmbeddingService.embed(chunkText);
++    const vec = await EmbeddingService.embed(chunkText, 'query');
+     if (chunkEmbeddingCache.size >= CHUNK_CACHE_MAX_SIZE) {
+       const oldest = chunkEmbeddingCache.keys().next().value;
+       if (oldest !== undefined) chunkEmbeddingCache.delete(oldest);
+@@ -392,16 +382,16 @@ export async function selectRelevantMemoriesForChunk(
+   // 3. 可选语义向量
+   const chunkEmbedding = await computeChunkEmbedding(chunkText);
+ 
+-  // 4. 逐条打分
++  // 4. 批量打分 — chunkEmbedding 存在时传入 expectedModelVersion 过滤 stale 记忆;
++  //    batch 版会对本批 raw cosine 做 z-score 归一化,spread 过小时整批把 semantic 置 0(权重不变)
+   const now = Date.now();
+-  const scored: ScoredMemory[] = allMemories.map((memory) => ({
+-    memory,
+-    breakdown: scoreMemory(memory, {
+-      chunkEntities,
+-      chunkEmbedding: chunkEmbedding ?? undefined,
+-      now,
+-    }),
+-  }));
++  const expectedModelVersion = chunkEmbedding ? MODEL_VERSION : undefined;
++  const scored: ScoredMemory[] = scoreMemoriesBatch(allMemories, {
++    chunkEntities,
++    chunkEmbedding: chunkEmbedding ?? undefined,
++    now,
++    expectedModelVersion,
++  });
+ 
+   // 5. 字符预算填充 — 读取用户预算设置
+   let charBudget = DEFAULT_CHAR_BUDGET;
+@@ -417,31 +407,27 @@ export async function selectRelevantMemoriesForChunk(
+ 
+   const selected = selectByBudget(scored, charBudget, HARD_ITEM_CAP, minScore);
+ 
+-  let memories: Memory[] = selected;
++  // 严格阈值策略:不走 LRU 兜底。minScore 以下的记忆一律不返回 —
++  // UI 预览和翻译注入共用同一函数,所以两边的过滤规则自动一致。
++  // 如果这一批全部不达标,用户看到"未参考记忆",这是正确的信号(说明当前
++  // chunk 没有足够相关的历史记忆,而不是用低分噪音凑数)。
++  const memories: Memory[] = selected;
+   const breakdowns: Record<string, ScoreBreakdown> = {};
+-  let fromFallback = false;
+-
+-  if (selected.length === 0) {
+-    // 6. 兜底:LRU 最近 5 条(不记录 breakdown)
+-    fromFallback = true;
+-    try {
+-      memories = await MemoryService.getRecentMemories(bookId, 5, 'lastAccessedAt', false);
+-    } catch {
+-      memories = [];
+-    }
+-  } else {
+-    const selectedIds = new Set(selected.map((m) => m.id));
+-    for (const item of scored) {
+-      if (selectedIds.has(item.memory.id)) {
+-        breakdowns[item.memory.id] = item.breakdown;
+-      }
+-    }
++  const scoredById = new Map(scored.map((s) => [s.memory.id, s.breakdown]));
++  for (const mem of memories) {
++    const bd = scoredById.get(mem.id);
++    if (bd) breakdowns[mem.id] = bd;
+   }
+ 
+   // 供 translation-service 旁路读取
+   lastScoreBreakdownsByBook.set(bookId, breakdowns);
+ 
+-  return { memories, breakdowns, fromFallback, totalMemoryCount: allMemories.length };
++  return {
++    memories,
++    breakdowns,
++    fromFallback: false,
++    totalMemoryCount: allMemories.length,
++  };
+ }
+ 
+ /**
+@@ -807,22 +793,7 @@ export async function buildSingleParagraphDefaultContext(options: {
+   const chapterContext = buildChapterContextSection(chapterId, chapterTitle);
+   if (chapterContext) parts.push(chapterContext);
+ 
+-  // 3. 章节摘要
+-  if (bookId && chapterId) {
+-    const booksStore = useBooksStore();
+-    const book = booksStore.getBookById(bookId);
+-    if (book) {
+-      for (const volume of book.volumes || []) {
+-        const chapter = volume.chapters?.find((c) => c.id === chapterId);
+-        if (chapter?.summary) {
+-          parts.push(`\n\n【当前章节摘要】\n${chapter.summary}\n`);
+-          break;
+-        }
+-      }
+-    }
+-  }
+-
+-  // 4. 本章角色
++  // 3. 本章角色
+   if (bookId) {
+     const booksStore = useBooksStore();
+     const book = booksStore.getBookById(bookId);
+@@ -835,7 +806,7 @@ export async function buildSingleParagraphDefaultContext(options: {
+     }
+   }
+ 
+-  // 5. 相关术语（基于当前段落文本匹配）
++  // 4. 相关术语（基于当前段落文本匹配）
+   if (bookId) {
+     const booksStore = useBooksStore();
+     const book = booksStore.getBookById(bookId);
+@@ -854,7 +825,7 @@ export async function buildSingleParagraphDefaultContext(options: {
+     }
+   }
+ 
+-  // 6. 前后段落上下文
++  // 5. 前后段落上下文
+   const surroundingContext = buildSurroundingParagraphsContext(
+     currentParagraphId,
+     allChapterParagraphs,
+
+### src/services/ai/tools/memory-tools.ts
+@@ -128,7 +128,7 @@ export const memoryTools: ToolDefinition[] = [
+       function: {
+         name: 'get_memory',
+         description:
+-          '根据 Memory ID 获取指定的 Memory 内容。当需要查看之前存储的背景设定、章节摘要等记忆内容时使用此工具。',
++          '根据 Memory ID 获取指定的 Memory 内容。当需要查看之前存储的背景设定、关键情节等记忆内容时使用此工具。',
+         parameters: {
+           type: 'object',
+           properties: {
+@@ -204,7 +204,7 @@ export const memoryTools: ToolDefinition[] = [
+       function: {
+         name: 'search_memories',
+         description:
+-          '搜索 Memory（混合检索：关键词匹配 + 语义相似度）。当需要查找相关记忆内容（如背景设定、章节摘要等）时使用此工具。传入自然语言查询，自动结合关键词匹配和语义向量进行排序。[警告] **重要**：当查询角色或术语信息时，必须**先**使用 get_character/search_characters_by_keywords 或 get_term/search_terms_by_keywords 查询数据库，**只有在数据库中没有找到时**才可以使用此工具搜索记忆。此工具主要用于查找背景设定、世界观、剧情要点等非结构化信息，不应用于替代角色或术语数据库查询。[警告] **敬语翻译**：翻译敬语时，必须**首先**使用此工具搜索记忆中关于该角色敬语翻译的相关信息（如角色关系、敬语使用习惯等），然后再使用 find_paragraph_by_keywords 搜索段落。',
++          '搜索 Memory（混合检索：关键词匹配 + 语义相似度）。当需要查找相关记忆内容（如背景设定、关键情节、角色关系等）时使用此工具。传入自然语言查询，自动结合关键词匹配和语义向量进行排序。[警告] **重要**：当查询角色或术语信息时，必须**先**使用 get_character/search_characters_by_keywords 或 get_term/search_terms_by_keywords 查询数据库，**只有在数据库中没有找到时**才可以使用此工具搜索记忆。此工具主要用于查找背景设定、世界观、剧情要点等非结构化信息，不应用于替代角色或术语数据库查询。[警告] **敬语翻译**：翻译敬语时，必须**首先**使用此工具搜索记忆中关于该角色敬语翻译的相关信息（如角色关系、敬语使用习惯等），然后再使用 find_paragraph_by_keywords 搜索段落。',
+         parameters: {
+           type: 'object',
+           properties: {
+@@ -272,17 +272,18 @@ export const memoryTools: ToolDefinition[] = [
+       function: {
+         name: 'create_memory',
+         description:
+-          '创建新的 Memory 记录（请谨慎使用）。优先用 search/list 找到相关记忆并用 update_memory 合并更新；仅当不存在任何可更新的相关记忆时才创建。记忆应短且可检索（summary 含关键词，content 用少量要点），系统会基于内容自动进行打分召回。',
++          '创建新的 Memory 记录（请谨慎使用）。优先用 search/list 找到相关记忆并用 update_memory 合并更新；仅当不存在任何可更新的相关记忆时才创建。一条 memory 尽量只解决一个问题（称呼规则、关系、术语翻译等分开写）。系统按部分子串匹配召回，summary 是"检索标题"权重最高；务必在 summary 中塞入所有同义表达以提高命中率，例如：「イレギュラー / irregular / 异常者 / 不规则者 的统一翻译」「セラ / 塞拉 / 塞拉小姐 / 塞拉菲娜 的称呼规则」「おまけ / 附属品 / 顺带送的 / 附带品 的翻译」。content 用少量要点表达。',
+         parameters: {
+           type: 'object',
+           properties: {
+             content: {
+               type: 'string',
+-              description: '要存储的实际内容',
++              description: '要存储的实际内容（少量要点）',
+             },
+             summary: {
+               type: 'string',
+-              description: '内容的摘要（由 AI 生成，用于后续搜索）',
++              description:
++                '摘要 / 检索标题。建议在摘要中并列写出所有可能被搜索到的同义表达（原文术语、别名、俗称、不同语言版本），以"/"分隔，例如「イレギュラー / 异常者 / 不规则者 的统一翻译」。summary 的命中权重远高于 content，直接决定能否被检索到。',
+             },
+           },
+           required: ['content', 'summary'],
+
+### src/services/embedding-queue.ts
+@@ -1,53 +1,82 @@
+ /**
+- * EmbeddingQueue — 异步批量嵌入任务队列
++ * EmbeddingQueue — 异步批量嵌入任务队列(支持 memory + chapter 两类目标)
+  *
+  * 职责:
+- * - 将待嵌入的 Memory ID 排队,按 BATCH_SIZE 切片调用 EmbeddingService.embedBatch
+- * - 完成批次后通过 MemoryService.updateMemoryEmbeddingOnly 持久化,不触发 Gist dirty
++ * - 将待嵌入的目标(memory / chapter)排队,按 BATCH_SIZE 切片调用 EmbeddingService
++ * - 完成批次后按 kind 分流持久化:
++ *   · memory → MemoryService.updateMemoryEmbeddingOnly
++ *   · chapter → ChapterEmbeddingService.embedChapter(整章一次,不与 memory 混批)
+  * - 每批之间 yield 一次事件循环,避免长任务阻塞 UI
+- * - 暴露进度事件(进度横幅订阅)与暂停/恢复(用户在设置里关闭语义检索时调用)
++ * - 暴露进度事件(含 memory / chapter 分解)、暂停/恢复、ETA
+  *
+  * 与 EmbeddingService 的关系:
+  * - EmbeddingService 负责模型加载与推理
+  * - EmbeddingQueue 负责调度顺序、持久化与进度反馈
++ *
++ * 批处理策略:
++ * - memory 按 BATCH_SIZE(8) 合批一次 embedBatch,单次写入
++ * - chapter 因为一章本身就是多 chunk 的一次完整嵌入,每次只处理一个 chapter,不与 memory 同批
+  */
+ 
+ import { EmbeddingService, MODEL_VERSION } from 'src/services/embedding-service';
+-import { MemoryService } from 'src/services/memory-service';
++import { MemoryService, isMemoryEmbeddingStale } from 'src/services/memory-service';
++import { ChapterEmbeddingService } from 'src/services/chapter-embedding-service';
+ import type { Memory } from 'src/models/memory';
+ 
+ const BATCH_SIZE = 8;
+ const ETA_WINDOW_SIZE = 5;
+ 
++export type QueueKind = 'memory' | 'chapter';
++
++interface QueueItem {
++  kind: QueueKind;
++  id: string;
++  /**
++   * 所属书籍 ID。enqueue 时由调用方传入,未传则在进入 run 循环前懒解析并缓存。
++   * 未能解析(记录被删、章节无归属)时为 null,将按单独一批处理,不与其它 item 混批。
++   */
++  bookId?: string | null;
++}
++
++export interface EmbeddingQueueBreakdown {
++  total: number;
++  completed: number;
++  pending: number;
++}
++
++/**
++ * 当前正在处理的批次元信息。用于 UI 跨书籍提示:
++ * 用户在 Book A 的面板里看到 currentTask.bookId === Book B 就知道队列在别处忙。
++ */
++export interface EmbeddingQueueCurrentTask {
++  kind: QueueKind;
++  bookId: string | null;
++  itemCount: number;
++}
++
+ export interface EmbeddingQueueProgress {
+-  total: number; // 本轮会话累计入队数
+-  completed: number; // 已处理(成功或失败)
+-  pending: number; // 尚未处理
+-  etaMs: number | null; // 预计剩余时间(null=无法估算)
++  total: number;
++  completed: number;
++  pending: number;
++  etaMs: number | null;
+   running: boolean;
+   paused: boolean;
++  breakdown: {
++    memory: EmbeddingQueueBreakdown;
++    chapter: EmbeddingQueueBreakdown;
++  };
++  currentTask: EmbeddingQueueCurrentTask | null;
+ }
+ 
+ interface BatchTiming {
+   count: number;
+   durationMs: number;
+ }
+ 
+-/**
+- * 判断一条 Memory 是否需要(重新)嵌入:
+- * - 无 embedding 字段
+- * - 或 embeddingModel 与当前 MODEL_VERSION 不一致(模型升级 / 旧格式)
+- */
+-function needsEmbedding(memory: Memory): boolean {
+-  if (!memory.embedding || memory.embedding.length === 0) return true;
+-  if (memory.embeddingModel !== MODEL_VERSION) return true;
+-  return false;
+-}
++// memoryNeedsEmbedding 已收敛到 memory-service.isMemoryEmbeddingStale(单一事实源)。
++// 其它处也通过该 helper 判定 stale,保证 UI / backlog / 测试三方语义一致。
+ 
+-/**
+- * 构造用于嵌入的输入文本。summary + content 简单拼接,最大化语义信号。
+- */
+-function buildInput(memory: Memory): string {
++function buildMemoryInput(memory: Memory): string {
+   const summary = (memory.summary ?? '').trim();
+   const content = (memory.content ?? '').trim();
+   if (!summary && !content) return '';
+@@ -57,14 +86,52 @@ function buildInput(memory: Memory): string {
+ }
+ 
+ export class EmbeddingQueue {
+-  private static pending: string[] = [];
++  private static pending: QueueItem[] = [];
+   private static processing = false;
+   private static paused = false;
+   private static runScheduled = false;
++  private static currentTask: EmbeddingQueueCurrentTask | null = null;
++
++  // 分 kind 的会话统计
++  private static totalEnqueued = { memory: 0, chapter: 0 };
++  private static completed = { memory: 0, chapter: 0 };
++
++  private static recentTimings: BatchTiming[] = [];
++
++  private static readonly events = new EventTarget();
+ 
+   /**
+-   * 延后到微任务再启动处理循环,确保同步连续的多次 enqueue 能够聚合到同一批次。
++   * 懒解析 item 的 bookId 并缓存在 item 上。
++   * - memory:查 MemoryService.getMemoryByIdOnly
++   * - chapter:扫 booksStore 找所属书
++   * 解析失败(记录已删/Pinia 未初始化)返回 null,由批处理策略单独走一批不混批。
+    */
++  private static async resolveBookId(item: QueueItem): Promise<string | null> {
++    if (item.bookId !== undefined) return item.bookId;
++    let resolved: string | null = null;
++    try {
++      if (item.kind === 'memory') {
++        const mem = await MemoryService.getMemoryByIdOnly(item.id);
++        resolved = mem?.bookId ?? null;
++      } else {
++        const { useBooksStore } = await import('src/stores/books');
++        const store = useBooksStore();
++        outer: for (const book of store.books) {
++          for (const v of book.volumes || []) {
++            if (v.chapters?.some((c) => c.id === item.id)) {
++              resolved = book.id;
++              break outer;
++            }
++          }
++        }
++      }
++    } catch {
++      resolved = null;
++    }
++    item.bookId = resolved;
++    return resolved;
++  }
++
+   private static scheduleRun(): void {
+     if (this.processing || this.paused || this.runScheduled) return;
+     if (this.pending.length === 0) return;
+@@ -77,14 +144,6 @@ export class EmbeddingQueue {
+     });
+   }
+ 
+-  private static totalEnqueued = 0;
+-  private static completed = 0;
+-
+-  // 滑动窗口 — 最近 N 批的吞吐量用于 ETA 估算
+-  private static recentTimings: BatchTiming[] = [];
+-
+-  private static readonly events = new EventTarget();
+-
+   // ==========================================================================
+   // 事件订阅
+   // ==========================================================================
+@@ -113,52 +172,137 @@ export class EmbeddingQueue {
+   // 入队 / 取消
+   // ==========================================================================
+   /**
+-   * 将单条 Memory 加入队列。已在队列中则跳过。
+-   * 若队列空闲,立即启动处理循环(不 await)。
++   * 兼容旧接口:memory 入队。可选 bookId 用于让队列按书籍串行化批处理;
++   * 不传则在 run 循环里懒解析。
+    */
+-  static enqueue(memoryId: string): void {
++  static enqueue(memoryId: string, bookId?: string): void {
++    this.enqueueMemory(memoryId, bookId);
++  }
++
++  static enqueueMemory(memoryId: string, bookId?: string): void {
+     if (!memoryId) return;
+-    if (this.pending.includes(memoryId)) return;
+-    this.pending.push(memoryId);
+-    this.totalEnqueued += 1;
++    if (this.pending.some((item) => item.kind === 'memory' && item.id === memoryId)) return;
++    const item: QueueItem = { kind: 'memory', id: memoryId };
++    if (bookId) item.bookId = bookId;
++    this.pending.push(item);
++    this.totalEnqueued.memory += 1;
++    this.emitProgress();
++    this.scheduleRun();
++  }
++
++  static enqueueChapter(chapterId: string, bookId?: string): void {
++    if (!chapterId) return;
++    if (this.pending.some((item) => item.kind === 'chapter' && item.id === chapterId)) return;
++    const item: QueueItem = { kind: 'chapter', id: chapterId };
++    if (bookId) item.bookId = bookId;
++    this.pending.push(item);
++    this.totalEnqueued.chapter += 1;
+     this.emitProgress();
+     this.scheduleRun();
+   }
+ 
+-  /**
+-   * 从队列中移除未开始的任务。已进入当前批次的无法取消(与批处理语义一致)。
+-   */
+   static cancel(memoryId: string): void {
+-    const idx = this.pending.indexOf(memoryId);
++    this.cancelMemory(memoryId);
++  }
++
++  static cancelMemory(memoryId: string): void {
++    const idx = this.pending.findIndex(
++      (item) => item.kind === 'memory' && item.id === memoryId,
++    );
+     if (idx >= 0) {
+       this.pending.splice(idx, 1);
+-      this.totalEnqueued -= 1;
++      this.totalEnqueued.memory -= 1;
++      this.emitProgress();
++    }
++  }
++
++  static cancelChapter(chapterId: string): void {
++    const idx = this.pending.findIndex(
++      (item) => item.kind === 'chapter' && item.id === chapterId,
++    );
++    if (idx >= 0) {
++      this.pending.splice(idx, 1);
++      this.totalEnqueued.chapter -= 1;
+       this.emitProgress();
+     }
+   }
+ 
+   /**
+-   * 扫描指定书籍的所有 Memory,把缺失或版本过期的全部入队(lazy backfill)。
++   * 扫描指定书籍的所有 Memory,把缺失或版本过期的全部入队。
+    */
+   static async enqueueBacklog(bookId: string): Promise<number> {
+     if (!bookId) return 0;
+     try {
+       const memories = await MemoryService.getAllBookMemories(bookId);
+       let added = 0;
+       for (const mem of memories) {
+-        if (needsEmbedding(mem) && !this.pending.includes(mem.id)) {
+-          this.pending.push(mem.id);
++        if (!isMemoryEmbeddingStale(mem)) continue;
++        if (this.pending.some((item) => item.kind === 'memory' && item.id === mem.id)) continue;
++        this.pending.push({ kind: 'memory', id: mem.id, bookId });
++        added += 1;
++      }
++      if (added > 0) {
++        this.totalEnqueued.memory += added;
++        this.emitProgress();
++        this.scheduleRun();
++      }
++      return added;
++    } catch (error) {
++      console.warn('[EmbeddingQueue] enqueueBacklog 失败:', error);
++      return 0;
++    }
++  }
++
++  /**
++   * 扫描指定书籍的所有章节,把缺失或 model 版本过期的全部入队。
++   */
++  static async enqueueChapterBacklog(bookId: string): Promise<number> {
++    if (!bookId) return 0;
++    try {
++      const chapterIds = await ChapterEmbeddingService.findChaptersNeedingEmbedding(bookId);
++      let added = 0;
++      for (const chId of chapterIds) {
++        if (this.pending.some((item) => item.kind === 'chapter' && item.id === chId)) continue;
++        this.pending.push({ kind: 'chapter', id: chId, bookId });
++        added += 1;
++      }
++      if (added > 0) {
++        this.totalEnqueued.chapter += added;
++        this.emitProgress();
++        this.scheduleRun();
++      }
++      return added;
++    } catch (error) {
++      console.warn('[EmbeddingQueue] enqueueChapterBacklog 失败:', error);
++      return 0;
++    }
++  }
++
+
+### src/services/embedding-service.ts
+@@ -2,21 +2,70 @@
+  * EmbeddingService — 基于 Transformers.js 的本地特征提取
+  *
+  * 约定:
+- * - 使用 EmbeddingGemma 300M ONNX(Google Sept 2025),q4 量化 ~195MB
+- * - 采用 Matryoshka 表征:从原生 768 维中截取前 256 维,再 L2 归一化
+- * - 模型加载走动态 import,确保 Transformers.js 不进主 bundle
+- * - 失败时静默降级:调用方通过 getStatus() 感知,不会抛到 UI 顶层
++ * - 使用 GTE-Multilingual-Base ONNX(Alibaba 2024),305M 参数 BERT-encoder。
++ *   体积:WebGPU q4f16 ~465MB / WASM int8 ~340MB。
++ *   相比 Qwen3-Embedding-0.6B(decoder + last-token pooling)同硬件下快 3-5×,
++ *   因为 encoder 的 forward pass 比同等参数的 decoder 轻很多。
++ * - 采用 Matryoshka 表征:从原生 768 维中截取前 256 维,再 L2 归一化。
++ * - 模型加载走动态 import,确保 Transformers.js 不进主 bundle。
++ * - 失败时静默降级:调用方通过 getStatus() 感知,不会抛到 UI 顶层。
+  */
+ 
+ import { cosineSimilarity } from 'src/utils/cosine-similarity';
+ 
+-export const MODEL_ID = 'onnx-community/embeddinggemma-300m-ONNX';
+-export const MODEL_VERSION = 'embeddinggemma-300m@256';
++export const MODEL_ID = 'onnx-community/gte-multilingual-base';
++// 模型 id + 截取维度 + 前缀方案 + pooling 方案 共同构成 embedding 空间身份,任一变化必须 bump 版本号,
++// EmbeddingQueue backlog 扫描会把版本不匹配的记录当作 stale 自动重算。
++export const MODEL_VERSION = 'gte-multilingual-base@256@mean';
+ export const DIMENSIONS = 256;
+ const NATIVE_DIMENSIONS = 768;
+ 
+ export type EmbeddingStatus = 'idle' | 'loading' | 'ready' | 'failed';
+ 
++/**
++ * 运行后端:WebGPU 优先,不可用/初始化失败时回落 WASM(CPU)。
++ * 两者体积差不多,但 WebGPU 上推理速度可快 5-10 倍(尤其对 0.6B 级别模型)。
++ */
++export type EmbeddingBackend = 'webgpu' | 'wasm';
++
++interface PipelineConfig {
++  device: EmbeddingBackend;
++  dtype: 'q4f16' | 'int8';
++}
++
++/** WebGPU 上:4-bit 权重 + fp16 激活,gte 的 q4f16 ≈ 465MB。 */
++const WEBGPU_CONFIG: PipelineConfig = { device: 'webgpu', dtype: 'q4f16' };
++/** WASM 上:8-bit 量化,gte 的 int8 ≈ 340MB,兼容性最好但速度慢于 WebGPU 许多。 */
++const WASM_CONFIG: PipelineConfig = { device: 'wasm', dtype: 'int8' };
++
++function hasWebGPU(): boolean {
++  return typeof navigator !== 'undefined' && 'gpu' in navigator;
++}
++
++/**
++ * GTE-Multilingual 官方非对称检索方案(参见 Alibaba-NLP/gte-multilingual-base 模型卡):
++ * - query 端:`Represent this sentence for searching relevant passages: {text}`
++ * - document 端:原文不加任何前缀 — 直接 encode
++ *
++ * 两侧必须严格配对:若 query 漏加前缀或 document 误加前缀,余弦相似度会退化。
++ * 前缀字面量用英文,文档/查询本体可任意语言(模型原生多语言)。
++ */
++export type EmbeddingTask = 'query' | 'document';
++const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
++
++/**
++ * Pooling 方案 — gte-multilingual-base 是 encoder-only BERT,官方指定 mean pooling。
++ * 单条 embed() 与批处理 embedBatch() 必须使用同一方案,否则 query 向量和 document 向量
++ * 落到不同空间,余弦相似度退化成噪声。集中在此常量避免两处手写漂移。
++ * 该值也是 MODEL_VERSION 的一部分——变更 pooling 必须同时 bump 版本号。
++ */
++const POOLING = 'mean' as const;
++
++function applyTaskPrefix(text: string, task: EmbeddingTask): string {
++  if (task === 'query') return QUERY_PREFIX + text;
++  return text; // document 侧不加前缀
++}
++
+ export interface EmbeddingProgressEvent {
+   status: string;
+   name?: string;
+@@ -56,6 +105,14 @@ export class EmbeddingService {
+   private static readonly MAX_RETRIES = 3;
+   private static readonly RETRY_DELAYS = [3000, 8000, 20000]; // 递增延迟(ms)
+ 
++  /**
++   * WebGPU 初始化是否失败过:失败一次就不再重试,本会话内永久回落 WASM。
++   * 避免在无 WebGPU 的浏览器里每次重试都再次触发 WebGPU 探测。
++   */
++  private static webGpuBlacklisted = false;
++  /** 最终加载成功的后端,供 UI 展示(q4f16 / q8 速度差 5-10 倍,用户应该能看到) */
++  private static activeBackend: EmbeddingBackend | null = null;
++
+   private static readonly events = new EventTarget();
+ 
+   /**
+@@ -136,6 +193,17 @@ export class EmbeddingService {
+     return this.status === 'ready' && this.pipeline !== null;
+   }
+ 
++  /** 当前加载成功的后端,未 init 或失败时返回 null */
++  static getActiveBackend(): EmbeddingBackend | null {
++    return this.activeBackend;
++  }
++
++  /** 按当前会话状态决定本次 init 用什么后端 + dtype */
++  private static pickConfig(): PipelineConfig {
++    if (!this.webGpuBlacklisted && hasWebGPU()) return WEBGPU_CONFIG;
++    return WASM_CONFIG;
++  }
++
+   /**
+    * 检测浏览器 Cache Storage 中是否已存在模型文件。
+    * Transformers.js 通过 Cache API 持久化模型权重,命中则说明之前在本设备加载过。
+@@ -148,7 +216,7 @@ export class EmbeddingService {
+       for (const name of cacheNames) {
+         const cache = await caches.open(name);
+         const keys = await cache.keys();
+-        if (keys.some((req) => req.url.includes('embeddinggemma'))) {
++        if (keys.some((req) => req.url.toLowerCase().includes('gte-multilingual'))) {
+           return true;
+         }
+       }
+@@ -158,6 +226,47 @@ export class EmbeddingService {
+     }
+   }
+ 
++  /**
++   * 历史模型在浏览器 Cache Storage 中的 URL 片段列表。
++   * 每次切换嵌入模型时,往这里追加旧模型的 URL 关键词,启动清理会把它们从 Cache API 中删除。
++   * 匹配采用小写 `includes`,不区分大小写。
++   */
++  private static readonly LEGACY_MODEL_URL_PATTERNS: readonly string[] = [
++    'embeddinggemma',
++    'qwen3-embedding', // 0.6B decoder 在 WebGPU 上仍过慢,已弃用,回收 ~567MB 缓存
++  ];
++
++  /**
++   * 清理历史嵌入模型在浏览器 Cache Storage 中的残留文件。
++   * 用于模型升级后回收空间(例如 EmbeddingGemma-300m 的 ~195MB 权重在切到 Qwen3 后就废了)。
++   * - 不阻塞启动,失败静默
++   * - 返回被删除的条目数,调用方可据此决定是否重置其它相关标记(如 `embeddingModelCached`)
++   */
++  static async cleanupLegacyModelCache(): Promise<number> {
++    if (typeof caches === 'undefined') return 0;
++    let deleted = 0;
++    try {
++      const cacheNames = await caches.keys();
++      for (const name of cacheNames) {
++        const cache = await caches.open(name);
++        const requests = await cache.keys();
++        for (const req of requests) {
++          const url = req.url.toLowerCase();
++          if (EmbeddingService.LEGACY_MODEL_URL_PATTERNS.some((p) => url.includes(p))) {
++            const ok = await cache.delete(req);
++            if (ok) deleted += 1;
++          }
++        }
++      }
++      if (deleted > 0) {
++        console.info(`[EmbeddingService] 清理历史模型缓存: 删除 ${deleted} 个文件`);
++      }
++    } catch (error) {
++      console.warn('[EmbeddingService] cleanupLegacyModelCache 失败:', error);
++    }
++    return deleted;
++  }
++
+   static getStatus(): EmbeddingStatus {
+     return this.status;
+   }
+@@ -188,18 +297,26 @@ export class EmbeddingService {
+           options: Record<string, unknown>,
+         ) => Promise<FeatureExtractionPipeline>;
+ 
++        // 按 pickConfig 的结果决定 backend + dtype:
++        // - WebGPU 支持: q4f16 (~567MB, 推理 5-10x 快于 WASM)
++        // - WASM 回落:  q8  (~614MB, 兼容性最好)
++        const config = this.pickConfig();
++        console.info(
++          `[EmbeddingService] 使用后端 ${config.device} + dtype ${config.dtype}`,
++        );
+         const extractor = await pipeline('feature-extraction', MODEL_ID, {
+-          dtype: 'q4',
+-          device: 'auto',
++          dtype: config.dtype,
++          device: config.device,
+           progress_callback: (event: EmbeddingProgressEvent) => {
+             this.dispatch('progress', this.enrichWithAggregate(event));
+           },
+         });
+ 
+         this.pipeline = extractor;
++        this.activeBackend = config.device;
+         this.retryCount = 0; // 成功后重置重试计数
+         this.setStatus('ready');
+-        this.dispatch('ready', { modelVersion: MODEL_VERSION });
++        this.dispatch('ready', { modelVersion: MODEL_VERSION, backend: config.device });
+       } catch (error) {
+         this.lastError = error instanceof Error ? error : new Error(String(error));
+         this.pipeline = null;
+@@ -208,7 +325,23 @@ export class EmbeddingService {
+           this.lastError.message,
+         );
+ 
+-        // 自动重试(递增延迟）
++        // WebGPU 路径首次失败 → 把它拉黑,下一次 init 直接走 WASM。
++        // 不消耗正常重试预算:常见场景是 GPU 驱动不兼容,重试也是失败,不如立刻回落。
++        if (!this.webGpuBlacklisted && hasWebGPU()) {
++          this.webGpuBlacklisted = true;
++          console.info('[EmbeddingService] WebGPU 初始化失败,回落 WASM 重试');
++          this.setStatus('loading');
++          this.dispatch('error', {
++            error: this.lastError,
++            retrying: true,
++            fallbackToWasm: true,
++          });
++          this.initPromise = null;
++          void this.init();
++          return;
++        }
++
++        // 自动重试(递增延迟)
+         if (this.retryCount < this.MAX_RETRIES) {
+           const delay = this.RETRY_DELAYS[this.retryCount] ?? 20000;
+           this.retryCount++;
+@@ -249,6 +382,9 @@ export class EmbeddingService {
+     this.initPromise = null;
+     this.lastError = null;
+     this.retryCount = 0;
++    this.activeBackend = null;
++    // reload 是用户主动触发,清空 WebGPU 黑名单 — 可能他们换了 GPU 驱动或启用了 flag
++    this.webGpuBlacklisted = false;
+     this.setStatus('idle');
+     await this.init();
+   }
+@@ -257,18 +393,21 @@ export class EmbeddingService {
+    * 对单条文本计算 embedding。
+    * 返回 256 维 L2 归一化 Float32Array。
+    * 未就绪或失败时返回 null(调用方 fallback 到纯关键词 + 时间衰减)。
++   *
++   * `task` 必填:'query' 用于检索查询,'document' 用于被检索的文档/记忆/章节 chunk。
++   * 两者走不同 prompt 前缀,必须与写入端严格一致,否则相似度会退化成噪声。
+    */
+-  static async embed(text: string): Promise<Float32Array | null> {
++  static async embed(text: string, task: EmbeddingTask): Promise<Float32Array | null> {
+     if (!text || !text.trim()) return null;
+     if (!this.isReady()) {
+       // 不主动 init — 调用方应先显式 warmup/init
+       return null;
+     }
+     try {
+-       
+-      const output = await this.pipeline!(text, {
+-        pooling: 'mean',
+-        normalize: false, // 我们手动处理截断 + 归一化
++
++      const output = await this.pipeline!(applyTaskPrefix(text, task), {
++        pooling: POOLING,
++        normalize: false, // 我们手动处理截断 + 归一化(Matryoshka 截前 DIMENSIONS 维后再 L2)
+       });
+       return this.extractFirstVector(output);
+     } catch (error) {
+@@ -280,8 +419,13 @@ export class EmbeddingService {
+   /**
+    * 批量 embed。相比逐条调用,transformers.js 会复用 tokenizer + 单次 forward。
+    * 返回的数组下标与输入一一对应,失败或空文本对应位置为 null。
++   *
++   * `task` 必填,会给所有非空输入统一加前缀(见 `embed` 说明)。
+    */
+-  static async embedBatch(texts: string[]): Promise<Array<Float32Array | null>> {
++  static async embedBatch(
++    texts: string[],
++    task: EmbeddingTask,
++  ): Promise<Array<Float32Array | null>> {
+     if (!texts || texts.length === 0) return [];
+     if (!this.isReady()) return texts.map(() => null);
+ 
+@@ -294,11 +438,11 @@ export class EmbeddingService {
+ 
+     const result: Array<Float32Array | null> = texts.map(() => null);
+     try {
+-       
++
+       const output = await this.pipeline!(
+-        indexed.map((e) => e.text),
++        indexed.map((e) => applyTaskPrefix(e.text, task)),
+         {
+-          pooling: 'mean',
++          pooling: POOLING,
+           normalize: false,
+         },
+       );
+@@ -407,6 +551,8 @@ export class EmbeddingService {
+     this.initPromise = null;
+     this.lastError = null;
+     this.retryCount = 0;
++    this.activeBackend = null;
++    this.webGpuBlacklisted = false;
+   }
+ 
+   /** 测试专用:跳过自动重试 */
+
+### src/services/memory-scoring.ts
+@@ -19,7 +19,41 @@ export const MAX_TOTAL_SCORE = 1.0;
+ 
+ export const DEFAULT_CHAR_BUDGET = 2000;
+ export const HARD_ITEM_CAP = 25;
+-export const DEFAULT_MIN_SCORE = 0.38;
++export const DEFAULT_MIN_SCORE = 0.3;
++
++/**
++ * 相对排名参数 — 解决"mean-pooled 多语言向量绝对余弦噪声地板高"导致的
++ * 分数膨胀问题(无关记忆也常 >0.5,所有记忆都越过绝对阈值)。
++ *
++ * 排序后:
++ * - 只保留前 DEFAULT_TOP_K 条(硬上限,防止"全员注入"的极端)
++ * - 再剔除分数比 top 低超过 DEFAULT_RELATIVE_DELTA 的条目(质量地板,
++ *   top 1 很弱时整体注入数量也相应减少,而不是强行凑满 K 条)
++ *
++ * 值按经验选定 — 可通过调用 filterByRelativeRanking 覆写。
++ */
++export const DEFAULT_TOP_K = 8;
++export const DEFAULT_RELATIVE_DELTA = 0.08;
++
++/**
++ * 语义 spread 的下限阈值。
++ *
++ * mean-pooled 多语言 BERT 向量在同书同领域下会抱团 — 本次 query 对所有 memory
++ * 的原始余弦可能全部落在 0.9±0.02 之间,此时"语义分数"没有任何区分度。
++ * 若 stddev 低于此阈值,`scoreMemoriesBatch` 判定本批语义信号退化为噪声,整批
++ * 把 semantic 设为 0(权重仍是 SCORING_WEIGHTS,不重新分配),让关键词和新近性
++ * 来区分 — 避免把噪声当信号注入。
++ *
++ * 经验值:对 256 维 Matryoshka L2-normalized 向量,0.02 对应 ~2% 相对差异,
++ * 低于这个量级几乎全是噪声。
++ */
++export const SPREAD_FLOOR = 0.02;
++
++/**
++ * z-score 归一化后的截断边界。raw cosine 距群体均值 ±Z_CLAMP·stddev 以外
++ * 的映射到 [0, 1] 两端。设成 2 覆盖约 95% 正态分布区间。
++ */
++export const Z_CLAMP = 2;
+ 
+ const RECENCY_HALF_LIFE_DAYS = 30;
+ const MS_PER_DAY = 24 * 60 * 60 * 1000;
+@@ -30,14 +64,29 @@ export interface ScoredMemory {
+ }
+ 
+ export interface ScoringContext {
++  /**
++   * 实体列表(翻译注入路径传 terms+characters)。与 `rawQuery` 二选一:
++   * 传 entities 走字面 includes 匹配,适合 proper noun 集合。
++   */
+   chunkEntities: Array<{ name: string }>;
++  /**
++   * 自然语言查询原文(搜索路径传)。传入时优先用部分匹配打分 ——
++   * 按 CJK 连续块切"语义单元",每个单元取在 memory 里的最长公共子串 / 单元长度
++   * 作为命中度,对无空格 CJK 查询比字面 includes 友好得多。
++   */
++  rawQuery?: string | undefined;
+   chunkEmbedding?: Float32Array | number[] | undefined;
+   now: number;
++  /**
++   * 期望的 embedding 模型版本。传入时,`memory.embeddingModel` 与之不匹配的记录
++   * 会被视为无语义向量,避免跨 embedding 空间的余弦相似度退化成噪声。
++   */
++  expectedModelVersion?: string | undefined;
+ }
+ 
+ /**
+- * 计算关键词命中比例。
+- * 统计 chunkEntities 中有多少名称出现在 memory.summary + memory.content 中。
++ * 计算关键词命中比例(基于实体集合)。
++ * 统计 chunkEntities 中有多少名称字面出现在 memory.summary + memory.content 中。
+  * 空集合时返回 0。
+  */
+ export function calculateKeywordHitRatio(
+@@ -60,6 +109,208 @@ export function calculateKeywordHitRatio(
+   return hits / chunkEntities.length;
+ }
+ 
++/**
++ * 从自然语言 query 里抽出"语义单元"——用于搜索场景的部分匹配打分。
++ *
++ * 单元 = CJK 连续块(汉字/假名)∪ 字母数字词 ∪ identifier 字符。忽略标点和空白分隔符。
++ * - CJK / ALPHA_RUN:长度 ≥ 2 才入,避免单字噪声(单个汉字在大量 memory 里都能命中)
++ * - IDENTIFIER_RUN:**单字符即入**,因为圈号/罗马数字本身就是完整的章节序号 token
++ *   (轻小说章节标题大量用 ① ⑥ Ⅴ 这类),长度过滤会把它们误删
++ */
++const CJK_RUN = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff々ー〇]+/g;
++const ALPHA_RUN = /[a-z0-9]{2,}/g;
++/**
++ * Identifier 字符:
++ * - U+2460–U+24FF: 圈号(① ② ⑥ ⑳ ㈠ ㊀ etc.)
++ * - U+2160–U+217F: 罗马数字(Ⅰ Ⅱ Ⅲ ⅷ ⅹ etc.)
++ * 单字符即一个 unit;不与相邻 CJK / ALPHA 合并(它们各自有独立扫描)。
++ */
++const IDENTIFIER_RUN = /[\u2460-\u24ff\u2160-\u217f]/g;
++
++export function extractQueryUnits(query: string): string[] {
++  const units: string[] = [];
++  const lower = query.toLowerCase();
++  for (const m of lower.matchAll(CJK_RUN)) {
++    if (m[0].length >= 2) units.push(m[0]);
++  }
++  for (const m of lower.matchAll(ALPHA_RUN)) {
++    units.push(m[0]);
++  }
++  for (const m of lower.matchAll(IDENTIFIER_RUN)) {
++    units.push(m[0]);
++  }
++  return units;
++}
++
++/**
++ * 判断 unit 是不是 "identifier" — 章节序号/卷号性质的强结构信号。
++ *
++ * 包含:
++ * - 纯阿拉伯数字(`83`、`100`)
++ * - 纯中文数字(`〇一二三四五六七八九十百千` 组合,如 `八十三`)
++ * - 圈号(① ⑥ etc.,U+2460–U+24FF)
++ * - 罗马数字(Ⅰ Ⅴ Ⅹ,U+2160–U+217F)
++ *
++ * 这类 unit 在打分和惩罚时都享有比专名更强的权重 — query 里出现 identifier 通常
++ * 表示用户想精确命中某个具体章节(83 / 第六章 / ⑥),系统应据此严格匹配。
++ */
++const ARABIC_NUMBER = /^\d+$/;
++const CHINESE_NUMBER = /^[〇一二三四五六七八九十百千]+$/;
++const CIRCLED_OR_ROMAN = /^[\u2460-\u24ff\u2160-\u217f]$/;
++export function isIdentifierUnit(unit: string): boolean {
++  return ARABIC_NUMBER.test(unit) || CIRCLED_OR_ROMAN.test(unit) || CHINESE_NUMBER.test(unit);
++}
++
++/**
++ * 复合 query 切分:按 CJK/西文标点和空白断句,过滤掉太短的片段。
++ * 单问题返回 [原 query];多子问题返回 [原 query, 子 1, 子 2, ...]
++ * —— 保留原 query 作为基线,让恰好能精确匹配整句的 memory 不被拆分稀释。
++ *
++ * 例:"老瓦的称号是什么，他和芬恩是什么关系" →
++ *   ["老瓦的称号是什么，他和芬恩是什么关系",
++ *    "老瓦的称号是什么",
++ *    "他和芬恩是什么关系"]
++ */
++const COMPOUND_SPLIT_RE = /[，,、；;。？?！!\s]+/;
++export function splitCompoundQuery(query: string): string[] {
++  const trimmed = query.trim();
++  if (!trimmed) return [];
++  const parts = trimmed.split(COMPOUND_SPLIT_RE).filter((p) => p.length >= 2);
++  if (parts.length <= 1) return [trimmed];
++  return [trimmed, ...parts];
++}
++
++/**
++ * summary 是"检索标题",命中权重 1.0;content-only 命中按 0.5 折算。
++ * 目的:同样部分匹配的两条 memory,summary 含字面的排在前面
++ * (之前 summary 与 content 合成 haystack,summary 命中被 content 长度稀释)。
++ */
++const SUMMARY_HIT_WEIGHT = 1.0;
++const CONTENT_HIT_WEIGHT = 0.5;
++
++/**
++ * 可选的关键词打分上下文,由调用方(章节检索)注入,让专名 / identifier / 稀有词
++ * 命中获得额外加权。
++ *
++ * 加权优先级(按 unit 选**第一项匹配**,不复合):
++ * 1. **identifierBoost**: 当 unit 是 identifier(圈号/罗马数字/纯数字/纯中文数字)时,
++ *    命中分乘以此系数。Identifier 是最强的精确定位信号(结构性),应永远独占。
++ * 2. **idfWeights**: 数据驱动的稀有度加权。Map<unit, idf ∈ [0, 1]>。
++ *    multiplier = 0.3 + 1.7 × idf,即稀有 unit 拿 2.0×、最常见 unit 仅 0.3× 抑制。
++ *    (round 5 收紧:常见词从 0.5× 进一步压到 0.3×,让锚点稀有词对排序的影响更激进)。
++ *    比固定 properNoun boost 鲁棒 — 角色名在很多章出现时不会被误抬。
++ * 3. **properNouns + boost**(fallback): 没传 idfWeights 时回落到固定 boost,
++ *    保持 round 2 的向后兼容(memory 注入路径仍走这条)。
++ * 加权后 clamp 到 [0, 1]。
++ *
++ * 不传 / 传空 → 行为与旧逻辑完全一致(memory-scoring 自身不维护这些表)。
++ */
++export interface KeywordScoringOptions {
++  properNouns?: Set<string>;
++  boost?: number;
++  identifierBoost?: number;
++  idfWeights?: Map<string, number>;
++}
++
++/**
++ * 单条(不含子拆分)query 对 memory 的关键词部分匹配分。
++ * summary / content 分别打分,取 max,再按单元平均。
++ */
++function scoreSingleQueryAgainstMemory(
++  query: string,
++  memory: Memory,
++  options?: KeywordScoringOptions,
++): number {
++  const units = extractQueryUnits(query);
++  if (units.length === 0) return 0;
++  const summary = (memory.summary ?? '').toLowerCase();
++  const content = (memory.content ?? '').toLowerCase();
++  if (!summary && !content) return 0;
++
++  const properNouns = options?.properNouns;
++  const boost = options?.boost ?? 1;
++  const identifierBoost = options?.identifierBoost ?? 1;
++  const idfWeights = options?.idfWeights;
++
++  let totalScore = 0;
++  for (const unit of units) {
++    const sRatio = summary ? partialMatchLength(unit, summary) / unit.length : 0;
++    const cRatio = content ? partialMatchLength(unit, content) / unit.length : 0;
++    // summary 命中完整权重,content-only 折半 —— 对同一字段的最高匹配胜出
++    let unitScore = Math.max(sRatio * SUMMARY_HIT_WEIGHT, cRatio * CONTENT_HIT_WEIGHT);
++    if (unitScore > 0) {
++      // 加权优先级:identifier(结构性)→ idf(数据驱动)→ properNoun(配置 fallback)
++      // 三者**互斥**(不复合):一旦匹配上一档就不再看下一档,避免角色名同时拿 boost+idf
++      // 这种"先验+后验"复合放大。multiplier > 1 时 clamp [0, 1];multiplier < 1 时不 clamp
++      // (允许 0.5x 抑制泛词)。
++      let multiplier = 1;
++      if (identifierBoost > 1 && isIdentifierUnit(unit)) {
++        multiplier = identifierBoost;
++      } else if (idfWeights && idfWeights.has(unit)) {
++        // idf ∈ [0, 1]: 越稀有越大 → multiplier ∈ [0.3, 2.0]
++        // round 5 收紧:常见词从 0.5× 压到 0.3×,稀有上限不变
++        multiplier = 0.3 + 1.7 * idfWeights.get(unit)!;
++      } else if (boost > 1 && properNouns && properNouns.has(unit)) {
++        multiplier = boost;
++      }
++      if (multiplier !== 1) {
++        unitScore = Math.min(1, unitScore * multiplier);
++      }
++    }
++    totalScore += unitScore;
++  }
++  return totalScore / units.length;
++}
++
++/**
++ * 部分匹配打分:对每个语义单元,找它在 memory 里的最长公共子串,
++ * 把长度 / 单元长度作为该单元的命中分(0~1)。两层改进:
++ *
++ * 1. **summary / content 分别打分**:summary 命中权重 1.0,content-only 权重 0.5。
++ *    这样 summary 含关键字面的 memory 排序更靠前,不再被 content 长度稀释。
++ * 2. **复合 query 拆分取 max**:按标点切子 query,分别打分取最大值。
++ *    "老瓦的称号，他和芬恩的关系"只覆盖其中一问的 memory 也能拿到高分,
++ *    不被不相关的子问题拖累。
++ *
++ * 例:query "闇のマリアンヌ" 对 memory(summary="闇の[角色名]") →
++ *   sRatio = 2/7 ≈ 0.286,content=0 → unitScore = 0.286。
++ */
++export function calculateQueryKeywordScore(
++  query: string,
++  memory: Memory,
++  options?: KeywordScoringOptions,
++): number {
++  const subQueries = splitCompoundQuery(query);
++  let maxScore = 0;
++  for (const sub of subQueries) {
++    const score = scoreSingleQueryAgainstMemory(sub, memory, options);
++    if (score > maxScore) maxScore = score;
++  }
++  return maxScore;
++}
++
++/**
++ * 返回 unit 在 haystack 中的最长公共子串长度。从大到小试,首次命中即返回
++ * (早停,避免 O(n²) 完整扫)。
++ *
++ * 长度处理:
++ * - length === 1:由 extractQueryUnits 的契约保证只有 identifier 字符(圈号 / 罗马数字)
++ *   才会以单字符进来,所以直接 includes 检查即可 — 它们都是低噪声字符,不会像
++ *   单字汉字那样到处误命中。
++ * - length >= 2:正常的最长公共子串扫描。
++ */
++function partialMatchLength(unit: string, haystack: string): number {
++  if (unit.length === 0) return 0;
++  if (unit.length === 1) return haystack.includes(unit) ? 1 : 0;
++  if (haystack.includes(unit)) return unit.length;
++  for (let len = unit.length - 1; len >= 2; len--) {
++    for (let i = 0; i + len <= unit.length; i++) {
++      if (haystack.includes(unit.slice(i, i + len))) return len;
++    }
++  }
++  return 0;
++}
++
+ /**
+  * 计算时间衰减因子:exp(-ageDays / 30)
+  * lastAccessedAt 越新,返回值越接近 1。
+@@ -78,47 +329,65 @@ function hasEmbeddings(
+   memoryEmbedding: number[] | Float32Array | undefined | null,
+   chunkEmbedding: number[] | Float32Array | undefined | null,
+ ): boolean {
+-  return !!(memoryEmbedding && memoryEmbedding.length > 0 && chunkEmbedding && chunkEmbedding.length > 0);
++  return !!(
++    memoryEmbedding &&
++    memoryEmbedding.length > 0 &&
++    chunkEmbedding &&
++    chunkEmbedding.length > 0
++  );
+ }
+ 
+ /**
+- * 无 embedding 时的降级权重:将语义权重按 3:1 比例重新分配给 keyword 和 recency,
++ * 无语义信号时的降级权重:把原本给语义的 0.6 按 3:1 重新分配到 keyword 和 recency,
+
+### src/services/memory-service.ts
+@@ -3,9 +3,28 @@ import { generateShortId } from 'src/utils/id-generator';
+ import type { Memory } from 'src/models/memory';
+ import { useSettingsStore } from 'src/stores/settings';
+ import { EmbeddingQueue } from 'src/services/embedding-queue';
++import { MODEL_VERSION } from 'src/services/embedding-service';
+ 
+ const MAX_MEMORIES_PER_BOOK = 500;
+ 
++/**
++ * 单一事实源 — 判定一条 memory 是否需要(重新)嵌入:无 vector 或 model 版本不匹配。
++ *
++ * 集中在这里避免 `!memory.embedding || memory.embeddingModel !== MODEL_VERSION` 这种
++ * 比对在 EmbeddingQueue / MemoryCard / MemoryPanel / Dialog 各处独立漂移。
++ *
++ * 语义:返回 true 表示"stale 或缺失",一概视为需要嵌入(EmbeddingQueue.memoryNeedsEmbedding
++ * 与 UI 的 stale 标识沿用同一语义,backlog 入队 / UI 显示 / 测试查询过滤都用它)。
++ */
++export function isMemoryEmbeddingStale(memory: {
++  embedding?: number[] | undefined;
++  embeddingModel?: string | undefined;
++}): boolean {
++  if (!memory.embedding || memory.embedding.length === 0) return true;
++  if (memory.embeddingModel !== MODEL_VERSION) return true;
++  return false;
++}
++
+ /**
+  * Memory 存储结构（用于 IndexedDB）
+  */
+@@ -254,7 +273,7 @@ export class MemoryService {
+ 
+       this.dispatchMemoryChanged({ bookId, memoryId: result.id, action: 'created' });
+ 
+-      EmbeddingQueue.enqueue(result.id);
++      EmbeddingQueue.enqueue(result.id, bookId);
+ 
+       return result;
+     } catch (error) {
+@@ -332,7 +351,7 @@ export class MemoryService {
+     await tx.done;
+ 
+     if (shouldEnqueueRecompute) {
+-      EmbeddingQueue.enqueue(memory.id);
++      EmbeddingQueue.enqueue(memory.id, memory.bookId);
+     }
+ 
+     const cachedMemory: Memory = {
+@@ -425,7 +444,7 @@ export class MemoryService {
+         this.dispatchMemoryChanged({ bookId, memoryId, action: 'imported' });
+ 
+         if (existing.content !== content || existing.summary !== summary) {
+-          EmbeddingQueue.enqueue(memoryId);
++          EmbeddingQueue.enqueue(memoryId, bookId);
+         }
+ 
+         return result;
+@@ -487,7 +506,7 @@ export class MemoryService {
+ 
+       this.dispatchMemoryChanged({ bookId, memoryId: result.id, action: 'imported' });
+ 
+-      EmbeddingQueue.enqueue(result.id);
++      EmbeddingQueue.enqueue(result.id, bookId);
+ 
+       return result;
+     } catch (error) {
+@@ -606,34 +625,43 @@ export class MemoryService {
+     }
+ 
+     const queryText = query.trim();
+-    const queryTokens = queryText
+-      .toLowerCase()
+-      .split(/\s+/)
+-      .filter((t) => t.length > 0);
+ 
+     try {
+       const allMemories = await this.getAllBookMemories(bookId);
+ 
+       let chunkEmbedding: Float32Array | undefined;
++      let expectedModelVersion: string | undefined;
+       try {
+-        const { EmbeddingService } = await import('src/services/embedding-service');
++        const { EmbeddingService, MODEL_VERSION } = await import('src/services/embedding-service');
+         if (EmbeddingService.isReady()) {
+-          const vec = await EmbeddingService.embed(queryText);
+-          if (vec) chunkEmbedding = vec;
++          const vec = await EmbeddingService.embed(queryText, 'query');
++          if (vec) {
++            chunkEmbedding = vec;
++            // 当前 query 向量已对齐到 MODEL_VERSION,传入让 scoreMemory 跳过版本不符的 stale 记录
++            expectedModelVersion = MODEL_VERSION;
++          }
+         }
+       } catch {
+         // 语义搜索不可用时静默降级
+       }
+ 
+-      const { scoreMemory } = await import('src/services/memory-scoring');
++      const { scoreMemoriesBatch, filterByRelativeRanking, DEFAULT_MIN_SCORE } =
++        await import('src/services/memory-scoring');
+       const now = Date.now();
+-      const chunkEntities = queryTokens.map((t) => ({ name: t }));
+-      const scored = allMemories.map((memory) => {
+-        const breakdown = scoreMemory(memory, { chunkEntities, chunkEmbedding, now });
+-        return { memory, breakdown };
++      // 传 rawQuery(不是 whitespace-split 出来的 token),让 scoreMemoriesBatch 走
++      // 部分匹配打分 — 对无空格 CJK 自然语言查询友好很多。chunkEntities 传空即可。
++      const scored = scoreMemoriesBatch(allMemories, {
++        chunkEntities: [],
++        rawQuery: queryText,
++        chunkEmbedding,
++        now,
++        expectedModelVersion,
+       });
+ 
+-      let minScore = 0.34;
++      // 默认阈值与 selectByBudget 保持一致(DEFAULT_MIN_SCORE = 0.3),
++      // 让"搜索工具"和"翻译注入"走相同的过滤规则,避免 AI 通过 search_memories
++      // 看到注入阶段会被过滤掉的低分项,产生行为不一致。
++      let minScore = DEFAULT_MIN_SCORE;
+       try {
+         const { useSettingsStore } = await import('src/stores/settings');
+         const cfg = useSettingsStore().settings?.memoryInjection;
+@@ -642,10 +670,12 @@ export class MemoryService {
+         /* 保持默认 */
+       }
+ 
+-      const filtered = scored.filter(
+-        (s) => s.breakdown.keyword > 0 || s.breakdown.total > minScore,
+-      );
+-      filtered.sort((a, b) => b.breakdown.total - a.breakdown.total);
++      // 绝对阈值:严格按 total >= minScore 过滤,不再给"有关键词命中"开后门 —
++      // 保证搜索和注入的收敛条件完全相同。
++      const absoluteFiltered = scored.filter((s) => s.breakdown.total >= minScore);
++      // 相对排名收缩:针对语义余弦噪声地板高的场景,把候选从"全员高分"压成
++      // "top 附近的少数突出项",避免工具向 AI 返回一大堆中庸匹配。
++      const filtered = filterByRelativeRanking(absoluteFiltered);
+ 
+       const resultIds = filtered.map((s) => s.memory.id);
+       if (resultIds.length > 0) {
+@@ -732,7 +762,7 @@ export class MemoryService {
+       const oldSummary = (memory as MemoryStorage).summary;
+       const oldContent = (memory as MemoryStorage).content;
+       if (oldSummary !== summary || oldContent !== content) {
+-        EmbeddingQueue.enqueue(memoryId);
++        EmbeddingQueue.enqueue(memoryId, bookId);
+       }
+ 
+       return result;
+
+### src/services/sync-data-service.ts
+@@ -13,66 +13,6 @@ import type { DeletionRecord } from 'src/models/sync';
+ import { isEqual, omit } from 'lodash';
+ import { isTimeDifferent, isNewlyAdded as checkIsNewlyAdded } from 'src/utils/time-utils';
+ 
+-/**
+- * 检查章节摘要是否需要上传到远程
+- * 场景：有时 book.lastEdited 可能与远程相同（例如合并后时间被对齐），
+- * 但章节摘要（chapter.summary）在其中一端缺失。
+- *
+- * 规则（保守，避免误覆盖远程）：
+- * - 仅当“本地有非空摘要、远程缺失/为空”时返回 true
+- * - 远程有摘要但本地缺失时返回 false（应由下载合并补齐，不应上传覆盖）
+- */
+-function hasLocalChapterSummaryMissingInRemote(localNovel: any, remoteNovel: any): boolean {
+-  const localVolumes = localNovel?.volumes;
+-  const remoteVolumes = remoteNovel?.volumes;
+-
+-  if (!Array.isArray(localVolumes) || localVolumes.length === 0) {
+-    return false;
+-  }
+-  if (!Array.isArray(remoteVolumes) || remoteVolumes.length === 0) {
+-    // 远程没有 volumes：如果本地存在摘要，说明远程缺失，需要上传
+-    for (const v of localVolumes) {
+-      const chapters = v?.chapters;
+-      if (!Array.isArray(chapters)) continue;
+-      for (const ch of chapters) {
+-        const localSummary = typeof ch?.summary === 'string' ? ch.summary.trim() : '';
+-        if (localSummary) return true;
+-      }
+-    }
+-    return false;
+-  }
+-
+-  const remoteSummaryMap = new Map<string, string>();
+-  for (const v of remoteVolumes) {
+-    const chapters = v?.chapters;
+-    if (!Array.isArray(chapters)) continue;
+-    for (const ch of chapters) {
+-      const id = typeof ch?.id === 'string' ? ch.id : '';
+-      if (!id) continue;
+-      const summary = typeof ch?.summary === 'string' ? ch.summary.trim() : '';
+-      remoteSummaryMap.set(id, summary);
+-    }
+-  }
+-
+-  for (const v of localVolumes) {
+-    const chapters = v?.chapters;
+-    if (!Array.isArray(chapters)) continue;
+-    for (const ch of chapters) {
+-      const id = typeof ch?.id === 'string' ? ch.id : '';
+-      if (!id) continue;
+-      const localSummary = typeof ch?.summary === 'string' ? ch.summary.trim() : '';
+-      if (!localSummary) continue;
+-
+-      const remoteSummary = remoteSummaryMap.get(id);
+-      // 远程缺少该章节，或章节存在但摘要为空 → 需要上传补齐
+-      if (remoteSummary === undefined || remoteSummary === '') {
+-        return true;
+-      }
+-    }
+-  }
+-
+-  return false;
+-}
+ 
+ /**
+  * 合并段落翻译
+@@ -188,27 +128,6 @@ function mergeParagraphTranslations(
+   return result;
+ }
+ 
+-/**
+- * 合并章节摘要（chapter.summary）
+- * 规则：
+- * 1) 只有一方有摘要：使用有摘要的一方
+- * 2) 两边都有且不同：按 lastEdited 选择更新的一方
+- * 3) 两边都没有：返回 undefined
+- */
+-function mergeChapterSummary(localChapter: Chapter, remoteChapter: Chapter): string | undefined {
+-  const localSummary = typeof localChapter.summary === 'string' ? localChapter.summary.trim() : '';
+-  const remoteSummary =
+-    typeof remoteChapter.summary === 'string' ? remoteChapter.summary.trim() : '';
+-
+-  if (!localSummary && !remoteSummary) return undefined;
+-  if (!localSummary) return remoteSummary;
+-  if (!remoteSummary) return localSummary;
+-  if (localSummary === remoteSummary) return localSummary;
+-
+-  const localTime = localChapter.lastEdited ? new Date(localChapter.lastEdited).getTime() : 0;
+-  const remoteTime = remoteChapter.lastEdited ? new Date(remoteChapter.lastEdited).getTime() : 0;
+-  return remoteTime > localTime ? remoteSummary : localSummary;
+-}
+ 
+ /**
+  * 将远程翻译合并到本地书籍中
+@@ -265,9 +184,6 @@ async function mergeRemoteTranslationsIntoLocalNovel(
+             return localChapter;
+           }
+ 
+-          // 无论是否合并内容，都要合并章节摘要，避免摘要不同步
+-          const mergedSummary = mergeChapterSummary(localChapter, remoteChapter);
+-
+           // 获取本地章节内容
+           let localContent: Paragraph[] | undefined;
+           if (
+@@ -284,10 +200,7 @@ async function mergeRemoteTranslationsIntoLocalNovel(
+ 
+           // 如果本地没有内容，保持不变
+           if (!localContent || localContent.length === 0) {
+-            return {
+-              ...localChapter,
+-              summary: mergedSummary,
+-            };
++            return localChapter;
+           }
+ 
+           // 获取远程章节内容
+@@ -298,7 +211,6 @@ async function mergeRemoteTranslationsIntoLocalNovel(
+ 
+           return {
+             ...localChapter,
+-            summary: mergedSummary,
+             content: mergedContent,
+           };
+         }),
+@@ -2016,10 +1928,6 @@ export class SyncDataService {
+         return true;
+       }
+ 
+-      // lastEdited 相同但章节摘要本地有、远程缺失：也需要上传（避免摘要永远不同步）
+-      if (hasLocalChapterSummaryMissingInRemote(localNovel, remoteNovel)) {
+-        return true;
+-      }
+     }
+ 
+     // 2. 检查 AI 模型
+@@ -2619,13 +2527,8 @@ export class SyncDataService {
+               remoteVolume.chapters.map(async (remoteChapter) => {
+                 const localChapter = localVolume.chapters?.find((ch) => ch.id === remoteChapter.id);
+ 
+-                // 优先构造一个已合并摘要的章节元数据，避免后续分支遗漏 summary
+-                const remoteChapterWithMergedSummary: Chapter = localChapter
+-                  ? ({
+-                      ...remoteChapter,
+-                      summary: mergeChapterSummary(localChapter, remoteChapter),
+-                    } as Chapter)
+-                  : (remoteChapter);
++                // 摘要字段已移除,章节合并不再带 summary
++                const remoteChapterWithMergedSummary: Chapter = remoteChapter;
+ 
+                 // 如果本地章节存在，尝试保留其内容并合并远程翻译
+                 if (localChapter) {
+
+### src/stores/settings.ts
+@@ -29,7 +29,7 @@ const SETTINGS_DB_KEY = 'app';
+ const DEFAULT_MEMORY_INJECTION: MemoryInjectionSettings = {
+   charBudget: 2000,
+   enableSemantic: true,
+-  minScoreThreshold: 0.38,
++  minScoreThreshold: 0.3,
+   hasSeenIntro: false,
+   embeddingModelCached: false,
+ };
+@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS: AppSettings = {
+   booksSortOption: 'default',
+   quickStartDismissed: false,
+   memoryInjection: { ...DEFAULT_MEMORY_INJECTION },
++  enableLocalEmbedding: false, // 默认关闭,用户在设置页主动开启以触发模型下载
+ };
+ 
+ /**
+@@ -190,49 +191,14 @@ async function loadSettingsFromDB(): Promise<AppSettings | null> {
+ async function saveSettingsToDB(settings: AppSettings): Promise<void> {
+   try {
+     const db = await getDB();
+-    // 使用 toRaw 获取原始对象，去除 Vue 响应式包装
+-    const rawSettings = toRaw(settings);
+-
+-    // 创建一个"纯净"的对象，避免 Proxy/响应式对象导致结构化克隆失败
+-    // 使用 cloneDeep 深度克隆嵌套对象，确保去除响应式包装
+-    // 确保 Date 对象是普通 Date 实例
+-    const clean: AppSettings = {
+-      lastEdited:
+-        rawSettings.lastEdited instanceof Date
+-          ? new Date(rawSettings.lastEdited.getTime())
+-          : new Date(rawSettings.lastEdited || 0),
+-      scraperConcurrencyLimit: rawSettings.scraperConcurrencyLimit,
+-      ...(rawSettings.taskDefaultModels !== undefined
+-        ? { taskDefaultModels: cloneDeep(rawSettings.taskDefaultModels) }
+-        : {}),
+-      ...(rawSettings.lastOpenedSettingsTab !== undefined
+-        ? { lastOpenedSettingsTab: rawSettings.lastOpenedSettingsTab }
+-        : {}),
+-      ...(rawSettings.proxyEnabled !== undefined ? { proxyEnabled: rawSettings.proxyEnabled } : {}),
+-      ...(rawSettings.proxyUrl !== undefined ? { proxyUrl: rawSettings.proxyUrl } : {}),
+-      ...(rawSettings.proxyAutoSwitch !== undefined
+-        ? { proxyAutoSwitch: rawSettings.proxyAutoSwitch }
+-        : {}),
+-      ...(rawSettings.proxyAutoAddMapping !== undefined
+-        ? { proxyAutoAddMapping: rawSettings.proxyAutoAddMapping }
+-        : {}),
+-      ...(rawSettings.proxySiteMapping !== undefined
+-        ? { proxySiteMapping: cloneDeep(rawSettings.proxySiteMapping) }
+-        : {}),
+-      ...(rawSettings.proxyList !== undefined
+-        ? { proxyList: cloneDeep(rawSettings.proxyList) }
+-        : {}),
+-      ...(rawSettings.tavilyApiKey !== undefined ? { tavilyApiKey: rawSettings.tavilyApiKey } : {}),
+-      ...(rawSettings.booksSortOption !== undefined
+-        ? { booksSortOption: rawSettings.booksSortOption }
+-        : {}),
+-      ...(rawSettings.quickStartDismissed !== undefined
+-        ? { quickStartDismissed: rawSettings.quickStartDismissed }
+-        : {}),
+-      ...(rawSettings.memoryInjection !== undefined
+-        ? { memoryInjection: cloneDeep(rawSettings.memoryInjection) }
+-        : {}),
+-    };
++    // cloneDeep(toRaw(...)) 深度剥离 Vue 响应式包装，避免 Proxy 导致 structured clone 失败。
++    // 依赖 AppSettings 类型作为单一事实来源：新增字段自动持久化，无需维护白名单。
++    const clean = cloneDeep(toRaw(settings));
++    // 保证 lastEdited 是普通 Date 实例（cloneDeep 会复制 Date，但防御历史数据里可能是字符串）
++    clean.lastEdited =
++      clean.lastEdited instanceof Date
++        ? new Date(clean.lastEdited.getTime())
++        : new Date((clean.lastEdited as unknown as string | number | undefined) || 0);
+ 
+     await db.put('settings', { key: SETTINGS_DB_KEY, ...clean });
+   } catch (error) {
+@@ -307,14 +273,6 @@ async function saveSyncToDB(syncs: SyncConfig[]): Promise<void> {
+     const tx = db.transaction('sync-configs', 'readwrite');
+     const store = tx.objectStore('sync-configs');
+ 
+-    // 使用 lodash 将响应式/Proxy 对象深拷贝为纯对象，避免 IndexedDB structured clone 报错
+-    const toPlain = <T>(value: T): T => {
+-      if (value === undefined || value === null) return value;
+-      // 先 toRaw 获取原始对象（如果是顶层 Proxy），然后 cloneDeep 确保所有嵌套的 Proxy 也被转换为纯对象
+-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+-      return cloneDeep(toRaw(value as any)) as T;
+-    };
+-
+     // 简化：以当前内存状态为准，覆盖保存
+     await store.clear();
+ 
+@@ -326,48 +284,11 @@ async function saveSyncToDB(syncs: SyncConfig[]): Promise<void> {
+       typeCounter.set(type, nextIndex);
+       const id = nextIndex === 1 ? `sync-${type}` : `sync-${type}-${nextIndex}`;
+ 
+-      // 创建纯净对象，避免 Proxy 导致结构化克隆失败
+-      const clean: SyncConfig = {
+-        enabled: Boolean(sync.enabled),
+-        lastSyncTime: Number(sync.lastSyncTime || 0),
+-        syncInterval: Number(sync.syncInterval || 0),
+-        syncType: sync.syncType,
+-        syncParams: toPlain(sync.syncParams || {}),
+-        secret: String(sync.secret || ''),
+-        apiEndpoint: String(sync.apiEndpoint || ''),
+-        ...(sync.lastSyncedModelIds !== undefined
+-          ? { lastSyncedModelIds: toPlain(sync.lastSyncedModelIds) }
+-          : {}),
+-        ...(sync.deletedNovelIds !== undefined
+-          ? { deletedNovelIds: toPlain(sync.deletedNovelIds) }
+-          : {}),
+-        ...(sync.deletedModelIds !== undefined
+-          ? { deletedModelIds: toPlain(sync.deletedModelIds) }
+-          : {}),
+-        ...(sync.deletedCoverIds !== undefined
+-          ? { deletedCoverIds: toPlain(sync.deletedCoverIds) }
+-          : {}),
+-        ...(sync.deletedCoverUrls !== undefined
+-          ? { deletedCoverUrls: toPlain(sync.deletedCoverUrls) }
+-          : {}),
+-        ...(sync.deletedMemoryIds !== undefined
+-          ? { deletedMemoryIds: toPlain(sync.deletedMemoryIds) }
+-          : {}),
+-        // 注意：`lastRemoteUpdatedAt` 已由 `lastRemoteETag` 取代，主路径不再写入此字段。
+-        // 仅在加载旧配置时保留读取，因此 saveSyncConfigs 不序列化它。
+-        ...(sync.lastRemoteETag !== undefined
+-          ? { lastRemoteETag: String(sync.lastRemoteETag) }
+-          : {}),
+-        ...(sync.knownRemoteHashes !== undefined
+-          ? { knownRemoteHashes: toPlain(sync.knownRemoteHashes) }
+-          : {}),
+-        ...(sync.knownRemoteEntries !== undefined
+-          ? { knownRemoteEntries: toPlain(sync.knownRemoteEntries) }
+-          : {}),
+-        ...(sync.knownRemoteTombstones !== undefined
+-          ? { knownRemoteTombstones: toPlain(sync.knownRemoteTombstones) }
+-          : {}),
+-      };
++      // cloneDeep(toRaw(...)) 深度剥离 Vue 响应式包装，避免 Proxy 导致 structured clone 失败。
++      // 依赖 SyncConfig 类型作为单一事实来源：新增字段自动持久化。
++      const clean = cloneDeep(toRaw(sync));
++      // `lastRemoteUpdatedAt` 已由 `lastRemoteETag` 取代，写入时去掉（读取仍保留以兼容旧数据）
++      delete clean.lastRemoteUpdatedAt;
+ 
+       await store.put({ id, ...clean });
+     }
+@@ -497,6 +418,15 @@ export const useSettingsStore = defineStore('settings', {
+       const gistSync = state.syncs.find((sync) => sync.syncType === SyncType.Gist);
+       return gistSync ?? createDefaultGistSyncConfig();
+     },
++
++    /**
++     * 获取强制推送模式状态
++     * 旧数据缺失时返回 { active: false }
++     */
++    forceSyncMode: (state): { active: boolean; lastFailedAt?: number } => {
++      const gistSync = state.syncs.find((sync) => sync.syncType === SyncType.Gist);
++      return gistSync?.forceSyncMode ?? { active: false };
++    },
+   },
+ 
+   actions: {
+@@ -698,9 +628,7 @@ export const useSettingsStore = defineStore('settings', {
+      * - minScoreThreshold: clamp 到 [0, 1.0]
+      * - enableSemantic 切换时:true→resume / false→pause EmbeddingQueue
+      */
+-    async updateMemoryInjection(
+-      updates: Partial<MemoryInjectionSettings>,
+-    ): Promise<void> {
++    async updateMemoryInjection(updates: Partial<MemoryInjectionSettings>): Promise<void> {
+       const current = this.settings.memoryInjection ?? { ...DEFAULT_MEMORY_INJECTION };
+       const merged = { ...current, ...updates };
+ 
+@@ -709,7 +637,10 @@ export const useSettingsStore = defineStore('settings', {
+       merged.minScoreThreshold = Math.min(1.0, Math.max(0, merged.minScoreThreshold));
+ 
+       // 副作用:enableSemantic 变更时联动 EmbeddingQueue
+-      if (updates.enableSemantic !== undefined && updates.enableSemantic !== current.enableSemantic) {
++      if (
++        updates.enableSemantic !== undefined &&
++        updates.enableSemantic !== current.enableSemantic
++      ) {
+         try {
+           const { EmbeddingQueue } = await import('src/services/embedding-queue');
+           if (updates.enableSemantic) {
+@@ -934,18 +865,17 @@ export const useSettingsStore = defineStore('settings', {
+       const lastRemoteUpdatedAt =
+         updates.lastRemoteUpdatedAt ?? existingConfig?.lastRemoteUpdatedAt;
+ 
+-      const lastRemoteETag =
+-        updates.lastRemoteETag ?? existingConfig?.lastRemoteETag;
++      const lastRemoteETag = updates.lastRemoteETag ?? existingConfig?.lastRemoteETag;
+ 
+-      const knownRemoteHashes =
+-        updates.knownRemoteHashes ?? existingConfig?.knownRemoteHashes;
++      const knownRemoteHashes = updates.knownRemoteHashes ?? existingConfig?.knownRemoteHashes;
+ 
+-      const knownRemoteEntries =
+-        updates.knownRemoteEntries ?? existingConfig?.knownRemoteEntries;
++      const knownRemoteEntries = updates.knownRemoteEntries ?? existingConfig?.knownRemoteEntries;
+ 
+       const knownRemoteTombstones =
+         updates.knownRemoteTombstones ?? existingConfig?.knownRemoteTombstones;
+ 
++      const forceSyncMode = updates.forceSyncMode ?? existingConfig?.forceSyncMode;
++
+       const updatedConfig: SyncConfig = {
+         enabled: updates.enabled ?? existingConfig?.enabled ?? defaultConfig.enabled,
+         lastSyncTime:
+@@ -975,6 +905,7 @@ export const useSettingsStore = defineStore('settings', {
+         ...(knownRemoteHashes !== undefined ? { knownRemoteHashes } : {}),
+         ...(knownRemoteEntries !== undefined ? { knownRemoteEntries } : {}),
+         ...(knownRemoteTombstones !== undefined ? { knownRemoteTombstones } : {}),
++        ...(forceSyncMode !== undefined ? { forceSyncMode } : {}),
+       };
+ 
+       if (index >= 0) {
+@@ -1152,6 +1083,24 @@ export const useSettingsStore = defineStore('settings', {
+       await this.updateGistSync({ knownRemoteTombstones: tombstones });
+     },
+ 
++    /**
++     * 更新强制推送模式状态
++     * 传 { active: false } 时会同时清除 lastFailedAt
++     */
++    async updateForceSyncMode(partial: {
++      active: boolean;
++      lastFailedAt?: number | undefined;
++    }): Promise<void> {
++      // active=false 时强制清除 lastFailedAt，保证语义：关闭 = 完全退出强制模式
++      const next: { active: boolean; lastFailedAt?: number } = partial.active
++        ? {
++            active: true,
++            ...(partial.lastFailedAt !== undefined ? { lastFailedAt: partial.lastFailedAt } : {}),
++          }
++        : { active: false };
++      await this.updateGistSync({ forceSyncMode: next });
++    },
++
+     /**
+      * 设置同步间隔（毫秒）
+      * 如果设置为 0，则禁用自动同步
+
+### src/utils/indexed-db.ts
+@@ -6,6 +6,7 @@ import type { CoverHistoryItem } from 'src/models/novel';
+ import type { SyncConfig } from 'src/models/sync';
+ import type { ToastHistoryItem } from 'src/stores/toast-history';
+ import type { AIProcessingTask } from 'src/stores/ai-processing';
++import type { ChapterEmbedding, ChapterEmbeddingKind } from 'src/models/chapter-embedding';
+ 
+ /**
+  * 书籍详情页面 UI 状态
+@@ -108,10 +109,21 @@ interface TsukuyomiDB extends DBSchema {
+       lastUpdated: string; // ISO 日期字符串
+     };
+   };
++  'chapter-embeddings': {
++    key: string; // `${chapterId}:${kind}:${chunkIndex}` (v11+);v10 旧 key 为 `${chapterId}:${chunkIndex}`
++    value: ChapterEmbedding;
++    indexes: {
++      'by-chapterId': string;
++      'by-bookId': string;
++    };
++  };
+ }
+ 
+ const DB_NAME = 'tsukuyomi';
+-const DB_VERSION = 9; // v9 硬迁移：清理旧 attachedTo 字段残留（memory-attachment 系统已移除）
++// v11 在 chapter-embeddings 上新增 `kind: 'content' | 'title'` 字段并改为复合 key
++// `${chapterId}:${kind}:${chunkIndex}`,以支持章节标题专属语义 chunk;旧 v10 记录在 upgrade
++// 中回填 `kind: 'content'` 并按新 key 重写。
++const DB_VERSION = 11;
+ 
+ let dbPromise: Promise<IDBPDatabase<TsukuyomiDB>> | null = null;
+ let dbBlocked = false;
+@@ -238,6 +250,63 @@ export async function getDB(): Promise<IDBPDatabase<TsukuyomiDB>> {
+           db.createObjectStore('full-text-indexes', { keyPath: 'bookId' });
+         }
+ 
++        // 创建 chapter-embeddings 存储（版本 10 新增）
++        if (!db.objectStoreNames.contains('chapter-embeddings')) {
++          const chapterEmbeddingsStore = db.createObjectStore('chapter-embeddings');
++          chapterEmbeddingsStore.createIndex('by-chapterId', 'chapterId', { unique: false });
++          chapterEmbeddingsStore.createIndex('by-bookId', 'bookId', { unique: false });
++        }
++
++        // 版本 11:给 chapter-embeddings 旧记录回填 `kind: 'content'`,并按新 key 格式
++        // `${chapterId}:content:${chunkIndex}` 重写。
++        // 旧 v10 key 为 `${chapterId}:${chunkIndex}`,字段无 kind。整批在同一 upgrade 事务内
++        // 完成,任一失败回滚到 v10。索引 by-chapterId / by-bookId 字段名未变,无需重建。
++        if (oldVersion < 11 && db.objectStoreNames.contains('chapter-embeddings')) {
++          const startedAt =
++            typeof performance !== 'undefined' && typeof performance.now === 'function'
++              ? performance.now()
++              : Date.now();
++          const store = transaction.objectStore('chapter-embeddings');
++          let migrated = 0;
++          // eslint-disable-next-line @typescript-eslint/no-explicit-any
++          let cursor = await (store as any).openCursor();
++          // 收集 [oldKey, newKey, value] 后批量删/写,避免在 cursor 迭代过程中边删边写
++          // 触发 fake-indexeddb 时序问题(v9 迁移踩过同样的坑)。
++          type MigrationOp = { oldKey: string; newKey: string; value: ChapterEmbedding };
++          const ops: MigrationOp[] = [];
++          while (cursor) {
++            const oldKey = cursor.key as string;
++            const record = cursor.value as ChapterEmbedding & { kind?: ChapterEmbeddingKind };
++            const value: ChapterEmbedding = {
++              chapterId: record.chapterId,
++              bookId: record.bookId,
++              kind: 'content',
++              chunkIndex: record.chunkIndex,
++              vector: record.vector,
++              textSnippet: record.textSnippet,
++              model: record.model,
++              updatedAt: record.updatedAt,
++            };
++            const newKey = `${value.chapterId}:content:${value.chunkIndex}`;
++            ops.push({ oldKey, newKey, value });
++            cursor = await cursor.continue();
++          }
++          for (const op of ops) {
++            await store.delete(op.oldKey);
++            await store.put(op.value, op.newKey);
++            migrated += 1;
++          }
++          const endedAt =
++            typeof performance !== 'undefined' && typeof performance.now === 'function'
++              ? performance.now()
++              : Date.now();
++          console.info(
++            `[indexed-db] v11 迁移完成:回填 ${migrated} 条 chapter-embeddings 的 kind 字段并重写 key,耗时 ${Math.round(
++              endedAt - startedAt,
++            )} ms`,
++          );
++        }
++
+         // 版本 9：硬迁移清理旧 attachedTo 字段
+         // 历史版本的 Memory 记录含有 attachedTo 字段，本次将其从每条记录中物理删除，
+         // 确保 DevTools / 单元测试观察到的数据形态与 TS 类型一致。
+@@ -541,6 +610,7 @@ export async function clearAllData(): Promise<void> {
+     'chapter-contents',
+     'memories',
+     'full-text-indexes',
++    'chapter-embeddings',
+   ] as const;
+ 
+   for (const storeName of storeNames) {
+
+===== P145 | repo deepcausality-rs/deep_causality | PR #691: formalized algebra, num, dual, complex, and deep_causality crates | capacidade: blackout-composition
+--- SPEC VIVA
+# blackout-composition Specification
+
+## Purpose
+TBD - created by archiving change add-plasma-blackout-corridor. Update Purpose after archive.
+## Requirements
+
+### Requirement: Regime classifier
+
+Stage 3 SHALL provide the regime classifier that reads the Stage-0 classifier-input contract (Knudsen number,
+electron density / ionization fraction, GNSS state) and selects the governing models (airflow closure, gas
+model, timing mode) — the corridor §4 [2]/[3] coupling, generalizing the `grmhd/select_metric` pattern. The
+threshold(s) it compares against SHALL be config; the indicators SHALL be computed from state.
+
+#### Scenario: Neutral→plasma and GNSS→denied transitions fire from state
+- **WHEN** the transported `n_e` crosses the plasma-frequency threshold (blackout flag) and Knudsen crosses the
+  continuum/slip threshold
+- **THEN** the classifier selects the ionized gas model + INS-only timing, and logs the regime change
+
+### Requirement: Counterfactual bank-angle branches
+
+Stage 3 SHALL spawn counterfactual bank-angle branches via `continue_with`, each a coupled rollout to the landing
+ellipse returning (peak heat flux, integrated thermal load, miss distance, blackout dwell), each propagating
+predict-only through the blackout window.
+
+#### Scenario: Branches yield distinct outcomes
+- **WHEN** N bank-angle profiles are branched through the blackout window
+- **THEN** each returns its own (heat, thermal load, miss distance, dwell) tuple, and two histories yield two
+  distinct clock/position outcomes (path-dependence)
+
+### Requirement: Cybernetic bounded-correction gate and provenance
+
+Stage 3 SHALL apply the corrective safety gate as a **cybernetic loop**
+(`deep_causality_haft::CyberneticLoop::control_step`), not the Effect Ethos layer — a deterministic,
+self-contained, real-time-capable feedback step that compiles to low-overhead machine code (the Effect monad is
+unsuitable for the latency-bound guidance inner loop). The loop's five components map to the corridor: **Sensor
+(S)** = the sensed coupled state (heat flux, g-load, miss distance) from the counterfactual rollouts; **Belief
+(B)** = the estimated trajectory / thermal-margin state (`observe_fn: S × &C → B`); **Context (C)** = the
+**verified safety envelope** (thermal-corridor bounds, g-load limit, crewed physiological / ROE limits);
+**Action (A)** = the bank-angle correction (`decide_fn: B × &C → A`); **Entropy (E)** = an unrecoverable
+envelope breach (no safe action). It SHALL emit the Stage-0 provenance schema to the `EffectLog` for every step
+and decision.
+
+The **bounded-correction invariant** SHALL hold: every returned Action `A` lies within the safety envelope `C`
+by construction — a correction that would exit the envelope is clamped to the envelope boundary, and if no safe
+action exists the step returns `E` rather than an out-of-envelope command. The correction is therefore always
+inside a verified safety envelope, deterministically.
+
+#### Scenario: Correction stays inside the verified safety envelope
+- **WHEN** the decided bank-angle correction would drive the trajectory outside the thermal-corridor / g-load
+  envelope
+- **THEN** the returned Action is clamped to the envelope boundary (never an out-of-envelope command), and the
+  clamp is recorded in the `EffectLog`
+
+#### Scenario: Unrecoverable breach returns entropy, not an unsafe action
+- **WHEN** no bank-angle action keeps the trajectory inside the safety envelope
+- **THEN** the control step returns the Entropy `E` (an unrecoverable-breach signal), and the `EffectLog` records
+  the breach and the evidence each candidate rested on — no unsafe Action is ever emitted
+
+#### Scenario: Deterministic real-time step
+- **WHEN** the control step is invoked on identical Sensor + Context inputs
+- **THEN** it produces the identical Action with no Effect-monad allocation on the hot path (a low-overhead,
+  real-time-suitable feedback step)
+
+--- ARQUIVOS DO PR (226)
+modified  +24    -1     .github/workflows/formalization.yml
+modified  +1     -1     .github/workflows/rust_miri.yml
+modified  +4     -0     Cargo.lock
+modified  +1     -1     MODULE.bazel
+added     +29    -0     build/scripts/lean.sh
+removed   +0     -28    build/sysroot/ README.md
+removed   +0     -116   build/sysroot/.bazelrc
+removed   +0     -5     build/sysroot/BUILD.bazel
+removed   +0     -50    build/sysroot/MODULE.bazel
+removed   +0     -30    build/utils/binary.bzl
+removed   +0     -143   build/utils/container.bzl
+removed   +0     -31    build/utils/transition.bzl
+modified  +1     -0     deep_causality/BUILD.bazel
+modified  +4     -0     deep_causality/Cargo.toml
+added     +96    -0     deep_causality/LEAN_DeepCausality.md
+modified  +5     -0     deep_causality/src/lib.rs
+modified  +8     -2     deep_causality/src/traits/causable/mod.rs
+added     +26    -0     deep_causality/src/traits/causable/sealed.rs
+modified  +4     -1     deep_causality/src/traits/causable/stateful.rs
+modified  +135   -0     deep_causality/src/traits/causable_graph/graph/mod.rs
+modified  +116   -24    deep_causality/src/traits/causable_graph/graph_reasoning/mod.rs
+modified  +18    -0     deep_causality/src/traits/causable_graph/graph_reasoning/stateful.rs
+modified  +11    -0     deep_causality/src/types/causal_types/causaloid/causable.rs
+modified  +6     -0     deep_causality/src/types/causal_types/causaloid/getters.rs
+modified  +56    -2     deep_causality/src/types/causal_types/causaloid/mod.rs
+modified  +1     -1     deep_causality/src/types/causal_types/causaloid_graph/causable_graph.rs
+added     +112   -0     deep_causality/src/types/causal_types/causaloid_graph/lambda_edges.rs
+modified  +1     -0     deep_causality/src/types/causal_types/causaloid_graph/mod.rs
+modified  +1     -1     deep_causality/src/types/csm_types/csm/eval.rs
+modified  +31    -1     deep_causality/src/utils/monadic_collection_utils.rs
+modified  +21    -0     deep_causality/tests/BUILD.bazel
+added     +215   -0     deep_causality/tests/formalization_lean/catamorphism_tests.rs
+added     +218   -0     deep_causality/tests/formalization_lean/causaloid_tests.rs
+added     +110   -0     deep_causality/tests/formalization_lean/command_input_tests.rs
+added     +150   -0     deep_causality/tests/formalization_lean/context_graph_tests.rs
+added     +174   -0     deep_causality/tests/formalization_lean/graph_algebra_tests.rs
+added     +24    -0     deep_causality/tests/formalization_lean/mod.rs
+added     +124   -0     deep_causality/tests/formalization_lean/relay_round_composition_tests.rs
+added     +225   -0     deep_causality/tests/formalization_lean/verdict_closure_tests.rs
+modified  +1     -0     deep_causality/tests/mod.rs
+added     +143   -0     deep_causality/tests/traits/causable_graph/graph_reasoning/characterization_corpus_tests.rs
+modified  +4     -0     deep_causality/tests/traits/causable_graph/graph_reasoning/mod.rs
+added     +135   -0     deep_causality/tests/traits/causable_graph/graph_reasoning/monadic_reasoning_join_tests.rs
+modified  +47    -0     deep_causality/tests/traits/causable_graph/graph_reasoning/stateful_tests.rs
+modified  +15    -16    deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_reconvergence_tests.rs
+modified  +33    -0     deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_sub_tests.rs
+added     +66    -0     deep_causality/tests/types/causal_types/causaloid_graph/lambda_edges_tests.rs
+modified  +2     -0     deep_causality/tests/types/causal_types/causaloid_graph/mod.rs
+modified  +12    -1     deep_causality_algebra/Cargo.toml
+added     +0     -0     deep_causality_algebra/LEAN_ALGEBRA.md
+modified  +5     -2     deep_causality_algebra/src/algebra/commutative_monoid.rs
+modified  +3     -1     deep_causality_algebra/src/algebra/conjunction.rs
+modified  +3     -1     deep_causality_algebra/src/algebra/count.rs
+modified  +3     -1     deep_causality_algebra/src/algebra/disjunction.rs
+modified  +3     -1     deep_causality_algebra/src/algebra/prob.rs
+modified  +1     -1     deep_causality_algebra/src/algebra/scalar.rs
+modified  +3     -3     deep_causality_algebra/src/algebra/scalar_conjugate.rs
+modified  +33    -0     deep_causality_algebra/src/algebra/verdict.rs
+modified  +1     -0     deep_causality_algebra/tests/BUILD.bazel
+modified  +20    -0     deep_causality_algebra/tests/algebra/verdict_tests.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_mapconfig.rs
+modified  +1     -1     deep_causality_algorithms/src/dag_sampling/mod.rs
+modified  +1     -0     deep_causality_calculus/Cargo.toml
+modified  +1     -1     deep_causality_cfd/src/types/flow/corridor.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_cfd/src/types/flow/qtt_march_run.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow/study/mod.rs
+modified  +16    -6     deep_causality_core/LEAN_CORE.md
+modified  +72    -0     deep_causality_core/src/types/causal_effect/mod.rs
+modified  +200   -0     deep_causality_core/tests/formalization_lean/causal_effect_tests.rs
+modified  +22    -0     deep_causality_core/tests/types/causal_effect/causal_effect_tests.rs
+modified  +12    -1     deep_causality_data_structures/Cargo.toml
+modified  +12    -1     deep_causality_discovery/Cargo.toml
+modified  +1     -2     deep_causality_ethos/README.md
+modified  +1     -0     deep_causality_fft/Cargo.toml
+modified  +1     -0     deep_causality_file/Cargo.toml
+modified  +1     -1     deep_causality_file/src/errors/data_loading_error.rs
+modified  +1     -0     deep_causality_haft/BUILD.bazel
+modified  +7     -1     deep_causality_haft/Cargo.toml
+modified  +6     -7     deep_causality_haft/LEAN_HAFT.md
+modified  +2     -8     deep_causality_haft/examples/traversable.rs
+added     +353   -0     deep_causality_haft/src/arrow/arrow_term.rs
+added     +146   -0     deep_causality_haft/src/arrow/choice.rs
+added     +155   -0     deep_causality_haft/src/arrow/interpreter.rs
+modified  +51    -0     deep_causality_haft/src/arrow/mod.rs
+added     +103   -0     deep_causality_haft/src/category/mod.rs
+modified  +37    -0     deep_causality_haft/src/foldable/mod.rs
+modified  +7     -5     deep_causality_haft/src/io/mod.rs
+modified  +21    -2     deep_causality_haft/src/lib.rs
+added     +71    -0     deep_causality_haft/src/monoidal/mod.rs
+added     +58    -0     deep_causality_haft/src/natural_transformation/mod.rs
+modified  +1     -0     deep_causality_haft/tests/BUILD.bazel
+added     +181   -0     deep_causality_haft/tests/formalization_lean/arrow_choice_tests.rs
+added     +337   -0     deep_causality_haft/tests/formalization_lean/arrow_term_tests.rs
+added     +27    -0     deep_causality_haft/tests/formalization_lean/category_tests.rs
+modified  +31    -1     deep_causality_haft/tests/formalization_lean/foldable_tests.rs
+added     +352   -0     deep_causality_haft/tests/formalization_lean/interpreter_tests.rs
+added     +35    -0     deep_causality_haft/tests/formalization_lean/kleisli_tests.rs
+modified  +12    -0     deep_causality_haft/tests/formalization_lean/mod.rs
+added     +103   -0     deep_causality_haft/tests/formalization_lean/monoidal_tests.rs
+modified  +1     -0     deep_causality_metric/Cargo.toml
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_hilbert_state_tests.rs
+modified  +12    -2     deep_causality_num/Cargo.toml
+added     +83    -0     deep_causality_num/LEAN_NUM.md
+modified  +1     -1     deep_causality_num/src/float/float_106_impl.rs
+modified  +12    -2     deep_causality_num_complex/Cargo.toml
+added     +87    -0     deep_causality_num_complex/LEAN_NUM_COMPLEX.md
+added     +79    -0     deep_causality_num_dual/LEAN_NUM_DUAL.md
+modified  +1     -0     deep_causality_par/Cargo.toml
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/solenoidal_field.rs
+modified  +3     -1     deep_causality_physics/tests/kernels/fluids/mod.rs
+modified  +1     -0     deep_causality_rand/Cargo.toml
+modified  +1     -0     deep_causality_sparse/Cargo.toml
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/construct/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/cubical_regge_geometry/has_hodge_star.rs
+modified  +28    -2     deep_causality_uncertain/src/types/computation/operator/arithmetic_operator.rs
+modified  +1     -0     deep_causality_uncertain/src/types/uncertain/mod.rs
+added     +74    -0     deep_causality_uncertain/src/types/uncertain/uncertain_verdict.rs
+modified  +24    -0     deep_causality_uncertain/tests/types/computation/operator/arithmetic_operator_tests.rs
+modified  +4     -4     examples/causal_discovery_examples/algos/surd/main.rs
+modified  +41    -0     examples/classical_causality_examples/classical_via_causaloid/dbn/types.rs
+modified  +50    -1     examples/classical_causality_examples/classical_via_causaloid/rcm/model.rs
+modified  +51    -1     examples/classical_causality_examples/classical_via_causaloid/scm/model.rs
+modified  +1     -1     examples/quantum_examples/hopf_fibration_multivector/main.rs
+modified  +12    -0     lean/DeepCausalityFormal.lean
+added     +238   -0     lean/DeepCausalityFormal/Core/Catamorphism.lean
+modified  +290   -0     lean/DeepCausalityFormal/Core/CausalEffect.lean
+added     +266   -0     lean/DeepCausalityFormal/Core/Causaloid.lean
+added     +95    -0     lean/DeepCausalityFormal/Core/CommandInput.lean
+added     +184   -0     lean/DeepCausalityFormal/Core/ContextGraph.lean
+added     +343   -0     lean/DeepCausalityFormal/Core/GraphAlgebra.lean
+added     +347   -0     lean/DeepCausalityFormal/Core/VerdictClosure.lean
+added     +199   -0     lean/DeepCausalityFormal/Haft/ArrowChoice.lean
+added     +257   -0     lean/DeepCausalityFormal/Haft/ArrowTerm.lean
+added     +47    -0     lean/DeepCausalityFormal/Haft/Category.lean
+modified  +50    -0     lean/DeepCausalityFormal/Haft/Foldable.lean
+added     +138   -0     lean/DeepCausalityFormal/Haft/Interpreter.lean
+added     +60    -0     lean/DeepCausalityFormal/Haft/Kleisli.lean
+added     +98    -0     lean/DeepCausalityFormal/Haft/SymmetricMonoidal.lean
+modified  +1     -1     lean/README.md
+modified  +161   -130   lean/THEOREM_MAP.md
+modified  +6     -0     makefile
+modified  +1     -1     openspec/changes/archive/2026-05-22-add-cubical-regge-calculus-analytical/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/design.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/specs/haft-arrow-interpreter/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/specs/haft-category-kleisli/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/specs/haft-foldable-foldmap/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/specs/haft-free-arrow/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/specs/haft-symmetric-monoidal-prop/spec.md
+added     +40    -0     openspec/changes/archive/2026-07-08-haft-categorical-machinery/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/.openspec.yaml
+added     +159   -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/design.md
+added     +95    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/proposal.md
+added     +71    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/causaloid-catamorphism/spec.md
+added     +74    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/causaloid-fixpoint/spec.md
+added     +82    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/causaloid-graph-algebra/spec.md
+added     +76    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/causaloid-verdict-closure/spec.md
+added     +38    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/core-formalization/spec.md
+added     +48    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/haft-arrow-choice/spec.md
+added     +29    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/haft-arrow-interpreter/spec.md
+added     +30    -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/specs/haft-free-arrow/spec.md
+added     +109   -0     openspec/changes/archive/2026-07-10-causaloid-formalization-stages-2-5/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-07-10-formalize-main-crate/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-07-10-formalize-main-crate/design.md
+renamed   +11    -4     openspec/changes/archive/2026-07-10-formalize-main-crate/proposal.md
+added     +51    -0     openspec/changes/archive/2026-07-10-formalize-main-crate/specs/causaloid-formalization/spec.md
+renamed   +2     -2     openspec/changes/archive/2026-07-10-formalize-main-crate/specs/context-hypergraph-formalization/spec.md
+added     +37    -0     openspec/changes/archive/2026-07-10-formalize-main-crate/specs/graph-reasoning-formalization/spec.md
+added     +56    -0     openspec/changes/archive/2026-07-10-formalize-main-crate/tasks.md
+removed   +0     -38    openspec/changes/formalize-main-crate/specs/causaloid-formalization/spec.md
+removed   +0     -34    openspec/changes/formalize-main-crate/specs/graph-reasoning-formalization/spec.md
+removed   +0     -38    openspec/changes/formalize-main-crate/specs/intervention-do-operator/spec.md
+removed   +0     -70    openspec/changes/formalize-main-crate/specs/quantum-causal-model-support/spec.md
+removed   +0     -54    openspec/changes/formalize-main-crate/tasks.md
+removed   +0     -40    openspec/changes/haft-categorical-machinery/tasks.md
+renamed   +0     -0     openspec/notes/archive/causal-algebra/Causal-Algebra.md
+renamed   +24    -0     openspec/notes/archive/causal-algebra/CausalMonadProptest.md
+renamed   +48    -5     openspec/notes/archive/causal-algebra/Causaloid-Formalization.md
+renamed   +16    -1     openspec/notes/archive/causal-algebra/Causaloid-structure.md
+renamed   +14    -22    openspec/notes/archive/causal-algebra/Formalization.md
+added     +263   -0     openspec/notes/archive/causal-algebra/algebraic-causaloid-assumptions.md
+renamed   +1     -1     openspec/notes/archive/causal-algebra/algebraic-causaloid.md
+renamed   +0     -0     openspec/notes/archive/causal-algebra/causal-arrow-state-threading-plan.md
+added     +414   -0     openspec/notes/archive/causal-algebra/causaloid-formalization-roadmap.md
+renamed   +1     -1     openspec/notes/archive/causal-algebra/core-formalization-deviations.md
+renamed   +0     -0     openspec/notes/archive/causal-algebra/deepcausality-formalization.md
+renamed   +0     -0     openspec/notes/archive/causal-algebra/haft-formalization-deviations.md
+renamed   +1     -1     openspec/notes/archive/cfd-dsl/01-dsl-review.md
+renamed   +0     -0     openspec/notes/archive/cfd-dsl/02-dsl-study-io.md
+renamed   +0     -0     openspec/notes/archive/cfd-dsl/03-dsl-acceptance.md
+renamed   +0     -0     openspec/notes/archive/cfd-dsl/04-dsl-feasibility.md
+renamed   +2     -2     openspec/notes/archive/cfd-examples/common-examples.md
+renamed   +3     -3     openspec/notes/archive/cfd/3DCausalFluidDynamics.md
+renamed   +0     -0     openspec/notes/archive/cfd/causal_cfd.md
+renamed   +0     -0     openspec/notes/archive/cfd/cfd-roadmap.md
+renamed   +0     -0     openspec/notes/archive/cfd/cfd-validation-plan.md
+renamed   +0     -0     openspec/notes/archive/cfd/consolidation-followups.md
+renamed   +0     -0     openspec/notes/archive/cfd/qmc-presence-gate-followup.md
+renamed   +0     -0     openspec/notes/archive/cfd/quantum_fluid_dynamics_survey.md
+renamed   +0     -0     openspec/notes/archive/cfd/references.md
+renamed   +0     -0     openspec/notes/archive/cfd/tensor_network_cfd.md
+renamed   +0     -0     openspec/notes/archive/cfd/variable-grid-geometry.md
+modified  +1     -1     openspec/notes/archive/freeze-dag-optin.md
+removed   +0     -238   openspec/notes/causal-algebra/algebraic-causaloid-assumptions.md
+added     +0     -0     openspec/notes/causal-do/Introduction to Do-Calculus.pdf
+added     +0     -0     openspec/notes/causal-do/The Do-Calculus Revisited.pdf
+added     +0     -0     openspec/notes/quantum/causaloid.pdf
+added     +304   -0     openspec/notes/quantum/full-stack.md
+modified  +4     -4     openspec/notes/quantum/quantum-epp.md
+modified  +2     -2     openspec/notes/tensor-network/ACCELERATION-SOTA-FIRST.md
+added     +74    -0     openspec/specs/causaloid-catamorphism/spec.md
+added     +77    -0     openspec/specs/causaloid-fixpoint/spec.md
+added     +44    -0     openspec/specs/causaloid-formalization/spec.md
+added     +85    -0     openspec/specs/causaloid-graph-algebra/spec.md
+added     +79    -0     openspec/specs/causaloid-verdict-closure/spec.md
+added     +28    -0     openspec/specs/context-hypergraph-formalization/spec.md
+modified  +14    -1     openspec/specs/core-formalization/spec.md
+added     +30    -0     openspec/specs/graph-reasoning-formalization/spec.md
+added     +51    -0     openspec/specs/haft-arrow-choice/spec.md
+added     +32    -0     openspec/specs/haft-arrow-interpreter/spec.md
+added     +28    -0     openspec/specs/haft-category-kleisli/spec.md
+added     +28    -0     openspec/specs/haft-foldable-foldmap/spec.md
+added     +33    -0     openspec/specs/haft-free-arrow/spec.md
+added     +28    -0     openspec/specs/haft-symmetric-monoidal-prop/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### deep_causality_cfd/src/types/flow/corridor.rs
+@@ -194,7 +194,7 @@ impl<const D: usize, R: CfdScalar> PhysicsStage<D, R> for RegimeClassify<R> {
+ // [4] Trajectory / navigation stage
+ // ---------------------------------------------------------------------------
+ 
+-/// The trajectory/navigation stage ([4]): one [`ReentryNavEngine`](crate::ReentryNavEngine) step per coupling step — KS
++/// The trajectory/navigation stage (\[4\]): one [`ReentryNavEngine`](crate::ReentryNavEngine) step per coupling step — KS
+ /// predict with the ④ aero-force channel as the perturbation kick, then the ESKF measurement fold.
+ ///
+ /// The nav *state* threads through the [`CoupledField`] (the stage takes the engine out, advances
+
+===== P146 | repo igamenovoer/houmao | PR #55: Release 0.9.0 | capacidade: houmao-server-tracking-debug
+--- SPEC VIVA
+## Purpose
+Define the maintainer-facing `houmao-server` tracking-debug workflow used to reproduce and diagnose interactive lifecycle tracking behavior with persistent trace evidence.
+
+## Requirements
+
+### Requirement: Debug workflow SHALL provide opt-in dense server-side lifecycle trace streams
+The system SHALL provide a maintainer-facing debug mode for `houmao-server` live TUI tracking that is disabled by default and enabled only through an explicit debug workflow or environment setting.
+
+When enabled, the server SHALL emit structured trace events that cover, at minimum:
+
+- CAO-compatible terminal input submission handling
+- prompt-submission recording into the tracker
+- turn-anchor arming, loss, and expiry
+- per-cycle parsed-surface ingestion
+- lifecycle reduction branch selection
+- operator-state construction
+- stability-signature updates
+- transition publication or suppression
+
+Each emitted event SHALL include enough metadata to correlate it with related events for the same tracked terminal and run.
+
+#### Scenario: Normal server run stays free of dense debug tracing
+- **WHEN** a maintainer runs `houmao-server` without enabling the tracking-debug workflow
+- **THEN** the server does not emit the dense tracking-debug event streams
+- **AND THEN** normal server and demo behavior remain unchanged
+
+#### Scenario: Enabled debug run emits structured lifecycle-trace events
+- **WHEN** a maintainer enables the tracking-debug workflow for a live watched terminal
+- **THEN** the server writes structured trace events for the required tracking boundaries
+- **AND THEN** those events include correlation keys such as terminal identity and event type so cross-module state flow can be reconstructed after the run
+
+### Requirement: Debug workflow SHALL run an automatic two-path interactive repro
+The system SHALL provide an automatic debug runner that exercises interactive lifecycle tracking through two distinct prompt-delivery paths against the same `houmao-server` shadow-watch substrate:
+
+1. a server-owned input path that submits the prompt through the CAO-compatible terminal-input route
+2. a direct tmux-input path that injects the prompt into the live pane without using the server input route
+
+The runner SHALL collect the same classes of evidence for both paths so the results can be compared directly.
+
+#### Scenario: Runner captures the server-owned input control path
+- **WHEN** a maintainer runs the automatic tracking-debug workflow
+- **THEN** the workflow submits at least one prompt through the server-owned terminal-input path
+- **AND THEN** the resulting artifacts show whether prompt-submission recording and turn-anchor arming occurred for that prompt
+
+#### Scenario: Runner captures the direct tmux-input comparison path
+- **WHEN** a maintainer runs the automatic tracking-debug workflow
+- **THEN** the workflow submits at least one prompt through direct tmux input into the live pane
+- **AND THEN** the resulting artifacts show how the same watched-session lifecycle surface behaved without the server-owned input hook
+
+### Requirement: Debug artifacts SHALL persist under a run-scoped repo-local `tmp/` root
+When the automatic tracking-debug workflow is invoked without an explicit output directory, it SHALL write all generated artifacts under a fresh run directory rooted at:
+
+```text
+tmp/houmao-server-tracking-debug/
+```
+
+Each run directory SHALL preserve, at minimum:
+
+- structured trace event streams
+- inspect snapshots
+- terminal or pane captures needed to correlate visible behavior with tracked state
+- the effective tracking cadence and timing values used for that debug run
+- a summary artifact that explains the observed differences between the two prompt paths
+
+The workflow SHALL keep debug artifacts out of tracked repository paths.
+
+#### Scenario: Default output root is repo-local and run-scoped
+- **WHEN** a maintainer runs the tracking-debug workflow without overriding the output root
+- **THEN** the workflow creates a fresh run directory under `tmp/houmao-server-tracking-debug/`
+- **AND THEN** all debug artifacts for that run are stored beneath that run directory
+
+#### Scenario: Debug output preserves both machine-readable traces and human-readable summary
+- **WHEN** a tracking-debug run completes
+- **THEN** the run directory contains machine-readable trace files and captured artifacts
+- **AND THEN** it also contains a summary that identifies whether the observed failure came from missing prompt-submission anchoring, reduction behavior, transition suppression, or another traced branch outcome
+
+### Requirement: Debug workflow SHALL label supplemental tmux and terminal-recording diagnostics clearly
+The tracking-debug workflow SHALL clearly label supplemental transport evidence when it collects that evidence directly from tmux, including libtmux-backed pane inspection and workspace-available terminal-recording helpers, to explain what the live terminal visibly did during the run.
+
+When such evidence is collected, the workflow SHALL keep it clearly labeled as supplemental diagnostics rather than the authoritative server-tracked state under investigation.
+
+#### Scenario: Supplemental pane evidence explains server-state decisions without replacing them
+- **WHEN** a maintainer enables supplemental tmux or terminal-recording capture during a tracking-debug run
+- **THEN** the run artifacts include those captures alongside the server trace streams
+- **AND THEN** the summary still treats the server-side lifecycle trace as the primary subject of analysis rather than treating the supplemental capture as the source of truth
+
+### Requirement: Trace evidence SHALL make prompt-path causality explicit
+The tracking-debug workflow SHALL make it possible to determine, from persisted artifacts alone, whether a prompt:
+
+- reached the server-owned terminal-input route,
+- caused prompt-submission recording,
+- armed a tracker turn anchor,
+- produced parsed-surface observations that entered the reduction pipeline, and
+- resulted in published lifecycle transitions or in explicit suppression of those transitions
+
+#### Scenario: Persisted evidence explains missing turn-anchor behavior
+- **WHEN** a maintainer inspects a completed tracking-debug run where the direct tmux prompt path does not surface completion lifecycle
+- **THEN** the persisted artifacts make clear whether no prompt-submission event was recorded for that path
+- **AND THEN** the maintainer does not need to guess whether the missing lifecycle transition came from a bypassed input hook or a later tracker-stage failure
+
+#### Scenario: Persisted evidence explains tracker-stage suppression after prompt submission
+- **WHEN** a maintainer inspects a completed tracking-debug run where the server-owned input path still fails to surface the expected lifecycle state
+- **THEN** the persisted artifacts make clear which tracker stage last advanced normally
+- **AND THEN** the maintainer can identify whether the failure came from parsed-surface classification, reduction branching, stability handling, or transition publication
+
+--- ARQUIVOS DO PR (225)
+modified  +4     -0     .gitmodules
+modified  +17    -0     CHANGELOG.md
+modified  +7     -5     README.md
+added     +175   -0     context/logs/code-review/20260428-103652-issue-51-final-stable-active-recovery.md
+modified  +2     -2     docs/developer/houmao-server/state-reference.md
+modified  +3     -3     docs/developer/houmao-server/state-tracking.md
+modified  +46    -9     docs/getting-started/loop-authoring.md
+modified  +2     -0     docs/getting-started/overview.md
+modified  +3     -2     docs/getting-started/system-skills-overview.md
+modified  +2     -1     docs/index.md
+modified  +12    -10    docs/reference/cli/agents-mail.md
+modified  +3     -3     docs/reference/cli/houmao-mgr.md
+modified  +1     -1     docs/reference/cli/internals.md
+modified  +5     -1     docs/reference/cli/system-skills.md
+modified  +32    -10    docs/reference/gateway/contracts/protocol-and-state.md
+modified  +2     -0     docs/reference/gateway/internals/queue-and-recovery.md
+modified  +4     -0     docs/reference/gateway/operations/lifecycle.md
+modified  +2     -0     docs/reference/gateway/operations/mail-notifier.md
+modified  +2     -0     docs/reference/gateway/operations/mailbox-facade.md
+modified  +19    -0     docs/reference/gateway/operations/troubleshooting.md
+modified  +9     -6     docs/reference/mailbox/contracts/canonical-model.md
+modified  +2     -2     docs/reference/managed_agent_api.md
+modified  +1     -1     docs/reference/registry/operations/discovery-and-cleanup.md
+added     +87    -0     docs/reference/run-phase/degraded-stale-recovery.md
+modified  +7     -0     docs/reference/run-phase/session-lifecycle.md
+modified  +4     -1     docs/reference/system-files/agents-and-runtime.md
+modified  +1     -1     docs/reference/system-files/operator-preparation.md
+modified  +2     -0     extern/tracked/.gitignore
+added     +1     -0     extern/tracked/houmao-agents
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/design.md
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/specs/agent-mailbox-operator-origin-send/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/specs/agent-mailbox-protocol/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/specs/houmao-srv-ctrl-native-cli/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-27-add-mailbox-notify-prompt-block/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-27-redesign-tui-stable-active-recovery/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-04-27-redesign-tui-stable-active-recovery/design.md
+added     +30    -0     openspec/changes/archive/2026-04-27-redesign-tui-stable-active-recovery/proposal.md
+added     +104   -0     openspec/changes/archive/2026-04-27-redesign-tui-stable-active-recovery/specs/official-tui-state-tracking/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-27-redesign-tui-stable-active-recovery/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/.openspec.yaml
+added     +129   -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/design.md
+added     +49    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/proposal.md
+added     +120   -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/specs/agent-gateway-mail-notifier/spec.md
+added     +30    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/specs/agent-mailbox-operator-origin-send/spec.md
+added     +92    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/specs/agent-mailbox-protocol/spec.md
+added     +43    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/specs/houmao-srv-ctrl-native-cli/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/specs/single-agent-mail-prompt-injection-demo/spec.md
+added     +92    -0     openspec/changes/archive/2026-04-27-render-mailbox-notify-block-channel/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/.openspec.yaml
+added     +95    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/design.md
+added     +32    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/proposal.md
+added     +25    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/specs/agent-gateway-reference-docs/spec.md
+added     +66    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/specs/agent-gateway/spec.md
+added     +18    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/specs/houmao-mgr-cleanup-cli/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-28-add-gateway-diagnostic-logging/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/.openspec.yaml
+added     +89    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/design.md
+added     +35    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/proposal.md
+added     +58    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/specs/docs-loop-authoring-guide/spec.md
+added     +87    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/specs/docs-readme-system-skills/spec.md
+added     +48    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/specs/docs-system-skills-overview-guide/spec.md
+added     +132   -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/specs/houmao-agent-loop-pairwise-v4-skill/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/specs/houmao-system-skill-installation/spec.md
+added     +30    -0     openspec/changes/archive/2026-04-28-add-pairwise-v4-template-loop-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/design.md
+added     +31    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/proposal.md
+added     +19    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/specs/docs-cli-reference/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/specs/docs-degraded-stale-recovery/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/specs/docs-run-phase-reference/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/specs/docs-subsystem-reference/spec.md
+added     +37    -0     openspec/changes/archive/2026-04-28-docs-backfill-missing-features/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/.openspec.yaml
+added     +80    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/design.md
+added     +29    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/proposal.md
+added     +19    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/specs/houmao-mgr-agents-join/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/specs/houmao-mgr-agents-launch/spec.md
+added     +39    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/specs/tmux-integration-runtime/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-28-persist-primary-tmux-surface-handles/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/.openspec.yaml
+renamed   +36    -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/design.md
+renamed   +0     -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/proposal.md
+renamed   +27    -1     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/specs/brain-launch-runtime/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/specs/houmao-mgr-cleanup-cli/spec.md
+renamed   +20    -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/specs/houmao-mgr-registry-discovery/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/specs/houmao-srv-ctrl-native-cli/spec.md
+added     +25    -0     openspec/changes/archive/2026-04-28-recover-degraded-active-tmux-authority/tasks.md
+removed   +0     -22    openspec/changes/recover-degraded-active-tmux-authority/tasks.md
+modified  +120   -0     openspec/specs/agent-gateway-mail-notifier/spec.md
+modified  +24    -0     openspec/specs/agent-gateway-reference-docs/spec.md
+modified  +65    -0     openspec/specs/agent-gateway/spec.md
+modified  +29    -0     openspec/specs/agent-mailbox-operator-origin-send/spec.md
+modified  +132   -0     openspec/specs/agent-mailbox-protocol/spec.md
+modified  +88    -9     openspec/specs/brain-launch-runtime/spec.md
+modified  +18    -0     openspec/specs/docs-cli-reference/spec.md
+added     +58    -0     openspec/specs/docs-degraded-stale-recovery/spec.md
+modified  +19    -5     openspec/specs/docs-loop-authoring-guide/spec.md
+modified  +17    -8     openspec/specs/docs-readme-system-skills/spec.md
+modified  +15    -0     openspec/specs/docs-run-phase-reference/spec.md
+modified  +20    -0     openspec/specs/docs-subsystem-reference/spec.md
+modified  +9     -0     openspec/specs/docs-system-skills-overview-guide/spec.md
+modified  +20    -1     openspec/specs/houmao-agent-loop-pairwise-v3-skill/spec.md
+added     +135   -0     openspec/specs/houmao-agent-loop-pairwise-v4-skill/spec.md
+modified  +18    -0     openspec/specs/houmao-mgr-agents-join/spec.md
+modified  +19    -0     openspec/specs/houmao-mgr-agents-launch/spec.md
+modified  +44    -0     openspec/specs/houmao-mgr-cleanup-cli/spec.md
+modified  +49    -1     openspec/specs/houmao-mgr-registry-discovery/spec.md
+modified  +68    -12    openspec/specs/houmao-srv-ctrl-native-cli/spec.md
+modified  +8     -7     openspec/specs/houmao-system-skill-installation/spec.md
+modified  +33    -53    openspec/specs/official-tui-state-tracking/spec.md
+added     +48    -0     openspec/specs/single-agent-mail-prompt-injection-demo/spec.md
+modified  +37    -0     openspec/specs/tmux-integration-runtime/spec.md
+modified  +1     -1     pyproject.toml
+modified  +9     -0     scripts/demo/README.md
+added     +243   -0     scripts/demo/single-agent-mail-prompt-injection/README.md
+added     +3     -0     scripts/demo/single-agent-mail-prompt-injection/expected_report/.gitkeep
+added     +13    -0     scripts/demo/single-agent-mail-prompt-injection/expected_report/report-claude-permissive-log.json
+added     +13    -0     scripts/demo/single-agent-mail-prompt-injection/expected_report/report-codex-permissive-log.json
+added     +13    -0     scripts/demo/single-agent-mail-prompt-injection/inputs/benign_body.md
+added     +44    -0     scripts/demo/single-agent-mail-prompt-injection/inputs/demo_parameters.json
+added     +18    -0     scripts/demo/single-agent-mail-prompt-injection/inputs/injection_body.md
+added     +55    -0     scripts/demo/single-agent-mail-prompt-injection/inputs/system_prompt.md
+added     +2     -0     scripts/demo/single-agent-mail-prompt-injection/outputs/.gitignore
+added     +333   -0     scripts/demo/single-agent-mail-prompt-injection/run_demo.sh
+modified  +6     -0     src/houmao/agents/assets/system_skills/catalog.toml
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-loop-generic/SKILL.md
+modified  +8     -14    src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/SKILL.md
+modified  +1     -1     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/agents/openai.yaml
+modified  +4     -9     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/authoring/formulate-loop-plan.md
+modified  +1     -1     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/authoring/render-loop-graph.md
+modified  +3     -7     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/authoring/revise-loop-plan.md
+modified  +2     -4     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/operating/start.md
+modified  +19    -51    src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/prestart/prepare-run.md
+modified  +7     -29    src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/references/plan-structure.md
+modified  +0     -1     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/references/reporting-contract.md
+modified  +5     -7     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/references/run-charter.md
+modified  +6     -10    src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/templates/bundle-plan.md
+modified  +6     -9     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v3/templates/single-file-plan.md
+added     +267   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/SKILL.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/agents/openai.yaml
+added     +169   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/authoring/formulate-loop-plan.md
+added     +71    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/authoring/render-loop-graph.md
+added     +87    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/authoring/revise-loop-plan.md
+added     +42    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/document-templates/agent-note.md
+added     +38    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/document-templates/bookkeeping-template.md
+added     +23    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/document-templates/constraint-coverage-audit.md
+added     +75    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/document-templates/plan.md
+added     +28    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/document-templates/reporting-template.md
+added     +47    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/hard-kill.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/pause.md
+added     +41    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/peek.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/ping.md
+added     +88    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/recover-and-continue.md
+added     +28    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/resume.md
+added     +117   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/start.md
+added     +40    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/operating/stop.md
+added     +152   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/prestart/prepare-run.md
+added     +27    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/delegation-policy.md
+added     +305   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/plan-structure.md
+added     +90    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/reporting-contract.md
+added     +141   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/run-charter.md
+added     +19    -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/stop-modes.md
+added     +108   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/references/workspace-contract.md
+added     +250   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/templates/bundle-plan.md
+added     +179   -0     src/houmao/agents/assets/system_skills/houmao-agent-loop-pairwise-v4/templates/single-file-plan.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-touring/SKILL.md
+modified  +2     -1     src/houmao/agents/assets/system_skills/houmao-touring/branches/advanced-usage.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-touring/references/concepts.md
+modified  +5     -3     src/houmao/agents/assets/system_skills/houmao-utils-llm-wiki/SKILL.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-utils-llm-wiki/references/log-guide.md
+modified  +2     -2     src/houmao/agents/realm_controller/assets/system_prompts/mailbox/mail-notifier.md
+modified  +99    -3     src/houmao/agents/realm_controller/backends/headless_base.py
+modified  +31    -14    src/houmao/agents/realm_controller/backends/headless_runner.py
+modified  +19    -54    src/houmao/agents/realm_controller/backends/local_interactive.py
+modified  +364   -12    src/houmao/agents/realm_controller/backends/tmux_runtime.py
+modified  +13    -1     src/houmao/agents/realm_controller/boundary_models.py
+added     +328   -0     src/houmao/agents/realm_controller/gateway_diagnostics.py
+modified  +15    -12    src/houmao/agents/realm_controller/gateway_mailbox.py
+modified  +63    -3     src/houmao/agents/realm_controller/gateway_models.py
+modified  +637   -41    src/houmao/agents/realm_controller/gateway_service.py
+modified  +241   -6     src/houmao/agents/realm_controller/gateway_storage.py
+modified  +4     -0     src/houmao/agents/realm_controller/manifest.py
+added     +147   -0     src/houmao/agents/realm_controller/notify_auth_verifier.py
+modified  +84    -0     src/houmao/agents/realm_controller/runtime.py
+modified  +48    -0     src/houmao/agents/realm_controller/schemas/session_manifest.v4.schema.json
+modified  +10    -0     src/houmao/mailbox/__init__.py
+modified  +112   -22    src/houmao/mailbox/protocol.py
+modified  +32    -0     src/houmao/passive_server/headless.py
+modified  +12    -0     src/houmao/server/managed_agents.py
+modified  +59    -1     src/houmao/server/service.py   <== código ligado à spec
+modified  +29    -45    src/houmao/server/tui/tracking.py   <== código ligado à spec
+modified  +2     -0     src/houmao/srv_ctrl/commands/agents/core.py
+modified  +41    -2     src/houmao/srv_ctrl/commands/agents/mail.py
+modified  +247   -10    src/houmao/srv_ctrl/commands/managed_agents.py
+modified  +16    -0     src/houmao/srv_ctrl/commands/runtime_artifacts.py
+modified  +16    -3     src/houmao/srv_ctrl/commands/runtime_cleanup.py
+modified  +4     -4     tests/integration/srv_ctrl/test_cli_shape_contract.py
+added     +111   -0     tests/unit/agents/realm_controller/test_gateway_diagnostics.py
+modified  +165   -1     tests/unit/agents/realm_controller/test_gateway_support.py
+modified  +41    -6     tests/unit/agents/realm_controller/test_mail_compose_notify_round_trip.py
+modified  +14    -8     tests/unit/agents/realm_controller/test_mail_send_notify_request.py
+added     +151   -0     tests/unit/agents/realm_controller/test_notifier_audit_rendered_blocks.py
+added     +326   -0     tests/unit/agents/realm_controller/test_notifier_render_notify_blocks.py
+added     +136   -0     tests/unit/agents/realm_controller/test_notify_auth_verifier.py
+modified  +37    -1     tests/unit/agents/realm_controller/test_runtime_registry.py
+modified  +4     -0     tests/unit/agents/realm_controller/test_runtime_resume.py
+modified  +6     -0     tests/unit/agents/realm_controller/test_schema_and_manifest.py
+modified  +27    -12    tests/unit/agents/realm_controller/test_tmux_control_input.py
+modified  +363   -3     tests/unit/agents/realm_controller/test_tmux_runtime.py
+modified  +2     -0     tests/unit/agents/test_brain_builder.py
+modified  +228   -0     tests/unit/agents/test_system_skills.py
+modified  +26    -4     tests/unit/docs/test_loop_authoring_docs.py
+modified  +56    -8     tests/unit/mailbox/test_notify_extractor.py
+modified  +1     -1     tests/unit/mailbox/test_protocol.py
+modified  +63    -35    tests/unit/mailbox/test_protocol_notify_fields.py
+modified  +44    -0     tests/unit/server/test_service.py
+modified  +106   -14    tests/unit/server/test_tui_parser_and_tracking.py
+modified  +6     -0     tests/unit/srv_ctrl/commands/test_runtime_artifacts_join.py
+modified  +46    -2     tests/unit/srv_ctrl/test_agents_mail_notify_block.py
+modified  +214   -0     tests/unit/srv_ctrl/test_cleanup_commands.py
+modified  +26    -16    tests/unit/srv_ctrl/test_commands.py
+modified  +351   -0     tests/unit/srv_ctrl/test_managed_agents.py
+modified  +5     -0     tests/unit/srv_ctrl/test_system_skills_commands.py
+--- DIFF DO CÓDIGO LIGADO
+### src/houmao/server/service.py
+@@ -104,6 +104,7 @@
+     HEADLESS_AGENT_WINDOW_NAME,
+     TmuxCommandError,
+     headless_agent_pane_target,
++    resolve_primary_tmux_surface,
+     run_tmux,
+     tmux_session_exists,
+     tmux_error_detail,
+@@ -896,6 +897,8 @@ def launch_headless_agent(
+             manifest_path=str(controller.manifest_path),
+             session_root=str(controller.manifest_path.parent),
+             tmux_session_name=self._require_controller_tmux_session_name(controller),
++            tmux_window_id=_controller_primary_tmux_window_id(controller),
++            tmux_pane_id=_controller_primary_tmux_pane_id(controller),
+             agent_def_dir=str(agent_def_dir),
+             agent_name=controller.agent_identity,
+             agent_id=controller.agent_id,
+@@ -3215,6 +3218,8 @@ def _provision_headless_turn(
+         turn_artifact_dir = self._headless_turn_artifacts_root(controller) / turn_id
+         process_path = turn_artifact_dir / "process.json"
+         tmux_window_name = HEADLESS_AGENT_WINDOW_NAME
++        tmux_window_id = _controller_primary_tmux_window_id(controller)
++        tmux_pane_id = _controller_primary_tmux_pane_id(controller)
+         turn_record = ManagedHeadlessTurnRecord(
+             tracked_agent_id=tracked_agent_id,
+             turn_id=turn_id,
+@@ -3224,6 +3229,8 @@ def _provision_headless_turn(
+             turn_artifact_dir=str(turn_artifact_dir),
+             tmux_session_name=self._require_controller_tmux_session_name(controller),
+             tmux_window_name=tmux_window_name,
++            tmux_window_id=tmux_window_id,
++            tmux_pane_id=tmux_pane_id,
+             process_path=str(process_path),
+             history_summary=f"Turn {turn_id} accepted.",
+         )
+@@ -3235,6 +3242,8 @@ def _provision_headless_turn(
+             started_at_utc=turn_record.started_at_utc,
+             tmux_session_name=turn_record.tmux_session_name,
+             tmux_window_name=tmux_window_name,
++            tmux_window_id=tmux_window_id,
++            tmux_pane_id=tmux_pane_id,
+             process_path=str(process_path),
+         )
+         self.m_managed_headless_store.write_turn_record(turn_record)
+@@ -4640,7 +4649,7 @@ def _interrupt_headless_tmux_target(
+     ) -> None:
+         """Interrupt one headless turn through tmux as a last-resort fallback."""
+ 
+-        target = headless_agent_pane_target(session_name=active_turn.tmux_session_name)
++        target = _active_turn_primary_tmux_target(active_turn)
+         try:
+             result = run_tmux(["send-keys", "-t", target, "C-c"])
+         except TmuxCommandError as exc:
+@@ -4781,6 +4790,55 @@ def _message_sha1(message: str) -> str:
+     return hashlib.sha1(message.encode("utf-8")).hexdigest()
+ 
+ 
++def _controller_primary_tmux_window_id(controller: RuntimeSessionController) -> str | None:
++    """Return the controller's current primary tmux window id when available."""
++
++    backend_session = controller.backend_session
++    if not isinstance(backend_session, HeadlessInteractiveSession):
++        return None
++    try:
++        state = backend_session.state
++    except AttributeError:
++        return None
++    value = getattr(state, "tmux_window_id", None)
++    return value if isinstance(value, str) and value.strip() else None
++
++
++def _controller_primary_tmux_pane_id(controller: RuntimeSessionController) -> str | None:
++    """Return the controller's current primary tmux pane id when available."""
++
++    backend_session = controller.backend_session
++    if not isinstance(backend_session, HeadlessInteractiveSession):
++        return None
++    try:
++        state = backend_session.state
++    except AttributeError:
++        return None
++    value = getattr(state, "tmux_pane_id", None)
++    return value if isinstance(value, str) and value.strip() else None
++
++
++def _active_turn_primary_tmux_target(active_turn: ManagedHeadlessActiveTurnRecord) -> str:
++    """Return the best tmux target for interrupting one active headless turn."""
++
++    if active_turn.tmux_pane_id is not None:
++        try:
++            return resolve_primary_tmux_surface(
++                session_name=active_turn.tmux_session_name,
++                pane_id=active_turn.tmux_pane_id,
++                window_id=active_turn.tmux_window_id,
++            ).pane_id
++        except TmuxCommandError:
++            pass
++    try:
++        return resolve_primary_tmux_surface(
++            session_name=active_turn.tmux_session_name,
++            window_name=active_turn.tmux_window_name,
++        ).pane_id
++    except TmuxCommandError:
++        return headless_agent_pane_target(session_name=active_turn.tmux_session_name)
++
++
+ TerminalWatchWorker = SessionWatchWorker
+ 
+ 
+
+### src/houmao/server/tui/tracking.py
+@@ -31,6 +31,7 @@
+ from houmao.shared_tui_tracking.public_state import (
+     diagnostics_availability as shared_diagnostics_availability,
+ )
++from houmao.shared_tui_tracking.surface import ANSI_ESCAPE_RE
+ from houmao.server.models import (
+     CompletionState,
+     HoumaoDegradedChatContextDiagnostic,
+@@ -687,12 +688,8 @@ def record_cycle(
+                     },
+                 )
+             final_stable_active_candidate = _build_final_stable_active_recovery_candidate(
+-                parsed_surface=parsed_surface,
+-                diagnostics=diagnostics,
+-                surface=surface,
+                 turn=turn,
+-                tracker_state=tracker_state,
+-                raw_surface_signature=_raw_surface_signature(output_text),
++                rendered_surface_signature=_rendered_surface_signature(output_text),
+             )
+             final_stable_active_recovered = self._update_final_stable_active_recovery_locked(
+                 candidate=final_stable_active_candidate,
+@@ -1942,59 +1939,46 @@ def _build_stale_active_recovery_candidate(
+ 
+ def _build_final_stable_active_recovery_candidate(
+     *,
+-    parsed_surface: HoumaoParsedSurface | None,
+-    diagnostics: HoumaoTrackedDiagnostics,
+-    surface: HoumaoTrackedSurface,
+     turn: HoumaoTrackedTurn,
+-    tracker_state: TrackedStateSnapshot,
+-    raw_surface_signature: str | None,
++    rendered_surface_signature: str | None,
+ ) -> _FinalStableActiveRecoveryCandidate | None:
+-    """Return one final stable-active recovery candidate for a prompt-ready false active."""
++    """Return one final stable-active recovery candidate keyed only on rendered-surface stability.
++
++    The recovery is the parser-independent backstop for detector misclassification.
++    Its candidate signature is the rendered-surface signature alone, and the only
++    preconditions are that `turn.phase` is currently `active` (something to
++    recover) and that the rendered-surface signature is observable. Parser
++    output, tracker state, and active-reason flags are intentionally not
++    consulted so the recovery cannot be vetoed by the same activity-detection
++    pipeline whose faults it exists to repair.
++    """
+ 
+-    if parsed_surface is None or diagnostics.availability != "available":
+-        return None
+-    if not _is_submit_ready(parsed_surface):
+-        return None
+-    if surface.accepting_input != "yes" or surface.editing_input != "no":
+-        return None
+     if turn.phase != "active":
+         return None
+-    active_reasons = tracker_state.active_reasons
+-    if "stream_retry_status" in active_reasons:
++    if rendered_surface_signature is None:
+         return None
+-    signature_payload = json.dumps(
+-        {
+-            "raw_surface_signature": raw_surface_signature,
+-            "tracker_stability_signature": tracker_state.stability_signature,
+-            "parsed_surface": {
+-                "availability": parsed_surface.availability,
+-                "business_state": parsed_surface.business_state,
+-                "input_mode": parsed_surface.input_mode,
+-                "ui_context": parsed_surface.ui_context,
+-                "normalized_projection_text": parsed_surface.normalized_projection_text,
+-            },
+-            "surface": surface.model_dump(mode="json"),
+-            "turn_phase": turn.phase,
+-            "last_turn_result": tracker_state.last_turn_result,
+-            "last_turn_source": tracker_state.last_turn_source,
+-            "active_reasons": list(active_reasons),
+-            "notes": list(tracker_state.notes),
+-        },
+-        sort_keys=True,
+-        separators=(",", ":"),
+-    )
+     return _FinalStableActiveRecoveryCandidate(
+-        signature=hashlib.sha1(signature_payload.encode("utf-8")).hexdigest(),
+-        active_reasons=active_reasons,
++        signature=rendered_surface_signature,
++        active_reasons=(),
+     )
+ 
+ 
+-def _raw_surface_signature(output_text: str | None) -> str | None:
+-    """Return an internal raw-surface signature for recovery stability."""
++def _rendered_surface_signature(output_text: str | None) -> str | None:
++    """Return a parser-independent stability signature of the rendered surface.
++
++    The signature is a `sha256` hex of the tmux capture text after stripping
++    ANSI escape sequences and right-trimming each line. It survives styling
++    jitter and trailing-pad-width differences between captures while flipping
++    on any visible text change. It is intentionally independent of any
++    activity-detection or tracker output so that final stable-active recovery
++    can judge purely from rendered-surface stability.
++    """
+ 
+     if output_text is None:
+         return None
+-    return hashlib.sha1(output_text.encode("utf-8")).hexdigest()
++    stripped = ANSI_ESCAPE_RE.sub("", output_text).replace(" ", " ")
++    normalized = "\n".join(line.rstrip() for line in stripped.splitlines())
++    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+ 
+ 
+ def _message_excerpt(message: str) -> str | None:
+

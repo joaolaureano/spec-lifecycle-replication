@@ -1,0 +1,562 @@
+===== P001 | langoai/lango PR #72 | capacidade do par: p2p-owner-shield
+PR: feat: merge dev into main with p2p, escrow, tooling, and docs updates
+arquivos ligados: internal/payment/eip3009/builder.go;internal/payment/eip3009/builder_test.go
+--- linhas alteradas (16; mostrando até 40)
++	// SignTransaction signs raw bytes (no additional hashing).
++	SignTransaction(ctx context.Context, rawTx []byte) ([]byte, error)
++	// SignMessage signs an arbitrary message (applies keccak256 before signing).
+-	sig, err := wallet.SignMessage(ctx, hash)
++	// Use SignTransaction (raw sign) because TypedDataHash already returns
++	// a keccak256 digest. SignMessage would double-hash, producing an
++	// invalid signature for on-chain verification.
++	sig, err := wallet.SignTransaction(ctx, hash)
+-		return nil, fmt.Errorf("sign message: %w", err)
++		return nil, fmt.Errorf("sign typed data: %w", err)
++func (w *testWallet) SignTransaction(_ context.Context, rawTx []byte) ([]byte, error) {
++	return crypto.Sign(rawTx, w.key)
++}
+-	return crypto.Sign(message, w.key)
++	hash := crypto.Keccak256(message)
++	return crypto.Sign(hash, w.key)
+--- candidata: smart-account [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Session key paymaster allowlist
+  | The `SessionPolicy` struct SHALL include an `allowedPaymasters` field (address array). When non-empty, `validateUserOp` SHALL enforce that the paymaster address in `paymasterAndData` is in the allowli
+  > - **WHEN** `paymasterAndData` has fewer than 20 bytes
+  > Three on-chain modules implementing ERC-7579 interfaces:
+  > 1. **LangoSessionValidator** (TYPE_VALIDATOR): Validates UserOperation signatures against registered session keys and their policies (targets, functions, spend limits, expiry). Session key registratio
+  > - `Manager`: Create (ECDSA keypair), encrypt via CryptoProvider callback, register on-chain, sign UserOps, revoke (cascade children)
+  > `UserOpSigner` interface in wallet package:
+  > - `SignUserOp(ctx, userOpHash, entryPoint, chainID) ([]byte, error)`
+  > - `budget.OnChainTracker`: Tracks per-session spending from on-chain data
+  > - **THEN** it calls eth_call with the EntryPoint.getNonce ABI-encoded calldata and returns the decoded uint256 nonce
+--- candidata: payment-service [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: USDC ERC-20 transfer transaction building
+  | The system SHALL build EIP-1559 ERC-20 transfer transactions by ABI-encoding `transfer(address,uint256)` with gas estimation and nonce management.
+  > - **THEN** the transaction is submitted on-chain and a PaymentReceipt with txHash and status "submitted" is returned
+  > - **WHEN** the amount plus today's total would exceed `maxDaily`
+  > #### Scenario: Payment to invalid address
+  > - **WHEN** `Send` is called with an invalid Ethereum address
+  > The system SHALL query the wallet's USDC balance via `balanceOf(address)` eth_call to the USDC contract.
+  > The system SHALL persist transaction records in an Ent PaymentTx schema with fields: id (UUID), tx_hash, from_address, to_address, amount, chain_id, status (pending/submitted/confirmed/failed), sessio
+  > - **THEN** the PaymentTx record is updated with status "failed" and the error message
+  > #### Scenario: On-chain config disabled by default
+--- candidata: config-system [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Configuration file loading
+  | The system SHALL load configuration from JSON or YAML files with a priority chain.
+  > The system SHALL load configuration from JSON or YAML files with a priority chain.
+  > The system SHALL validate configuration against a schema before use.
+  > The system SHALL validate configuration against a schema before use.
+  > - **THEN** validation SHALL fail with a clear error message
+  > - `maxContextPerLayer` (int): Maximum context items per layer in retrieval (default: 5)
+  > - **AND** `maxContextPerLayer` SHALL default to 5 if not specified or <= 0
+  > **Migration**: Remove `security.passphrase` from `lango.json` before import, or let the migration process ignore it.
+  > - **THEN** a compile error SHALL occur because the function no longer exists
+--- candidata: bootstrap-lifecycle [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified bootstrap sequence
+  | The system SHALL execute a complete bootstrap sequence: ensure data directory → open database → acquire passphrase → initialize crypto → load config profile. The result SHALL be a single struct contai
+  > The system SHALL execute a complete bootstrap sequence: ensure data directory → open database → acquire passphrase → initialize crypto → load config profile. The result SHALL be a single struct contai
+  > - **THEN** the system acquires a new passphrase (with confirmation), generates a salt, stores the checksum, creates a default config profile, and returns the Result
+  > - **THEN** the system returns a "passphrase checksum mismatch" error
+  > ### Requirement: Ephemeral keyfile shredding after crypto initialization
+  > The system SHALL shred the passphrase keyfile after successful crypto initialization and checksum verification when the passphrase source is keyfile and `KeepKeyfile` is false (default). Shred failure
+  > - **AND** crypto initialization and checksum verification succeed
+  > - **WHEN** `ShredKeyfile()` returns an error during bootstrap
+  > - **THEN** a warning is printed to stderr and bootstrap continues with the already-initialized crypto provider
+--- candidata: docs-only [PR]
+  | ## ADDED Requirements
+  | ### Requirement: README documents streaming in gateway feature
+  | README.md Features list SHALL describe the Gateway as supporting real-time streaming.
+  > ### Requirement: README documents observational memory context limit configs
+  > README.md Configuration Reference table SHALL include `observationalMemory.maxReflectionsInContext` and `observationalMemory.maxObservationsInContext` fields matching `ObservationalMemoryConfig` in `i
+  > #### Scenario: Context limit config fields present
+  > - **THEN** the table contains `observationalMemory.maxReflectionsInContext` (int, default `5`) and `observationalMemory.maxObservationsInContext` (int, default `20`)
+  > ### Requirement: README documents observational memory context limits
+  > README.md Observational Memory section SHALL describe context limits for reflections and observations.
+  > #### Scenario: Context limits bullet present
+  > - **THEN** there is a "Context Limits" bullet describing default limits of 5 reflections and 20 observations
+
+===== P002 | BlackBeltTechnology/pi-agent-dashboard PR #204 | capacidade do par: package-install
+PR: feat(restore-pi-version-skew-surface): pi-version advisory + per-session pi version
+arquivos ligados: packages/client/src/components/SettingsPanel.tsx;packages/extension/src/bridge.ts
+--- linhas alteradas (9; mostrando até 40)
++import { PiVersionAdvisory } from "./PiVersionAdvisory.js";
++                <PiVersionAdvisory />
+-import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfCh
++import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfCh
++  function sendPiVersionIfChanged() { _sendPiVersionIfChanged(syncBc()); }
+-    // Send initial git info
++    // Send initial git info + the session's pi version
++    sendPiVersionIfChanged();
++      sendPiVersionIfChanged,
+--- candidata: bridge-extension [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Extension lifecycle and server connection
+  | The bridge extension SHALL be a global pi extension installed at `~/.pi/agent/extensions/` (via pi package). On `session_start`, it SHALL connect to the dashboard server via WebSocket at a configurabl
+  > The bridge extension SHALL be a global pi extension installed at `~/.pi/agent/extensions/` (via pi package). On `session_start`, it SHALL connect to the dashboard server via WebSocket at a configurabl
+  > #### Scenario: Successful connection on session start
+  > - **WHEN** pi session starts and the bridge extension loads
+  > - **THEN** the extension SHALL connect to the dashboard server and send a `session_register` message with session metadata
+  > - **WHEN** pi session shuts down
+  > - **THEN** the extension SHALL send `session_unregister` and close the WebSocket
+  > The bridge extension SHALL detect the source environment where pi is running and include it in the `session_register` message.
+  > The bridge extension SHALL subscribe to all pi events and forward them to the dashboard server. Every forwarded event SHALL include the `piSessionId` from `ctx.sessionManager`.
+--- candidata: pi-core-version-check [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Core package discovery
+  | The server SHALL discover all installed pi ecosystem core packages from both global npm and the managed install directory (`~/.pi-dashboard/node_modules/`).
+  > - **THEN** it SHALL parse the output and identify pi ecosystem packages by matching known package names (`@mariozechner/pi-coding-agent`, `@blackbelt-technology/pi-agent-dashboard`, `@blackbelt-techno
+  > - **AND** each discovered package SHALL include its installed version from the JSON output
+  > - **THEN** the managed install version SHALL take precedence
+  > The server SHALL compare each discovered package's installed version against the latest version available on npm or GitHub.
+  > #### Scenario: npm package version check
+  > - **THEN** the server SHALL fetch its latest version via `fetchPackageMeta()` from the npm registry
+  > - **AND** set `updateAvailable` to `true` when installed version differs from latest
+  > The server SHALL cache version status results for 5 minutes to avoid excessive registry queries.
+--- candidata: model-selector [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Model selector in status bar
+  | The status bar SHALL display the current model name. Clicking it SHALL open an autocomplete dropdown listing all available models.
+  > The status bar SHALL display the current model name. Clicking it SHALL open an autocomplete dropdown listing all available models.
+  > #### Scenario: Display current model
+  > - **WHEN** a session has a model selected (e.g., "anthropic/claude-4")
+  > - **THEN** the status bar shows the model name on the left side
+  > #### Scenario: Open model dropdown
+  > - **WHEN** user clicks the model name
+  > - **THEN** a dropdown appears with a text filter and scrollable list of available models
+  > #### Scenario: Filter models
+--- candidata: provider-retry-state [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Bridge wire-ordering invariant for synthesized retry events
+  | The bridge SHALL forward any synthesized `auto_retry_start` for a given `message_end(stopReason:"error")` BEFORE the `agent_end` for the same session reaches the dashboard wire. The retry tracker's pe
+  > The bridge SHALL forward any synthesized `auto_retry_start` for a given `message_end(stopReason:"error")` BEFORE the `agent_end` for the same session reaches the dashboard wire. The retry tracker's pe
+  > The actual `connection.send` for the `message_end` body MAY be deferred (per the existing pi 0.69+ entryId-capture deferral introduced by `fix-per-message-fork`), but the synthesizer state-machine upd
+  > - **THEN** `retryTracker.isRetrying(sessionId)` SHALL return `true`
+  > - **AND** `usageLimitOrderer.hasPending(sessionId)` SHALL return `true`
+  > When the bridge observes an `agent_end` event whose terminal assistant message has `stopReason: "error"` and an `errorMessage` matching the broadened usage-limit pattern, AND the retry tracker reports
+  > - **GIVEN** the retry tracker reports an in-flight synthesized retry for session X
+  > - **GIVEN** the retry tracker reports an in-flight synthesized retry for session X
+  > - **GIVEN** the retry tracker reports an in-flight synthesized retry for session X
+--- candidata: dashboard-plugin-loader [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin runtime is a separate workspace package
+  | The plugin runtime SHALL live in its own monorepo workspace package `packages/dashboard-plugin-runtime/`. The package SHALL export at minimum the following entry points:
+  > - **WHEN** a plugin claims `{ "slot": "session-card-badge", "component": "OpenSpecBadge" }`
+  > - **THEN** the dashboard server SHALL still complete startup, `/api/health` SHALL show plugin "demo" failed with the error, and core endpoints (`/api/sessions`, `/api/config`) SHALL respond 200.
+  > - **WHEN** a plugin claims `{ "slot": "session-card-badge", "component": "OpenSpecBadge" }`
+  > - **THEN** the dashboard server SHALL still complete startup, `/api/health` SHALL show plugin "demo" failed with the error, and core endpoints (`/api/sessions`, `/api/config`) SHALL respond 200.
+  > If a plugin manifest declares a `server` entry, the loader SHALL dynamic-import that module after server bootstrap completes (after Fastify, session manager, and event store are ready). The module SHA
+  > - `sessionManager`, `eventStore`, `broadcastToSubscribers`, `directoryService` (read or subscribe to existing dashboard state)
+  > If a plugin manifest declares a `bridge` entry, the dashboard server SHALL on startup write the plugin's bridge path into `~/.pi/agent/settings.json` under the `extensions[]` array (under a path it ow
+  > - `useSessionState(sessionId): SessionState | undefined` — React hook for current session state.
+
+===== P003 | zhukunpenglinyutong/desktop-cc-gui PR #700 | capacidade do par: codex-chat-canvas-execution-cards-visual-refactor
+PR: Fix-0.5.11
+arquivos ligados: src-tauri/src/shared/codex_core.rs;src/features/app/hooks/useAppServerEvents.test.tsx;src/features/app/hooks/useAppServerEvents.ts;src/features/messages/components/Messages.tsx;src/features/threads/hooks/useThreadEventHandlers.ts;src/features/threads/hooks/useThreadItemEvents.test.ts;src/features/threads/hooks/useThreadItemEvents.ts;src/features/threads/hooks/useThreadMessaging.ts;src/features/threads/hooks/useThreadsReducer.ts;src/services/tauri.ts
+--- linhas alteradas (3557; mostrando até 40)
+-use tokio::time::timeout;
++use tokio::time::{sleep, timeout};
++const TURN_START_THREAD_NOT_FOUND_RETRY_DELAYS_MS: [u64; 2] = [150, 350];
+-    session
+-        .note_codex_turn_start_pending(thread_id, timeout_duration)
+-        .await;
+-    session
+-        .send_request_with_timeout(
+-            "turn/start",
+-            Value::Object(params.clone()),
+-            timeout_duration,
+-        )
+-        .await
++    for (attempt_index, delay_ms) in TURN_START_THREAD_NOT_FOUND_RETRY_DELAYS_MS
++        .iter()
++        .copied()
++        .enumerate()
++    {
++        sleep(Duration::from_millis(delay_ms)).await;
++        session
++            .note_codex_turn_start_pending(thread_id, timeout_duration)
++            .await;
++        session
++            .start_codex_turn_timing(thread_id, crate::backend::app_server::now_millis())
++            .await;
++        let retry_response = session
++            .send_request_with_timeout(
++                "turn/start",
++                Value::Object(params.clone()),
++                timeout_duration,
++            )
++            .await?;
++        session
++            .record_codex_turn_start_response(thread_id, crate::backend::app_server::now_millis())
++            .await;
++        if !is_thread_not_found_response(&retry_response) {
++            return Ok(retry_response);
++        }
++        session
++            .clear_codex_foreground_work(Some(thread_id), None)
+--- candidata: conversation-realtime-cpu-stability [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Lossless Realtime Event Micro-Batching
+  | The client MUST support lossless micro-batching for high-frequency realtime conversation events to reduce dispatch/render amplification while preserving event semantics.
+  > The client MUST support lossless micro-batching for high-frequency realtime conversation events to reduce dispatch/render amplification while preserving event semantics.
+  > #### Scenario: preserve per-thread event ordering during batching
+  > - **WHEN** high-frequency `delta` events are enqueued for the same thread
+  > - **THEN** batched dispatch MUST preserve original relative event order
+  > - **AND** downstream reducers MUST observe the same logical sequence as non-batched mode
+  > #### Scenario: no event loss under burst traffic
+  > - **WHEN** burst realtime events exceed a single frame capacity
+  > - **THEN** the batching queue MUST flush in bounded chunks without dropping events
+--- candidata: conversation-realtime-client-performance [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Realtime Conversation Client MUST Expose A Three-Engine Performance Budget
+  | The client MUST define a shared performance budget for Codex, Claude Code, and Gemini realtime conversation turns so optimization decisions are evaluated against the same observable contract.
+  > ### Requirement: Realtime Conversation Client MUST Expose A Three-Engine Performance Budget
+  > The client MUST define a shared performance budget for Codex, Claude Code, and Gemini realtime conversation turns so optimization decisions are evaluated against the same observable contract.
+  > #### Scenario: streaming turn records client-side budget evidence
+  > - **WHEN** a Codex, Claude Code, or Gemini turn enters realtime streaming
+  > - **THEN** the client MUST be able to correlate event ingress cadence, batching flush cadence, reducer derivation cost, render-visible text cadence, and composer responsiveness evidence to the same wo
+  > - **AND** this evidence MUST remain bounded for long streaming turns
+  > #### Scenario: budget evidence distinguishes engine-specific symptoms from shared client amplification
+  > - **WHEN** Gemini, Claude Code, or Codex shows slow or choppy visible output
+--- candidata: codex-conversation-liveness [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Codex Conversation Liveness MUST Separate Draft, Identity, Runtime, And Turn State
+  | Codex conversation liveness MUST be modeled as separate draft, thread identity, runtime generation, and foreground turn states rather than treating a `threadId` or runtime-ready result as complete con
+  > ### Requirement: Codex Conversation Liveness MUST Separate Draft, Identity, Runtime, And Turn State
+  > Codex conversation liveness MUST be modeled as separate draft, thread identity, runtime generation, and foreground turn states rather than treating a `threadId` or runtime-ready result as complete con
+  > #### Scenario: runtime readiness does not prove thread identity readiness
+  > - **WHEN** a Codex runtime reconnect or `ensureRuntimeReady` action succeeds
+  > - **AND** the active `threadId` cannot be verified by `thread/resume`, `turn/start`, alias resolution, or an equivalent identity check
+  > - **THEN** the system MUST keep thread identity liveness in `stale`, `unrecoverable`, or equivalent non-ready state
+  > - **AND** the UI MUST NOT claim the old conversation has been restored solely because the runtime is ready
+  > #### Scenario: runtime generation guards stale lifecycle updates
+--- candidata: runtime-performance-evidence-gates [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Runtime Evidence Gate MUST Classify Closure Evidence
+  | The system MUST classify performance and stability closure evidence before declaring a runtime optimization or stability change ready for archive.
+  > The system MUST classify performance and stability closure evidence before declaring a runtime optimization or stability change ready for archive.
+  > #### Scenario: report classifies evidence source
+  > - **WHEN** runtime performance evidence is generated
+  > - **THEN** each scenario MUST be classified as `measured`, `proxy`, `unsupported`, or `manual-only`
+  > - **AND** the report MUST include a short reason for that classification
+  > #### Scenario: proxy evidence does not become release-grade proof
+  > - **WHEN** a scenario is backed only by fixture, jsdom, static, or proxy evidence
+  > - **THEN** the report MUST NOT describe the scenario as fully measured
+--- candidata: codex-stale-thread-binding-recovery [tasks+PR]
+  | # codex-stale-thread-binding-recovery Specification Delta
+  | ## ADDED Requirements
+  | ### Requirement: Verified Codex Thread Replacement MUST Survive Restart
+  > # codex-stale-thread-binding-recovery Specification Delta
+  > ### Requirement: Verified Codex Thread Replacement MUST Survive Restart
+  > 当 `Codex` stale thread 已被恢复到新的 canonical `threadId` 后，系统 MUST 将该 replacement 作为可恢复事实持久化，而不是只保留在当前进程内存里。
+  > #### Scenario: persisted alias remaps stale thread after restart
+  > - **WHEN** 某个 `Codex` 线程已经验证 `oldThreadId -> canonicalThreadId`
+  > - **AND** 用户重启应用后重新打开同一 workspace 或历史会话
+  > - **THEN** 生命周期入口 MUST 优先把旧 `threadId` canonicalize 到持久化的 `canonicalThreadId`
+  > - **AND** 系统 MUST NOT 再次优先调用已知失效的旧 `threadId`
+
+===== P004 | fselich/dossier PR #1 | capacidade do par: path-arg
+PR: feat: sort specs
+arquivos ligados: internal/ui/model.go
+--- linhas alteradas (57; mostrando até 40)
++	"sort"
++	specSortBySuffix bool
++	specOrder        []int
++		case "s":
++			if m.mode == ModeIndex {
++				savedKind := indexKindActive
++				savedIdx := -1
++				savedReqIdx := 0
++				if m.indexCursor < len(m.indexItems) {
++					item := m.indexItems[m.indexCursor]
++					savedKind = item.kind
++					savedIdx = item.idx
++					savedReqIdx = item.reqIdx
++				}
++				m.specSortBySuffix = !m.specSortBySuffix
++				m.buildIndexItems()
++				if savedIdx >= 0 {
++					for i, it := range m.indexItems {
++						if it.kind == savedKind && it.idx == savedIdx && it.reqIdx == savedReqIdx {
++							m.indexCursor = i
++							break
++						}
++					}
++				}
++				m.refreshIndexViewport()
++			}
++func specSuffix(name string) string {
++	if i := strings.LastIndex(name, "-"); i >= 0 {
++		return name[i+1:]
++	}
++	return name
++}
++func (m *Model) buildSpecOrder() {
++	n := len(m.projectSpecs)
++	m.specOrder = make([]int, n)
++	for i := range m.specOrder {
++		m.specOrder[i] = i
++	}
++	if m.specSortBySuffix {
++		sort.SliceStable(m.specOrder, func(a, b int) bool {
+--- candidata: change-index [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Full-screen index view
+  | The TUI SHALL implement a `ModeIndex` mode that occupies the full screen with the same TUI chrome (borders, header, helpbar). The index SHALL display two sections: "Active" with the active changes and
+  > The TUI SHALL implement a `ModeIndex` mode that occupies the full screen with the same TUI chrome (borders, header, helpbar). The index SHALL display two sections: "Active" with the active changes and
+  > - **WHEN** the mode is `ModeIndex` and both active and archived changes exist
+  > - **WHEN** the mode is `ModeIndex` and there are no active changes
+  > - **WHEN** the mode is `ModeIndex` and there are no archived changes
+  > ### Requirement: Select a change with Enter
+  > Pressing `Enter` on an item SHALL close the index and open the selected change. If it is an active change, the mode transitions to `ModeNormal` with that active change. If it is an archived change, th
+  > - **WHEN** the cursor is on an active change and the user presses `Enter`
+  > - **WHEN** the cursor is on an archived change and the user presses `Enter`
+--- candidata: index-spec-sort [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Sort toggle for Specifications section
+  | In `ModeIndex`, pressing `s` SHALL toggle the sort order of the Specifications section between two modes: **name** (alphabetical by full spec name, the default) and **suffix** (alphabetical by the las
+  > In `ModeIndex`, pressing `s` SHALL toggle the sort order of the Specifications section between two modes: **name** (alphabetical by full spec name, the default) and **suffix** (alphabetical by the las
+  > #### Scenario: Toggle from name to suffix
+  > - **WHEN** the sort mode is **name** and the user presses `s` in `ModeIndex`
+  > #### Scenario: Toggle from suffix to name
+  > - **WHEN** the sort mode is **suffix** and the user presses `s` in `ModeIndex`
+  > - **WHEN** the TUI starts and enters `ModeIndex`
+  > The suffix of a spec name SHALL be the substring after the last `-` character. If the name contains no `-`, the entire name is the suffix.
+  > - **THEN** its sort suffix is `viewer`
+--- candidata: tui-viewer [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: TUI layout
+  | The TUI SHALL divide the screen into three fixed zones: header (1 line), tab bar (1 line) and content area (the rest). The header SHALL show `<project> · <change-name> [N/M]` where N is the current ch
+  > When the user toggles a task with `Space`, the progress counter in the tab bar SHALL update in the same frame, without waiting for the next polling cycle.
+  > - **WHEN** the user presses `Space` on a pending task and the disk write succeeds
+  > - **WHEN** the user presses `Space` on a completed task and the disk write succeeds
+  > - **THEN** the help line shows `h/l: change  1-4: artifact  j/k: navigate  Space: toggle  e: edit  q: quit`
+  > - **THEN** the help line shows `h/l: change  1-4: artifact  j/k: navigate  Space: toggle  q: quit`
+  > The TUI SHALL allow navigating between active changes with `h` (previous) and `l` (next). Switching changes SHALL reset the selected tab to `proposal` if available, or to the first available artifact 
+  > - **THEN** the mode transitions to `ModeIndex`
+  > - **THEN** the mode transitions to `ModeIndex`
+--- candidata: index-specs-section [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Specs no seleccionables en el índice
+  | Specs listed in the "Specs" section of `ModeIndex` SHALL be navigable. They SHALL be part of `indexItems` with kind `indexKindSpec`, the cursor SHALL be able to position on them with `j`/`k`, and `Ent
+  > Specs listed in the "Specs" section of `ModeIndex` SHALL be navigable. They SHALL be part of `indexItems` with kind `indexKindSpec`, the cursor SHALL be able to position on them with `j`/`k`, and `Ent
+  > #### Scenario: Enter on a spec activates the viewer
+  > - **WHEN** the index cursor is on a spec and the user presses `Enter`
+  > In `ModeIndex`, the TUI SHALL display a "Specifications" section below the "Archived Changes" section. The section SHALL list each spec on a line with its name on the left and `N requirements` in seco
+  > - **WHEN** the mode is `ModeIndex` and `LoadProjectSpecs()` returns at least one spec
+  > - **WHEN** the mode is `ModeIndex` and `LoadProjectSpecs()` returns an empty list
+  > - **WHEN** the user enters `ModeIndex`
+  > In `ModeIndex`, pressing `Space` on a spec item SHALL toggle its expanded/collapsed state. When expanded, the names of its requirements SHALL appear indented below the spec, one per line, as navigable
+--- candidata: tasks-toggle [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Inline markdown rendering in task items
+  | The TUI SHALL convert inline markdown marks present in each task's text to ANSI styles before rendering the item with lipgloss. The supported patterns are `` `code` `` (backtick) and `**bold**` (doubl
+  > ### Requirement: Checkbox toggle with Space
+  > When pressing `Space` on a task item, the system SHALL:
+  > - **WHEN** the cursor is on `- [ ] Create structure` and the user presses `Space`
+  > - **WHEN** the cursor is on `- [x] Create structure` and the user presses `Space`
+  > - **WHEN** `tasks.md` does not have write permissions and the user presses `Space`
+  > - **WHEN** the user navigates down and the selected task is below the bottom of the visible viewport
+  > - **WHEN** the user navigates up and the selected task is above the top of the visible viewport
+  > Manages the TUI tasks tab: parsing `tasks.md`, cursor navigation between items, checkbox toggle with `Space`, per-section progress bars, and inline markdown rendering in task text.
+
+===== P005 | elastic/terraform-provider-elasticstack PR #2852 | capacidade do par: ci-research-factory-issue-intake
+PR: sanitise research input
+arquivos ligados: .github/workflows-src/lib/sanitize-context.js
+--- linhas alteradas (51; mostrando até 40)
+- * HTML comment sanitisation and research-comment lookup helpers.
++ * HTML comment sanitisation, control/invisible-char removal, and research-comment lookup helpers.
++/**
++ * Removes non-printable ASCII control characters while preserving tab, newline,
++ * and carriage return. Also strips Unicode line/paragraph separators.
++ *
++ * Stripped ASCII:  \x00-\x08, \x0B, \x0C, \x0E-\x1F, \x7F
++ * Preserved:       \x09 (tab), \x0A (LF), \x0D (CR)
++ * Unicode:         \u2028, \u2029
++ *
++ * @param {string} text
++ * @returns {string}
++ */
++function stripControlChars(text) {
++  if (typeof text !== 'string') return '';
++  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u2028\u2029]/g, '');
++}
++/**
++ * Removes invisible Unicode characters that have no legitimate use in issue content:
++ * zero-width spaces/joiners, bidirectional marks, word/function/invisible operators,
++ * and the BOM (byte order mark).
++ *
++ * Ranges stripped:
++ *   \u200B-\u200F  — zero-width space, non-joiner, joiner, LTR mark, RTL mark
++ *   \u2060-\u2064  — word joiner, function application, invisible times/separator/plus
++ *   \uFEFF           — BOM / zero-width no-break space
++ *
++ * @param {string} text
++ * @returns {string}
++ */
++function stripInvisibleUnicode(text) {
++  if (typeof text !== 'string') return '';
++  return text.replace(/[\u200B-\u200F\u2060-\u2064\uFEFF]/g, '');
++}
++/**
++ * Composed sanitisation pipeline. Runs all three filters in sequence:
++ *
++ *   input → stripHtmlComments → stripControlChars → stripInvisibleUnicode → output
++ *
++ * Idempotent: applying twice produces the same result as applying once.
+--- candidata: ci-factory-comment-sanitisation [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: User-sourced content is sanitised before agent ingestion
+  | All factory issue intake workflows SHALL pass every user-sourced text field through `sanitizeUserContent` before writing it to disk for agent consumption. The affected fields are: issue body, issue co
+  > ### Requirement: User-sourced content is sanitised before agent ingestion
+  > All factory issue intake workflows SHALL pass every user-sourced text field through `sanitizeUserContent` before writing it to disk for agent consumption. The affected fields are: issue body, issue co
+  > The `sanitizeUserContent` function SHALL apply three filters in order:
+  > 1. **HTML comment stripping**: Remove all `<!-- ... -->` sequences, including unclosed sequences through end-of-string. This is the existing `stripHtmlComments` behaviour.
+  > 2. **Control character stripping**: Remove all ASCII control characters except `\x09` (tab), `\x0A` (line feed), and `\x0D` (carriage return). The stripped characters SHALL be: `\x00-\x08`, `\x0B`, `\
+  > 3. **Invisible Unicode stripping**: Remove zero-width and invisible Unicode characters: `\u200B-\u200F`, `\u2060-\u2064`, `\uFEFF`.
+  > #### Scenario: HTML comment stripping on issue body
+  > - **WHEN** an issue body contains `before<!-- hidden instructions -->after`
+--- candidata: ci-html-comment-sanitisation [tasks]
+  | # ci-html-comment-sanitisation Specification
+  | ## Purpose
+  | Shared deterministic helpers for stripping HTML comments from untrusted human-authored content before it is passed to agentic workflows, eliminating a prompt-injection surface where malicious users em
+  > # ci-html-comment-sanitisation Specification
+  > Shared deterministic helpers for stripping HTML comments from untrusted human-authored content before it is passed to agentic workflows, eliminating a prompt-injection surface where malicious users em
+  > ### Requirement: Shared library provides HTML-comment stripping
+  > The repository SHALL provide a shared helper under `.github/workflows-src/lib/` that exposes a `stripHtmlComments(text)` function. The function SHALL remove all HTML comment sequences — that is, text 
+  > #### Scenario: Input contains embedded HTML comment
+  > - **WHEN** `stripHtmlComments` is called with text containing `<!-- hidden -->`
+  > #### Scenario: Input contains multiple HTML comments
+  > - **WHEN** `stripHtmlComments` is called with text containing several disjoint HTML comments
+--- candidata: ci-change-factory-issue-intake [tasks]
+  | # `ci-change-factory-issue-intake` — Issue-labeled OpenSpec proposal factory
+  | Workflow implementation: authored source under `.github/workflows-src/change-factory-issue/`, generating checked-in `.github/workflows/change-factory-issue.md` (via `scripts/compile-workflow-sources`)
+  | ## Purpose
+  > # `ci-change-factory-issue-intake` — Issue-labeled OpenSpec proposal factory
+  > Workflow implementation: authored source under `.github/workflows-src/change-factory-issue/`, generating checked-in `.github/workflows/change-factory-issue.md` (via `scripts/compile-workflow-sources`)
+  > Define requirements for a GitHub Agentic Workflow that reacts to trusted GitHub issues labeled `change-factory` and creates exactly one linked OpenSpec change proposal pull request, without implementi
+  > The repository SHALL define the `change-factory` issue-intake automation as a repository-authored GitHub Agentic Workflow source under `.github/workflows-src/` that generates checked-in workflow artif
+  > - **WHEN** maintainers modify the `change-factory` issue-intake workflow
+  > - **AND** the generated `.github/workflows/change-factory-issue.md` and `.github/workflows/change-factory-issue.lock.yml` SHALL be checked in and SHALL match output from the repository generation comm
+  > ### Requirement: Workflow activates only for qualifying `change-factory` issue events
+  > The workflow MAY subscribe to GitHub `issues.opened` and `issues.labeled` events, but it SHALL activate the proposal agent only for eligible `change-factory` issue triggers. Eligible triggers SHALL in
+--- candidata: ci-implementation-research-block-format [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Block is delimited by stable HTML-comment markers
+  | The implementation-research block SHALL be delimited by exactly two HTML comments: an opening marker `<!-- implementation-research:start -->` and a closing marker `<!-- implementation-research:end -->
+  > ### Requirement: Block is delimited by stable HTML-comment markers
+  > The implementation-research block SHALL be delimited by exactly two HTML comments: an opening marker `<!-- implementation-research:start -->` and a closing marker `<!-- implementation-research:end -->
+  > #### Scenario: Body contains a research block
+  > - **WHEN** an issue body contains the markers `<!-- implementation-research:start -->` and `<!-- implementation-research:end -->`
+  > - **THEN** the content between (and including) those markers SHALL constitute the implementation-research block
+  > #### Scenario: Body contains no research block
+  > - **WHEN** an issue body does not contain the opening marker `<!-- implementation-research:start -->`
+  > - **THEN** the body SHALL be treated as having no implementation-research block
+--- candidata: kibana-dashboard [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: APM service map panel support (REQ-049) — ENVIRONMENT_ALL server-default suppression
+  | The provider SHALL treat `environment = "ENVIRONMENT_ALL"` returned by the Kibana API as a
+  > On import (no prior state), when the API returns `environment = "ENVIRONMENT_ALL"`, the provider
+  > configuration that omits `environment`, breaking `ImportStateVerify` and forcing practitioners to
+  > - WHEN Kibana 9.5+ returns `environment = "ENVIRONMENT_ALL"` in the API response
+  > - WHEN the panel is imported from Kibana 9.5+ (which returns `environment = "ENVIRONMENT_ALL"`)
+  > - WHEN apply runs and Kibana returns `environment = "ENVIRONMENT_ALL"` in the API response
+  > - WHEN apply runs and Kibana returns `environment = "production"` in the API response
+  > ### Requirement: Time slider control panel behavior (REQ-029)
+  > For `time_slider_control` panels, the resource SHALL accept an optional `time_slider_control_config` block. The block itself is optional; a panel with `type = "time_slider_control"` and no `time_slide
+
+===== P006 | atman-33/openspec-for-copilot PR #14 | capacidade do par: settings-view
+PR: Add commands for detailed design creation and updating specs
+arquivos ligados: src/extension.ts
+--- linhas alteradas (524; mostrando até 40)
+-import { homedir } from "os";
+-import { basename, join } from "node:path";
+-import type { FileSystemWatcher } from "vscode";
+-	commands,
+-	ConfigurationTarget,
+-	env,
+-	type OutputChannel,
+-	RelativePattern,
+-	Uri,
+-import { VSC_CONFIG_NAMESPACE } from "./constants";
++import { registerCommands } from "./activation/register-commands";
++import { setupFileWatchers } from "./activation/setup-file-watchers";
++import { setupSaveGuards } from "./activation/setup-save-guards";
++import type { ExtensionServices } from "./activation/extension-services";
+-import { sendPromptToChat } from "./utils/chat-prompt-runner";
+-import { getVSCodeUserDataPath } from "./utils/platform-utils";
+-let copilotProvider: CopilotProvider;
+-let specManager: SpecManager;
+-let steeringManager: SteeringManager;
+-export let outputChannel: OutputChannel;
+-	outputChannel = window.createOutputChannel("OpenSpec for Copilot - Debug");
++	const outputChannel = window.createOutputChannel(
++		"OpenSpec for Copilot - Debug"
++	);
+-	copilotProvider = new CopilotProvider(context, outputChannel);
++	const copilotProvider = new CopilotProvider(context, outputChannel);
+-	specManager = new SpecManager(context, outputChannel);
+-	steeringManager = new SteeringManager(
++	const specManager = new SpecManager(context, outputChannel);
++	const steeringManager = new SteeringManager(
++	const services: ExtensionServices = {
++		extensionUri: context.extensionUri,
++		outputChannel,
++		configManager,
++		specManager,
++		steeringManager,
++		copilotProvider,
++	};
+-	registerCommands(context, specExplorer, steeringExplorer, promptsExplorer);
++	registerCommands(context, services, {
+--- candidata: spec-explorer [tasks+PR+termos]
+  | # Spec Explorer Specs
+  | ## ADDED Requirements
+  | ### Requirement: Context Menu
+  > # Spec Explorer Specs
+  > The context menu for changes SHALL include an option to archive the change.
+  > #### Scenario: Archive Change
+  > Given I am in the Specs view
+  > When I right-click on a change item
+  > Then I should see an "Archive" option
+  > And clicking it should execute the archive prompt for that change
+  > The Spec Explorer SHALL display "Changes" before "Current Specs".
+--- candidata: prompt-explorer [tasks+termos]
+  | # prompt-explorer Specification
+  | ## ADDED Requirements
+  | ### Requirement: Delete Prompt Command
+  > # prompt-explorer Specification
+  > ### Requirement: Delete Prompt Command
+  > The extension MUST provide a "Delete" command in the context menu for prompt files in the PROMPTS view.
+  > #### Scenario: Delete Menu Item
+  > When the user right-clicks on a prompt file
+  > Then the "Delete" option should be visible in the context menu
+  > ### Requirement: Delete Confirmation
+  > The "Delete" command MUST ask for confirmation before deleting the file.
+--- candidata: ide-view [PR]
+  | ## ADDED Requirements
+  | ### Requirement: OpenSpec Structure Support
+  | The IDE SHALL support the new OpenSpec directory structure.
+  > ### Requirement: OpenSpec Structure Support
+  > The IDE SHALL support the new OpenSpec directory structure.
+  > #### Scenario: View OpenSpec Structure
+  > Given the user has an `openspec` folder in their workspace
+  > And the folder contains `specs/` and `changes/`
+  > Then they should see two top-level sections: "Current Specs" and "Changes"
+  > And "Current Specs" should list folders from `openspec/specs/`
+  > And "Changes" should list folders from `openspec/changes/`
+--- candidata: chat-integration [termos]
+  | # Spec: Chat Language Integration
+  | ## ADDED Requirements
+  | ### Requirement: Append Language Instruction
+  > All prompts sent to GitHub Copilot via OpenSpec commands MUST include an instruction to respond in the configured language.
+  > #### Scenario: Send Prompt in English (Default)
+  > - When the user executes a command that sends a prompt to chat (e.g., "Run Prompt", "Create Spec")
+  > - Then the prompt text sent to Copilot should NOT include a specific language instruction (or explicitly request English if needed to override context).
+  > - *Refinement*: Since Copilot defaults to English, we can omit the instruction for `en` to save tokens, or add "Please respond in English" to be explicit. For this iteration, we will omit it for `en` 
+  > #### Scenario: Send Prompt in Japanese
+  > - When the user executes a command that sends a prompt to chat
+  > - Then the prompt text sent to Copilot should end with the directive "Please respond in Japanese."

@@ -1,0 +1,547 @@
+===== P076 | aleris/woti PR #2 | capacidade do par: dynamic-tz-abbrev-year
+PR: add sub-hour navigation interval (60/30/15 min)
+arquivos ligados: src/tz_data.rs
+--- linhas alteradas (240; mostrando até 40)
+-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
++use chrono::{Datelike, NaiveDate, Offset, TimeZone, Utc};
++    // Curated fallback: insert canonical abbreviations for zones whose IANA
++    // tzdata format string is numeric (so chrono-tz exposes no named
++    // abbreviation, e.g. NPT for Asia/Kathmandu, MMT for Asia/Yangon).
++    // Walk modern IANA ids first so legacy aliases (e.g. Asia/Rangoon,
++    // NZ-CHAT) don't claim the slot through non-deterministic iteration.
++    let mut canonical_insert = |tz: Tz| {
++        for nd in [winter, summer] {
++            if let Some(dt) = tz.from_local_datetime(&nd).earliest() {
++                if dt.offset().abbreviation().is_some() {
++                    continue;
++                }
++                let utc_offset_minutes = dt.offset().fix().local_minus_utc() / 60;
++                if let Some(abbr) = canonical_abbreviation(tz.name(), utc_offset_minutes) {
++                    map.entry(abbr.to_uppercase()).or_insert(tz);
++                }
++            }
++        }
++    };
++    for &tz in CANONICAL_FALLBACK_PREFERRED {
++        canonical_insert(tz);
++    }
++    for &tz in &TZ_VARIANTS {
++        canonical_insert(tz);
++    }
++/// Modern IANA zones to consider first when registering the curated
++/// `canonical_abbreviation` fallback. Ensures the modern name wins over a
++/// legacy alias (e.g. `Asia/Yangon` over `Asia/Rangoon`).
++const CANONICAL_FALLBACK_PREFERRED: &[Tz] = &[
++    Tz::Asia__Kathmandu,
++    Tz::Asia__Yangon,
++    Tz::Asia__Tehran,
++    Tz::Asia__Kabul,
++    Tz::Asia__Yerevan,
++    Tz::Asia__Singapore,
++    Tz::Asia__Almaty,
++    Tz::Indian__Mahe,
++    Tz::Indian__Mauritius,
++    Tz::Indian__Reunion,
+--- candidata: cldr-hour-cycle [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Zone-to-country lookup table
+  | The system SHALL maintain a static `ZONE_COUNTRY` table mapping IANA timezone identifiers to ISO 3166-1 alpha-2 country codes, sourced from the IANA `zone1970.tab` file. The table MUST be sorted alpha
+  > The system SHALL maintain a static `ZONE_COUNTRY` table mapping IANA timezone identifiers to ISO 3166-1 alpha-2 country codes, sourced from the IANA `zone1970.tab` file. The table MUST be sorted alpha
+  > #### Scenario: Known zone resolves to country code
+  > - **WHEN** `uses_12h_clock` is called with `"America/New_York"`
+  > - **THEN** the zone resolves to country code `"US"` and the hour cycle for `US` is used
+  > #### Scenario: Known zone in multi-country entry
+  > - **THEN** the zone resolves to the first-listed country code `"AE"`
+  > The system SHALL maintain a static `TWELVE_HOUR_COUNTRIES` table listing ISO 3166-1 alpha-2 country codes whose preferred hour cycle is 12-hour, sourced from Unicode CLDR `supplemental/timeData` where
+  > #### Scenario: US timezone detected as 12h
+--- candidata: sub-hour-nav-interval [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  | The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  > The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > #### Scenario: Default interval is 60 minutes when nothing is configured
+  > - **THEN** the TUI launches with the navigation interval set to 60 minutes and renders identically to today (no tick glyphs, no minute markers)
+  > - **THEN** the TUI launches with the navigation interval set to 30 minutes
+  > - **THEN** the TUI launches with the navigation interval set to 15 minutes
+  > The TUI SHALL respond to the `i` key by cycling the active interval through the sequence `60 → 30 → 15 → 60`. The cycle SHALL re-render immediately on each press. The selected absolute time SHALL be p
+  > - **WHEN** the active interval is 60 minutes and the user presses `i`
+--- candidata: half-hour-timeline-indicator [PR]
+  | ## ADDED Requirements
+  | ### Requirement: TimelineParams carries timezone minute offset
+  | The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > ### Requirement: TimelineParams carries timezone minute offset
+  > The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > #### Scenario: Whole-hour timezone
+  > - **WHEN** a timezone has offset +5:00 (offset_m = 0)
+  > - **THEN** `TimelineParams.offset_m` is 0
+  > #### Scenario: Half-hour timezone
+  > - **WHEN** a timezone has offset +5:30 (offset_m = 30)
+  > - **THEN** `TimelineParams.offset_m` is 30
+--- candidata: hour-offset-indicator [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Relative offset label is displayed when selection is not current hour
+  | The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > ### Requirement: Relative offset label is displayed when selection is not current hour
+  > The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > describing how many hours the selection is from the current time. The row SHALL only be visible when `hour_offset != 0`.
+  > - **WHEN** the user navigates 2 hours to the right (`hour_offset == 2`)
+  > - **THEN** the indicator row displays "in 2 hours"
+  > - **WHEN** the user navigates 3 hours to the left (`hour_offset == -3`)
+  > - **THEN** the indicator row displays "3 hours ago"
+  > - **WHEN** `hour_offset == 1`
+--- candidata: accelerated-nav [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Single-tap navigation unchanged
+  | A single left or right arrow key press SHALL move the timeline by exactly 1 hour in the corresponding direction, regardless of acceleration state.
+  > - **THEN** `hour_offset` decreases by 1
+  > - **THEN** `hour_offset` increases by 1
+  > When the user holds a left or right arrow key, the step size SHALL increase based on elapsed time since the first press in the current direction.
+  > - **AND** less than 400 ms has elapsed since the first press
+  > - **THEN** the first left step SHALL move 1 hour (acceleration restarts from zero)
+  > The acceleration state SHALL reset when the user releases the navigation key, detected by a poll timeout with no pending offset.
+  > When the user holds a left or right arrow key, the step size SHALL increase linearly based on elapsed time since the first press in the current direction.
+  > A single left or right arrow key press SHALL move the timeline by exactly 1 cell in the corresponding direction, regardless of acceleration state. A cell represents the active navigation interval (60,
+
+===== P077 | Litash/moomoo-api-mcp PR #4 | capacidade do par: account-info
+PR: Feat/auto select account for trades
+arquivos ligados: src/moomoo_mcp/services/trade_service.py;tests/test_services/test_trade_service.py
+--- linhas alteradas (129; mostrando até 40)
+-from moomoo import OpenSecTradeContext, RET_OK, SecurityFirm, TrdMarket
++from moomoo import OpenSecTradeContext, OrderStatus, RET_OK, SecurityFirm, TrdMarket
++    def _convert_status_filter(
++        self, status_filter_list: list[str] | None
++    ) -> list | None:
++        """Convert string status values to OrderStatus enum values.
++        The Moomoo SDK expects OrderStatus enum values, not strings.
++        This method converts user-provided string values to the proper enum format.
++        Args:
++            status_filter_list: List of status strings like ['SUBMITTED', 'FILLED_ALL'].
++        Returns:
++            List of OrderStatus enum values, or None if input is None.
++        Raises:
++            ValueError: If an invalid status string is provided.
++        """
++        if status_filter_list is None:
++            return None
++        converted = []
++        for status_str in status_filter_list:
++            # OrderStatus has the attribute matching the string (e.g., OrderStatus.SUBMITTED)
++            status_enum = getattr(OrderStatus, status_str.upper(), None)
++            if status_enum is None:
++                valid_statuses = [
++                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING", "SUBMIT_FAILED",
++                    "SUBMITTED", "FILLED_PART", "FILLED_ALL",
++                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART", "CANCELLED_ALL",
++                    "REJECTED", "DISABLED", "DELETED", "FAILED", "NONE"
++                ]
++                raise ValueError(
++                    f"Invalid order status: '{status_str}'. "
++                    f"Valid options: {valid_statuses}"
++                )
++            converted.append(status_enum)
++        return converted
+-            status_filter_list: Filter by order statuses.
++            status_filter_list: Filter by order statuses (as strings).
++                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
++                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
++                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+-            List of order dictionaries.
+--- candidata: order-retrieval [tasks+termos]
+  | # Order Retrieval
+  | ## ADDED Requirements
+  | ### Support Getting Order List
+  > The system must allow retrieving a list of orders (today's orders) filtered by environment and account.
+  > Given the user wants to see their orders
+  > When they call `get_orders(trd_env='REAL')`
+  > Then the tool should return a list of orders including order ID, code, side, price, qty, status.
+  > When they call `get_deals(trd_env='REAL')`
+  > Then the tool should return a list of deals including deal ID, order ID, code, price, qty.
+--- candidata: order-modification [tasks+termos]
+  | # Order Modification and Cancellation
+  | ## ADDED Requirements
+  | ### Support Modifying Orders
+  > The system must allow modifying price, quantity, or other attributes of an open order.
+  > Given an open order with ID '12345'
+  > When a user calls `modify_order(order_id='12345', op='NORMAL', price=355.0)`
+  > Then the order modification request should be sent to Moomoo
+  > And the tool should return success status.
+  > The system must allow cancelling an open order.
+  > Given an open order with ID '67890'
+  > When a user calls `cancel_order(order_id='67890')`
+--- candidata: order-placement [tasks]
+  | # Order Placement
+  | ## ADDED Requirements
+  | ### Support placing orders
+  > ### Support placing orders
+  > The system must allow placing orders with `code`, `side`, `qty`, `price`, `order_type`, and `trd_env`.
+  > Supported order types include: `NORMAL` (Limit), `MARKET`, `STOP`, `STOP_LIMIT`, `TRAILING_STOP`, `TRAILING_STOP_LIMIT`, `AUCTION`, `AUCTION_LIMIT`, etc.
+  > When they call `place_order(code='HK.00700', side='BUY', qty=100, price=350.0, order_type='NORMAL')`
+  > Then the order should be submitted to Moomoo
+  > And the tool should return the order ID.
+  > When they call `place_order(code='US.AAPL', side='BUY', qty=100, price=0.0, order_type='MARKET')`
+  > Then the order should be submitted
+--- candidata: watchlist-management [PR]
+  | # Spec: Watchlist Management
+  | ## ADDED Requirements
+  | ### R1: List Security Groups
+  > - **Then** it returns a list of groups, including their IDs and names
+  > - **Then** it returns a list of securities in that group, each with their code and name
+--- candidata: trade-unlock [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Auto-unlock Trade at Startup
+  | The MCP server SHALL automatically unlock trade during startup if a trade password is provided via environment variable.
+  > The MCP server SHALL automatically unlock trade during startup if a trade password is provided via environment variable.
+  > - **AND** log a success message indicating REAL account access is enabled
+  > - **AND** log a success message indicating REAL account access is enabled
+  > #### Scenario: Skip unlock when no password provided
+  > - **AND** log an info message indicating SIMULATE-only mode
+  > #### Scenario: Handle unlock failure gracefully
+  > - **GIVEN** an environment variable is set with an invalid password
+  > - **AND** REAL account access will not be available
+
+===== P078 | opencom-org/opencom PR #36 | capacidade do par: shared-audience-rule-contracts
+PR: update to main
+arquivos ligados: apps/web/src/app/articles/page.tsx
+--- linhas alteradas (80; mostrando até 40)
+-import { Plus } from "lucide-react";
++import { Plus, RefreshCw } from "lucide-react";
+-  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(
+-    ALL_COLLECTION_FILTER
+-  );
+-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(
+-    ALL_VISIBILITY_FILTER
+-  );
++  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(ALL_COLLECTION_FILTER);
++  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(ALL_VISIBILITY_FILTER);
++  const [isBackfillingEmbeddings, setIsBackfillingEmbeddings] = useState(false);
++  const [backfillNotice, setBackfillNotice] = useState<string | null>(null);
++  const [backfillError, setBackfillError] = useState<string | null>(null);
++    backfillEmbeddings,
++  const handleBackfillEmbeddings = async () => {
++    if (!activeWorkspace?._id) {
++      return;
++    }
++    setIsBackfillingEmbeddings(true);
++    setBackfillError(null);
++    setBackfillNotice(null);
++    try {
++      const result = await backfillEmbeddings({
++        workspaceId: activeWorkspace._id,
++        contentTypes: ["article", "internalArticle"],
++      });
++      setBackfillNotice(
++        `Embeddings backfilled: ${result.processed} processed, ${result.skipped} skipped (already existed)`
++      );
++    } catch (error) {
++      console.error("Failed to backfill embeddings:", error);
++      setBackfillError(error instanceof Error ? error.message : "Failed to backfill embeddings.");
++    } finally {
++      setIsBackfillingEmbeddings(false);
++    }
++  };
+-        <div className="flex gap-2">
+-          <Link href="/articles/collections">
+-            <Button variant="outline">Manage Collections</Button>
+-          </Link>
+--- candidata: inbox-knowledge-vector-search [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox knowledge search MUST use vector search for semantic relevance
+  | The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > - **THEN** the search SHALL use vector embeddings to find semantically relevant content
+  > - **THEN** results SHALL include articles, internal articles, and snippets
+  > - **AND** each result SHALL include the content type, title, snippet preview, and article ID
+  > TBD - created by archiving change article-link-widget-integration. Update Purpose after archive.
+  > The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > - **THEN** the search SHALL use vector embeddings to find semantically relevant content
+  > - **THEN** results SHALL include articles, internal articles, and snippets
+--- candidata: web-articles-admin-modularity [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Articles admin render sections MUST be implemented as dedicated modules
+  | The articles admin route SHALL implement import/export/history workflows, article list filtering/table rendering, and delete confirmation rendering through dedicated local modules instead of a single 
+  > ### Requirement: Articles admin render sections MUST be implemented as dedicated modules
+  > The articles admin route SHALL implement import/export/history workflows, article list filtering/table rendering, and delete confirmation rendering through dedicated local modules instead of a single 
+  > - **AND** article table and delete dialog modules SHALL not require unrelated edits
+  > ### Requirement: Articles admin decomposition MUST preserve existing workflow behavior
+  > Extraction SHALL preserve current article CRUD operations, markdown import/export flow, and existing import/export test selectors used by automation.
+  > # web-articles-admin-modularity Specification
+  > TBD - created by archiving change decompose-web-articles-admin-page. Update Purpose after archive.
+  > ### Requirement: Articles admin render sections MUST be implemented as dedicated modules
+--- candidata: ai-help-center-linked-sources [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AI response source records MUST include linkable metadata for article sources
+  | AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > ### Requirement: AI response source records MUST include linkable metadata for article sources
+  > AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > #### Scenario: AI response references published article
+  > - **WHEN** AI response includes a Help Center article source
+  > - **THEN** source metadata SHALL include linkable article identity fields for UI navigation
+  > ### Requirement: Widget AI messages MUST render article sources as clickable links
+  > Widget conversation UI SHALL render article-backed AI sources as clickable elements that open the corresponding article context.
+  > #### Scenario: Visitor taps article source in AI message
+--- candidata: inbox-knowledge-insertion [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox MUST provide one consolidated knowledge picker
+  | The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > - **THEN** the picker SHALL return matching snippets, public articles, and internal articles in one result list
+  > - **AND** the inbox composer SHALL not open a separate snippet-only or article-only picker for that action
+  > The consolidated picker SHALL provide insertion actions that match the selected knowledge type: snippets SHALL insert reusable reply content directly, and articles SHALL support explicit article-link 
+  > #### Scenario: Agent inserts an article from the picker
+  > - **WHEN** an agent selects an article result
+  > - **THEN** the picker SHALL offer the article insertion action configured for that result type
+  > - **AND** the agent SHALL be able to complete article insertion without opening a separate article search control
+--- candidata: shared-markdown-rendering-sanitization [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Web and widget MUST consume a shared markdown rendering implementation
+  | Markdown rendering and sanitization SHALL be implemented in a shared utility module consumed by both web and widget surfaces.
+  > ### Requirement: Shared markdown utility MUST detect article links for in-widget navigation
+  > The shared markdown utility SHALL detect `article:` protocol links and emit metadata for in-widget article navigation.
+  > #### Scenario: Article link is rendered with navigation metadata
+  > - **WHEN** markdown contains a link in the format `[title](article:<articleId>)`
+  > - **THEN** the rendered anchor SHALL include a `data-article-id` attribute with the article ID
+  > #### Scenario: Article link click is handled by widget
+  > - **WHEN** a visitor clicks an article link in the widget
+  > - **THEN** the widget SHALL call `onSelectArticle(articleId)` to open the article view
+
+===== P079 | Amm1rr/WebAI-to-API PR #80 | capacidade do par: robust-auth-recovery
+PR: Refactor Gemini to provider-centric adapter architecture
+arquivos ligados: src/app/services/browser/auth_manager.py;tests/test_recovery_orchestration.py
+--- linhas alteradas (76; mostrando até 40)
+-        from app.services.providers.gemini_playwright_scripts import SELECTORS
++        from app.services.browser.adapters.scripts.gemini_scripts import SELECTORS
+-from app.services.providers.gemini_playwright import GeminiPlaywrightProvider
++from app.services.providers.gemini.provider import GeminiProvider
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.sleep", mock_sleep)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.sleep", mock_sleep)
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.submit_prompt", mock_submit_prompt)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.submit_prompt", mock_submit_prompt)
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.sleep", mock_sleep)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.sleep", mock_sleep)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.timeout", InstantTimeout)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.timeout", InstantTimeout)
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+--- candidata: provider-adapter-framework [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Unified Gemini Provider Identity
+  | The system SHALL expose a single `GeminiProvider` class as the primary entry point for all Gemini-related operations, regardless of the underlying execution backend.
+  > The system SHALL expose a single `GeminiProvider` class as the primary entry point for all Gemini-related operations, regardless of the underlying execution backend.
+  > #### Scenario: Instantiating the unified provider
+  > - **WHEN** the system initializes the Gemini provider
+  > - **THEN** it returns an instance of the unified `GeminiProvider` class
+  > The `GeminiProvider` SHALL be the sole authority for selecting its execution adapter (e.g., WebAPI or Playwright). The `ProviderFactory` MUST NOT participate in this selection.
+  > - **WHEN** a request is routed to `GeminiProvider`
+  > - **THEN** `GeminiProvider` SHALL internally determine which adapter to use based on configuration or model prefix aliases.
+  > The system SHALL determine the backend for a provider based on the project configuration files (e.g., `config.conf`).
+--- candidata: docker-compatible-auth [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable Direct Filesystem State Storage (`auth_state_dir`)
+  | The system SHALL support a configurable directory path named `auth_state_dir` for loading and saving the pre-authenticated persistent state files, which represent serialized browser contexts rather th
+  > The system SHALL support a configurable directory path named `auth_state_dir` for loading and saving the pre-authenticated persistent state files, which represent serialized browser contexts rather th
+  > - **WHEN** a provider session initialization is executed
+  > - **THEN** it SHALL resolve the state file path inside the configured `auth_state_dir` directory utilizing a deterministic provider-specific state file naming convention (e.g., `gemini.json`, `openai.
+  > The system SHALL enforce the guarantee that no automatic persistent Playwright storage state rewrites occur during normal request execution. The runtime API service is permitted to mutate in-memory Pl
+  > - **WHEN** a client completions request is processed and performs in-memory modifications (such as page creation or session cookie adjustments in browser memory)
+  > - **AND** the provider adapters SHALL NOT directly perform state loading, write operations, or file mutations
+  > - **THEN** it SHALL write the JSON payload to `{provider}.json.tmp` inside the `auth_state_dir`
+  > - **AND** it SHALL atomically replace the target `{provider}.json` file using an atomic rename operation
+--- candidata: on-demand-auth-bootstrap [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Centralized Authentication Status Monitoring
+  | The system SHALL maintain a centralized, thread-safe, and cached authentication status monitor (`AuthManager`) for both the `gemini-webapi` connection and Playwright-driven browser sessions. The syste
+  > The system SHALL maintain a centralized, thread-safe, and cached authentication status monitor (`AuthManager`) for both the `gemini-webapi` connection and Playwright-driven browser sessions. The syste
+  > - **THEN** the system SHALL return the cached status for both providers without executing active network navigations or browser launches
+  > - **AND** the `gemini-webapi` status SHALL be refreshed to check if it has fallen back to guest mode
+  > The system SHALL provide an API-driven, controlled login workflow that replaces manual out-of-band utility executions. The `AuthManager` SHALL own and orchestrate the login workflow via `AuthManager.r
+  > - **WHEN** an administrator triggers the login endpoint `/v1/auth/login` and completes Google sign-in in the browser window
+  > - **THEN** `AuthManager` SHALL detect the chat input box, invoke atomic persistence to save `gemini.json`, transition Playwright status to `VALID_SESSION`, and close the login page lease
+  > - **AND** the system SHALL NOT crash or leave zombie browser processes
+  > - **WHEN** the browser window is closed manually by the user during the active login workflow
+--- candidata: modular-browser-engine [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Minimal Provider Adapter Interface
+  | The system SHALL define a minimal `BaseProviderAdapter` interface that abstracts only vendor-specific authentication checks, URL state parsers, and prompt DOM submission sequences.
+  > The system SHALL manage browser tab lifecycles, states, and locking rules in a dedicated `tab` module, completely separated from process management and DOM-interaction logic.
+  > - **THEN** the `ManagedPage` SHALL execute its release logic inside an `asyncio.shield` block to return the semaphore slot to the session and return or close the `PersistentTab` resource.
+  > The system SHALL isolate the active tab registry, background sweep loops, and concurrency boundaries for each provider session in a dedicated `session` module.
+  > - **WHEN** a provider (e.g., Gemini) is configured to use the Playwright backend
+  > - **THEN** it SHALL use a provider-specific implementation of `BaseProviderAdapter` to interact with the shared browser runtime.
+  > # modular-browser-engine Specification
+  > The system SHALL manage browser tab lifecycles, states, and locking rules in a dedicated `tab` module, completely separated from process management and DOM-interaction logic.
+  > - **THEN** the `ManagedPage` SHALL execute its release logic inside an `asyncio.shield` block to return the semaphore slot to the session and return or close the `PersistentTab` resource.
+--- candidata: error-and-lifecycle-hardening [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Reaper Loop Rollover Safe State Handling
+  | The ProviderSession reaper loop MUST NOT trigger engine-scoped terminal shutdown upon detecting a browser generation rollover mismatch. The reaper loop MUST ignore the stale generation state, MUST NOT
+  > The ProviderSession reaper loop MUST NOT trigger engine-scoped terminal shutdown upon detecting a browser generation rollover mismatch. The reaper loop MUST ignore the stale generation state, MUST NOT
+  > - **WHEN** the reaper loop executes and detects that last_browser_generation does not match engine.browser_generation
+  > - **THEN** the loop SHALL skip active liveness validation, skip calling the browser disconnected callback, and delegate subsequent recovery handling to the authoritative session recovery flow
+  > - **WHEN** the provider detects authentication loss on a page
+  > Providers detect and escalate failures, but MUST NOT directly manage storage state file deletions or execute context setups on authentication failure. Providers MUST raise a recovery-scoped exception 
+  > - **WHEN** the provider detects authentication loss on a page
+  > - **THEN** it SHALL raise a recovery-scoped exception and terminate the request, allowing the ProviderSession to catch the error, invalidate the context, and safely attempt context recreation in subse
+  > The ProviderSession reaper loop MUST NOT trigger engine-scoped terminal shutdown upon detecting a browser generation rollover mismatch. The reaper loop MUST ignore the stale generation state, MUST NOT
+
+===== P080 | Creatiwity/siren PR #644 | capacidade do par: sentry-integration-axum
+PR: feat: add doublons data and endpoints
+arquivos ligados: src/commands/serve/runner/error.rs
+--- linhas alteradas (12; mostrando até 40)
+-use crate::models::{etablissement, lien_succession, unite_legale, update_metadata};
++use crate::models::{etablissement, lien_succession, siren_doublon, unite_legale, update_metadata};
+-    http::StatusCode,
++    http::{StatusCode, header},
++    SirenDoublonRedirect{location: String} = "Moved permanently to {location}",
++    SirenDoublonLookup{source: siren_doublon::error::Error} = "[SirenDoublon] {source}",
++            Error::SirenDoublonRedirect { location } => {
++                return (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, location.as_str())]).into_response();
++            }
++            Error::SirenDoublonLookup { source: _ } => {
++                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
++            }
+--- candidata: http-server-axum [tasks+PR+termos]
+  | # Spec: HTTP Server Migration to Axum
+  | ## ADDED Requirements
+  | ### Requirement: HTTP Server with Axum
+  > - **WHEN** a GET request is made to `/v3/etablissements/<siret>` where `<siret>` is a valid 14-digit SIRET
+  > - **WHEN** a GET request is made to `/v3/etablissements/<siret>` where `<siret>` is not a valid 14-digit SIRET
+  > - **WHEN** a GET request is made to `/v3/etablissements/<siret>` where `<siret>` is valid but not found in the database
+  > - **WHEN** a GET request is made to `/v3/etablissements/<siret>` where `<siret>` is a valid 14-digit SIRET
+  > - **WHEN** a GET request is made to `/v3/etablissements` with optional query parameters
+  > - **AND** `<siren>` is present in `siren_doublons.siren_doublon`
+  > - **AND** the `Location` header is set to `/v3/unites_legales/<siren_canonique>`
+  > - **AND** `<siren>` is not present in `siren_doublons`
+--- candidata: siren-doublons [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Ingestion du fichier StockDoublons dans le pipeline de mise à jour
+  | Le système SHALL ingérer le fichier `StockDoublons_utf8.zip` (colonnes `siren`, `sirenDoublon`, `dateDernierTraitementDoublon`) via le pipeline existant UpdateData + SwapData, de la même manière que l
+  > - **THEN** le système télécharge, décompresse et insère le CSV dans la table de staging `siren_doublons_staging`
+  > - **THEN** le contenu de `siren_doublons_staging` remplace celui de `siren_doublons` (truncate + insert)
+  > Le système SHALL exposer une fonction de lookup permettant de retrouver le SIREN canonique à partir d'un SIREN doublon, utilisée en cas de ressource non trouvée sur les endpoints établissement et unit
+  > - **WHEN** `find_canonical_siren` est appelé avec un SIREN présent dans `siren_doublons.siren_doublon`
+  > - **WHEN** `find_canonical_siren` est appelé avec un SIREN absent de `siren_doublons`
+  > Décrit les comportements attendus pour l'ingestion du fichier StockDoublons (doublons SIREN publiés par l'INSEE) dans le pipeline de mise à jour, et le lookup `find_canonical_siren` utilisé pour les r
+  > - **THEN** le système télécharge, décompresse et insère le CSV dans la table de staging `siren_doublons_staging`
+  > - **THEN** `siren_doublons` est renommé en `siren_doublons_temp`, `siren_doublons_staging` est renommé en `siren_doublons`, et `siren_doublons_temp` est tronqué et renommé en `siren_doublons_staging` 
+--- candidata: scalar-api-documentation [termos]
+  | # Spec: Scalar API Documentation
+  | ## ADDED Requirements
+  | ### Requirement: Scalar API Documentation
+  > - `GET /v3/etablissements/<siret>`
+
+===== P081 | Xeonice/soul-killer PR #2 | capacidade do par: build-script
+PR: fix: Windows viewer 路径对齐 + updater 父目录自愈
+arquivos ligados: src/cli/updater.ts
+--- linhas alteradas (25; mostrando até 40)
+-import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync } from 'node:fs'
++import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
+-import { join } from 'node:path'
++import { dirname, join } from 'node:path'
++/**
++ * Replace the viewer static-assets directory atomically.
++ *
++ * Ensures the parent directory (~/.soulkiller) exists before attempting
++ * rename — install.ps1 never creates ~/.soulkiller on Windows, so the first
++ * --update after a fresh install would otherwise hit ENOENT.
++ *
++ * Extracted as its own function to make the ordering (mkdir → rm → rename)
++ * directly testable without standing up the whole download pipeline.
++ */
++export function replaceViewer(src: string, dst: string): void {
++  mkdirSync(dirname(dst), { recursive: true })
++  rmSync(dst, { recursive: true, force: true })
++  renameSync(src, dst)
++}
+-  // Replace viewer static files (if present in archive)
++  // Replace viewer static files (if present in archive).
+-    const viewerDst = join(homedir(), '.soulkiller', 'viewer')
+-    rmSync(viewerDst, { recursive: true, force: true })
+-    renameSync(extractedViewer, viewerDst)
++    replaceViewer(extractedViewer, join(homedir(), '.soulkiller', 'viewer'))
+--- candidata: install-script [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unix 安装脚本自动检测平台并安装
+  | `scripts/install.sh` SHALL 检测 OS 和 Arch，下载对应二进制到 `~/.soulkiller/bin/`。
+  > `scripts/install.sh` SHALL 检测 OS 和 Arch，下载对应二进制到 `~/.soulkiller/bin/`。
+  > - **WHEN** 在 macOS ARM64 上执行 `curl -fsSL .../install.sh | sh`
+  > - **THEN** SHALL 下载 `soulkiller-darwin-arm64.tar.gz`，解压到 `~/.soulkiller/bin/soulkiller`，文件具有可执行权限
+  > - **THEN** SHALL 下载 `soulkiller-linux-x64.tar.gz` 并安装到 `~/.soulkiller/bin/soulkiller`
+  > 安装脚本 SHALL 检测 `~/.soulkiller/bin` 是否在 PATH 中，若不在则写入 shell 配置文件。
+  > - **WHEN** 用户使用 zsh 且 PATH 不含 `~/.soulkiller/bin`
+  > - **THEN** SHALL 追加 `export PATH="$HOME/.soulkiller/bin:$PATH"` 到 `~/.zshrc`
+  > - **WHEN** `~/.soulkiller/bin` 已在 PATH 中
+--- candidata: self-update [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 统一的 atomicReplaceBinary 原语
+  | `updater.ts` SHALL 将"把一个临时文件原子替换到目标可执行路径"的逻辑抽出为独立函数 `atomicReplaceBinary(src, dst)`，所有平台差异收敛在该函数内部。`runUpdate` 主流程 SHALL NOT 出现 `isWindows` / `process.platform` 分支。
+  > ### Requirement: 统一的 atomicReplaceBinary 原语
+  > `updater.ts` SHALL 将"把一个临时文件原子替换到目标可执行路径"的逻辑抽出为独立函数 `atomicReplaceBinary(src, dst)`，所有平台差异收敛在该函数内部。`runUpdate` 主流程 SHALL NOT 出现 `isWindows` / `process.platform` 分支。
+  > - **WHEN** `atomicReplaceBinary(src, dst)` 成功完成
+  > - **THEN** SHALL 只有一处 `await atomicReplaceBinary(...)` 调用
+  > - **AND** 平台特定逻辑 SHALL 全部位于 `atomicReplaceBinary` 内部
+  > ### Requirement: Windows 平台 rename-self 替换策略
+  > 在 Windows 平台下，`soulkiller --update` SHALL 使用"rename running exe"策略替换二进制：先 rename 运行中的 exe 到 `<execPath>.old`，再将新二进制写入 `<execPath>`。运行中 exe 的文件锁是 Windows 特有约束，直接写入或删除会返回 `EBUSY` / `ERROR_SHARING_VIOLAT
+  > #### Scenario: Windows 正常升级
+--- candidata: skill-install [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI 命令形状
+  | CLI SHALL 在 `soulkiller skill install` 下提供如下命令签名：`install <slug|url|path> [--to <target>]... [--scope global|project] [--overwrite] [--catalog <url>]`；其中 `<slug>` 指 catalog 中的 slug，`<url>` 指远端 `.skill
+  > CLI SHALL 在 `soulkiller skill install` 下提供如下命令签名：`install <slug|url|path> [--to <target>]... [--scope global|project] [--overwrite] [--catalog <url>]`；其中 `<slug>` 指 catalog 中的 slug，`<url>` 指远端 `.skill
+  > - **WHEN** 用户执行 `soulkiller skill install fate-zero --to claude-code`
+  > - **WHEN** 用户执行 `soulkiller skill install fate-zero --to claude-code --to codex --to openclaw`
+  > - **WHEN** 用户在 `/home/user/proj/` 执行 `soulkiller skill install fate-zero --to claude-code --scope project`
+  > - **WHEN** 用户执行 `soulkiller skill install --all --to claude-code`
+  > - **WHEN** 用户执行 `soulkiller skill install /path/to/local.skill --to claude-code`
+  > - **THEN** CLI 跳过 catalog 与网络，直接读本地文件，解内嵌 `soulkiller.json` 校验 engine_version，完成后安装
+  > - **WHEN** 用户执行 `soulkiller skill install https://example.com/custom.skill --to claude-code`
+--- candidata: repl-upgrade [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: `/upgrade` REPL 命令
+  | REPL SHALL 注册 `/upgrade` 命令，其行为是在 REPL 内部完成整套二进制升级流程（查询版本 → 确认 → 下载 → 校验 → 原子替换），**全程不退出 REPL**。该命令 MUST 复用现有 `runUpdate()` 的下载、sha256 校验、原子替换、Windows self-rename 逻辑，并以可重入的方式在 ink 渲染循环中执行。
+  > REPL SHALL 注册 `/upgrade` 命令，其行为是在 REPL 内部完成整套二进制升级流程（查询版本 → 确认 → 下载 → 校验 → 原子替换），**全程不退出 REPL**。该命令 MUST 复用现有 `runUpdate()` 的下载、sha256 校验、原子替换、Windows self-rename 逻辑，并以可重入的方式在 ink 渲染循环中执行。
+  > - **THEN** UI 切到 "upgrading" 状态；流程通过 progress callback 实时渲染 "downloading X/Y MB" / "verifying checksum" / "replacing binary" 状态；升级成功后 UI 渲染明显视觉强调的 "Upgrade complete — current session stays on vX.Y.Z u
+  > 系统 SHALL 在升级成功后显式告知用户，当前 REPL 进程仍运行旧版本代码；新功能、bug 修复、engine_version 升级只有在 `/exit` 并重启 `soulkiller` 后生效。此提示 MUST 以视觉对比（warning 色 / 高亮背景 / 多行展示）突出显示，避免用户误以为当前会话已切换到新版。
+  > - **WHEN** 升级成功但用户未重启，此后尝试 `/install` 一个需要新 engine_version 的 skill
+  > - **THEN** `/install` 报告 "engine too high"（正常行为，因为当前进程仍是旧二进制逻辑）；错误文案引导用户 `/exit` 重启
+  > `runUpdate()` SHALL 支持 `silent: true` 与 `onProgress` 参数。在 REPL 调用下，该函数 MUST NOT 直接使用 `console.log/warn/error` 写 stdout（会污染 ink 渲染循环）；所有阶段事件、错误信息 MUST 通过 `onProgress` 回调上报，由 `UpgradeCommand` 组件渲染。CLI 直
+  > - **WHEN** 用户执行 `soulkiller --update`（不走 REPL）
+  > - **WHEN** `/upgrade` 在 downloading/verifying/replacing 任一阶段，用户按 Esc
+--- candidata: skill-catalog [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: catalog.json 端点
+  | Worker SHALL 在 `/examples/catalog.json` 提供可公开访问的 JSON 端点，内容为 CI 自动生成的 skill 清单；响应 `Content-Type: application/json`，且允许跨源（CORS）。
+  > - **THEN** 返回 HTTP 200 + JSON 响应，顶层字段 `version` / `updated_at` / `soulkiller_version_min` / `skills[]` 齐备
+  > catalog JSON SHALL 遵循以下结构：顶层 `version: 1`、`updated_at: ISO8601 string`、`soulkiller_version_min: semver string`、`skills: array`。每个 skills 元素 SHALL 包含 `slug`（kebab-case）、`display_name`、`description`、`ve
+  > - **THEN** 输出如 `{ "slug": "fate-zero", "display_name": "Fate/Zero", "description": "…", "version": "1.0.0", "engine_version": 3, "size_bytes": 2411724, "sha256": "abc…", "url": "/examples/skills/fate-
+  > - **THEN** 客户端识别 `version !== 1` 时打印警告 "catalog version unsupported; please update soulkiller" 并 fall back 到缓存
+  > 构建流水线 SHALL 在每次 `.skill` 发布前扫描 `examples/skills/*.skill`，对每个档案解包读取 `soulkiller.json` 与 `SKILL.md` frontmatter，计算 sha256，合成 `catalog.json`，随 `.skill` 一并上传到 Worker。
+  > - **THEN** CI 自动重新生成 `catalog.json` 包含新条目；下一次 `soulkiller skill catalog` 即可看到
+  > CLI SHALL 按下列优先级解析 catalog URL：命令行 `--catalog <url>` > 环境变量 `SOULKILLER_CATALOG_URL` > 硬编码默认值 `https://soulkiller-download.ad546971975.workers.dev/examples/catalog.json`。
+  > - **WHEN** 用户设 `SOULKILLER_CATALOG_URL=a` 且执行 `soulkiller skill install foo --catalog b`

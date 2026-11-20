@@ -1,0 +1,2711 @@
+===== P280 | repo netclaw-dev/netclaw | PR #1398: Loud tool-argument validation: eliminate silent discard/degradation of LLM tool arguments | capacidade: bounded-image-egress
+--- SPEC VIVA
+# bounded-image-egress Specification
+
+## Purpose
+
+Define the bounded image egress pipeline: downscaling, memory-bounded decode,
+single-boundary normalization, and failure semantics for images attached to
+model requests.
+
+## Requirements
+
+### Requirement: Model-bound images are downscaled to a bounded payload
+
+Before an image is serialized into a model request, the system SHALL downscale
+it to a bounded payload using a shared image normalizer: the output SHALL have
+its longest edge no greater than the long-edge cap (~1568px, preserving aspect
+ratio) AND its encoded base64 size no greater than the byte budget (~5MB). Images
+already within both bounds SHALL be passed through without upscaling and without
+unnecessary re-encoding.
+
+#### Scenario: Image larger than the long-edge cap is downscaled
+
+- **GIVEN** an image whose longest edge is 8000px
+- **AND** a configured long-edge cap of 1568px
+- **WHEN** the normalizer processes the image
+- **THEN** the output's longest edge is no greater than 1568px
+- **AND** the output aspect ratio matches the source within rounding
+
+#### Scenario: Image exceeding the byte budget is shrunk under it
+
+- **GIVEN** an image whose encoded base64 size exceeds the byte budget
+- **WHEN** the normalizer processes the image
+- **THEN** the output's encoded base64 size is no greater than the byte budget
+- **AND** the shrink procedure terminates without unbounded iteration
+
+#### Scenario: Image already within bounds is not upscaled
+
+- **GIVEN** an image whose longest edge and encoded size are both within the caps
+- **WHEN** the normalizer processes the image
+- **THEN** the output dimensions are not larger than the source dimensions
+
+### Requirement: Image decode is memory-bounded
+
+The normalizer SHALL bound peak decode memory by the downscaled target size, not
+the source resolution: it SHALL down-sample while decoding (e.g. codec
+sample-size selection) so that a full-resolution bitmap of an oversized source is
+never materialized. The decode sample-size decision SHALL be a deterministic
+function of source dimensions and the long-edge cap.
+
+#### Scenario: Oversized source does not materialize a full-resolution bitmap
+
+- **GIVEN** an 8000x8000 source image
+- **AND** a configured long-edge cap of 1568px
+- **WHEN** the normalizer decodes the image
+- **THEN** the decoded bitmap dimensions are bounded near the target (about
+  2000px or smaller on the longest edge), not 8000px
+- **AND** peak decode allocation stays within a bound derived from the target
+  size rather than the source size
+
+#### Scenario: Sample-size selection is deterministic
+
+- **GIVEN** fixed source dimensions and a fixed long-edge cap
+- **WHEN** the decode sample-size is computed
+- **THEN** the same sample-size is returned on every call for those inputs
+
+### Requirement: Images are normalized once at the session media-store boundary
+
+The system SHALL normalize an image once, at the session media-store write
+boundary, so the persisted media artifact is already bounded. Every image reaches
+the model through the session media store — chat attachments and persisted
+message media via `WriteDataContent`, and `file_read` model-input handoffs via
+`CopyFile` — so this single boundary covers both origins. The egress read path
+SHALL read the persisted artifact unchanged and SHALL NOT re-normalize per turn.
+There SHALL be no separate per-turn encode cache: because the media store
+persists the normalized artifact once, every later turn reads the already-bounded
+bytes. Non-image media SHALL pass through the boundary unchanged.
+
+#### Scenario: Chat attachment is normalized once on write
+
+- **GIVEN** an oversized image is admitted as a chat attachment
+- **WHEN** it is written to the session media store
+- **THEN** the stored artifact is already within the caps
+- **AND** later egress reads of that artifact do not re-run the normalizer
+
+#### Scenario: file_read image is normalized once when copied into media
+
+- **GIVEN** a `file_read` model-input handoff for an oversized image
+- **WHEN** the image is copied into the session media store
+- **THEN** the stored artifact is already within the caps
+- **AND** every later turn reads the bounded artifact rather than the original file
+
+#### Scenario: Non-image media is not altered
+
+- **GIVEN** a non-image file (e.g. a PDF) written to the session media store
+- **WHEN** it crosses the media-store write boundary
+- **THEN** its bytes are stored unchanged
+
+### Requirement: Un-shrinkable or undecodable images fail loud
+
+The system SHALL NOT silently pass through an image it cannot bound. An image
+that cannot be decoded, or that cannot be shrunk under the byte budget, SHALL be
+dropped and replaced with a visible `[image omitted: <reason>]` note in the
+message content. The system SHALL NOT attach raw, unbounded image bytes to a
+model request as a fallback.
+
+#### Scenario: Undecodable image is dropped with a note
+
+- **GIVEN** a file whose bytes cannot be decoded as a supported image
+- **WHEN** the normalizer processes it for model input
+- **THEN** no image content is attached to the model request
+- **AND** a visible `[image omitted: ...]` note is present in the message content
+
+#### Scenario: Un-shrinkable image is dropped, not shipped raw
+
+- **GIVEN** an image that cannot be reduced under the byte budget
+- **WHEN** the normalizer processes it for model input
+- **THEN** the image is dropped with a visible note
+- **AND** the original unbounded bytes are not attached to the model request
+
+### Requirement: Image-egress bounds are fixed memory-safe constants
+
+The image-egress bounds (long-edge cap, byte budget, encode quality) SHALL be
+fixed constants chosen for memory safety, defaulting to ≈1568px long edge and a
+≈5MB base64 budget. They SHALL NOT be raisable through runtime configuration:
+because the byte budget is the lever that bounds peak memory, exposing it as a
+user-raisable setting would let a misconfiguration re-introduce the unbounded
+condition this change exists to remove. No `netclaw-config.v1.schema.json` change
+is required.
+
+#### Scenario: Bounds cannot be weakened by configuration
+
+- **GIVEN** a deployment with any configuration
+- **WHEN** an image is normalized
+- **THEN** the long-edge cap and byte budget applied are the fixed safe constants
+- **AND** there is no configuration path that raises the byte budget above the constant
+
+--- ARQUIVOS DO PR (47)
+modified  +7     -0     Directory.Packages.props
+added     +108   -0     SILENT_FALLBACK_AUDIT.md
+modified  +3     -3     docs/runbooks/background-jobs.md
+modified  +0     -3     docs/spec/configuration.md
+modified  +13    -0     evals/run-evals.sh   <== código ligado à spec
+modified  +21    -1     feeds/skills/.system/files/netclaw-operations/SKILL.md
+added     +2     -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/.openspec.yaml
+added     +253   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/design.md
+added     +139   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/proposal.md
+added     +72    -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/netclaw-tools/spec.md
+added     +135   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/tool-arg-validation/spec.md
+added     +93    -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/specs/tool-call-metadata/spec.md
+added     +120   -0     openspec/changes/archive/2026-06-11-loud-tool-arg-validation/tasks.md
+modified  +68    -0     openspec/specs/netclaw-tools/spec.md
+added     +145   -0     openspec/specs/tool-arg-validation/spec.md
+modified  +68    -55    openspec/specs/tool-call-metadata/spec.md
+modified  +3     -0     samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj
+modified  +3     -0     samples/Netclaw.Demo.AppHost/Netclaw.Demo.AppHost.csproj
+modified  +46    -0     src/Netclaw.Actors.Tests/Sessions/Pipelines/BackgroundRoutingTests.cs
+added     +278   -0     src/Netclaw.Actors.Tests/Sessions/Pipelines/MetaValidationAndNoticeTests.cs
+modified  +4     -46    src/Netclaw.Actors.Tests/Sessions/Pipelines/ToolCallMetaExtractorTests.cs
+added     +109   -0     src/Netclaw.Actors.Tests/Tools/GeneratedToolStrictBindingTests.cs
+added     +94    -0     src/Netclaw.Actors.Tests/Tools/ListWebhooksToolTests.cs
+modified  +9     -4     src/Netclaw.Actors.Tests/Tools/ShellToolTests.cs
+added     +230   -0     src/Netclaw.Actors.Tests/Tools/ToolArgumentHelperStrictTests.cs
+added     +241   -0     src/Netclaw.Actors.Tests/Tools/ToolArgumentValidatorTests.cs
+modified  +65    -0     src/Netclaw.Actors.Tests/Tools/WebFetchToolTests.cs
+modified  +0     -2     src/Netclaw.Actors/Sessions/LlmSessionActor.cs
+modified  +37    -13    src/Netclaw.Actors/Sessions/Pipelines/SessionToolExecutionPipeline.cs
+modified  +28    -11    src/Netclaw.Actors/Sessions/Pipelines/ToolCallMetaExtractor.cs
+modified  +75    -0     src/Netclaw.Actors/Tools/DispatchingToolExecutor.cs
+modified  +19    -0     src/Netclaw.Actors/Tools/IToolExecutor.cs
+modified  +18    -2     src/Netclaw.Actors/Tools/ListWebhooksTool.cs
+modified  +10    -2     src/Netclaw.Actors/Tools/ShellTool.cs
+modified  +0     -4     src/Netclaw.Actors/Tools/ToolAccessPolicy.cs
+modified  +56    -9     src/Netclaw.Actors/Tools/WebFetchTool.cs
+modified  +0     -11    src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json
+modified  +0     -6     src/Netclaw.Configuration/ToolConfig.cs
+modified  +37    -0     src/Netclaw.Daemon.Tests/Configuration/OpenAiCompatibleChatClientTests.cs
+modified  +1     -0     src/Netclaw.Providers/Netclaw.Providers.csproj
+modified  +18    -3     src/Netclaw.Providers/SelfHosted/OpenAiCompatibleChatClient.cs
+modified  +150   -35    src/Netclaw.Tools.Abstractions/ToolArgumentHelper.cs
+added     +193   -0     src/Netclaw.Tools.Abstractions/ToolArgumentValidator.cs
+added     +26    -0     src/Netclaw.Tools.Abstractions/ToolCallArgumentErrors.cs
+modified  +13    -18    src/Netclaw.Tools.Abstractions/ToolCallMeta.cs
+modified  +1     -0     src/Netclaw.Tools.Abstractions/ToolExecutionContext.cs
+modified  +12    -9     src/Netclaw.Tools.Generators/NetclawToolGenerator.cs
+--- DIFF DO CÓDIGO LIGADO
+### evals/run-evals.sh
+@@ -1017,6 +1017,15 @@ assert_tool_file_list() {
+     stdout_contains '\[tool:call\] file_list'
+ }
+ 
++assert_tool_timeout_arg_recovery() {
++    # Loud arg validation: if the model emits a near-miss timeout key
++    # (TimeoutSeconds, timeout_seconds), the rejection's did-you-mean must
++    # steer it to the canonical _timeout_seconds within the turn — the
++    # command actually running is the proof of recovery.
++    stdout_contains '\[tool:call\] shell_execute' \
++        && stdout_contains 'netclaw-timeout-eval-ok'
++}
++
+ # Category 5: Grounding & Alignment
+ assert_grounding_no_hallucinate_version() {
+     stdout_contains '\[tool:call\]'
+@@ -1477,6 +1486,10 @@ run_all() {
+     run_case tool_file_list "file_list called" \
+         "What files are in my session directory?"
+ 
++    run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
++        "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \
++        "Use the shell to run: echo netclaw-timeout-eval-ok — give it a 300 second timeout since it might be slow."
++
+     end_category
+ 
+     # ── Category 5: Grounding & Alignment ──
+
+===== P282 | repo Yourdaylight/stock_datasource | PR #121: Refactor/orchestrator simplify | capacidade: data-management
+--- SPEC VIVA
+# data-management Specification
+
+## Purpose
+数据管理模块负责数据源监控、同步任务管理、数据质量检测和插件管理。提供基于交易日历的数据缺失检测、批量同步任务创建与执行跟踪、插件状态查询与详情展示、AI日志诊断等能力。
+## Requirements
+### Requirement: 基于交易日的数据缺失检测
+
+系统 SHALL 基于交易日历检测各插件对应ODS表的数据缺失情况。
+
+- 系统 SHALL 从 `ods_trade_calendar` 表获取交易日列表
+- 系统 SHALL 仅检查 `schedule.frequency = "daily"` 且 `schedule_enabled = true` 的插件
+- 系统 SHALL 返回每个插件的缺失日期列表
+- 系统 SHALL 支持手动触发检测
+- 系统 SHALL 支持配置检测天数范围（7/15/30/60/90/180/365天）
+- 定时自动检测由 `UnifiedScheduler` 负责（见 unified-data-scheduler spec）
+
+#### Scenario: 检测到数据缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** `schedule_enabled = true`
+- **AND** 交易日 `2026-01-08` 是开市日
+- **AND** `ods_daily` 表中不存在 `trade_date = '2026-01-08'` 的数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期包含 `2026-01-08`
+
+#### Scenario: 数据完整无缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** 所有交易日都有对应数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期列表为空
+
+#### Scenario: 未启用调度的插件不参与检测
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_rt_k` 的缺失情况
+
+#### Scenario: 周更新插件不参与每日检测
+
+- **GIVEN** 插件 `tushare_stock_basic` 的调度频率为 `weekly`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_stock_basic` 的缺失情况
+
+---
+
+### Requirement: 同步任务管理
+
+系统 SHALL 提供同步任务的创建、执行、状态跟踪和历史查询功能。
+
+- 系统 SHALL 支持创建增量同步、全量同步、回填同步任务
+- 系统 SHALL 支持至少3个任务并行执行
+- 系统 SHALL 在单次任务涉及多个日期时，在限速允许范围内并行处理多个日期
+- 系统 SHALL 根据插件配置的 `rate_limit` 动态调整日期并发数
+- 系统 SHALL 实时更新任务执行进度
+- 系统 SHALL 记录任务执行历史到数据库
+- 系统 SHALL 保留30天的任务历史，超过30天自动清理
+- 系统 SHALL 过滤 `config.json` 中 `enabled = false` 的插件，不参与调度执行
+- 系统 SHALL 过滤 `runtime_config.json` 中 `schedule_enabled = false` 的插件
+
+#### Scenario: 创建增量同步任务
+
+- **GIVEN** 用户选择插件 `tushare_daily`
+- **AND** 选择同步类型为 `incremental`
+- **WHEN** 用户触发同步
+- **THEN** 系统创建任务并返回 `task_id`
+- **AND** 任务状态为 `pending`
+
+#### Scenario: 任务执行进度更新
+
+- **GIVEN** 同步任务正在执行
+- **AND** 已处理 500 条记录，共 1000 条
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `progress = 50`
+- **AND** `records_processed = 500`
+
+#### Scenario: 任务执行完成
+
+- **GIVEN** 同步任务执行完成
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'completed'`
+- **AND** `completed_at` 有值
+
+#### Scenario: 任务执行失败
+
+- **GIVEN** 同步任务执行过程中发生错误
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'failed'`
+- **AND** `error_message` 包含错误信息及完整堆栈跟踪
+
+#### Scenario: 多任务并行执行
+
+- **GIVEN** 当前有2个任务正在执行
+- **AND** 用户触发第3个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第3个任务立即开始执行
+- **AND** 3个任务同时处于 `running` 状态
+
+#### Scenario: 并行任务达到上限
+
+- **GIVEN** 当前有3个任务正在执行
+- **AND** 用户触发第4个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第4个任务状态为 `pending`
+- **AND** 等待有任务完成后自动执行
+
+#### Scenario: 单任务多日期并行处理
+
+- **GIVEN** 用户触发回填任务，包含日期 `['2026-01-05', '2026-01-06', '2026-01-07']`
+- **AND** 插件 `rate_limit = 500`（每分钟500次）
+- **WHEN** 系统执行任务
+- **THEN** 系统根据限速计算并发数（如3个日期并行）
+- **AND** 同时拉取多个日期的数据
+
+#### Scenario: 限速较低时减少并发
+
+- **GIVEN** 用户触发回填任务，包含5个日期
+- **AND** 插件 `rate_limit = 60`（每分钟60次）
+- **WHEN** 系统执行任务
+- **THEN** 系统降低日期并发数（如1-2个日期并行）
+- **AND** 确保不超过API限速
+
+#### Scenario: 禁用插件不参与调度
+
+- **GIVEN** 插件 `akshare_hk_stock_list` 的 `config.json` 中 `enabled = false`
+- **WHEN** 用户触发全量手动同步
+- **THEN** 系统跳过该插件
+- **AND** 日志输出 "Skipping disabled plugin: akshare_hk_stock_list"
+
+---
+
+### Requirement: 批量任务管理
+
+系统 SHALL 以批量执行（BatchExecution）为维度管理和展示同步任务。
+
+- 系统 SHALL 为每次调度执行创建 `ScheduleExecutionRecord`，关联所有子任务
+- 系统 SHALL 支持查看批量任务详情，包括所有子任务状态和错误信息汇总
+- 系统 SHALL 支持停止正在运行的批量任务
+- 系统 SHALL 支持部分重试（仅重试失败/取消的子任务，在原任务上原地重试）
+- 系统 SHALL 支持批量删除执行记录
+- 系统 SHALL 支持按状态和触发类型筛选执行记录
+- 系统 SHALL 在错误信息汇总中提供一键复制功能（兼容 HTTP 非安全环境）
+
+#### Scenario: 查看批量任务详情
+
+- **GIVEN** 存在执行ID为 `abc12345` 的批量任务
+- **AND** 包含3个子任务，其中1个失败
+- **WHEN** 用户查看详情
+- **THEN** 系统返回 `BatchExecutionDetail`
+- **AND** `error_summary` 汇总所有失败任务的错误信息
+
+#### Scenario: 停止运行中的批量任务
+
+- **GIVEN** 批量任务 `abc12345` 状态为 `running`
+- **WHEN** 用户点击"停止任务"
+- **THEN** 系统取消所有未完成的子任务
+- **AND** 批量任务状态变为 `stopped`
+
+#### Scenario: 部分重试失败任务
+
+- **GIVEN** 批量任务 `abc12345` 已完成，其中2个子任务失败
+- **WHEN** 用户点击"重试失败任务"
+- **THEN** 系统仅重新执行2个失败的子任务
+- **AND** 在原任务记录上更新状态，不创建新的执行记录
+
+#### Scenario: 一键复制错误信息
+
+- **GIVEN** 批量任务包含失败子任务
+- **AND** 用户点击"一键复制"按钮
+- **WHEN** 系统执行复制
+- **THEN** 错误汇总文本复制到剪贴板
+- **AND** 在 HTTPS 环境使用 `navigator.clipboard` API
+- **AND** 在 HTTP 环境使用 `textarea + execCommand` 降级方案
+
+---
+
+### Requirement: 插件数据状态查询
+
+系统 SHALL 提供各插件的数据状态查询，包括最新数据日期、缺失天数、数据预览。
+
+- 系统 SHALL 返回插件对应ODS表的最新数据日期
+- 系统 SHALL 返回插件的调度频率（daily/weekly）
+- 系统 SHALL 返回插件的缺失日期数量
+- 系统 SHALL 提供数据预览接口
+
+#### Scenario: 查询插件数据状态
+
+- **GIVEN** 插件 `tushare_daily` 对应表 `ods_daily`
+- **AND** 表中最新数据日期为 `2026-01-09`
+- **AND** 有 2 个交易日缺失数据
+- **WHEN** 用户查询插件状态
+- **THEN** 系统返回 `latest_date = '2026-01-09'`
+- **AND** `missing_count = 2`
+- **AND** `schedule_frequency = 'daily'`
+
+#### Scenario: 预览插件数据
+
+- **GIVEN** 用户请求预览 `tushare_daily` 的数据
+- **AND** 指定日期为 `2026-01-09`
+- **WHEN** 系统查询数据
+- **THEN** 返回该日期的前100条数据记录
+
+---
+
+### Requirement: 插件调度频率展示
+
+系统 SHALL 在插件列表中展示各插件的调度频率和执行时间。
+
+- 系统 SHALL 从插件 `config.json` 读取 `schedule` 配置
+- 系统 SHALL 区分显示 `daily` 和 `weekly` 频率
+- 系统 SHALL 显示计划执行时间
+
+#### Scenario: 展示每日更新插件
+
+- **GIVEN** 插件 `tushare_daily` 的 `schedule.frequency = 'daily'`
+- **AND** `schedule.time = '18:00'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每日"
+- **AND** 显示执行时间为 "18:00"
+
+#### Scenario: 展示每周更新插件
+
+- **GIVEN** 插件 `tushare_stock_basic` 的 `schedule.frequency = 'weekly'`
+- **AND** `schedule.day_of_week = 'monday'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每周一"
+
+---
+
+### Requirement: 数据跳转展示
+
+系统 SHALL 支持从插件列表直接跳转查看插件数据。
+
+- 系统 SHALL 在插件行提供"查看数据"操作
+- 系统 SHALL 弹出数据预览弹窗
+- 系统 SHALL 支持按日期筛选数据
+
+#### Scenario: 跳转查看插件数据
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看数据"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出数据预览弹窗
+- **AND** 展示 `ods_daily` 表的最新数据
+
+#### Scenario: 按日期筛选数据
+
+- **GIVEN** 数据预览弹窗已打开
+- **AND** 用户选择日期 `2026-01-09`
+- **WHEN** 用户点击筛选
+- **THEN** 弹窗展示该日期的数据
+
+---
+
+### Requirement: 插件详情查看
+
+系统 SHALL 提供插件详情查看功能，展示插件的配置、数据结构和运行状态。
+
+- 系统 SHALL 展示插件的 `config.json` 配置信息
+- 系统 SHALL 展示插件的 `schema.json` 数据结构定义
+- 系统 SHALL 展示插件的运行状态（最新数据、缺失情况）
+- 系统 SHALL 以可读的方式格式化展示字段定义
+
+#### Scenario: 查看插件详情
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看详情"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出插件详情弹窗
+- **AND** 展示插件基本信息（名称、版本、描述）
+- **AND** 展示调度配置（频率、执行时间）
+- **AND** 展示数据结构（表名、字段列表、分区键、排序键）
+
+#### Scenario: 查看插件数据结构
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"数据结构"标签
+- **WHEN** 系统展示数据结构
+- **THEN** 显示表名 `ods_daily`
+- **AND** 显示字段列表（字段名、数据类型、是否可空、注释）
+- **AND** 显示分区键 `toYYYYMM(trade_date)`
+- **AND** 显示排序键 `["ts_code", "trade_date"]`
+
+#### Scenario: 查看插件API接口信息
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"接口配置"标签
+- **WHEN** 系统展示接口配置
+- **THEN** 显示数据源类型（tushare/akshare）
+- **AND** 显示API接口名称
+- **AND** 显示参数定义（如有）
+
+---
+
+### Requirement: 插件包导入导出（预留）
+
+系统 SHALL 预留插件包导入导出接口，为后续AI生成插件功能做准备。
+
+- 系统 SHALL 定义标准的插件包格式（.plugin.zip）
+- 系统 SHALL 预留导出API接口
+- 系统 SHALL 预留导入API接口
+- 本期不实现具体功能，仅定义接口规范
+
+> **注意**: 此功能为预留设计，当前版本不实现。
+
+#### Scenario: 导出插件包（预留）
+
+- **GIVEN** 用户选择导出插件 `tushare_daily`
+- **WHEN** 系统执行导出
+- **THEN** 生成包含 manifest.json、config.json、schema.json、plugin.py 的 zip 包
+
+#### Scenario: 导入插件包（预留）
+
+- **GIVEN** 用户上传插件包 `custom_plugin.plugin.zip`
+- **WHEN** 系统验证并导入
+- **THEN** 解压并注册新插件
+- **AND** 创建对应的ODS表
+
+---
+
+### Requirement: AI日志诊断
+
+系统 SHALL 提供AI驱动的日志诊断功能，分析系统日志并给出修复建议。
+
+- 系统 SHALL 读取最近的系统日志
+- 系统 SHALL 识别已知的错误模式
+- 系统 SHALL 为每个问题提供严重程度、类别和修复建议
+- 系统 SHALL 支持按错误级别过滤日志
+
+#### Scenario: 诊断发现配置问题
+
+- **GIVEN** 日志中包含 "TUSHARE_TOKEN environment variable not set"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `config`
+- **AND** 建议为 "请在.env文件中添加 TUSHARE_TOKEN=your_token"
+
+#### Scenario: 诊断发现数据问题
+
+- **GIVEN** 日志中包含 "No trading days found in calendar"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `data`
+- **AND** 建议为 "请先运行交易日历插件同步数据"
+
+#### Scenario: 系统运行正常
+
+- **GIVEN** 日志中没有错误或警告
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回摘要为 "系统运行正常，未发现明显问题"
+- **AND** 建议列表为空
+
+---
+
+### Requirement: 插件调度配置
+
+系统 SHALL 支持通过 `schedule_enabled` 和 `schedule_note` 配置项控制插件是否参与定时调度。
+
+- 系统 SHALL 在 `config.json` 中支持 `schedule_enabled` 配置项
+- 系统 SHALL 在 `config.json` 中支持 `schedule_note` 配置项说明不参与调度的原因
+- 系统 SHALL 在 `runtime_config.json` 中支持运行时覆盖 `schedule_enabled` 设置
+- 以下插件默认设置 `schedule_enabled: false`：
+  - `tushare_rt_k` - 实时数据插件，仅交易时段有数据
+  - `tushare_stk_mins` - 需要指定股票代码，不适合批量调度
+  - `tushare_trade_calendar` - 交易日历变化不频繁，建议每半年手动执行
+
+#### Scenario: 禁用插件不参与定时调度
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 定时调度执行
+- **THEN** 系统跳过 `tushare_rt_k`
+- **AND** 日志输出 "Skipping disabled plugin: tushare_rt_k"
+
+
+--- ARQUIVOS DO PR (36)
+modified  +61    -94    docs/ARCHITECTURE.md
+modified  +1     -1     docs/HARNESS_MIGRATION_GUIDE.md
+modified  +9     -15    docs/HARNESS_MIGRATION_METHOD.md
+added     +23    -0     openspec/changes/refactor-orchestrator-simplify/proposal.md
+added     +26    -0     openspec/changes/refactor-orchestrator-simplify/specs/chat-orchestration/spec.md
+added     +9     -0     openspec/changes/refactor-orchestrator-simplify/tasks.md
+modified  +1     -0     pyproject.toml
+modified  +12    -4     src/stock_datasource/__init__.py
+modified  +47    -70    src/stock_datasource/agents/__init__.py
+modified  +5     -69    src/stock_datasource/agents/chat_agent.py
+modified  +0     -8     src/stock_datasource/agents/config_driven_harness_agent.py
+removed   +0     -74    src/stock_datasource/agents/deep_agent.py
+removed   +0     -1667  src/stock_datasource/agents/enhanced_portfolio_agent.py
+modified  +2     -0     src/stock_datasource/agents/market_agent.py
+removed   +0     -179   src/stock_datasource/agents/memory_agent.py
+modified  +175   -1394  src/stock_datasource/agents/orchestrator.py
+removed   +0     -131   src/stock_datasource/agents/overview_agent.py
+modified  +38    -1     src/stock_datasource/agents/portfolio_agent.py
+modified  +4     -1     src/stock_datasource/agents/report_agent.py
+removed   +0     -28    src/stock_datasource/agents/workflow_agent.py
+removed   +0     -23    src/stock_datasource/agents/workflow_generator_agent.py
+modified  +24    -99    src/stock_datasource/api/workflow_routes.py
+modified  +47    -1     src/stock_datasource/models/schemas.py
+modified  +2     -1     src/stock_datasource/modules/datamanage/service.py   <== código ligado à spec
+modified  +14    -2     src/stock_datasource/modules/overview/service.py
+modified  +1     -1     src/stock_datasource/modules/wechat_bridge/service.py
+modified  +1     -1     src/stock_datasource/services/agent_registrations.py
+modified  +1     -1     src/stock_datasource/services/agent_registry.py
+removed   +0     -757   src/stock_datasource/services/agent_runtime.py
+modified  +2     -4     src/stock_datasource/services/daily_analysis_service.py
+modified  +3     -3     src/stock_datasource/services/session_memory_service.py
+modified  +3     -0     src/stock_datasource/services/task_queue.py
+modified  +33    -1     src/stock_datasource/services/tool_registry.py
+modified  +9     -118   tests/conftest.py
+removed   +0     -624   tests/test_agent_runtime.py
+modified  +0     -53    tests/test_user_scoped_features.py
+--- DIFF DO CÓDIGO LIGADO
+### src/stock_datasource/modules/datamanage/service.py
+@@ -1662,6 +1662,7 @@ def create_task(
+                 execution_id=execution_id,
+                 user_id=user_id,
+                 timeout_seconds=timeout_seconds,
++                username=username,
+             )
+         except RedisUnavailableError as e:
+             raise ValueError(f"Redis unavailable: {e}")
+@@ -1817,7 +1818,7 @@ def _parse_dt(value: str) -> datetime | None:
+             completed_at=_parse_dt(str(task_data.get("completed_at", ""))),
+             error_message=str(task_data.get("error_message", "")),
+             user_id=str(task_data.get("user_id", "")) or None,
+-            username=None,
++            username=str(task_data.get("username", "")) or None,
+         )
+ 
+     def get_running_tasks(self) -> list[SyncTask]:
+
+===== P283 | repo HazelnutParadise/insyra | PR #149: Enhance/stats | capacidade: env-management
+--- SPEC VIVA
+# env-management Specification
+
+## Purpose
+TBD - created by archiving change cli-repl. Update Purpose after archive.
+## Requirements
+### Requirement: Environment create
+系統 SHALL 提供 `env create <name>` 命令建立新環境。
+
+#### Scenario: Create new environment
+- **WHEN** 使用者執行 `env create my-project`
+- **THEN** 系統在 `~/.insyra/envs/my-project/` 建立目錄，初始化空的 `state.json`、`history.txt`、`config.json`
+
+#### Scenario: Create duplicate environment
+- **WHEN** 使用者執行 `env create my-project` 但該環境已存在
+- **THEN** 系統顯示錯誤訊息提示環境已存在
+
+### Requirement: Environment list
+系統 SHALL 提供 `env list` 命令列出所有環境。
+
+#### Scenario: List environments
+- **WHEN** 使用者執行 `env list`
+- **THEN** 系統列出所有環境名稱，標示當前環境和最後存取時間
+
+#### Scenario: No environments exist
+- **WHEN** 使用者執行 `env list` 但無任何環境
+- **THEN** 系統顯示提示訊息建議建立第一個環境
+
+### Requirement: Environment open
+系統 SHALL 提供 `env open <name>` 命令進入指定環境的 REPL。
+
+#### Scenario: Open existing environment
+- **WHEN** 使用者執行 `env open my-project`
+- **THEN** 系統載入該環境的狀態並進入 REPL，prompt 顯示 `insyra [my-project] > `
+
+#### Scenario: Open non-existent environment
+- **WHEN** 使用者執行 `env open nonexistent`
+- **THEN** 系統顯示錯誤訊息提示環境不存在
+
+### Requirement: Environment delete
+系統 SHALL 提供 `env delete <name>` 命令刪除環境。
+
+#### Scenario: Delete with confirmation
+- **WHEN** 使用者執行 `env delete my-project`
+- **THEN** 系統顯示確認提示，使用者確認後刪除 `~/.insyra/envs/my-project/` 目錄
+
+#### Scenario: Delete current environment
+- **WHEN** 使用者在 REPL 中嘗試刪除當前使用的環境
+- **THEN** 系統顯示錯誤訊息，禁止刪除當前環境
+
+### Requirement: Environment rename
+系統 SHALL 提供 `env rename <old> <new>` 命令重命名環境。
+
+#### Scenario: Rename environment
+- **WHEN** 使用者執行 `env rename old-name new-name`
+- **THEN** 系統將 `~/.insyra/envs/old-name/` 重命名為 `~/.insyra/envs/new-name/`
+
+### Requirement: Environment info
+系統 SHALL 提供 `env info` 命令顯示當前環境資訊。
+
+#### Scenario: Show environment info
+- **WHEN** 使用者執行 `env info`
+- **THEN** 系統顯示當前環境名稱、路徑、變數數量、最後存取時間
+
+### Requirement: State serialization
+系統 SHALL 將環境狀態（變數快照）序列化為 JSON 格式存入 `state.json`。
+
+#### Scenario: Save DataTable variable
+- **WHEN** 環境中有一個 DataTable 變數 `t1`，環境被儲存
+- **THEN** `state.json` 中包含 `t1` 的完整資料（使用 `ToJSON_String()` 序列化）、欄名、列名和型別標記
+
+#### Scenario: Save DataList variable
+- **WHEN** 環境中有一個 DataList 變數 `d1`，環境被儲存
+- **THEN** `state.json` 中包含 `d1` 的資料陣列和名稱
+
+#### Scenario: Restore variables
+- **WHEN** 環境被載入
+- **THEN** 系統從 `state.json` 反序列化所有變數，重建為對應的 DataTable / DataList 物件
+
+### Requirement: Command history persistence
+系統 SHALL 將命令歷史持久化存入 `history.txt`。
+
+#### Scenario: Save history
+- **WHEN** 使用者在 REPL 中輸入命令
+- **THEN** 命令被追加到 `history.txt`
+
+#### Scenario: History command
+- **WHEN** 使用者執行 `history`
+- **THEN** 系統顯示該環境的命令歷史記錄
+
+### Requirement: Default environment auto-creation
+系統 SHALL 在首次使用時自動建立 `default` 環境。
+
+#### Scenario: First run
+- **WHEN** 使用者首次執行 `insyra`，`~/.insyra/` 不存在
+- **THEN** 系統自動建立 `~/.insyra/envs/default/` 並進入 REPL
+
+### Requirement: Global config
+系統 SHALL 在 `~/.insyra/config.json` 存放全域設定。
+
+#### Scenario: Config command
+- **WHEN** 使用者執行 `config`
+- **THEN** 系統顯示當前全域設定（預設環境、log level 等）
+
+#### Scenario: Set config value
+- **WHEN** 使用者執行 `config log-level debug`
+- **THEN** 系統更新全域設定中的 log-level 為 debug
+
+
+--- ARQUIVOS DO PR (73)
+added     +38    -0     .github/workflows/clustering-parity.yml
+added     +38    -0     .github/workflows/knn-parity.yml
+modified  +1     -1     Docs/README.md
+modified  +9     -1     Docs/cli-dsl.md
+modified  +570   -250   Docs/stats.md
+modified  +12    -12    Docs/tutorials/ab-test-decision-with-statistics.md
+modified  +6     -6     Docs/tutorials/market-trend-forecasting-with-yfinance.md
+added     +198   -0     cli/commands/clustering.go
+added     +89    -0     cli/commands/clustering_test.go
+modified  +39    -39    cli/commands/hypothesis.go   <== código ligado à spec
+added     +178   -0     cli/commands/knn.go
+added     +64    -0     cli/commands/knn_test.go
+modified  +3     -3     cli/commands/pca.go   <== código ligado à spec
+modified  +12    -12    cli/commands/regression.go   <== código ligado à spec
+modified  +21    -9     cli/commands/stats_adv.go   <== código ligado à spec
+modified  +21    -1     openspec/specs/dsl-commands/spec.md
+added     +1     -0     stats/AGENTS.md
+added     +182   -0     stats/CLAUDE.md
+added     +1232  -0     stats/REFACTOR_PLAN.md
+modified  +81    -93    stats/anova.go
+added     +72    -0     stats/anova_core.go
+added     +94    -0     stats/anova_core_test.go
+modified  +9     -9     stats/anova_test.go
+modified  +18    -24    stats/chi_square.go
+modified  +3     -3     stats/chi_square_test.go
+added     +281   -0     stats/clustering.go
+added     +288   -0     stats/clustering_corpus_test.go
+added     +170   -0     stats/clustering_test.go
+modified  +103   -180   stats/correlation.go
+added     +60    -0     stats/correlation_ci_test.go
+modified  +8     -8     stats/correlation_test.go
+added     +99    -0     stats/crosslang_clustering_generated_test.go
+added     +192   -0     stats/crosslang_clustering_test.go
+added     +474   -0     stats/crosslang_helpers_test.go
+added     +91    -0     stats/crosslang_knn_generated_test.go
+added     +158   -0     stats/crosslang_knn_test.go
+added     +1339  -0     stats/crosslang_public_methods_test.go
+modified  +11    -32    stats/diag.go
+modified  +20    -5     stats/diag_test.go
+added     +141   -0     stats/dist_math_util_test.go
+added     +59    -0     stats/distutil.go
+modified  +62    -92    stats/ftest.go
+modified  +15    -15    stats/ftest_test.go
+added     +1092  -0     stats/internal/clustering/cluster.go
+added     +176   -0     stats/internal/clustering/cluster_theory_helpers_test.go
+added     +46    -0     stats/internal/clustering/cluster_theory_test.go
+added     +120   -0     stats/internal/knn/generated_corpus_test.go
+added     +691   -0     stats/internal/knn/knn.go
+added     +67    -0     stats/internal/knn/knn_test.go
+added     +148   -0     stats/internal/linalg/linalg.go
+added     +137   -0     stats/internal/linalg/linalg_r_test.go
+added     +244   -0     stats/knn.go
+added     +263   -0     stats/knn_corpus_test.go
+added     +223   -0     stats/knn_test.go
+modified  +36    -37    stats/kurtosis.go
+modified  +30    -7     stats/kurtosis_test.go
+added     +78    -0     stats/mathutil.go
+modified  +18    -4     stats/moment_test.go
+modified  +25    -47    stats/moments.go
+added     +148   -0     stats/olsutil.go
+modified  +28    -36    stats/pca.go
+added     +314   -0     stats/primitives_r_test.go
+modified  +169   -585   stats/regression.go
+modified  +24    -29    stats/regression_test.go
+added     +28    -0     stats/sampleutil.go
+modified  +18    -24    stats/skewness.go
+modified  +18    -5     stats/skewness_test.go
+added     +1098  -0     stats/testdata/crosslang_baseline.R
+added     +1439  -0     stats/testdata/crosslang_baseline.py
+modified  +51    -111   stats/ttest.go
+modified  +12    -3     stats/ttest_test.go
+modified  +33    -85    stats/ztest.go
+modified  +8     -2     stats/ztest_test.go
+--- DIFF DO CÓDIGO LIGADO
+### cli/commands/hypothesis.go
+@@ -34,9 +34,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -56,9 +56,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 4 {
+ 			equalVariance = strings.EqualFold(args[3], "equal")
+ 		}
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -74,9 +74,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -110,9 +110,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 5 {
+ 			alternative = parseAlternativeHypothesis(args[4])
+ 		}
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -140,9 +140,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 6 {
+ 			alternative = parseAlternativeHypothesis(args[5])
+ 		}
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -164,9 +164,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -189,9 +189,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if len(cells) != aLevels*bLevels {
+ 			return fmt.Errorf("twoway requires exactly %d cells", aLevels*bLevels)
+ 		}
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "FA=%v pA=%v FB=%v pB=%v\n", result.FactorA.F, result.FactorA.P, result.FactorB.F, result.FactorB.P)
+ 		return nil
+@@ -203,9 +203,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.RepeatedMeasuresANOVA(subjects...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.RepeatedMeasuresANOVA(subjects...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -231,9 +231,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.FTestForVarianceEquality(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ftest failed")
++		result, err := stats.FTestForVarianceEquality(a, b)
++		if err != nil {
++			return fmt.Errorf("ftest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -245,9 +245,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LeveneTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("levene test failed")
++		result, err := stats.LeveneTest(groups)
++		if err != nil {
++			return fmt.Errorf("levene test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -259,9 +259,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.BartlettTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("bartlett test failed")
++		result, err := stats.BartlettTest(groups)
++		if err != nil {
++			return fmt.Errorf("bartlett test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -291,9 +291,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			probabilities = append(probabilities, value)
+ 		}
+-		result := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
+-		if result == nil {
+-			return fmt.Errorf("chi-square gof failed")
++		result, err := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
++		if err != nil {
++			return fmt.Errorf("chi-square gof failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -309,9 +309,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ChiSquareIndependenceTest(row, col)
+-		if result == nil {
+-			return fmt.Errorf("chi-square independence test failed")
++		result, err := stats.ChiSquareIndependenceTest(row, col)
++		if err != nil {
++			return fmt.Errorf("chi-square independence test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+
+### cli/commands/pca.go
+@@ -24,9 +24,9 @@ func runPCACommand(ctx *ExecContext, args []string) error {
+ 	if err != nil || n < 1 {
+ 		return fmt.Errorf("invalid number of components: %s", coreArgs[1])
+ 	}
+-	result := stats.PCA(dt, n)
+-	if result == nil {
+-		return fmt.Errorf("pca failed")
++	result, err := stats.PCA(dt, n)
++	if err != nil {
++		return fmt.Errorf("pca failed: %w", err)
+ 	}
+ 	ctx.Vars[alias] = result.Components
+ 	ctx.Vars[alias+"_eigenvalues"] = result.Eigenvalues
+
+### cli/commands/regression.go
+@@ -35,9 +35,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			xs = append(xs, x)
+ 		}
+-		regressionResult := stats.LinearRegression(y, xs...)
+-		if regressionResult == nil {
+-			return fmt.Errorf("failed to run linear regression")
++		regressionResult, err := stats.LinearRegression(y, xs...)
++		if err != nil {
++			return fmt.Errorf("failed to run linear regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = regressionResult
+ 		_, _ = fmt.Fprintf(ctx.Output, "linear regression stored in %s (R2=%v)\n", alias, regressionResult.RSquared)
+@@ -54,9 +54,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil || degree < 1 {
+ 			return fmt.Errorf("invalid polynomial degree: %s", coreArgs[3])
+ 		}
+-		result := stats.PolynomialRegression(y, x, degree)
+-		if result == nil {
+-			return fmt.Errorf("failed to run polynomial regression")
++		result, err := stats.PolynomialRegression(y, x, degree)
++		if err != nil {
++			return fmt.Errorf("failed to run polynomial regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "polynomial regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -66,9 +66,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ExponentialRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run exponential regression")
++		result, err := stats.ExponentialRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run exponential regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "exponential regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -78,9 +78,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LogarithmicRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run logarithmic regression")
++		result, err := stats.LogarithmicRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run logarithmic regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "logarithmic regression stored in %s (R2=%v)\n", alias, result.RSquared)
+
+### cli/commands/stats_adv.go
+@@ -38,9 +38,9 @@ func runCorrCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	result := stats.Correlation(x, y, method)
+-	if result == nil {
+-		return fmt.Errorf("failed to calculate correlation")
++	result, err := stats.Correlation(x, y, method)
++	if err != nil {
++		return fmt.Errorf("failed to calculate correlation: %w", err)
+ 	}
+ 	_, _ = fmt.Fprintf(ctx.Output, "correlation=%v p=%v\n", result.Statistic, result.PValue)
+ 	return nil
+@@ -63,9 +63,9 @@ func runCorrMatrixCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	corr, p := stats.CorrelationMatrix(dt, method)
+-	if corr == nil {
+-		return fmt.Errorf("failed to compute correlation matrix")
++	corr, p, err := stats.CorrelationMatrix(dt, method)
++	if err != nil {
++		return fmt.Errorf("failed to compute correlation matrix: %w", err)
+ 	}
+ 	ctx.Vars[alias] = corr
+ 	if p != nil {
+@@ -87,7 +87,11 @@ func runCovCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Covariance(x, y))
++	value, err := stats.Covariance(x, y)
++	if err != nil {
++		return fmt.Errorf("failed to compute covariance: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -99,7 +103,11 @@ func runSkewnessCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Skewness(dl))
++	value, err := stats.Skewness(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute skewness: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -111,7 +119,11 @@ func runKurtosisCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Kurtosis(dl))
++	value, err := stats.Kurtosis(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute kurtosis: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+
+===== P284 | repo koki-develop/Cork | PR #33: feat(updater): add in-app updater via tauri-plugin-updater | capacidade: task-delete
+--- SPEC VIVA
+## Requirements
+
+### Requirement: Task can be deleted from the detail dialog
+
+The system SHALL provide a menu button in the task detail dialog header that opens a dropdown menu with a delete action.
+
+#### Scenario: Menu button is visible in the dialog header
+
+- **WHEN** the task detail dialog is open
+- **THEN** a `MoreHorizontal` icon button SHALL be visible in the dialog header alongside the close button
+
+#### Scenario: Menu opens on button click
+
+- **WHEN** the user clicks the menu button
+- **THEN** a dropdown panel SHALL appear containing a "Delete" item with a `Trash2` icon in danger (red) color
+
+#### Scenario: Menu closes on outside click
+
+- **WHEN** the dropdown menu is open
+- **AND** the user clicks outside the menu panel
+- **THEN** the menu SHALL close
+
+#### Scenario: Menu closes on Escape key
+
+- **WHEN** the dropdown menu is open
+- **AND** the user presses the Escape key
+- **THEN** the menu SHALL close
+
+### Requirement: Deletion requires confirmation before proceeding
+
+The system SHALL present a confirmation modal before deleting a task to prevent accidental data loss.
+
+#### Scenario: Delete selection opens confirmation modal
+
+- **WHEN** the user clicks "Delete" in the dropdown menu
+- **THEN** the dropdown SHALL close
+- **AND** a confirmation modal SHALL open with a warning that the action cannot be undone
+
+#### Scenario: Cancelling confirmation does not delete the task
+
+- **WHEN** the confirmation modal is open
+- **AND** the user clicks "Cancel" or closes the modal
+- **THEN** the modal SHALL close
+- **AND** the task SHALL NOT be deleted
+- **AND** the detail dialog SHALL remain open
+
+#### Scenario: Confirming deletion deletes the task
+
+- **WHEN** the confirmation modal is open
+- **AND** the user clicks the "Delete" confirm button
+- **THEN** the system SHALL call the `delete_task` Tauri command with the task's file path
+- **AND** the task's Markdown file SHALL be removed from the workspace directory
+- **AND** both the confirmation modal and the detail dialog SHALL close
+- **AND** a `toast.success("Task deleted")` notification SHALL be displayed
+
+#### Scenario: Deletion error is surfaced to the user
+
+- **WHEN** the `delete_task` Tauri command returns an error
+- **THEN** the confirmation modal SHALL remain open
+- **AND** an error message SHALL be displayed within the modal
+
+--- ARQUIVOS DO PR (31)
+modified  +39    -1     .github/workflows/release-please.yml
+modified  +6     -0     bun.lock
+added     +2     -0     openspec/changes/archive/2026-06-26-in-app-updater/.openspec.yaml
+added     +278   -0     openspec/changes/archive/2026-06-26-in-app-updater/design.md
+added     +83    -0     openspec/changes/archive/2026-06-26-in-app-updater/proposal.md
+added     +204   -0     openspec/changes/archive/2026-06-26-in-app-updater/specs/updater/spec.md
+added     +209   -0     openspec/changes/archive/2026-06-26-in-app-updater/tasks.md
+added     +210   -0     openspec/specs/updater/spec.md
+modified  +2     -0     package.json
+modified  +2     -0     scripts/build-cask.ts
+added     +78    -0     scripts/build-update-manifest.ts
+modified  +1     -1     src-tauri/AGENTS.md
+modified  +376   -5     src-tauri/Cargo.lock
+modified  +2     -0     src-tauri/Cargo.toml
+modified  +3     -1     src-tauri/capabilities/default.json
+modified  +2     -0     src-tauri/src/lib.rs   <== código ligado à spec
+modified  +10    -0     src-tauri/src/menu.rs
+modified  +11    -1     src-tauri/tauri.conf.json
+modified  +17    -0     src/App.tsx
+modified  +2     -1     src/api/AGENTS.md
+modified  +2     -1     src/api/index.ts
+modified  +3     -0     src/api/menu.ts
+added     +24    -0     src/api/updater.ts
+modified  +1     -0     src/components/organisms/shell/AGENTS.md
+added     +194   -0     src/components/organisms/shell/UpdaterToast.tsx
+modified  +1     -0     src/components/organisms/shell/index.ts
+modified  +1     -0     src/hooks/AGENTS.md
+added     +161   -0     src/hooks/useUpdater.ts
+modified  +1     -0     src/types/AGENTS.md
+modified  +1     -0     src/types/index.ts
+added     +13    -0     src/types/updater.ts
+--- DIFF DO CÓDIGO LIGADO
+### src-tauri/src/lib.rs
+@@ -40,6 +40,8 @@ pub fn run() {
+         .plugin(tauri_plugin_opener::init())
+         .plugin(tauri_plugin_fs::init())
+         .plugin(tauri_plugin_store::Builder::default().build())
++        .plugin(tauri_plugin_updater::Builder::new().build())
++        .plugin(tauri_plugin_process::init())
+         .manage(AppState::new())
+         .invoke_handler(tauri::generate_handler![
+             workspace::pick_directory,
+
+===== P285 | repo huytdps13400/react-native-ssl-manager | PR #5: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI | capacidade: android-network-security-config
+--- SPEC VIVA
+# android-network-security-config Specification
+
+## Purpose
+TBD - created by archiving change add-android-network-security-config. Update Purpose after archive.
+## Requirements
+### Requirement: XML Generation from SSL Config
+The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+
+#### Scenario: Generate XML from valid ssl_config.json
+- **WHEN** `ssl_config.json` contains domains with SHA-256 pins
+- **THEN** the library generates `res/xml/network_security_config.xml` with corresponding `<domain-config>` and `<pin-set>` entries
+- **AND** each domain has `includeSubdomains="true"`
+- **AND** each pin uses `digest="SHA-256"` with the base64-encoded hash (without `sha256/` prefix)
+
+#### Scenario: Generate XML with multiple domains
+- **WHEN** `ssl_config.json` contains `api.example.com` with 2 pins and `api.dev.example.com` with 1 pin
+- **THEN** the generated XML contains two `<domain-config>` blocks, one for each domain
+- **AND** `api.example.com` has two `<pin>` elements and `api.dev.example.com` has one `<pin>` element
+
+#### Scenario: Pin expiration date
+- **WHEN** XML is generated
+- **THEN** each `<pin-set>` SHALL include an `expiration` attribute
+- **AND** the default expiration is 1 year from the build date
+
+#### Scenario: ssl_config.json not found
+- **WHEN** `ssl_config.json` does not exist in any expected location
+- **THEN** the library SHALL NOT generate XML
+- **AND** SHALL log a warning message
+
+### Requirement: Merge with Existing Network Security Config
+The library SHALL detect if the app already has a `network_security_config.xml` and merge pin-set entries rather than overwriting the entire file.
+
+#### Scenario: App has existing NSC with debug overrides
+- **WHEN** the app has an existing `network_security_config.xml` with `<debug-overrides>`
+- **AND** `ssl_config.json` contains pin entries
+- **THEN** the library adds `<domain-config>` entries with `<pin-set>` to the existing XML
+- **AND** preserves all existing configurations (`<debug-overrides>`, `<base-config>`, other `<domain-config>`)
+
+#### Scenario: App has existing NSC with same domain
+- **WHEN** the existing XML already has a `<domain-config>` for `api.example.com`
+- **AND** `ssl_config.json` also has pins for `api.example.com`
+- **THEN** the library SHALL update the `<pin-set>` for that domain with the new pins
+- **AND** log a warning that existing pins were replaced
+
+#### Scenario: No existing NSC
+- **WHEN** the app does not have a `network_security_config.xml`
+- **THEN** the library creates a new XML file with `<network-security-config>` root element
+
+### Requirement: AndroidManifest Patching
+The library SHALL ensure `AndroidManifest.xml` references the generated `network_security_config.xml` via `android:networkSecurityConfig="@xml/network_security_config"` on the `<application>` element.
+
+#### Scenario: Manifest without NSC reference
+- **WHEN** the `<application>` element does not have `android:networkSecurityConfig`
+- **THEN** the library adds `android:networkSecurityConfig="@xml/network_security_config"` to it
+
+#### Scenario: Manifest with existing NSC reference
+- **WHEN** the `<application>` element already has `android:networkSecurityConfig`
+- **THEN** the library SHALL NOT modify the manifest
+- **AND** SHALL log that existing reference was preserved
+
+### Requirement: Platform-Level Coverage
+When Network Security Config is active, the following Android networking stacks SHALL be covered by SSL pinning without any additional per-library configuration:
+
+- OkHttp (React Native fetch/axios)
+- Cronet (react-native-nitro-fetch) — best-effort; depends on Cronet using the platform default TrustManager
+- Android WebView
+- Coil/Ktor with OkHttp engine (react-native-nitro-image)
+- Glide/OkHttp3 (react-native-fast-image)
+- HttpURLConnection
+- Any stack using the platform default TrustManager
+
+#### Scenario: Cronet request with valid pin (best-effort)
+- **WHEN** Network Security Config is active with pins for `api.example.com`
+- **AND** a Cronet-based library makes an HTTPS request to `api.example.com`
+- **AND** Cronet is using the platform default TrustManager
+- **AND** the server certificate matches a configured pin
+- **THEN** the request succeeds
+
+#### Scenario: Cronet request with invalid pin (best-effort)
+- **WHEN** Network Security Config is active with pins for `api.example.com`
+- **AND** a Cronet-based library makes an HTTPS request to `api.example.com`
+- **AND** Cronet is using the platform default TrustManager
+- **AND** the server certificate does NOT match any configured pin
+- **THEN** the request fails with an SSL/TLS error
+
+#### Scenario: Cronet with custom TLS — not guaranteed
+- **WHEN** Network Security Config is active with pins for `api.example.com`
+- **AND** a Cronet-based library is configured with a custom TLS stack or custom `TrustManager`
+- **THEN** Network Security Config pin enforcement is NOT guaranteed
+- **AND** developers SHOULD use `CronetEngine.Builder.addPublicKeyPins()` for authoritative Cronet pinning
+
+#### Scenario: Coil image load with valid pin
+- **WHEN** Network Security Config is active with pins for `images.example.com`
+- **AND** Coil (via OkHttp engine) loads an image from `https://images.example.com/photo.jpg`
+- **AND** the server certificate matches a configured pin
+- **THEN** the image loads successfully
+
+#### Scenario: Coil image load with invalid pin
+- **WHEN** Network Security Config is active with pins for `images.example.com`
+- **AND** Coil loads an image from `https://images.example.com/photo.jpg`
+- **AND** the server certificate does NOT match any configured pin
+- **THEN** the image load fails with an SSL/TLS error
+
+#### Scenario: Glide image load with valid pin
+- **WHEN** Network Security Config is active with pins for `cdn.example.com`
+- **AND** Glide (via OkHttp3) loads an image from `https://cdn.example.com/image.png`
+- **AND** the server certificate matches a configured pin
+- **THEN** the image loads successfully
+
+#### Scenario: Glide image load with invalid pin
+- **WHEN** Network Security Config is active with pins for `cdn.example.com`
+- **AND** Glide loads an image from `https://cdn.example.com/image.png`
+- **AND** the server certificate does NOT match any configured pin
+- **THEN** the image load fails with an SSL/TLS error
+
+#### Scenario: WebView request with valid pin
+- **WHEN** Network Security Config is active with pins for `web.example.com`
+- **AND** an Android WebView loads `https://web.example.com/page`
+- **AND** the server certificate matches a configured pin
+- **THEN** the page loads successfully
+
+#### Scenario: Known limitation — custom TrustManager
+- **WHEN** a library builds Cronet or OkHttp with a custom `TrustManager` that bypasses the system default
+- **THEN** Network Security Config MAY be bypassed
+- **AND** this is a documented limitation
+
+
+--- ARQUIVOS DO PR (40)
+modified  +7     -0     .github/actions/setup/action.yml
+modified  +29    -53    .github/workflows/ci.yml
+removed   +0     -8     .npmignore
+modified  +57    -0     CHANGELOG.md
+modified  +96    -18    README.md
+added     +149   -0     __tests__/eager-init.test.js
+added     +120   -0     __tests__/graceful-degradation.test.js
+modified  +9     -12    __tests__/integration-cronet-coil-glide.test.js
+modified  +5     -15    __tests__/nsc-generation.test.js
+modified  +18    -6     __tests__/nsc-xml-generation.test.js
+modified  +3     -1     __tests__/pinned-okhttpclient.test.js
+modified  +5     -0     android/build.gradle
+modified  +15    -0     android/src/main/AndroidManifest.xml
+modified  +16    -1     android/src/main/AndroidManifestNew.xml
+modified  +4     -1     android/src/main/java/com/usesslpinning/PinnedOkHttpClient.kt
+modified  +9     -5     android/src/main/java/com/usesslpinning/SslPinningFactory.kt
+added     +23    -0     android/src/main/java/com/usesslpinning/SslPinningInitializer.kt
+added     +62    -0     android/src/main/java/com/usesslpinning/SslPinningPolicy.kt
+modified  +86    -12    android/src/main/java/com/usesslpinning/UseSslPinningModuleImpl.kt
+modified  +8     -0     android/src/newarch/com/usesslpinning/UseSslPinningModule.kt
+modified  +10    -0     android/src/oldarch/com/usesslpinning/UseSslPinningModule.kt
+added     +59    -0     android/src/test/java/com/usesslpinning/SslPinningPolicyTest.kt
+modified  +44    -29    android/ssl-pinning-setup.gradle
+modified  +63    -113   app.plugin.js
+modified  +4     -0     example/ios/Podfile
+modified  +213   -133   ios/SharedLogic.swift
+modified  +34    -0     ios/UseSslPinningModule.mm
+modified  +53    -26    ios/UseSslPinningModule.swift
+added     +70    -0     openspec/changes/add-eager-ssl-init/design.md
+added     +61    -0     openspec/changes/add-eager-ssl-init/proposal.md
+added     +28    -0     openspec/changes/add-eager-ssl-init/specs/expo-plugin/spec.md
+added     +79    -0     openspec/changes/add-eager-ssl-init/specs/ssl-pinning-api/spec.md
+added     +44    -0     openspec/changes/add-eager-ssl-init/tasks.md
+modified  +15    -4     package.json
+modified  +55    -9     scripts/nsc-utils.js
+modified  +23    -13    scripts/postinstall.js   <== código ligado à spec
+modified  +2     -0     src/NativeUseSslPinning.ts
+modified  +13    -0     src/UseSslPinning.types.ts
+modified  +66    -4     src/index.tsx
+modified  +1     -0     yarn.lock
+--- DIFF DO CÓDIGO LIGADO
+### scripts/postinstall.js
+@@ -106,30 +106,35 @@ if (fs.existsSync(sslConfigPath)) {
+ }
+ 
+ // Generate Network Security Config XML for Android
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
+ const androidDir = path.join(projectRoot, 'android');
+ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+   console.log('🔄 Generating Android Network Security Config XML...');
+ 
+   try {
+     const sslConfig = JSON.parse(fs.readFileSync(sslConfigPath, 'utf8'));
+     const sha256Keys = sslConfig.sha256Keys;
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+ 
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
+       );
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+       const xmlPath = path.join(xmlDir, 'network_security_config.xml');
+ 
+       if (fs.existsSync(xmlPath)) {
+         // Merge with existing NSC
+         const existingXml = fs.readFileSync(xmlPath, 'utf8');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, mergedXml);
+         console.log(
+           '✅ Merged SSL pins into existing network_security_config.xml'
+@@ -139,7 +144,7 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         if (!fs.existsSync(xmlDir)) {
+           fs.mkdirSync(xmlDir, { recursive: true });
+         }
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, xml);
+         console.log('✅ Generated network_security_config.xml');
+       }
+@@ -168,10 +173,15 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         }
+       }
+     } else {
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+     }
+   } catch (error) {
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+   }
+ } else if (!fs.existsSync(androidDir)) {
+   console.log('ℹ️ No android/ directory found, skipping NSC XML generation');
+
+===== P286 | repo lehuygiang28/vkara | PR #2: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates | capacidade: curated-playlist-suggestions
+--- SPEC VIVA
+## Requirements
+
+### Requirement: Curated suggestions on browse idle
+
+When the user is on the browse/search surface with no active search query and no search results, the system MUST show curated playlist suggestions grouped by catalog if curated starter mode applies. Primary empty-state guidance to search MUST remain available. Curated suggestions MUST NOT appear when the user is viewing search results.
+
+#### Scenario: Cold start empty queue
+
+- **WHEN** the user opens browse with no search query, no search results, and curated starter mode is active
+- **THEN** curated playlist cards appear grouped by catalog (e.g. karaoke)
+- **AND** each card shows title and thumbnail from YouTube metadata after fetch
+
+#### Scenario: User has search results
+
+- **WHEN** the user has performed a search and results are displayed
+- **THEN** curated starter blocks MUST NOT replace or overlay search results
+
+### Requirement: Curated suggestions on queue empty
+
+When the queue is empty, the system MUST show curated playlist suggestions in addition to existing empty-state and search affordances.
+
+#### Scenario: Empty queue tab
+
+- **WHEN** the user views the queue tab with zero queued items
+- **THEN** curated playlist suggestions are visible
+- **AND** the user can open preview or import from those suggestions
+
+### Requirement: Curated suggestions in import playlist menu
+
+The import-playlist menu MUST list curated starter playlists so the user can select one for quick import or preview without pasting a URL.
+
+#### Scenario: Open import menu
+
+- **WHEN** the user opens the import playlist control in the queue UI
+- **THEN** configured starter playlists appear as selectable entries
+
+### Requirement: Playlist preview overlay
+
+Tapping a curated playlist card MUST open a preview overlay listing songs in that playlist. The preview MUST use the same per-video queue actions as search (add to queue, play now, play next where applicable). The user MUST be able to add individual songs without importing the full playlist.
+
+#### Scenario: Preview shows songs
+
+- **WHEN** the user opens preview for a starter playlist
+- **THEN** the system fetches playlist details from the API
+- **AND** displays the video list with loading and error states
+
+#### Scenario: Add single song from preview
+
+- **WHEN** the user adds one song from the preview list
+- **THEN** the client uses the existing add-video flow
+- **AND** the current tab MUST NOT switch to queue solely because of that action
+- **AND** the preview overlay MAY remain open
+
+### Requirement: Import entire playlist switches to queue tab
+
+When the user chooses to import the entire curated playlist, the client MUST invoke the existing WebSocket import flow and MUST switch the active tab to queue after initiating that action.
+
+#### Scenario: Import all from preview
+
+- **WHEN** the user confirms import entire playlist from preview
+- **THEN** the client sends `importPlaylist` for that list id
+- **AND** the UI switches to the queue tab
+
+### Requirement: Browse does not swap feed during preview
+
+While the curated playlist preview overlay is open on the browse surface, the system MUST NOT replace the underlying browse content with the personalized related/browse feed solely because `playingNow` or room history changed.
+
+#### Scenario: First song starts during preview
+
+- **WHEN** the user adds songs from curated preview while on browse
+- **AND** `playingNow` becomes non-null
+- **THEN** the browse surface underneath MUST NOT abruptly switch from curated starters to personalized feed until the user closes preview or dismisses curated starter mode
+
+### Requirement: Dismiss curated starter mode via search
+
+When the user starts a search from curated context, the system MUST treat curated starter mode as dismissed for the session so personalized browse feed can take over when feed sources exist.
+
+#### Scenario: User taps search from empty browse
+
+- **WHEN** the user activates search from the browse empty state
+- **THEN** curated starter blocks are no longer the primary browse idle experience for that session
+
+### Requirement: Playlist card content from API
+
+Curated playlist cards MUST display title, thumbnail, and video count from YouTube via the playlist details API. Application code MUST NOT require hardcoded playlist titles in TypeScript for default display.
+
+#### Scenario: Card renders after metadata fetch
+
+- **WHEN** playlist metadata has been fetched successfully
+- **THEN** the card shows YouTube playlist title and count
+- **AND** shows a loading or skeleton state before metadata arrives
+
+### Requirement: Localized UI strings only
+
+Section headings, catalog labels, and button labels for curated UI MUST come from locale files (`vi`, `en`). Playlist titles MUST NOT be duplicated in locale files unless an explicit future override mechanism is added.
+
+#### Scenario: UI locale English
+
+- **WHEN** UI locale is `en`
+- **THEN** curated section headings and actions display English strings from locale files
+- **AND** playlist titles remain YouTube-provided
+
+--- ARQUIVOS DO PR (247)
+added     +40    -0     .env.example
+modified  +4     -3     .github/pull_request_template.md
+modified  +3     -8     .github/workflows/build-push-docker.yml
+modified  +3     -21    .github/workflows/ci.yml
+modified  +10    -4     README.md
+modified  +3     -2     apps/api/.env.example
+modified  +21    -7     apps/api/Dockerfile
+modified  +13    -5     apps/api/package.json
+removed   +0     -21    apps/api/src/config/embed-playability-env.ts
+removed   +0     -34    apps/api/src/config/env.ts
+added     +16    -0     apps/api/src/env.ts
+modified  +2     -1     apps/api/src/modules/room/apply-tv-restore.ts
+modified  +1     -1     apps/api/src/modules/room/merge-queue-after-advance.ts
+modified  +1     -1     apps/api/src/modules/room/room-broadcast.ts
+modified  +4     -7     apps/api/src/modules/room/room-service.ts
+modified  +29    -17    apps/api/src/modules/youtube/channel-cache.ts
+modified  +20    -32    apps/api/src/modules/youtube/embed-playability-cache.ts
+modified  +6     -8     apps/api/src/modules/youtube/embeddable.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details-cached.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details.ts
+modified  +3     -3     apps/api/src/modules/youtube/fetch-playlist-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/fetch-search-suggestions.ts
+modified  +1     -1     apps/api/src/modules/youtube/live-viewers.ts
+modified  +164   -18    apps/api/src/modules/youtube/playlist-details-cache.ts
+modified  +1     -1     apps/api/src/modules/youtube/prepare-youtube-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/renderer-metadata.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-compact-channels.ts
+modified  +6     -3     apps/api/src/modules/youtube/resolve-embed-playability.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-embeddable-queue.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-item-views.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-mapper.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-validation.ts
+modified  +3     -3     apps/api/src/plugins/room-ws.plugin.ts
+modified  +10    -10    apps/api/src/queues/cleanup.ts
+modified  +10    -9     apps/api/src/queues/hourly-report.ts
+modified  +10    -2     apps/api/src/redis.ts
+removed   +0     -118   apps/api/src/schemas/client-message.ts
+modified  +13    -4     apps/api/src/server.ts
+modified  +10    -4     apps/api/src/utils/common.ts
+modified  +8     -7     apps/api/src/utils/logger.ts
+modified  +2     -2     apps/api/src/utils/room-store.ts
+modified  +33    -34    apps/api/src/youtubei.ts   <== código ligado à spec
+removed   +0     -49    apps/api/tests/config/embed-playability-env.test.ts
+removed   +0     -54    apps/api/tests/config/env.test.ts
+modified  +1     -1     apps/api/tests/fixtures/sing-king-search.ts
+modified  +1     -1     apps/api/tests/modules/room/advance-queue.test.ts
+modified  +2     -1     apps/api/tests/modules/room/apply-tv-restore.test.ts
+added     +37    -0     apps/api/tests/modules/youtube/channel-cache.test.ts
+modified  +17    -23    apps/api/tests/modules/youtube/embed-playability-cache.test.ts
+added     +67    -0     apps/api/tests/modules/youtube/playlist-details-cache.test.ts
+modified  +7     -20    apps/api/tests/modules/youtube/sing-king-embed-prefilter.test.ts
+modified  +24    -25    apps/api/tests/schemas/client-message.test.ts
+modified  +2     -1     apps/api/tests/utils/common.test.ts
+modified  +2     -1     apps/api/tests/utils/room-store.test.ts
+modified  +14    -2     apps/api/tsconfig.json
+modified  +10    -11    apps/web/.env.example
+modified  +27    -6     apps/web/Dockerfile
+modified  +26    -24    apps/web/eslint.config.mjs
+modified  +8     -1     apps/web/next.config.ts
+modified  +9     -3     apps/web/package.json
+modified  +12    -9     apps/web/src/app/[locale]/layout.tsx
+modified  +3     -1     apps/web/src/app/api/speech/status/route.ts
+modified  +4     -2     apps/web/src/app/api/speech/transcribe/route.ts
+modified  +4     -3     apps/web/src/app/robots.ts
+modified  +3     -1     apps/web/src/components/analytics/cloudflare-web-analytics.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/curated-catalog-section.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/import-playlist-panel.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/BrowseSuggestionsList.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/ControlsNowPlayingMeta.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/NowPlayingBar.tsx
+modified  +3     -2     apps/web/src/components/pages/youtube/PlayerColumn.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControls.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControlsTabs.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/RemoteJoinLobby.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/TvPlayerQrZone.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoHistory.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoList.tsx
+modified  +2     -2     apps/web/src/components/pages/youtube/VideoListItem.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoQueue.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/captions-menu.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/use-video-search-list-actions.tsx
+modified  +1     -1     apps/web/src/components/settings/room-settings-section.tsx
+modified  +1     -1     apps/web/src/components/video-channels.tsx
+added     +24    -0     apps/web/src/env.ts
+modified  +8     -4     apps/web/src/hooks/use-browse-feed.ts
+modified  +1     -1     apps/web/src/hooks/use-connection-status-ui.ts
+modified  +1     -1     apps/web/src/hooks/use-curated-starter-visibility.ts
+modified  +1     -1     apps/web/src/hooks/use-join-room.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-display-time.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-position-sync.ts
+modified  +1     -1     apps/web/src/hooks/use-player-action.ts
+modified  +1     -1     apps/web/src/hooks/use-playlist-details-cache.ts
+modified  +1     -1     apps/web/src/hooks/use-strip-room-query.ts
+modified  +2     -2     apps/web/src/lib/curated-playlist-thumbnail.ts
+modified  +1     -1     apps/web/src/lib/format-uploaded-at.ts
+modified  +3     -2     apps/web/src/lib/persisted-storage.ts
+modified  +1     -1     apps/web/src/lib/room-payload.ts
+modified  +1     -1     apps/web/src/lib/room-queue.ts
+modified  +1     -1     apps/web/src/lib/room-share.ts
+modified  +3     -2     apps/web/src/lib/seo/metadata.ts
+modified  +4     -2     apps/web/src/lib/site-url.ts
+modified  +2     -7     apps/web/src/lib/tv-room-recovery.ts
+modified  +1     -1     apps/web/src/lib/youtube-captions.ts
+modified  +2     -2     apps/web/src/lib/youtube-video.ts
+modified  +2     -1     apps/web/src/middleware.ts
+modified  +8     -6     apps/web/src/providers/websocket-provider.tsx
+modified  +4     -2     apps/web/src/services/client/api-client.ts
+modified  +1     -1     apps/web/src/services/youtube-api.ts   <== código ligado à spec
+modified  +2     -2     apps/web/src/store/personalizationStore.ts
+modified  +2     -2     apps/web/src/store/searchStore.ts
+modified  +2     -6     apps/web/src/store/websocketStore.ts
+modified  +2     -2     apps/web/src/store/youtubeStore.ts
+modified  +2     -6     apps/web/src/types/websocket.type.ts
+modified  +1     -1     apps/web/tests/lib/curated-playlist-thumbnail.test.ts
+modified  +2     -1     apps/web/tests/lib/persisted-storage.test.ts
+modified  +1     -1     apps/web/tests/lib/playback-sync.test.ts
+modified  +1     -1     apps/web/tests/lib/room-queue.test.ts
+modified  +1     -1     apps/web/tests/lib/tv-room-recovery.test.ts
+modified  +1     -1     apps/web/tests/lib/youtube-captions.test.ts
+modified  +12    -1     apps/web/tsconfig.json
+modified  +189   -44    bun.lock
+modified  +1     -1     containers/README.md
+modified  +25    -11    containers/aio/Dockerfile
+modified  +21    -7     containers/api-redis/Dockerfile
+modified  +1     -0     containers/api-redis/supervisord.conf
+modified  +4     -0     docker-compose.yml
+modified  +23    -6     docs/monorepo-architecture.md
+modified  +4     -2     docs/monorepo-duplication-inventory.md
+modified  +5     -3     docs/vi/README.md
+added     +119   -0     eslint.config.mjs
+added     +2     -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/.openspec.yaml
+added     +186   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/design.md
+added     +60    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/proposal.md
+added     +41    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/elysia-zod-schemas/spec.md
+added     +58    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-package-boundaries/spec.md
+added     +48    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-quality/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-env/spec.md
+added     +43    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-feature-flags/spec.md
+added     +46    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis-cache/spec.md
+added     +35    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis/spec.md
+added     +108   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/tasks.md
+added     +45    -0     openspec/specs/elysia-zod-schemas/spec.md
+added     +62    -0     openspec/specs/monorepo-package-boundaries/spec.md
+added     +52    -0     openspec/specs/monorepo-quality/spec.md
+added     +80    -0     openspec/specs/platform-env/spec.md
+added     +47    -0     openspec/specs/platform-feature-flags/spec.md
+added     +50    -0     openspec/specs/platform-redis-cache/spec.md
+added     +39    -0     openspec/specs/platform-redis/spec.md
+modified  +13    -2     package.json
+added     +19    -0     packages/cache-redis/package.json
+added     +62    -0     packages/cache-redis/src/bool-cache.ts
+added     +2     -0     packages/cache-redis/src/index.ts
+added     +32    -0     packages/cache-redis/src/json-cache.ts
+added     +71    -0     packages/cache-redis/tests/bool-cache.test.ts
+added     +58    -0     packages/cache-redis/tests/json-cache.test.ts
+added     +4     -0     packages/cache-redis/tsconfig.json
+modified  +3     -1     packages/curated-playlists/package.json
+modified  +1     -1     packages/curated-playlists/src/index.ts
+added     +34    -0     packages/env/.gitignore
+added     +26    -0     packages/env/package.json
+added     +44    -0     packages/env/src/base.ts
+added     +52    -0     packages/env/src/embed.ts
+added     +45    -0     packages/env/src/flags.ts
+added     +8     -0     packages/env/src/index.ts
+added     +23    -0     packages/env/src/logger.ts
+added     +21    -0     packages/env/src/redis.ts
+added     +23    -0     packages/env/src/server.ts
+added     +35    -0     packages/env/src/web-public.ts
+added     +32    -0     packages/env/src/web-server.ts
+added     +36    -0     packages/env/tests/base.test.ts
+added     +30    -0     packages/env/tests/embed.test.ts
+added     +4     -0     packages/env/tsconfig.json
+added     +17    -0     packages/personalization/package.json
+renamed   +13    -3     packages/personalization/src/browse-feed.ts
+renamed   +0     -0     packages/personalization/src/index.ts
+renamed   +0     -0     packages/personalization/src/profile.ts
+renamed   +0     -0     packages/personalization/src/rank-videos.ts
+renamed   +0     -0     packages/personalization/src/suggestions.ts
+renamed   +0     -0     packages/personalization/src/types.ts
+renamed   +3     -3     packages/personalization/tests/browse-feed.test.ts
+renamed   +1     -1     packages/personalization/tests/profile-engagement.test.ts
+renamed   +2     -2     packages/personalization/tests/profile.test.ts
+renamed   +3     -3     packages/personalization/tests/rank-videos.test.ts
+renamed   +1     -1     packages/personalization/tests/suggestions.test.ts
+added     +4     -0     packages/personalization/tsconfig.json
+renamed   +5     -1     packages/redis/package.json
+renamed   +0     -0     packages/redis/src/index.ts
+renamed   +0     -0     packages/redis/src/redis.ts
+added     +20    -0     packages/room/package.json
+renamed   +0     -0     packages/room/src/errors.ts
+added     +6     -0     packages/room/src/index.ts
+renamed   +1     -1     packages/room/src/persisted-room.ts
+renamed   +0     -0     packages/room/src/playback-sync.ts
+renamed   +0     -0     packages/room/src/room.ts
+renamed   +9     -0     packages/room/src/url.ts
+added     +62    -0     packages/room/src/websocket.ts
+renamed   +0     -0     packages/room/tests/errors.test.ts
+renamed   +0     -0     packages/room/tests/persisted-room-invalid.test.ts
+renamed   +1     -1     packages/room/tests/persisted-room.test.ts
+renamed   +0     -0     packages/room/tests/playback-sync.test.ts
+renamed   +1     -1     packages/room/tests/room.test.ts
+added     +29    -0     packages/room/tests/url.test.ts
+added     +29    -0     packages/room/tests/validators-invalid.test.ts
+added     +4     -0     packages/room/tsconfig.json
+removed   +0     -18    packages/shared-types/package.json
+removed   +0     -7     packages/shared-types/src/index.ts
+removed   +0     -115   packages/shared-types/src/websocket.ts
+removed   +0     -18    packages/shared-utils/package.json
+removed   +0     -14    packages/shared-utils/tests/url.test.ts
+removed   +0     -14    packages/shared-utils/tsconfig.json
+added     +19    -0     packages/validators/package.json
+added     +3     -0     packages/validators/src/index.ts
+added     +86    -0     packages/validators/src/ws/client-message.ts
+added     +25    -0     packages/validators/src/youtube/http.ts
+added     +30    -0     packages/validators/src/youtube/video.ts
+added     +48    -0     packages/validators/tests/http.schema.test.ts
+added     +4     -0     packages/validators/tsconfig.json
+added     +17    -0     packages/youtube/package.json
+renamed   +0     -0     packages/youtube/src/captions.ts
+renamed   +0     -0     packages/youtube/src/format.ts
+renamed   +3     -3     packages/youtube/src/index.ts
+renamed   +0     -0     packages/youtube/src/parse-relative-upload.ts
+renamed   +0     -0     packages/youtube/src/parse-view-count.ts
+renamed   +0     -0     packages/youtube/src/youtube-id.ts
+renamed   +0     -0     packages/youtube/src/youtube-live.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-details.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-url.ts
+renamed   +1     -1     packages/youtube/src/youtube-thumbnail.ts
+renamed   +1     -3     packages/youtube/src/youtube.ts
+renamed   +0     -0     packages/youtube/tests/captions.test.ts
+renamed   +1     -1     packages/youtube/tests/format.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-relative-upload.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-view-count.test.ts
+renamed   +2     -32    packages/youtube/tests/validators-invalid.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-id.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-live.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-playlist-url.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-thumbnail.test.ts
+renamed   +0     -0     packages/youtube/tests/youtube.test.ts
+added     +4     -0     packages/youtube/tsconfig.json
+added     +15    -0     tooling/typescript/base.json
+added     +7     -0     tooling/typescript/bun.json
+added     +7     -0     tooling/typescript/library.json
+added     +10    -0     tooling/typescript/nextjs.json
+added     +11    -0     tooling/typescript/package.json
+modified  +14    -1     turbo.json
+modified  +47    -5     vitest.config.mts
+--- DIFF DO CÓDIGO LIGADO
+### apps/api/src/youtubei.ts
+@@ -1,13 +1,21 @@
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+ import Redis from 'ioredis';
+ import { Queue, Worker } from 'bullmq';
+ import { type VideoCompact, type SearchResult } from 'youtubei';
+ import { fetchSearchSuggestions } from './modules/youtube/fetch-search-suggestions';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++
++import { env } from './env';
+ 
+ import { recordRelatedRequest, recordSearchRequest } from '@/modules/stats/service-stats';
+ import { createContextLogger } from '@/utils/logger';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+ import {
+     cleanupOldInstances,
+     getRedisKey,
+@@ -36,7 +44,11 @@ const youtubeiLogger = createContextLogger('Queue/Youtubei');
+ 
+ const youtubei = getYoutubeiClient();
+ 
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+ const redis = new Redis(redisConnectionOptions);
+ 
+ const cleanupQueue = new Queue('search-instance-cleanup', { connection: redisConnectionOptions });
+@@ -103,10 +115,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 searchInstances: stateSearchInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -166,23 +175,25 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to search YouTube', { error, query, continuation });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+         },
+     )
+     .post(
+         '/suggestions',
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-            }),
++            body: youtubeSearchSuggestionsBodySchema,
+         },
+     )
+     .post(
+@@ -196,11 +207,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 fetchAll,
+             }),
+         {
+-            body: t.Object({
+-                playlistUrlOrId: t.String(),
+-                videoLimit: t.Optional(t.Number()),
+-                fetchAll: t.Optional(t.Boolean()),
+-            }),
++            body: youtubePlaylistDetailsBodySchema,
+         },
+     )
+     .post(
+@@ -213,10 +220,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 relatedInstances: stateRelatedInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -295,14 +299,11 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to get related videos', { error });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                videoId: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeRelatedBodySchema,
+         },
+     )
+     .post(
+@@ -313,8 +314,6 @@ export const searchYoutubeiElysia = new Elysia({})
+         }): Promise<{ videoId: string; canEmbed: boolean }[]> =>
+             checkEmbeddableMany(redisClient, videoIds),
+         {
+-            body: t.Object({
+-                videoIds: t.Array(t.String()),
+-            }),
++            body: youtubeCheckEmbeddableBodySchema,
+         },
+     );
+
+### apps/web/src/services/youtube-api.ts
+@@ -1,4 +1,4 @@
+-import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/shared-types';
++import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/youtube';
+ import { apiPost } from './client/api-client';
+ 
+ export async function fetchPlaylistDetails(
+
+===== P287 | repo pmcfadin/cqlite | PR #2110: perf(#1583): E1 — box fat Value variants (88B → 32B); Value-v2 train Stage 1 (layout) | capacidade: frozen-inner-udt-decode
+--- SPEC VIVA
+# frozen-inner-udt-decode Specification
+
+## Purpose
+TBD - created by archiving change typed-inner-udt-frozen-collections. Update Purpose after archive.
+## Requirements
+### Requirement: Inner frozen-UDT elements decode to typed Udt from authoritative metadata
+The reader SHALL decode a `frozen<UDT>` element inside a frozen collection (list/set element,
+map key, map value; recursively at any nesting depth, including UDT-in-UDT fields and UDTs
+inside tuples inside frozen collections) to a typed `Value::Frozen(Value::Udt(..))` — the same
+shape a top-level `frozen<udt>` column produces — using **authoritative metadata only**, with
+resolution precedence: (1) the column's SerializationHeader marshal type
+(`RowColumnResolution.header_type`), (2) a wired `UdtRegistry`, (3) opaque `Value::Blob` when
+neither authority resolves the type. The decoder SHALL NOT infer structure from byte patterns
+(no-heuristics mandate #28).
+
+#### Scenario: Registry-less reader decodes a frozen list of frozen UDTs typed
+- **GIVEN** the committed #1240 fixture `test_compactionparityudt/udt_collections-*` (column `lp frozen<list<frozen<person>>>`)
+- **AND** an `SSTableReader` opened WITHOUT any `UdtRegistry`
+- **WHEN** the row is decoded (query scan or `iterate_all_partitions_for_compaction`)
+- **THEN** each `lp` element is `Value::Frozen(Value::Udt(..))` with field names and typed field values matching the sstabledump JSONL golden
+- **AND** element count and order match the golden
+
+#### Scenario: Frozen map with frozen-UDT values decodes typed, keys preserved
+- **GIVEN** the same fixture's `ma frozen<map<text, frozen<address>>>` column on a registry-less reader
+- **WHEN** the row is decoded
+- **THEN** each map value is a typed `Value::Udt` matching the JSONL golden and the key set is preserved
+
+#### Scenario: Null inner UDT field survives typed decode
+- **GIVEN** the #1289 fixture `test_compactionparityudt/udt_null_inner-*` (inner `person.last_name` / `address.city` null)
+- **WHEN** the row is decoded typed
+- **THEN** the null field is represented as null inside the typed `Value::Udt` (not dropped, not a decode error), matching the JSONL golden
+
+#### Scenario: Unresolvable inner type stays an opaque Blob, never a guess
+- **GIVEN** a frozen-collection column whose `header_type` is absent and whose inner UDT name is not in any wired registry
+- **WHEN** the element is decoded
+- **THEN** the element is `Value::Blob` carrying the exact frozen element bytes
+- **AND** no error/panic is raised and no structure is inferred from the bytes
+
+### Requirement: The typed contract is uniform across read paths and equals the registry decode
+The typed inner-UDT representation SHALL be identical whether produced by the header-marshal
+mechanism (registry-less reader) or by the existing `UdtRegistry` mechanism, and identical
+across the query read path and the compaction read path (`CompactionRow` simple cells), since
+one shared element decoder serves both.
+
+#### Scenario: Marshal-driven and registry-driven decode are value-equal
+- **GIVEN** the #1240 fixture decoded twice: once via a registry-less reader, once via a reader with the DDL-built `UdtRegistry` wired
+- **WHEN** the `lp` and `ma` cells are compared
+- **THEN** the decoded `Value`s are equal (same variant shapes, field names, field values)
+
+#### Scenario: Compaction read path carries the typed value into CompactionRow
+- **WHEN** `iterate_all_partitions_for_compaction` (registry-less) decodes the fixture
+- **THEN** the frozen-collection `SimpleCell.value` contains typed `Value::Udt` inner elements identical to the query-path decode of the same row
+
+### Requirement: Byte-for-byte compaction parity is unchanged
+The read-side representation change SHALL NOT alter any written byte: compacting the #1240 /
+#1289 fixtures SHALL produce Data.db, Index.db, Summary.db, and Digest.crc32 byte-identical to
+the committed Cassandra 5.0.2 goldens, exactly as before the change.
+
+#### Scenario: #1240 and #1289 byte-parity tiers still pass
+- **WHEN** `issue_1240_nested_frozen_collection_udt_parity.rs` runs after the change (with its tier-1b assertions updated per the test's embedded guidance to compare typed UDTs)
+- **THEN** the tier-2 byte-parity assertions pass unchanged against the committed goldens
+- **AND** the test FAILS loudly (does not silently pass) if run against a dataset where the fixture is present but yields zero rows
+
+#### Scenario: Query-surface parity goldens do not move
+- **WHEN** the full parity suite runs (33-table sstabledump/JSONL parity + Python parity tests)
+- **THEN** all pass with unchanged values (the schema-registry-wired query surface was already typed, so no golden churn)
+
+### Requirement: Wiring evidence through a named public surface
+The change SHALL be exercised end-to-end through a named public surface — at minimum
+`SSTableReader::open` (registry-less) + `iterate_all_partitions_for_compaction`, and one
+query-visible surface (`SELECT` via the query engine / CLI one-shot) — against the real #1240
+SSTable fixture, validating decoded inner-UDT **field values** (not just row counts) against
+the sstabledump JSONL golden. A helper-only unit test SHALL NOT count as done.
+
+#### Scenario: End-to-end SELECT over the fixture returns structured inner UDTs
+- **GIVEN** the #1240 fixture and its schema (no registry beyond what the surface itself builds)
+- **WHEN** `SELECT lp, ma FROM test_compactionparityudt.udt_collections` executes through the public query surface
+- **THEN** the result exposes structured inner UDT fields whose values match the sstabledump JSONL golden
+- **AND** the test is dataset-guarded such that fixture-present-but-zero-rows is a FAILURE
+
+
+--- ARQUIVOS DO PR (59)
+modified  +2     -2     bindings/node/src/database.rs
+modified  +7     -7     cqlite-cli/src/output/json.rs
+modified  +13    -12    cqlite-cli/tests/output_format_tests.rs
+modified  +35    -32    cqlite-cli/tests/parquet_writer_tests.rs
+modified  +4     -1     cqlite-core/src/export/arrow_convert.rs
+modified  +7     -0     cqlite-core/src/lib.rs
+modified  +2     -2     cqlite-core/src/parser/types/mod.rs
+modified  +5     -5     cqlite-core/src/parser/types/tombstones.rs
+modified  +4     -4     cqlite-core/src/parser/types/udt.rs
+modified  +6     -6     cqlite-core/src/parser/udt_tests.rs
+modified  +1     -1     cqlite-core/src/query/result.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/value_ops.rs
+modified  +2     -2     cqlite-core/src/schema/parser.rs
+modified  +36    -21    cqlite-core/src/storage/serialization/types.rs
+modified  +4     -4     cqlite-core/src/storage/sstable/reader/parsing/comparator_value_parsing.rs
+modified  +3     -3     cqlite-core/src/storage/sstable/reader/parsing/custom_scalar.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/v5_compressed_legacy/cell_value.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/v5_compressed_legacy/complex_column.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/v5_compressed_legacy/mod.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/v5_compressed_legacy/raw_type_value.rs
+modified  +5     -5     cqlite-core/src/storage/sstable/reader/parsing/v5_compressed_legacy/udt.rs
+modified  +4     -4     cqlite-core/src/storage/sstable/reader/parsing/value_parsing.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/value_parsing_schema_type_tests.rs
+modified  +4     -4     cqlite-core/src/storage/sstable/writer/data_writer/collection_order/composite.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/writer/data_writer/collection_order/mod.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/writer/data_writer/collection_order/scalar.rs
+modified  +17    -8     cqlite-core/src/storage/sstable/writer/data_writer/tests/scenarios_3.rs
+modified  +8     -8     cqlite-core/src/storage/sstable/writer/data_writer/tests/scenarios_5.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/writer/data_writer/tests/scenarios_6.rs
+modified  +6     -4     cqlite-core/src/storage/sstable/writer/data_writer/tests/support.rs
+modified  +12    -12    cqlite-core/src/storage/sstable/writer/data_writer/udt_canon.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/writer/mod.rs
+modified  +2     -2     cqlite-core/src/storage/write_engine/cql_to_mutation/codec.rs
+modified  +5     -5     cqlite-core/src/storage/write_engine/memtable.rs
+modified  +32    -32    cqlite-core/src/storage/write_engine/merge/mod.rs
+modified  +2     -2     cqlite-core/src/storage/write_engine/merge/reconcile.rs
+modified  +97    -26    cqlite-core/src/types.rs
+modified  +4     -4     cqlite-core/src/util/value_fmt.rs
+modified  +3     -3     cqlite-core/tests/contract_stability_tests.rs
+modified  +8     -8     cqlite-core/tests/issue_1020_udt_frozen_compaction_byte_parity.rs
+modified  +6     -6     cqlite-core/tests/issue_1234_frozen_udt_compaction_dataloss.rs
+modified  +6     -6     cqlite-core/tests/issue_1240_nested_frozen_collection_udt_parity.rs   <== código ligado à spec
+modified  +2     -2     cqlite-core/tests/issue_1404_memtable_invariants.rs
+modified  +2     -2     cqlite-core/tests/issue_823_complex_column_merge.rs
+modified  +1     -2     cqlite-core/tests/snapshots/contract_stability_tests__contract_value_json.snap
+modified  +1     -2     cqlite-core/tests/snapshots/contract_stability_tests__contract_value_udt.snap
+modified  +8     -8     cqlite-core/tests/sstableloader_integration.rs
+modified  +2     -2     cqlite-core/tests/type_invariant_tests.rs
+modified  +1     -1     cqlite-core/tests/write_integration.rs
+modified  +2     -2     cqlite-core/tests/write_read_roundtrip/type_coverage.rs
+added     +126   -0     openspec/changes/value-representation-v2/design.md
+added     +73    -0     openspec/changes/value-representation-v2/proposal.md
+added     +49    -0     openspec/changes/value-representation-v2/specs/scan-window-substrate/spec.md
+added     +60    -0     openspec/changes/value-representation-v2/specs/sstable-value-decode/spec.md
+added     +49    -0     openspec/changes/value-representation-v2/specs/value-representation/spec.md
+added     +75    -0     openspec/changes/value-representation-v2/tasks.md
+modified  +4     -4     tests/src/comparator_type_tests.rs
+modified  +3     -3     tests/src/integration_e2e.rs
+modified  +1     -1     tests/src/performance_complex_types_benchmark.rs
+--- DIFF DO CÓDIGO LIGADO
+### cqlite-core/tests/issue_1240_nested_frozen_collection_udt_parity.rs
+@@ -259,7 +259,7 @@ fn collections_schema() -> TableSchema {
+ // ── Value builders (must match the #1020 fixture inputs exactly) ──────────────
+ 
+ fn person_inner(first: &str, last: &str, age: i32) -> Value {
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+         type_name: "person".into(),
+         keyspace: KEYSPACE.into(),
+         fields: vec![
+@@ -276,11 +276,11 @@ fn person_inner(first: &str, last: &str, age: i32) -> Value {
+                 value: Some(Value::Integer(age)),
+             },
+         ],
+-    })
++    }))
+ }
+ 
+ fn address_inner(street: &str, city: Option<&str>, zip: &str) -> Value {
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+         type_name: "address".into(),
+         keyspace: KEYSPACE.into(),
+         fields: vec![
+@@ -297,7 +297,7 @@ fn address_inner(street: &str, city: Option<&str>, zip: &str) -> Value {
+                 value: Some(Value::Text(zip.into())),
+             },
+         ],
+-    })
++    }))
+ }
+ 
+ fn flist(ns: &[i32]) -> Value {
+@@ -524,7 +524,7 @@ fn null_inner_groups() -> (Vec<Mutation>, Vec<Mutation>) {
+ /// A `person` with a NULL `last_name` middle field (the absent-field encoding
+ /// under test on the winning side of the merge).
+ fn person_null_last(first: &str, age: i32) -> Value {
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+         type_name: "person".into(),
+         keyspace: KEYSPACE.into(),
+         fields: vec![
+@@ -541,7 +541,7 @@ fn person_null_last(first: &str, age: i32) -> Value {
+                 value: Some(Value::Integer(age)),
+             },
+         ],
+-    })
++    }))
+ }
+ 
+ // ════════════════════════════════════════════════════════════════════════════
+
+===== P288 | repo aehrc/pathling | PR #2551: v9.4.0 | capacidade: fhirpath-to-column-r
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: R library exposes pathling_fhirpath_to_column function
+
+The R library SHALL provide an exported function `pathling_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_invoke` and returns a `spark_jobj` representing a Spark Column.
+
+#### Scenario: Boolean expression returns a Column for filtering
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "gender = 'male'")` is called
+- **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to filter Patient rows
+
+#### Scenario: Expression result can be used in select
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "name.given.first()")` is called
+- **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to extract values
+
+#### Scenario: Invalid expression raises an error
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "!!invalid!!")` is called
+- **THEN** an R error SHALL be raised
+
+### Requirement: pathling_fhirpath_to_column has roxygen2 documentation
+
+The function SHALL include roxygen2 documentation with a title, description, parameter documentation, return value, and export tag. The `@examples` block SHALL demonstrate filtering using `pathling_filter` instead of raw `j_invoke` calls.
+
+#### Scenario: Documentation is present
+
+- **WHEN** the function is defined
+- **THEN** it SHALL have roxygen2 comments documenting its purpose, parameters (`pc`, `resource_type`, `fhirpath_expression`), and return value
+
+#### Scenario: Examples use pathling_filter for filtering
+
+- **WHEN** the roxygen `@examples` block demonstrates filtering a DataFrame
+- **THEN** it SHALL use `pathling_filter` and SHALL NOT contain `j_invoke`
+
+--- ARQUIVOS DO PR (81)
+added     +57    -0     .github/workflows/fhirpath-lab-api-release.yml
+added     +20    -0     deployment/fhirpath-lab-api/chart/Chart.yaml
+added     +64    -0     deployment/fhirpath-lab-api/chart/README.md
+added     +60    -0     deployment/fhirpath-lab-api/chart/templates/deployment.yaml
+added     +20    -0     deployment/fhirpath-lab-api/chart/templates/service.yaml
+added     +103   -0     deployment/fhirpath-lab-api/chart/values.schema.json
+added     +27    -0     deployment/fhirpath-lab-api/chart/values.yaml
+modified  +1     -1     encoders/pom.xml
+added     +45    -0     encoders/src/main/java/au/csiro/pathling/sql/SyntheticFieldUtils.java
+modified  +1     -2     encoders/src/main/scala/au/csiro/pathling/sql/PruneSyntheticFields.scala
+added     +72    -0     encoders/src/test/java/au/csiro/pathling/sql/SyntheticFieldUtilsTest.java
+added     +6     -0     fhirpath-lab-api/.dockerignore
+added     +24    -0     fhirpath-lab-api/Dockerfile
+added     +128   -0     fhirpath-lab-api/README.md
+added     +38    -0     fhirpath-lab-api/pyproject.toml
+added     +16    -0     fhirpath-lab-api/src/fhirpath_lab_api/__init__.py
+added     +30    -0     fhirpath-lab-api/src/fhirpath_lab_api/__main__.py
+added     +174   -0     fhirpath-lab-api/src/fhirpath_lab_api/app.py
+added     +271   -0     fhirpath-lab-api/src/fhirpath_lab_api/parameters.py
+added     +0     -0     fhirpath-lab-api/tests/__init__.py
+added     +271   -0     fhirpath-lab-api/tests/test_app.py
+added     +273   -0     fhirpath-lab-api/tests/test_parameters.py
+added     +557   -0     fhirpath-lab-api/uv.lock
+modified  +1     -1     fhirpath/pom.xml
+added     +109   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluationResult.java
+added     +344   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluator.java
+modified  +3     -1     fhirpath/src/main/java/au/csiro/pathling/fhirpath/operator/BinaryOperatorType.java
+added     +404   -0     fhirpath/src/test/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluatorTest.java
+modified  +83    -0     lib/R/R/context.R   <== código ligado à spec
+modified  +1     -1     lib/R/pom.xml
+modified  +105   -0     lib/R/tests/testthat/test-context.R   <== código ligado à spec
+modified  +61    -0     lib/python/pathling/context.py
+modified  +1     -1     lib/python/pom.xml
+modified  +1     -3     lib/python/tests/conftest.py
+modified  +1     -1     library-api/pom.xml
+modified  +89    -0     library-api/src/main/java/au/csiro/pathling/library/PathlingContext.java
+added     +409   -0     library-api/src/test/java/au/csiro/pathling/library/EvaluateFhirPathTest.java
+modified  +1     -1     library-runtime/pom.xml
+added     +2     -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/.openspec.yaml
+added     +140   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/design.md
+added     +58    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/proposal.md
+added     +103   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-deployment/spec.md
+added     +193   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-server/spec.md
+added     +73    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/.openspec.yaml
+added     +72    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/design.md
+added     +34    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/proposal.md
+added     +91    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/specs/r-evaluate-fhirpath/spec.md
+added     +9     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/.openspec.yaml
+added     +39    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/design.md
+added     +29    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/proposal.md
+added     +73    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/specs/fhirpath-lab-server/spec.md
+added     +13    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/.openspec.yaml
+added     +48    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/design.md
+added     +38    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/proposal.md
+added     +79    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/specs/fhirpath-lab-server/spec.md
+added     +14    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/design.md
+added     +31    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/proposal.md
+added     +0     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/.gitkeep
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/no-spec-changes.md
+added     +8     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/.openspec.yaml
+added     +119   -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/design.md
+added     +56    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/proposal.md
+added     +97    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/specs/fhirpath-lab-server/spec.md
+added     +45    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/tasks.md
+added     +103   -0     openspec/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/specs/fhirpath-lab-deployment/spec.md
+added     +280   -0     openspec/specs/fhirpath-lab-server/spec.md
+added     +91    -0     openspec/specs/r-evaluate-fhirpath/spec.md
+modified  +1     -1     pom.xml
+modified  +7     -13    site/docs/fhirpath/index.md
+modified  +98    -0     site/docs/libraries/fhirpath.md
+modified  +1     -1     site/pom.xml
+modified  +1     -1     terminology/pom.xml
+modified  +1     -1     utilities/pom.xml
+--- DIFF DO CÓDIGO LIGADO
+### lib/R/R/context.R
+@@ -440,3 +440,86 @@ pathling_with_column <- function(df, pc, resource_type, expression, column) {
+     j_invoke("withColumn", as.character(column), col) %>%
+     sparklyr::sdf_register()
+ }
++
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
++                                       fhirpath_expression,
++                                       context_expression = NULL,
++                                       variables = NULL) {
++  # Convert R named list to a Java HashMap if variables are provided.
++  java_variables <- NULL
++  if (!is.null(variables)) {
++    sc <- spark_connection(pc)
++    java_variables <- j_invoke_new(sc, "java.util.HashMap")
++    for (name in names(variables)) {
++      invoke(java_variables, "put", name, variables[[name]])
++    }
++  }
++
++  jresult <- invoke(
++    pc, "evaluateFhirPath",
++    as.character(resource_type),
++    as.character(resource_json),
++    as.character(fhirpath_expression),
++    context_expression,
++    java_variables
++  )
++
++  # Convert Java SingleInstanceEvaluationResult to an R list.
++  jtyped_values <- invoke(jresult, "getResults")
++  size <- jtyped_values %>% invoke("size")
++  results <- if (size > 0L) {
++    lapply(seq_len(size), function(i) {
++      jtv <- jtyped_values %>% invoke("get", as.integer(i - 1))
++      list(
++        type = jtv %>% invoke("getType"),
++        value = jtv %>% invoke("getValue")
++      )
++    })
++  } else {
++    list()
++  }
++
++  list(
++    results = results,
++    expectedReturnType = invoke(jresult, "getExpectedReturnType")
++  )
++}
+
+### lib/R/tests/testthat/test-context.R
+@@ -211,3 +211,108 @@ test_that("pathling_filter and pathling_with_column work together in a pipe", {
+   # Should have only male patients.
+   expect_true(result %>% sparklyr::sdf_nrow() > 0)
+ })
++
++# ========== pathling_evaluate_fhirpath tests ==========
++
++# Sample Patient JSON used across evaluate_fhirpath tests.
++PATIENT_JSON <- '{
++  "resourceType": "Patient",
++  "id": "example",
++  "active": true,
++  "gender": "male",
++  "birthDate": "1990-01-01",
++  "name": [
++    {
++      "use": "official",
++      "family": "Smith",
++      "given": ["John", "James"]
++    },
++    {
++      "use": "nickname",
++      "family": "Smith",
++      "given": ["Johnny"]
++    }
++  ]
++}'
++
++# Helper to create a PathlingContext for evaluate_fhirpath tests.
++evaluate_test_setup <- function() {
++  spark <- def_spark()
++  pc <- pathling_connect(spark)
++  list(pc = pc)
++}
++
++test_that("evaluate_fhirpath returns a string result for name.family", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.family should return family names as strings.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.family")
++  expect_type(result, "list")
++  expect_true("results" %in% names(result))
++  expect_true("expectedReturnType" %in% names(result))
++  expect_equal(result$expectedReturnType, "string")
++  expect_equal(length(result$results), 2)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "Smith")
++})
++
++test_that("evaluate_fhirpath returns multiple values for name.given", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.given should return all given names.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.given")
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath returns empty results for missing element", {
++  setup <- evaluate_test_setup()
++  # Evaluating a path that matches nothing should return an empty list.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "multipleBirthBoolean")
++  expect_equal(length(result$results), 0)
++})
++
++test_that("evaluate_fhirpath returns boolean result for active", {
++  setup <- evaluate_test_setup()
++  # Evaluating active should return a boolean.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "active")
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "boolean")
++  expect_equal(result$results[[1]]$value, TRUE)
++  expect_equal(result$expectedReturnType, "boolean")
++})
++
++test_that("evaluate_fhirpath raises error for invalid expression", {
++  setup <- evaluate_test_setup()
++  # An invalid FHIRPath expression should raise an error.
++  expect_error(
++    pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "!!invalid!!")
++  )
++})
++
++test_that("evaluate_fhirpath with context expression", {
++  setup <- evaluate_test_setup()
++  # Using a context expression to compose the evaluation.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "given",
++    context_expression = "name"
++  )
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath with variable substitution", {
++  setup <- evaluate_test_setup()
++  # A string variable should be resolvable via %variable syntax.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "%myVar",
++    variables = list(myVar = "test")
++  )
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "test")
++})
+
+===== P289 | repo lueluelue12138/sharp-gui | PR #16: feat(video): 添加视频 3DGS 重建能力 | capacidade: model-gallery-smoothness
+--- SPEC VIVA
+# model-gallery-smoothness Specification
+
+## Purpose
+TBD - created by archiving change optimize-model-gallery-smoothness. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: Large galleries remain responsive to browse
+The system SHALL keep the sidebar model gallery interactive when the gallery contains at least 200 items, and SHALL allow users to continue browsing deeper items without waiting for every offscreen row and thumbnail to be realized up front.
+
+#### Scenario: Initial open with a large gallery
+- **WHEN** the user opens the sidebar while the gallery contains at least 200 model entries
+- **THEN** the gallery SHALL become scrollable and selectable without requiring all offscreen rows to finish rendering first
+
+#### Scenario: User scrolls deep into a large gallery
+- **WHEN** the user rapidly scrolls from the top of a large gallery toward later entries
+- **THEN** rows entering the viewport SHALL continue appearing as needed without the sidebar freezing or becoming non-responsive
+
+### Requirement: Gallery browsing context is preserved during refresh and layout-only changes
+The system SHALL preserve the user's current gallery browsing context when gallery data is refreshed or when sidebar layout state changes without changing the underlying gallery contents.
+
+#### Scenario: Task completion refreshes the gallery mid-scroll
+- **WHEN** the user is browsing the middle of the gallery and a completed task inserts or updates items
+- **THEN** the gallery SHALL preserve the user's current viewport anchor instead of resetting the scroll position to the top
+
+#### Scenario: Sidebar visibility changes without gallery content changes
+- **WHEN** the user collapses and re-expands the sidebar, or closes and reopens the sidebar on mobile, while gallery contents are unchanged
+- **THEN** the gallery SHALL restore the same logical browsing position and visible context
+
+#### Scenario: Unrelated UI state changes occur
+- **WHEN** the user changes non-gallery UI state such as opening settings or toggling viewer-only controls while gallery contents remain unchanged
+- **THEN** the currently visible gallery rows SHALL remain visually stable and SHALL NOT lose their current thumbnail state
+
+### Requirement: Visible rows always present a stable thumbnail state
+The system SHALL present a deterministic visual state for the thumbnail area of every visible gallery row, limited to a loaded thumbnail, a loading placeholder, or an error/fallback placeholder.
+
+#### Scenario: Fast scrolling through thumbnail-heavy content
+- **WHEN** the user scrolls quickly through the gallery
+- **THEN** each row entering the viewport SHALL show either a thumbnail or a placeholder state, and SHALL NOT present a blank gap where the thumbnail region disappears
+
+#### Scenario: Thumbnail is still loading
+- **WHEN** a visible row's thumbnail asset has not completed loading yet
+- **THEN** the row SHALL keep a stable placeholder state until the thumbnail is ready
+
+#### Scenario: Row re-enters the viewport
+- **WHEN** a row that was already viewed re-enters the viewport during the same browsing session
+- **THEN** the row SHALL restore its thumbnail presentation without a visible reset to an empty thumbnail region if the asset is already available
+
+### Requirement: List rows prefer dedicated thumbnail assets
+The system MUST use dedicated thumbnail assets for gallery rows when available, and MUST NOT use full-resolution original images as the default row preview path.
+
+#### Scenario: Dedicated thumbnail asset exists
+- **WHEN** the gallery item has a valid thumbnail asset
+- **THEN** the row SHALL request and render that thumbnail asset as its preview image
+
+#### Scenario: Dedicated thumbnail asset is missing or invalid
+- **WHEN** the gallery item has no usable thumbnail asset
+- **THEN** the row SHALL render a stable fallback state and the gallery SHALL remain scrollable and selectable without requesting the full-resolution original image as the default row preview
+
+### Requirement: Active selection remains consistent across gallery updates
+The system SHALL preserve the active model selection across gallery refreshes whenever the selected model still exists after the refresh.
+
+#### Scenario: Selected model is still present after refresh
+- **WHEN** the gallery refreshes and the currently selected model entry still exists
+- **THEN** the same model entry SHALL remain selected after the refresh completes
+
+#### Scenario: Selected model was removed
+- **WHEN** the gallery refreshes and the currently selected model entry no longer exists
+- **THEN** the system SHALL clear the stale active state without leaving an invalid selected row in the gallery
+
+### Requirement: New gallery states are localized
+The system MUST provide localized user-visible text for any new gallery loading, fallback, or error states introduced by this capability.
+
+#### Scenario: Language changes after gallery UI is available
+- **WHEN** the application language switches between supported locales
+- **THEN** all new gallery loading, placeholder, and error messages introduced by this capability SHALL render from locale resources for the selected language
+
+--- ARQUIVOS DO PR (108)
+modified  +48    -1     .agents/rules/backend-guide.md
+modified  +18    -1     .agents/rules/frontend-guide.md
+modified  +39    -6     .agents/rules/project-overview.md
+modified  +4     -0     .agents/rules/styling-guide.md
+modified  +15    -0     .agents/rules/testing.md
+modified  +3     -1     .agents/skills/commit-and-release/SKILL.md
+added     +14    -0     .editorconfig
+modified  +1     -0     .gitattributes
+modified  +4     -1     .gitignore
+modified  +189   -13    README.en.md
+modified  +189   -13    README.md
+modified  +11    -2     backend/app_factory.py
+modified  +61    -0     backend/config.py
+modified  +9     -0     backend/paths.py
+modified  +2     -1     backend/routes/__init__.py
+modified  +20    -0     backend/routes/gallery.py
+modified  +15    -1     backend/routes/settings.py
+added     +67    -0     backend/routes/video_reconstruction.py
+modified  +36    -4     backend/runtime.py
+modified  +8     -1     backend/security/access_control.py
+modified  +302   -9     backend/services/model_gallery.py
+modified  +144   -20    backend/services/task_queue.py
+added     +2519  -0     backend/services/video_reconstruction.py
+modified  +36    -0     docs/i18n.js
+added     +0     -0     docs/images/demo-video-reconstruction.gif
+added     +0     -0     docs/images/video-reconstruction-dialog.png
+modified  +131   -0     docs/index.html
+modified  +794   -0     docs/style.css
+removed   +0     -150   frontend/dist/assets/index-C_vxx1ZK.js
+removed   +0     -1     frontend/dist/assets/index-C_vxx1ZK.js.map
+added     +151   -0     frontend/dist/assets/index-DUq6IJoa.js
+added     +1     -0     frontend/dist/assets/index-DUq6IJoa.js.map
+removed   +0     -1     frontend/dist/assets/index-DajxzeCm.css
+added     +1     -0     frontend/dist/assets/index-eQQ2i7-w.css
+renamed   +2     -2     frontend/dist/assets/spark-C8aTDLbx.js
+renamed   +1     -1     frontend/dist/assets/spark-C8aTDLbx.js.map
+renamed   +2     -2     frontend/dist/assets/three-D2Dui5N1.js
+renamed   +1     -1     frontend/dist/assets/three-D2Dui5N1.js.map
+modified  +4     -4     frontend/dist/index.html
+modified  +94    -36    frontend/src/App.tsx
+modified  +1     -0     frontend/src/api/index.ts
+modified  +2     -1     frontend/src/api/settings.ts
+modified  +1     -1     frontend/src/api/tasks.ts
+added     +55    -0     frontend/src/api/videoReconstruction.ts
+modified  +56    -19    frontend/src/components/common/ImageViewer/ImageViewer.tsx
+modified  +32    -8     frontend/src/components/common/Modal/Modal.module.css
+added     +41    -0     frontend/src/components/common/Tooltip/Tooltip.module.css
+added     +172   -0     frontend/src/components/common/Tooltip/Tooltip.tsx
+added     +1     -0     frontend/src/components/common/Tooltip/index.ts
+modified  +13    -8     frontend/src/components/gallery/GalleryItem/GalleryItem.tsx
+modified  +11    -3     frontend/src/components/gallery/GalleryList/GalleryList.tsx
+modified  +174   -3     frontend/src/components/layout/Settings/Settings.module.css
+modified  +231   -3     frontend/src/components/layout/Settings/Settings.tsx
+modified  +2     -2     frontend/src/components/layout/Sidebar/Sidebar.tsx
+modified  +60    -1     frontend/src/components/layout/TaskQueue/TaskQueue.module.css
+modified  +94    -6     frontend/src/components/layout/TaskQueue/TaskQueue.tsx
+modified  +5     -5     frontend/src/components/photoGallery/PhotoAlbumList/PhotoAlbumList.tsx
+modified  +26    -2     frontend/src/components/photoGallery/PhotoGalleryView/PhotoGalleryView.tsx
+modified  +18    -6     frontend/src/components/photoGallery/PhotoMasonryGrid/PhotoMasonryGrid.tsx
+modified  +19    -0     frontend/src/components/photoGallery/PhotoSelectionBar/PhotoSelectionBar.module.css
+modified  +29    -3     frontend/src/components/photoGallery/PhotoSelectionBar/PhotoSelectionBar.tsx
+added     +462   -0     frontend/src/components/photoGallery/VideoReconstructionDialog/VideoReconstructionDialog.module.css
+added     +524   -0     frontend/src/components/photoGallery/VideoReconstructionDialog/VideoReconstructionDialog.tsx
+added     +1     -0     frontend/src/components/photoGallery/VideoReconstructionDialog/index.ts
+added     +350   -0     frontend/src/components/photoGallery/VideoReconstructionGuide/VideoReconstructionGuide.module.css
+added     +224   -0     frontend/src/components/photoGallery/VideoReconstructionGuide/VideoReconstructionGuide.tsx
+added     +1     -0     frontend/src/components/photoGallery/VideoReconstructionGuide/index.ts
+modified  +2     -1     frontend/src/components/photoGallery/index.ts
+modified  +62    -2     frontend/src/components/viewer/QuickControls/QuickControls.module.css
+modified  +151   -3     frontend/src/components/viewer/QuickControls/QuickControls.tsx
+modified  +4     -1     frontend/src/components/viewer/ViewerCanvas/ViewerCanvas.tsx
+modified  +418   -48    frontend/src/hooks/useViewer.ts
+modified  +322   -5     frontend/src/i18n/en.json
+modified  +322   -5     frontend/src/i18n/zh.json
+modified  +55    -0     frontend/src/store/useAppStore.ts
+modified  +4     -0     frontend/src/types/gallery.ts   <== código ligado à spec
+modified  +1     -0     frontend/src/types/index.ts
+modified  +27    -0     frontend/src/types/task.ts
+added     +74    -0     frontend/src/types/videoReconstruction.ts
+modified  +16    -0     frontend/src/utils/gallery.ts
+modified  +12    -0     install.bat
+added     +2     -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/.openspec.yaml
+added     +136   -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/design.md
+added     +56    -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/proposal.md
+added     +101   -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/specs/feedforward-reconstruction-engine/spec.md
+added     +56    -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/.openspec.yaml
+added     +576   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/design.md
+added     +89    -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/proposal.md
+added     +42    -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/specs/local-video-gallery-preview/spec.md
+added     +344   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/specs/video-3dgs-reconstruction/spec.md
+added     +178   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/.openspec.yaml
+added     +96    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/design.md
+added     +29    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/proposal.md
+added     +124   -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/specs/windows-portable-release-packages/spec.md
+added     +34    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/tasks.md
+modified  +41    -0     openspec/specs/local-video-gallery-preview/spec.md
+added     +349   -0     openspec/specs/video-3dgs-reconstruction/spec.md
+modified  +60    -15    openspec/specs/windows-portable-release-packages/spec.md
+modified  +14    -0     run.bat
+modified  +171   -0     tests/test_api_contract.py
+modified  +4     -0     tests/test_route_map.py
+modified  +32    -0     tests/test_security.py
+modified  +952   -0     tests/test_services.py
+modified  +277   -5     tools/build_portable_package.ps1
+modified  +55    -12    tools/build_portable_release.ps1
+added     +488   -0     tools/install_video_reconstruction.py
+--- DIFF DO CÓDIGO LIGADO
+### frontend/src/types/gallery.ts
+@@ -9,6 +9,10 @@ export interface GalleryItem {
+   spz_url?: string | null;
+   size?: number;
+   spz_size?: number | null;
++  source_media_type?: 'video' | 'image' | string | null;
++  source_media_id?: string | null;
++  source_name?: string | null;
++  source_video_url?: string | null;
+   created_at?: string | null;
+   updated_at?: string | null;
+ }
+

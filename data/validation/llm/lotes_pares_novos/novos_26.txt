@@ -1,0 +1,1243 @@
+===== P234 | repo norish-recipes/norish | PR #468: Rc/0.19.0 | capacidade: mobile-offline-auth
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Session is re-validated when app reachability is restored
+
+When `appOnline` transitions from `false` to `true`, the auth system SHALL silently check whether the current session is still valid with the server.
+
+#### Scenario: Session still valid on reconnect
+
+- **WHEN** `appOnline` transitions from `false` to `true`
+- **AND** the auth client calls `getSession()` and receives a valid session
+- **THEN** the user SHALL remain authenticated
+- **AND** no sign-out or redirect SHALL occur
+
+#### Scenario: Session expired or revoked on reconnect
+
+- **WHEN** `appOnline` transitions from `false` to `true`
+- **AND** the auth client calls `getSession()` and receives a null/invalid response (e.g., 401 or empty session)
+- **THEN** the auth system SHALL call `signOut()`
+- **AND** the user SHALL be redirected to the login screen
+- **AND** the persisted auth credentials in `expo-secure-store` SHALL be cleared
+
+---
+
+### Requirement: Auth tokens remain accessible offline
+
+The Better Auth session cookie stored in `expo-secure-store` SHALL remain accessible when the device is offline. When the backend is unreachable, the auth context SHALL read the persisted session data directly from `expo-secure-store` and use it to determine authentication state, rather than relying on a network-dependent session check.
+
+#### Scenario: Offline with persisted session
+
+- **WHEN** the backend is unreachable (mode is `offline` or `backend-unreachable`)
+- **AND** a valid session exists in `expo-secure-store` at the `norish_session_data` key
+- **THEN** `useAuth()` SHALL return `isAuthenticated: true` and the cached `user` object parsed from the persisted session data
+- **AND** the user SHALL be routed to the authenticated `(tabs)` stack, not the `(auth)` login screen
+
+#### Scenario: Offline with no persisted session
+
+- **WHEN** the backend is unreachable
+- **AND** no session exists in `expo-secure-store`
+- **THEN** `useAuth()` SHALL return `isAuthenticated: false`
+- **AND** the user SHALL remain on the `(auth)` login screen
+
+#### Scenario: Offline with corrupted persisted session
+
+- **WHEN** the backend is unreachable
+- **AND** the persisted session data in `expo-secure-store` cannot be parsed (e.g., invalid JSON, missing user fields)
+- **THEN** `useAuth()` SHALL return `isAuthenticated: false`
+- **AND** no error SHALL be thrown to the UI
+
+---
+
+### Requirement: Persisted session reader utility
+
+The auth storage module SHALL expose a function to read and parse the persisted Better Auth session data from `expo-secure-store`.
+
+#### Scenario: Valid persisted session exists
+
+- **WHEN** `readPersistedSession()` is called
+- **AND** the `norish_session_data` key contains valid JSON with a `user` object
+- **THEN** the function SHALL return the parsed user object with `id`, `email`, `name`, and optional `image` fields
+
+#### Scenario: No persisted session exists
+
+- **WHEN** `readPersistedSession()` is called
+- **AND** the `norish_session_data` key is empty or does not exist
+- **THEN** the function SHALL return `null`
+
+#### Scenario: Persisted session is corrupted
+
+- **WHEN** `readPersistedSession()` is called
+- **AND** the `norish_session_data` key contains data that cannot be parsed
+- **THEN** the function SHALL return `null`
+- **AND** the error SHALL be logged at `warn` level
+
+---
+
+### Requirement: Auth context uses network awareness for session source
+
+The auth context SHALL use the backend reachability state to decide its session data source: the live Better Auth session hook when online, or the locally-persisted session when the backend is unreachable.
+
+#### Scenario: Backend is reachable
+
+- **WHEN** the backend is reachable (mode is `online`)
+- **THEN** the auth context SHALL use the result from `authClient.useSession()` to determine `isAuthenticated` and `user`
+
+#### Scenario: Backend becomes unreachable after being online
+
+- **WHEN** the backend transitions from reachable to unreachable
+- **AND** the auth context previously had a live session
+- **THEN** the auth context SHALL continue reporting `isAuthenticated: true` with the last-known user data
+- **AND** the user SHALL NOT be redirected to the login screen
+
+#### Scenario: Cold start with backend unreachable
+
+- **WHEN** the app cold-starts and the backend is unreachable
+- **AND** a persisted session exists in `expo-secure-store`
+- **THEN** the auth context SHALL read the persisted session and report `isAuthenticated: true`
+- **AND** the user SHALL be routed directly to the `(tabs)` stack
+
+#### Scenario: Startup reachability still initializing
+
+- **WHEN** the app has mounted
+- **AND** network reachability runtime state is still `initializing`
+- **THEN** the auth context SHALL remain in a loading/transitional state
+- **AND** it SHALL NOT prematurely force offline persisted-session auth resolution until reachability is `ready`
+
+#### Scenario: Backend becomes reachable after offline period
+
+- **WHEN** the backend transitions from unreachable to reachable
+- **THEN** the auth context SHALL transition to using the live `authClient.useSession()` result
+- **AND** the existing `useSessionRevalidation` hook SHALL validate the session and sign out if invalid
+
+#### Scenario: Network provider topology requirement
+
+- **WHEN** `AuthProviderInner` is used in the backend-configured app tree
+- **THEN** it SHALL be mounted under `NetworkProvider`
+- **AND** offline auth bypass behavior SHALL rely on `useNetworkStatus()` as a required dependency rather than optional fallback logic
+
+---
+
+### Requirement: Session re-validation does not block the UI
+
+The reconnect session check SHALL be performed asynchronously in the background without blocking the user's interaction with cached data.
+
+#### Scenario: User interacts during re-validation
+
+- **WHEN** `appOnline` is restored and `getSession()` is in flight
+- **THEN** the user SHALL be able to continue browsing cached data without interruption
+- **AND** sign-out (if needed) SHALL occur after the response returns
+
+---
+
+### Requirement: Session re-validation handles transient network errors gracefully
+
+If the session re-validation request fails due to a transient network error (e.g., timeout, DNS failure), the auth system SHALL NOT sign the user out immediately.
+
+#### Scenario: Re-validation request fails transiently
+
+- **WHEN** `appOnline` has transitioned to `true` but the `getSession()` call still fails with a transient network error
+- **THEN** the auth system SHALL retry on the next reconnect cycle
+- **AND** the user SHALL remain authenticated with cached session data
+
+--- ARQUIVOS DO PR (996)
+modified  +3     -0     .dockerignore
+modified  +7     -1     .github/workflows/_docker-build.yml
+modified  +4     -0     .github/workflows/_node-ci.yml
+modified  +1     -0     .github/workflows/docker-build-test.yml
+modified  +2     -0     .github/workflows/pr-quality.yml
+modified  +1     -0     .github/workflows/rc-release-build.yml
+modified  +2     -0     .github/workflows/release-build.yml
+added     +3     -0     .gitmodules
+modified  +1     -1     AGENTS.md
+modified  +7     -0     README.md
+added     +56    -0     apps/mobile/__tests__/recipes/recipe-actions-menu-share.test.ts
+modified  +30    -0     apps/mobile/eslint.config.js
+modified  +2     -0     apps/mobile/package.json
+modified  +30    -3     apps/mobile/src/app/(tabs)/_layout.tsx
+modified  +2     -8     apps/mobile/src/app/(tabs)/groceries/index.tsx
+modified  +7     -1     apps/mobile/src/app/_layout.tsx   <== código ligado à spec
+added     +38    -0     apps/mobile/src/components/groceries/groceries-menu.tsx
+added     +281   -0     apps/mobile/src/components/groceries/groceries-screen.tsx
+added     +157   -0     apps/mobile/src/components/groceries/grocery-row.tsx
+added     +195   -0     apps/mobile/src/components/groceries/grocery-section-card.tsx
+added     +1     -0     apps/mobile/src/components/groceries/index.ts
+added     +167   -0     apps/mobile/src/components/groceries/sortable-grocery-list.tsx
+added     +275   -0     apps/mobile/src/components/groceries/swipeable-grocery-row.tsx
+added     +1     -0     apps/mobile/src/components/groceries/types.ts
+modified  +12    -9     apps/mobile/src/components/home/todays-meals-section.tsx
+modified  +21    -8     apps/mobile/src/components/recipe-detail/recipe-actions-menu.tsx
+added     +43    -0     apps/mobile/src/components/recipe-detail/recipe-share.ts
+added     +445   -0     apps/mobile/src/components/shell/sheet/grocery-editor-sheet.tsx
+added     +503   -0     apps/mobile/src/components/shell/sheet/grocery-recurrence-sheet.tsx
+added     +16    -0     apps/mobile/src/context/groceries-context.tsx
+added     +16    -0     apps/mobile/src/context/stores-context.tsx
+modified  +3     -1     apps/mobile/src/global.css
+added     +6     -0     apps/mobile/src/hooks/groceries/index.ts
+added     +41    -0     apps/mobile/src/hooks/groceries/shared-groceries-hooks.tsx
+added     +7     -0     apps/mobile/src/hooks/stores/index.ts
+added     +10    -0     apps/mobile/src/hooks/stores/shared-stores-hooks.ts
+added     +170   -0     apps/mobile/src/lib/groceries/grocery-utils.ts
+modified  +4     -0     apps/mobile/src/providers/trpc-provider.tsx   <== código ligado à spec
+modified  +12    -9     apps/mobile/src/styles/todays-meals-section.styles.ts
+modified  +2     -2     apps/parser-api/package.json
+added     +1     -0     apps/quick-import-extension
+modified  +9     -12    apps/web/__tests__/app/providers/base-providers.test.tsx
+modified  +8     -5     apps/web/__tests__/app/recipes/author-chip.test.tsx
+added     +77    -0     apps/web/__tests__/app/recipes/cooking-mode-steps.test.ts
+modified  +6     -3     apps/web/__tests__/app/recipes/recipe-favorites-doubletap.test.tsx
+modified  +6     -4     apps/web/__tests__/app/recipes/system-convert-menu.test.tsx
+modified  +1     -1     apps/web/__tests__/app/settings/admin/json-editor.test.tsx
+modified  +2     -2     apps/web/__tests__/app/settings/admin/unsaved-changes-chip.test.tsx
+modified  +42    -32    apps/web/__tests__/app/settings/user/preferences-card.test.tsx
+modified  +20    -10    apps/web/__tests__/app/settings/user/profile-card.test.tsx
+added     +143   -0     apps/web/__tests__/components/dashboard/todays-meals.test.tsx
+modified  +11    -10    apps/web/__tests__/components/delete-recipe-modal.test.tsx
+modified  +20    -7     apps/web/__tests__/components/filters-panel.test.tsx
+modified  +32    -14    apps/web/__tests__/components/import-recipe-modal.test.tsx
+added     +192   -0     apps/web/__tests__/components/navbar-user-menu-open-state.test.tsx
+modified  +20    -10    apps/web/__tests__/components/navbar-user-menu.test.tsx
+added     +92    -0     apps/web/__tests__/components/panel.test.tsx
+added     +18    -0     apps/web/__tests__/components/recipe/public-smart-instruction-boundary.test.ts
+added     +92    -0     apps/web/__tests__/components/share-links-table-card.test.tsx
+added     +74    -0     apps/web/__tests__/components/shared/smart-markdown-renderer.test.tsx
+added     +70    -0     apps/web/__tests__/components/shared/smart-text-input.test.tsx
+modified  +113   -0     apps/web/__tests__/hooks/calendar/use-calendar-subscription.test.ts
+modified  +44    -13    apps/web/__tests__/hooks/groceries/use-groceries-mutations.test.ts
+modified  +52    -40    apps/web/__tests__/hooks/groceries/use-groceries-subscription.test.ts
+modified  +16    -35    apps/web/__tests__/hooks/households/use-household-subscription.test.ts
+modified  +5     -4     apps/web/__tests__/hooks/ratings/use-ratings-subscription.test.tsx
+modified  +5     -4     apps/web/__tests__/hooks/recipes/use-recipe-subscription.test.tsx
+modified  +238   -8     apps/web/__tests__/hooks/recipes/use-recipes-mutations.test.ts
+modified  +5     -4     apps/web/__tests__/hooks/recipes/use-recipes-subscription.test.ts
+modified  +1     -1     apps/web/app/(app)/avatars/[id]/route.ts
+added     +19    -0     apps/web/app/(app)/calendar/context-helpers.ts
+added     +30    -0     apps/web/app/(app)/calendar/context-types.ts
+modified  +14    -67    apps/web/app/(app)/calendar/context.tsx
+modified  +64    -10    apps/web/app/(app)/calendar/page.tsx
+modified  +24    -14    apps/web/app/(app)/groceries/components/add-grocery-button.tsx
+modified  +76    -99    apps/web/app/(app)/groceries/components/groceries-page.tsx
+modified  +7     -7     apps/web/app/(app)/groceries/components/recurrence-pill.tsx
+modified  +3     -3     apps/web/app/(app)/groceries/components/recurrence-suggestion.tsx
+modified  +33    -134   apps/web/app/(app)/groceries/context.tsx
+modified  +8     -55    apps/web/app/(app)/groceries/stores-context.tsx
+modified  +2     -4     apps/web/app/(app)/layout.tsx
+modified  +34    -16    apps/web/app/(app)/page.tsx
+modified  +0     -1     apps/web/app/(app)/recipes/[id]/[filename]/route.ts
+modified  +54    -83    apps/web/app/(app)/recipes/[id]/components/actions-menu.tsx
+modified  +4     -7     apps/web/app/(app)/recipes/[id]/components/add-to-calendar-button.tsx
+modified  +6     -15    apps/web/app/(app)/recipes/[id]/components/add-to-groceries-button.tsx
+removed   +0     -32    apps/web/app/(app)/recipes/[id]/components/author-chip.tsx
+added     +74    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-ingredients-view.tsx
+added     +63    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-mode-header.tsx
+added     +58    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-mode-steps.ts
+added     +83    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-mode-tabs.tsx
+added     +238   -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-mode.tsx
+added     +143   -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/cooking-step-view.tsx
+added     +12    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/desktop-cooking-mode-dialog.tsx
+added     +3     -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/index.ts
+added     +8     -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/mobile-cooking-mode-dialog.tsx
+added     +116   -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/step-images.tsx
+added     +34    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/types.ts
+added     +19    -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/use-is-desktop-cooking-mode.ts
+added     +4     -0     apps/web/app/(app)/recipes/[id]/components/cookingmode/utils.ts
+modified  +29    -27    apps/web/app/(app)/recipes/[id]/components/delete-recipe-modal.tsx
+modified  +16    -188   apps/web/app/(app)/recipes/[id]/components/ingredient-list.tsx
+added     +118   -0     apps/web/app/(app)/recipes/[id]/components/nutrition-card.tsx
+modified  +81    -82    apps/web/app/(app)/recipes/[id]/components/recipe-share-panel.tsx
+modified  +35    -42    apps/web/app/(app)/recipes/[id]/components/servings-control.tsx
+modified  +14    -217   apps/web/app/(app)/recipes/[id]/components/steps-list.tsx
+modified  +55    -69    apps/web/app/(app)/recipes/[id]/components/system-convert-menu.tsx
+modified  +0     -1     apps/web/app/(app)/recipes/[id]/components/wake-lock-context.tsx
+modified  +3     -2     apps/web/app/(app)/recipes/[id]/components/wake-lock-toggle.tsx
+modified  +2     -3     apps/web/app/(app)/recipes/[id]/context.tsx
+modified  +7     -4     apps/web/app/(app)/recipes/[id]/page.tsx
+modified  +48    -38    apps/web/app/(app)/recipes/[id]/recipe-page-desktop.tsx
+modified  +57    -52    apps/web/app/(app)/recipes/[id]/recipe-page-mobile.tsx
+modified  +0     -1     apps/web/app/(app)/recipes/[id]/steps/[filename]/route.ts
+modified  +27    -4     apps/web/app/(app)/recipes/edit/[id]/page.tsx
+modified  +167   -153   apps/web/app/(app)/recipes/edit/components/recipe-form.tsx
+modified  +2     -2     apps/web/app/(app)/recipes/edit/components/use-recipe-form-dirty-state.ts
+modified  +1     -3     apps/web/app/(app)/settings/admin/components/admin-settings-content.tsx
+modified  +203   -130   apps/web/app/(app)/settings/admin/components/ai-config-form.tsx
+modified  +80    -50    apps/web/app/(app)/settings/admin/components/ai-processing-card.tsx
+modified  +18    -19    apps/web/app/(app)/settings/admin/components/auth-providers/auth-provider-form.tsx
+modified  +98    -84    apps/web/app/(app)/settings/admin/components/auth-providers/auth-providers-card.tsx
+modified  +25    -25    apps/web/app/(app)/settings/admin/components/auth-providers/delete-provider-modal.tsx
+modified  +1     -1     apps/web/app/(app)/settings/admin/components/auth-providers/env-managed-badge.tsx
+modified  +36    -31    apps/web/app/(app)/settings/admin/components/auth-providers/oidc-claim-mapping.tsx
+modified  +28    -33    apps/web/app/(app)/settings/admin/components/auth-providers/oidc-provider-form.tsx
+modified  +6     -21    apps/web/app/(app)/settings/admin/components/auth-providers/provider-actions.tsx
+modified  +2     -3     apps/web/app/(app)/settings/admin/components/auth-providers/test-result-display.tsx
+modified  +11    -9     apps/web/app/(app)/settings/admin/components/bulk-categorization-form.tsx
+modified  +125   -90    apps/web/app/(app)/settings/admin/components/content-detection-card.tsx
+modified  +80    -105   apps/web/app/(app)/settings/admin/components/general-card.tsx
+modified  +19    -33    apps/web/app/(app)/settings/admin/components/json-editor.tsx
+modified  +48    -84    apps/web/app/(app)/settings/admin/components/permission-policy-card.tsx
+modified  +46    -59    apps/web/app/(app)/settings/admin/components/prompts-form.tsx
+modified  +41    -43    apps/web/app/(app)/settings/admin/components/restart-confirmation-modal.tsx
+modified  +1     -1     apps/web/app/(app)/settings/admin/components/restart-required-chip.tsx
+modified  +21    -31    apps/web/app/(app)/settings/admin/components/system-card.tsx
+modified  +53    -58    apps/web/app/(app)/settings/admin/components/timer-keywords-editor.tsx
+modified  +1     -1     apps/web/app/(app)/settings/admin/components/unsaved-changes-chip.tsx
+modified  +144   -108   apps/web/app/(app)/settings/admin/components/video-processing-form.tsx
+modified  +3     -5     apps/web/app/(app)/settings/admin/context.tsx
+modified  +99    -114   apps/web/app/(app)/settings/caldav/components/caldav-config-card.tsx
+modified  +197   -192   apps/web/app/(app)/settings/caldav/components/caldav-config-edit-modal.tsx
+modified  +32    -55    apps/web/app/(app)/settings/caldav/components/caldav-config-summary.tsx
+modified  +1     -3     apps/web/app/(app)/settings/caldav/components/caldav-settings-content.tsx
+modified  +119   -116   apps/web/app/(app)/settings/caldav/components/caldav-sync-status-card.tsx
+modified  +28    -38    apps/web/app/(app)/settings/caldav/components/delete-caldav-modal.tsx
+modified  +16    -30    apps/web/app/(app)/settings/caldav/context.tsx
+modified  +3     -6     apps/web/app/(app)/settings/components/new-feature-chip.tsx
+added     +1     -0     apps/web/app/(app)/settings/components/settings-switch.tsx
+modified  +45    -56    apps/web/app/(app)/settings/household/components/household-info-card.tsx
+modified  +1     -3     apps/web/app/(app)/settings/household/components/household-settings-content.tsx
+modified  +19    -40    apps/web/app/(app)/settings/household/components/join-code-card.tsx
+modified  +157   -150   apps/web/app/(app)/settings/household/components/members-card.tsx
+modified  +37    -41    apps/web/app/(app)/settings/household/components/no-household-view.tsx
+modified  +1     -2     apps/web/app/(app)/settings/household/context.tsx
+modified  +78    -83    apps/web/app/(app)/settings/page.tsx
+modified  +10    -14    apps/web/app/(app)/settings/user/components/allergies-card.tsx
+modified  +157   -166   apps/web/app/(app)/settings/user/components/api-token-card.tsx
+modified  +7     -8     apps/web/app/(app)/settings/user/components/archive-import-card.tsx
+modified  +41    -53    apps/web/app/(app)/settings/user/components/danger-zone-card.tsx
+modified  +37    -27    apps/web/app/(app)/settings/user/components/preferences-card.tsx
+modified  +36    -49    apps/web/app/(app)/settings/user/components/profile-card.tsx
+modified  +141   -145   apps/web/app/(app)/settings/user/components/site-auth-tokens-card.tsx
+modified  +0     -1     apps/web/app/(app)/settings/user/components/user-settings-content.tsx
+modified  +2     -3     apps/web/app/(app)/settings/user/context.tsx
+modified  +26    -20    apps/web/app/(auth)/auth-error/page.tsx
+modified  +5     -7     apps/web/app/(auth)/components/auth-card.tsx
+modified  +11    -12    apps/web/app/(auth)/login/components/auto-sign-in.tsx
+modified  +42    -26    apps/web/app/(auth)/login/components/email-password-form.tsx
+modified  +9     -11    apps/web/app/(auth)/login/components/login-client.tsx
+modified  +6     -9     apps/web/app/(auth)/login/components/provider-button.tsx
+modified  +1     -1     apps/web/app/(auth)/login/components/provider-icon.tsx
+modified  +1     -1     apps/web/app/(auth)/login/page.tsx
+modified  +0     -1     apps/web/app/(auth)/signup/components/signup-client.tsx
+modified  +75    -52    apps/web/app/(auth)/signup/components/signup-form.tsx
+modified  +2     -1     apps/web/app/(auth)/signup/page.tsx
+modified  +1     -0     apps/web/app/api/docs/route.ts
+modified  +1     -0     apps/web/app/api/openapi.json/route.ts
+modified  +1     -0     apps/web/app/api/trpc/[trpc]/route.ts
+modified  +1     -0     apps/web/app/error.tsx
+modified  +1     -1     apps/web/app/images/splash/route.tsx
+modified  +2     -6     apps/web/app/layout.tsx
+modified  +22    -25    apps/web/app/not-found.tsx
+modified  +1     -3     apps/web/app/providers/auth-providers.tsx
+modified  +11    -18    apps/web/app/providers/base-providers.tsx
+modified  +0     -1     apps/web/app/providers/trpc-provider.tsx
+added     +23    -0     apps/web/app/share/[token]/components/share-recipe-controls.tsx
+added     +20    -0     apps/web/app/share/[token]/components/share-recipe-ingredients.tsx
+added     +25    -0     apps/web/app/share/[token]/components/share-recipe-steps.tsx
+added     +54    -0     apps/web/app/share/[token]/components/share-servings-control.tsx
+added     +53    -0     apps/web/app/share/[token]/components/share-system-switcher.tsx
+added     +72    -0     apps/web/app/share/[token]/components/shared-recipe-page-desktop.tsx
+added     +96    -0     apps/web/app/share/[token]/components/shared-recipe-page-mobile.tsx
+modified  +0     -1     apps/web/app/share/[token]/media/[filename]/route.ts
+modified  +13    -395   apps/web/app/share/[token]/page.tsx
+added     +51    -0     apps/web/app/share/[token]/public/public-recipe-context.tsx
+added     +37    -0     apps/web/app/share/[token]/public/types.ts
+added     +39    -0     apps/web/app/share/[token]/public/use-share-recipe-state.ts
+modified  +0     -1     apps/web/app/share/[token]/steps/[filename]/route.ts
+modified  +107   -110   apps/web/components/Panel/Panel.tsx
+modified  +99    -121   apps/web/components/Panel/consumers/add-grocery-panel.tsx
+modified  +101   -133   apps/web/components/Panel/consumers/edit-grocery-panel.tsx
+modified  +56    -47    apps/web/components/Panel/consumers/edit-note-panel.tsx
+modified  +91    -49    apps/web/components/Panel/consumers/edit-planned-recipe-panel.tsx
+modified  +26    -59    apps/web/components/Panel/consumers/edit-tag-panel.tsx
+modified  +293   -272   apps/web/components/Panel/consumers/filters-panel.tsx
+modified  +87    -77    apps/web/components/Panel/consumers/mini-calendar.tsx
+modified  +277   -191   apps/web/components/Panel/consumers/mini-groceries.tsx
+modified  +93    -88    apps/web/components/Panel/consumers/mini-recipes.tsx
+modified  +149   -114   apps/web/components/Panel/consumers/recurrence-panel.tsx
+modified  +42    -55    apps/web/components/calendar/desktop/desktop-day-card.tsx
+modified  +1     -2     apps/web/components/calendar/desktop/desktop-drag-overlay.tsx
+modified  +13    -8     apps/web/components/calendar/desktop/desktop-scroll-to-today.tsx
+modified  +6     -8     apps/web/components/calendar/desktop/desktop-timeline.tsx
+modified  +6     -8     apps/web/components/calendar/mobile/mobile-timeline.tsx
+modified  +3     -5     apps/web/components/calendar/mobile/planned-item-content.tsx
+modified  +38    -52    apps/web/components/calendar/mobile/timeline-day-section.tsx
+modified  +1     -2     apps/web/components/calendar/mobile/timeline-drag-overlay.tsx
+modified  +2     -4     apps/web/components/calendar/mobile/timeline-planned-item.tsx
+modified  +16    -8     apps/web/components/calendar/mobile/timeline-scroll-to-today.tsx
+modified  +3     -4     apps/web/components/calendar/mobile/timeline-slot-container.tsx
+modified  +2     -4     apps/web/components/calendar/planned-item-thumbnail.tsx
+modified  +51    -51    apps/web/components/dashboard/create-recipe-button.tsx
+modified  +25    -15    apps/web/components/dashboard/floating-recipe-chip.tsx
+modified  +7     -9     apps/web/components/dashboard/no-recipe-results.tsx
+modified  +7     -7     apps/web/components/dashboard/no-recipes-text.tsx
+modified  +318   -114   apps/web/components/dashboard/recipe-card.tsx
+modified  +40    -23    apps/web/components/dashboard/recipe-grid.tsx
+modified  +25    -28    apps/web/components/dashboard/recipe-metadata.tsx
+modified  +24    -7     apps/web/components/dashboard/recipe-tags.tsx
+added     +48    -0     apps/web/components/dashboard/recipe-view-mode-toggle.tsx
+modified  +7     -4     apps/web/components/dashboard/search-field-toggles.tsx
+modified  +41    -30    apps/web/components/dashboard/search-input.tsx
+added     +134   -0     apps/web/components/dashboard/today/today-meal-slot-card.tsx
+added     +10    -0     apps/web/components/dashboard/today/todays-meals-constants.ts
+added     +86    -0     apps/web/components/dashboard/today/todays-meals-content.tsx
+added     +51    -0     apps/web/components/dashboard/today/todays-meals-helpers.ts
+added     +29    -0     apps/web/components/dashboard/today/todays-meals-slot-chip.tsx
+added     +8     -0     apps/web/components/dashboard/today/todays-meals-types.ts
+added     +13    -0     apps/web/components/dashboard/today/todays-meals.tsx
+modified  +1     -2     apps/web/components/groceries/dnd/collision-detection.ts
+modified  +1     -2     apps/web/components/groceries/dnd/dnd-grocery-provider.tsx
+modified  +2     -4     apps/web/components/groceries/dnd/dnd-grouped-grocery-provider.tsx
+modified  +15    -13    apps/web/components/groceries/dnd/grocery-drag-overlay.tsx
+modified  +10    -13    apps/web/components/groceries/dnd/group-drag-overlay.tsx
+modified  +2     -3     apps/web/components/groceries/dnd/sortable-grocery-item.tsx
+modified  +3     -4     apps/web/components/groceries/dnd/sortable-group-item.tsx
+modified  +2     -3     apps/web/components/groceries/dnd/sortable-grouped-store-container.tsx
+modified  +2     -3     apps/web/components/groceries/dnd/sortable-store-container.tsx
+modified  +2     -4     apps/web/components/groceries/dnd/use-grocery-dnd.ts
+modified  +2     -1     apps/web/components/groceries/dnd/utils.ts
+modified  +0     -1     apps/web/components/groceries/dynamic-hero-icon.tsx
+added     +93    -0     apps/web/components/groceries/grocery-checkbox.tsx
+modified  +12    -14    apps/web/components/groceries/grocery-item.tsx
+modified  +5     -6     apps/web/components/groceries/grocery-list-by-recipe.tsx
+modified  +8     -9     apps/web/components/groceries/grocery-list.tsx
+modified  +35    -39    apps/web/components/groceries/grouped-grocery-item.tsx
+modified  +57    -53    apps/web/components/groceries/grouped-store-section.tsx
+modified  +8     -11    apps/web/components/groceries/recipe-section.tsx
+modified  +10    -10    apps/web/components/groceries/store-colors.ts
+modified  +56    -59    apps/web/components/groceries/store-section.tsx
+modified  +43    -37    apps/web/components/groceries/store-selector.tsx
+modified  +61    -65    apps/web/components/groceries/stores/delete-store-modal.tsx
+modified  +115   -106   apps/web/components/groceries/stores/store-manager-panel.tsx
+modified  +13    -14    apps/web/components/navbar/archive-importer.tsx
+modified  +8     -9     apps/web/components/navbar/mobile-nav.tsx
+modified  +182   -167   apps/web/components/navbar/navbar-user-menu.tsx
+modified  +21    -26    apps/web/components/navbar/navbar.tsx
+modified  +53    -34    apps/web/components/navbar/theme-switch.tsx
+modified  +25    -215   apps/web/components/recipe/public-smart-instruction.tsx
+modified  +26    -232   apps/web/components/recipe/smart-instruction.tsx
+modified  +14    -14    apps/web/components/recipe/timer-chip.tsx
+renamed   +13    -8     apps/web/components/recipes/amount-display-toggle.tsx
+added     +19    -0     apps/web/components/recipes/author-chip.tsx
+modified  +12    -13    apps/web/components/recipes/image-gallery-input.tsx
+modified  +25    -48    apps/web/components/recipes/ingredient-input.tsx
+modified  +25    -17    apps/web/components/recipes/measurement-system-selector.tsx
+modified  +14    -15    apps/web/components/recipes/media-gallery-input.tsx
+removed   +0     -251   apps/web/components/recipes/nutrition-card.tsx
+modified  +4     -9     apps/web/components/recipes/nutrition-portion-control.tsx
+added     +212   -0     apps/web/components/recipes/readonly-ingredients-list.tsx
+added     +139   -0     apps/web/components/recipes/readonly-nutrition.tsx
+modified  +16    -15    apps/web/components/recipes/readonly-recipe-sections.tsx
+added     +243   -0     apps/web/components/recipes/readonly-steps-list.tsx
+renamed   +0     -0     apps/web/components/recipes/recipe-layout-constants.ts
+modified  +2     -3     apps/web/components/recipes/recipe-share-status-chip.tsx
+modified  +142   -104   apps/web/components/recipes/share-links-table-card.tsx
+modified  +70    -62    apps/web/components/recipes/step-input.tsx
+modified  +37    -40    apps/web/components/recipes/time-inputs.tsx
+modified  +1     -0     apps/web/components/register-service-worker.ts
+added     +139   -0     apps/web/components/shared/action-button.tsx
+modified  +3     -2     apps/web/components/shared/ai-action-button.tsx
+modified  +31    -41    apps/web/components/shared/auth-language-selector.tsx
+modified  +3     -4     apps/web/components/shared/connection-status-overlay.tsx
+modified  +29    -27    apps/web/components/shared/delete-recipe-modal.tsx
+modified  +12    -7     apps/web/components/shared/fallback-image.tsx
+modified  +6     -11    apps/web/components/shared/filters.tsx
+modified  +14    -12    apps/web/components/shared/heart-button.tsx
+removed   +0     -248   apps/web/components/shared/image-carousel.tsx
+modified  +199   -172   apps/web/components/shared/image-lightbox.tsx
+modified  +155   -151   apps/web/components/shared/import-from-image-modal.tsx
+modified  +69    -93    apps/web/components/shared/import-from-paste-modal.tsx
+modified  +40    -60    apps/web/components/shared/import-recipe-modal.tsx
+modified  +39    -27    apps/web/components/shared/language-switch.tsx
+modified  +130   -211   apps/web/components/shared/media-carousel.tsx
+modified  +14    -22    apps/web/components/shared/not-found-view.tsx
+modified  +17    -28    apps/web/components/shared/secret-input.tsx
+modified  +22    -13    apps/web/components/shared/slot-dropdown.tsx
+modified  +33    -30    apps/web/components/shared/smart-input-help.tsx
+modified  +173   -14    apps/web/components/shared/smart-markdown-renderer.tsx
+modified  +179   -63    apps/web/components/shared/smart-text-input.tsx
+modified  +15    -12    apps/web/components/shared/swipable-row.tsx
+modified  +8     -10    apps/web/components/shared/tag-input.tsx
+added     +20    -0     apps/web/components/shared/ui-switch.tsx
+added     +65    -0     apps/web/components/shared/user-avatar.tsx
+modified  +34    -56    apps/web/components/shared/video-player.tsx
+modified  +2     -2     apps/web/components/skeleton/calendar-skeleton.tsx
+modified  +7     -7     apps/web/components/skeleton/grocery-skeleton.tsx
+modified  +4     -4     apps/web/components/skeleton/login-skeleton.tsx
+modified  +3     -3     apps/web/components/skeleton/mini-recipe-skeleton.tsx
+modified  +29    -6     apps/web/components/skeleton/recipe-card-skeleton.tsx
+modified  +15    -1     apps/web/components/skeleton/recipe-grid-skeleton.tsx
+modified  +5     -5     apps/web/components/skeleton/recipe-skeleton-desktop.tsx
+modified  +8     -8     apps/web/components/skeleton/recipe-skeleton-mobile.tsx
+modified  +5     -5     apps/web/components/skeleton/settings-skeleton.tsx
+modified  +3     -3     apps/web/components/skeleton/tags-skeleton.tsx
+added     +29    -0     apps/web/components/skeleton/todays-meals-skeleton.tsx
+modified  +1     -6     apps/web/components/skeleton/video-player-skeleton.tsx
+modified  +83    -71    apps/web/components/timer-dock.tsx
+modified  +6     -6     apps/web/config/css-tokens.ts
+removed   +0     -11    apps/web/config/fonts.ts
+modified  +0     -2     apps/web/context/archive-import-context.tsx
+modified  +1     -2     apps/web/context/household-context.tsx
+modified  +1     -2     apps/web/context/permissions-context.tsx
+modified  +24    -20    apps/web/context/recipes-context.tsx
+modified  +1     -2     apps/web/context/recipes-filters-context.tsx
+modified  +8     -34    apps/web/context/user-context.tsx
+modified  +1     -2     apps/web/hooks/admin/shared-admin-hooks.ts
+modified  +9     -15    apps/web/hooks/archive/shared-archive-hooks.ts
+modified  +5     -9     apps/web/hooks/archive/use-archive-import-mutation.ts
+modified  +2     -2     apps/web/hooks/archive/use-archive-import-query.ts
+modified  +6     -9     apps/web/hooks/archive/use-archive-import-subscription.ts
+modified  +5     -8     apps/web/hooks/caldav/shared-caldav-hooks.ts
+modified  +1     -2     apps/web/hooks/calendar/shared-calendar-hooks.ts
+modified  +2     -2     apps/web/hooks/calendar/use-calendar-dnd.ts
+modified  +1     -2     apps/web/hooks/config/shared-config-hooks.ts
+modified  +1     -2     apps/web/hooks/config/use-timers-enabled-query.ts
+modified  +1     -2     apps/web/hooks/favorites/shared-favorites-hooks.ts
+modified  +1     -2     apps/web/hooks/groceries/error-adapter.ts
+modified  +2     -4     apps/web/hooks/groceries/shared-groceries-hooks.ts
+modified  +2     -16    apps/web/hooks/groceries/use-groceries-mutations.ts
+modified  +2     -17    apps/web/hooks/groceries/use-groceries-subscription.ts
+modified  +88    -17    apps/web/hooks/groceries/use-grouped-grocery-dnd.ts
+modified  +6     -9     apps/web/hooks/households/adapters.ts
+modified  +1     -2     apps/web/hooks/households/shared-household-hooks.ts
+modified  +1     -2     apps/web/hooks/households/use-household-mutations.ts
+modified  +1     -2     apps/web/hooks/households/use-household-subscription.ts
+modified  +1     -2     apps/web/hooks/permissions/shared-permissions-hooks.ts
+modified  +1     -2     apps/web/hooks/ratings/shared-ratings-hooks.ts
+modified  +2     -3     apps/web/hooks/ratings/use-ratings-subscription.ts
+modified  +1     -2     apps/web/hooks/recipes/shared-recipe-hooks.ts
+modified  +1     -3     apps/web/hooks/recipes/use-recipe-id.ts
+modified  +1     -2     apps/web/hooks/recipes/use-recipe-images.ts
+modified  +1     -2     apps/web/hooks/recipes/use-recipe-prefetch.ts
+modified  +7     -16    apps/web/hooks/recipes/use-recipe-subscription.tsx
+modified  +4     -7     apps/web/hooks/recipes/use-recipes-mutations.ts
+modified  +19    -45    apps/web/hooks/recipes/use-recipes-subscription.tsx
+modified  +1     -2     apps/web/hooks/recipes/use-share-public-config-query.ts
+modified  +1     -2     apps/web/hooks/stores/shared-stores-hooks.ts
+modified  +1     -2     apps/web/hooks/use-amount-display-preference.ts
+added     +83    -0     apps/web/hooks/use-ingredient-link-highlight.ts
+modified  +1     -0     apps/web/hooks/use-notification-permission.ts
+added     +19    -0     apps/web/hooks/use-recipe-dashboard-view-mode.ts
+modified  +1     -2     apps/web/hooks/use-recurrence-detection.ts
+modified  +2     -2     apps/web/hooks/use-unit-formatter.ts
+modified  +1     -0     apps/web/hooks/use-wake-lock.tsx
+modified  +1     -3     apps/web/hooks/user/use-active-allergies.ts
+modified  +3     -5     apps/web/hooks/user/use-language-switch.tsx
+modified  +2     -4     apps/web/hooks/user/use-locale-cookie.ts
+modified  +3     -5     apps/web/hooks/user/use-locale.ts
+modified  +1     -2     apps/web/hooks/user/use-user-allergies-query.ts
+modified  +2     -4     apps/web/hooks/user/use-user-cache.ts
+modified  +2     -4     apps/web/hooks/user/use-user-mutations.ts
+modified  +2     -4     apps/web/hooks/user/use-user-query.ts
+modified  +5     -5     apps/web/i18n/request.ts
+modified  +2     -1     apps/web/lib/meal-icon.tsx
+modified  +1     -1     apps/web/lib/recipe-media.ts
+modified  +12    -7     apps/web/lib/ui/safe-error-toast.ts
+modified  +1     -1     apps/web/next.config.js
+modified  +9     -9     apps/web/package.json
+modified  +3     -4     apps/web/proxy.ts
+modified  +2     -4     apps/web/server/embedded-parser.ts
+modified  +1     -0     apps/web/stores/timers.ts
+modified  +54    -5     apps/web/styles/globals.css
+modified  +7     -4     docker/Dockerfile
+modified  +2     -2     docker/docker-compose.test.yml
+added     +2     -0     openspec/changes/align-mobile-grocery-models/.openspec.yaml
+added     +63    -0     openspec/changes/align-mobile-grocery-models/design.md
+added     +38    -0     openspec/changes/align-mobile-grocery-models/proposal.md
+added     +59    -0     openspec/changes/align-mobile-grocery-models/specs/shared-groceries-context/spec.md
+added     +37    -0     openspec/changes/align-mobile-grocery-models/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/design.md
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/specs/recipe-loading-skeletons/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/specs/recipe-paste-import/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-21-add-multi-paste-import/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/.openspec.yaml
+added     +83    -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/design.md
+added     +25    -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/proposal.md
+added     +38    -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/specs/mobile-recipe-sharing/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/specs/recipe-share-react-state/spec.md
+added     +15    -0     openspec/changes/archive/2026-04-21-mobile-native-share-links/tasks.md
+added     +2     -0     openspec/changes/design-ios-groceries-ui/.openspec.yaml
+added     +73    -0     openspec/changes/design-ios-groceries-ui/design.md
+added     +24    -0     openspec/changes/design-ios-groceries-ui/proposal.md
+added     +79    -0     openspec/changes/design-ios-groceries-ui/specs/mobile-groceries-ui/spec.md
+added     +29    -0     openspec/changes/design-ios-groceries-ui/tasks.md
+added     +2     -0     openspec/changes/wire-mobile-groceries-backend/.openspec.yaml
+added     +77    -0     openspec/changes/wire-mobile-groceries-backend/design.md
+added     +31    -0     openspec/changes/wire-mobile-groceries-backend/proposal.md
+added     +107   -0     openspec/changes/wire-mobile-groceries-backend/specs/mobile-groceries-backend/spec.md
+added     +17    -0     openspec/changes/wire-mobile-groceries-backend/specs/shared-groceries-context/spec.md
+added     +32    -0     openspec/changes/wire-mobile-groceries-backend/specs/shared-groceries-hooks/spec.md
+added     +51    -0     openspec/changes/wire-mobile-groceries-backend/tasks.md
+modified  +2     -2     openspec/specs/heroui-native-integration/spec.md
+added     +48    -0     openspec/specs/mobile-recipe-sharing/spec.md
+modified  +10    -4     openspec/specs/recipe-loading-skeletons/spec.md
+added     +160   -0     openspec/specs/recipe-paste-import/spec.md
+modified  +6     -0     openspec/specs/recipe-share-react-state/spec.md
+modified  +11    -5     package.json
+modified  +2     -2     packages/api/__tests__/ai/auto-tagger.test.ts
+modified  +1     -1     packages/api/__tests__/ai/features/recipe-extraction/normalizer.test.ts
+modified  +2     -2     packages/api/__tests__/ai/prompts/builder.test.ts
+modified  +1     -1     packages/api/__tests__/server/downloader-convert-to-mp4.test.ts
+modified  +1     -1     packages/api/__tests__/server/downloader-video-codec.test.ts
+modified  +1     -1     packages/api/__tests__/server/downloader.test.ts
+modified  +4     -4     packages/api/__tests__/server/parser/content-detection-korean.test.ts
+modified  +1     -1     packages/api/__tests__/server/parser/import-flow.test.ts
+modified  +1     -1     packages/api/__tests__/server/parser/normalize.test.ts
+modified  +10    -0     packages/api/__tests__/server/parser/parsers/ingredients.test.ts
+modified  +1     -1     packages/api/__tests__/server/parser/python-adapter.test.ts
+modified  +1     -1     packages/api/__tests__/server/video/yt-dlp-auth-tokens.test.ts
+modified  +1     -1     packages/api/__tests__/startup/migrate-gallery-images.test.ts
+modified  +1     -1     packages/api/package.json
+modified  +3     -3     packages/api/src/ai/allergy-detector.ts
+modified  +4     -4     packages/api/src/ai/auto-categorizer.ts
+modified  +5     -6     packages/api/src/ai/auto-tagger.ts
+modified  +2     -2     packages/api/src/ai/core/executor.ts
+modified  +2     -3     packages/api/src/ai/core/guards.ts
+modified  +2     -3     packages/api/src/ai/features/recipe-extraction/normalizer.ts
+modified  +4     -5     packages/api/src/ai/image-recipe-parser.ts
+modified  +4     -5     packages/api/src/ai/nutrition-estimator.ts
+modified  +1     -1     packages/api/src/ai/prompts/builder.ts
+modified  +4     -6     packages/api/src/ai/recipe-parser.ts
+modified  +5     -6     packages/api/src/ai/transcriber.ts
+modified  +9     -8     packages/api/src/caldav/event-listener.ts
+modified  +0     -1     packages/api/src/caldav/household-deduplication.ts
+modified  +0     -1     packages/api/src/caldav/sync-manager.ts
+modified  +1     -1     packages/api/src/parser/fetch.ts
+modified  +1     -2     packages/api/src/parser/index.ts
+modified  +1     -0     packages/api/src/parser/jsonld.ts
+modified  +0     -1     packages/api/src/parser/legacy.ts
+modified  +1     -2     packages/api/src/parser/normalize.ts
+modified  +1     -0     packages/api/src/parser/parsers/images.ts
+modified  +2     -3     packages/api/src/parser/parsers/ingredients.ts
+modified  +1     -0     packages/api/src/parser/parsers/metadata.ts
+modified  +1     -2     packages/api/src/parser/parsers/steps.ts
+modified  +1     -1     packages/api/src/parser/parsers/videos.ts
+modified  +2     -3     packages/api/src/parser/python/adapter.ts
+modified  +1     -2     packages/api/src/parser/python/client.ts
+modified  +2     -3     packages/api/src/playwright.ts
+removed   +0     -71    packages/api/src/services/recipe-randomizer.ts
+modified  +1     -1     packages/api/src/startup/http-server.ts
+modified  +13    -18    packages/api/src/startup/media-cleanup.ts
+modified  +12    -16    packages/api/src/startup/migrate-gallery-images.ts
+modified  +1     -1     packages/api/src/startup/migrations.ts
+modified  +4     -5     packages/api/src/startup/seed-config.ts
+modified  +1     -1     packages/api/src/startup/shutdown.ts
+modified  +1     -1     packages/api/src/startup/static-files.ts
+modified  +1     -2     packages/api/src/video/base-processor.ts
+modified  +0     -1     packages/api/src/video/instagram.ts
+modified  +4     -4     packages/api/src/video/normalizer.ts
+modified  +0     -1     packages/api/src/video/processor-factory.ts
+modified  +1     -2     packages/api/src/video/processor.ts
+modified  +1     -2     packages/api/src/video/processors/facebook.ts
+modified  +1     -2     packages/api/src/video/processors/generic.ts
+modified  +1     -2     packages/api/src/video/processors/instagram.ts
+modified  +1     -2     packages/api/src/video/processors/youtube.ts
+modified  +1     -2     packages/api/src/video/url-utils.ts
+modified  +4     -5     packages/api/src/video/yt-dlp.ts
+modified  +3     -3     packages/auth/__tests__/auth/claim-processor.test.ts
+modified  +1     -2     packages/auth/package.json
+modified  +5     -5     packages/auth/src/auth.ts
+modified  +5     -6     packages/auth/src/claim-processor.ts
+modified  +1     -56    packages/auth/src/crypto.ts
+modified  +0     -1     packages/auth/src/permissions.ts
+modified  +0     -1     packages/auth/src/providers.ts
+modified  +2     -2     packages/auth/src/withAuth.ts
+modified  +2     -4     packages/config/package.json
+added     +56    -0     packages/config/src/crypto.ts
+modified  +0     -1     packages/config/src/env-config-server.ts
+modified  +0     -1     packages/config/src/index.ts
+added     +10    -0     packages/db-schema/eslint.config.ts
+added     +30    -0     packages/db-schema/package.json
+added     +35    -0     packages/db-schema/src/schema/api-logs.ts
+added     +194   -0     packages/db-schema/src/schema/auth.ts
+added     +23    -0     packages/db-schema/src/schema/caldav-config.ts
+added     +46    -0     packages/db-schema/src/schema/caldav-sync-status.ts
+added     +51    -0     packages/db-schema/src/schema/groceries.ts
+added     +27    -0     packages/db-schema/src/schema/household-users.ts
+added     +26    -0     packages/db-schema/src/schema/households.ts
+added     +28    -0     packages/db-schema/src/schema/index.ts
+added     +18    -0     packages/db-schema/src/schema/ingredients.ts
+added     +39    -0     packages/db-schema/src/schema/planned-items.ts
+added     +8     -0     packages/db-schema/src/schema/recipe-categories.ts
+added     +25    -0     packages/db-schema/src/schema/recipe-favorites.ts
+added     +19    -0     packages/db-schema/src/schema/recipe-images.ts
+added     +29    -0     packages/db-schema/src/schema/recipe-ingredients.ts
+added     +27    -0     packages/db-schema/src/schema/recipe-ratings.ts
+added     +1     -0     packages/db-schema/src/schema/recipe-share-links.ts
+added     +28    -0     packages/db-schema/src/schema/recipe-shares.ts
+added     +25    -0     packages/db-schema/src/schema/recipe-tags.ts
+added     +21    -0     packages/db-schema/src/schema/recipe-videos.ts
+added     +54    -0     packages/db-schema/src/schema/recipes.ts
+added     +37    -0     packages/db-schema/src/schema/recurring-groceries.ts
+added     +211   -0     packages/db-schema/src/schema/relations.ts
+added     +23    -0     packages/db-schema/src/schema/server-config.ts
+added     +34    -0     packages/db-schema/src/schema/shared.ts
+added     +27    -0     packages/db-schema/src/schema/site-auth-tokens.ts
+added     +19    -0     packages/db-schema/src/schema/step-images.ts
+added     +24    -0     packages/db-schema/src/schema/steps.ts
+added     +44    -0     packages/db-schema/src/schema/stores.ts
+added     +18    -0     packages/db-schema/src/schema/tags.ts
+added     +27    -0     packages/db-schema/src/schema/user-allergies.ts
+added     +9     -0     packages/db-schema/tsconfig.json
+modified  +62    -10    packages/db/__tests__/helpers/db-setup.ts
+modified  +1     -1     packages/db/__tests__/helpers/db-test-helpers.ts
+modified  +11    -2     packages/db/__tests__/helpers/repository-test-base.ts
+modified  +27    -0     packages/db/__tests__/server/db/repositories/ingredient-unit-normalization.test.ts
+modified  +93    -1     packages/db/__tests__/server/db/repositories/recipes.test.ts
+modified  +1     -1     packages/db/__tests__/server/db/repositories/server-config-normalization.test.ts
+modified  +4     -3     packages/db/__tests__/server/db/repositories/tags.test.ts
+modified  +4     -1     packages/db/package.json
+modified  +13    -1     packages/db/src/drizzle.ts
+modified  +1     -1     packages/db/src/index.ts
+modified  +2     -2     packages/db/src/repositories/api-keys.ts
+added     +7     -0     packages/db/src/repositories/api-logs.ts
+modified  +4     -5     packages/db/src/repositories/caldav-config.ts
+modified  +2     -2     packages/db/src/repositories/caldav-sync-status.ts
+modified  +3     -4     packages/db/src/repositories/favorites.ts
+modified  +17    -8     packages/db/src/repositories/groceries.ts
+modified  +8     -13    packages/db/src/repositories/households.ts
+modified  +1     -0     packages/db/src/repositories/index.ts
+modified  +3     -4     packages/db/src/repositories/ingredients.ts
+modified  +8     -2     packages/db/src/repositories/planned-items.ts
+modified  +2     -1     packages/db/src/repositories/ratings.ts
+modified  +0     -1     packages/db/src/repositories/recipe-share-helpers.ts
+modified  +5     -7     packages/db/src/repositories/recipe-shares.ts
+modified  +78    -14    packages/db/src/repositories/recipes.ts
+modified  +1     -0     packages/db/src/repositories/recurring-groceries.ts
+modified  +4     -4     packages/db/src/repositories/server-config.ts
+modified  +4     -5     packages/db/src/repositories/site-auth-tokens.ts
+modified  +72    -23    packages/db/src/repositories/steps.ts
+modified  +4     -4     packages/db/src/repositories/stores.ts
+modified  +44    -3     packages/db/src/repositories/tags.ts
+modified  +1     -0     packages/db/src/repositories/user-allergies.ts
+modified  +5     -7     packages/db/src/repositories/users.ts
+modified  +1     -36    packages/db/src/schema/api-logs.ts
+modified  +1     -195   packages/db/src/schema/auth.ts
+modified  +1     -23    packages/db/src/schema/caldav-config.ts
+modified  +1     -46    packages/db/src/schema/caldav-sync-status.ts
+modified  +1     -51    packages/db/src/schema/groceries.ts
+modified  +1     -27    packages/db/src/schema/household-users.ts
+modified  +1     -26    packages/db/src/schema/households.ts
+modified  +1     -28    packages/db/src/schema/index.ts
+modified  +1     -18    packages/db/src/schema/ingredients.ts
+modified  +1     -39    packages/db/src/schema/planned-items.ts
+modified  +1     -8     packages/db/src/schema/recipe-categories.ts
+modified  +1     -25    packages/db/src/schema/recipe-favorites.ts
+modified  +1     -19    packages/db/src/schema/recipe-images.ts
+modified  +1     -29    packages/db/src/schema/recipe-ingredients.ts
+modified  +1     -27    packages/db/src/schema/recipe-ratings.ts
+modified  +1     -1     packages/db/src/schema/recipe-share-links.ts
+modified  +1     -28    packages/db/src/schema/recipe-shares.ts
+modified  +1     -25    packages/db/src/schema/recipe-tags.ts
+modified  +1     -21    packages/db/src/schema/recipe-videos.ts
+modified  +1     -54    packages/db/src/schema/recipes.ts
+modified  +1     -37    packages/db/src/schema/recurring-groceries.ts
+modified  +1     -211   packages/db/src/schema/relations.ts
+modified  +1     -24    packages/db/src/schema/server-config.ts
+modified  +1     -34    packages/db/src/schema/shared.ts
+modified  +1     -27    packages/db/src/schema/site-auth-tokens.ts
+modified  +1     -19    packages/db/src/schema/step-images.ts
+modified  +1     -24    packages/db/src/schema/steps.ts
+modified  +1     -44    packages/db/src/schema/stores.ts
+modified  +1     -18    packages/db/src/schema/tags.ts
+modified  +1     -27    packages/db/src/schema/user-allergies.ts
+modified  +1     -1     packages/i18n/package.json
+modified  +1     -0     packages/i18n/src/locales.ts
+modified  +9     -0     packages/i18n/src/messages.ts
+modified  +12    -0     packages/i18n/src/messages/da/groceries.json
+modified  +7     -1     packages/i18n/src/messages/da/recipes.json
+modified  +12    -0     packages/i18n/src/messages/de-formal/groceries.json
+modified  +7     -2     packages/i18n/src/messages/de-formal/recipes.json
+modified  +12    -0     packages/i18n/src/messages/de-informal/groceries.json
+modified  +7     -2     packages/i18n/src/messages/de-informal/recipes.json
+modified  +13    -1     packages/i18n/src/messages/en/groceries.json
+modified  +7     -1     packages/i18n/src/messages/en/recipes.json
+modified  +12    -0     packages/i18n/src/messages/es/groceries.json
+modified  +7     -2     packages/i18n/src/messages/es/recipes.json
+modified  +12    -0     packages/i18n/src/messages/fr/groceries.json
+modified  +7     -2     packages/i18n/src/messages/fr/recipes.json
+modified  +12    -0     packages/i18n/src/messages/it/groceries.json
+modified  +7     -1     packages/i18n/src/messages/it/recipes.json
+modified  +12    -0     packages/i18n/src/messages/ko/groceries.json
+modified  +7     -2     packages/i18n/src/messages/ko/recipes.json
+modified  +12    -0     packages/i18n/src/messages/nl/groceries.json
+modified  +7     -2     packages/i18n/src/messages/nl/recipes.json
+added     +126   -0     packages/i18n/src/messages/no/auth.json
+added     +57    -0     packages/i18n/src/messages/no/calendar.json
+added     +217   -0     packages/i18n/src/messages/no/common.json
+added     +90    -0     packages/i18n/src/messages/no/groceries.json
+added     +50    -0     packages/i18n/src/messages/no/navbar.json
+added     +274   -0     packages/i18n/src/messages/no/recipes.json
+added     +629   -0     packages/i18n/src/messages/no/settings.json
+modified  +12    -0     packages/i18n/src/messages/pl/groceries.json
+modified  +15    -3     packages/i18n/src/messages/pl/recipes.json
+modified  +12    -0     packages/i18n/src/messages/ru/groceries.json
+modified  +7     -2     packages/i18n/src/messages/ru/recipes.json
+modified  +3     -3     packages/queue/__tests__/image-import/worker.test.ts
+modified  +1     -1     packages/queue/__tests__/paste-import/parser.test.ts
+modified  +17    -7     packages/queue/__tests__/paste-import/worker.integration.test.ts
+modified  +3     -3     packages/queue/__tests__/paste-import/worker.test.ts
+modified  +10    -8     packages/queue/__tests__/queue/auto-categorization-queue.test.ts
+modified  +2     -2     packages/queue/__tests__/queue/auto-tagging-queue.test.ts
+modified  +2     -2     packages/queue/__tests__/queue/recipe-import-queue.test.ts
+modified  +1     -1     packages/queue/package.json
+modified  +2     -2     packages/queue/src/allergy-detection/producer.ts
+modified  +1     -1     packages/queue/src/allergy-detection/queue.ts
+modified  +12    -23    packages/queue/src/allergy-detection/worker.ts
+modified  +1     -0     packages/queue/src/api-handlers.ts
+modified  +2     -2     packages/queue/src/auto-categorization/producer.ts
+modified  +1     -1     packages/queue/src/auto-categorization/queue.ts
+modified  +5     -5     packages/queue/src/auto-categorization/worker.ts
+modified  +2     -2     packages/queue/src/auto-tagging/producer.ts
+modified  +1     -1     packages/queue/src/auto-tagging/queue.ts
+modified  +12    -23    packages/queue/src/auto-tagging/worker.ts
+modified  +1     -1     packages/queue/src/caldav-sync/producer.ts
+modified  +1     -1     packages/queue/src/caldav-sync/queue.ts
+modified  +3     -3     packages/queue/src/caldav-sync/worker.ts
+modified  +1     -1     packages/queue/src/helpers.ts
+modified  +1     -1     packages/queue/src/image-import/producer.ts
+modified  +1     -1     packages/queue/src/image-import/queue.ts
+modified  +8     -5     packages/queue/src/image-import/worker.ts
+modified  +1     -1     packages/queue/src/lazy-worker-manager.ts
+modified  +1     -1     packages/queue/src/nutrition-estimation/producer.ts
+modified  +1     -1     packages/queue/src/nutrition-estimation/queue.ts
+modified  +5     -5     packages/queue/src/nutrition-estimation/worker.ts
+modified  +0     -1     packages/queue/src/operation-aware-queue.ts
+modified  +5     -6     packages/queue/src/paste-import/parser.ts
+modified  +1     -1     packages/queue/src/paste-import/producer.ts
+modified  +1     -1     packages/queue/src/paste-import/queue.ts
+modified  +9     -9     packages/queue/src/paste-import/worker.ts
+modified  +1     -1     packages/queue/src/queue-operation-context.ts
+modified  +2     -2     packages/queue/src/recipe-import/producer.ts
+modified  +1     -1     packages/queue/src/recipe-import/queue.ts
+modified  +8     -5     packages/queue/src/recipe-import/worker.ts
+modified  +1     -1     packages/queue/src/redis/bullmq.ts
+modified  +1     -0     packages/queue/src/redis/client.ts
+modified  +4     -5     packages/queue/src/redis/pubsub.ts
+modified  +2     -3     packages/queue/src/redis/subscription-multiplexer.ts
+modified  +2     -2     packages/queue/src/registry.ts
+modified  +1     -1     packages/queue/src/scheduled-tasks/producer.ts
+modified  +1     -0     packages/queue/src/scheduled-tasks/queue.ts
+modified  +1     -1     packages/queue/src/scheduled-tasks/worker.ts
+modified  +3     -6     packages/queue/src/scheduler/old-calendar-cleanup.ts
+modified  +1     -0     packages/queue/src/scheduler/old-groceries-cleanup.ts
+modified  +1     -1     packages/queue/src/scheduler/recurring-grocery-check.ts
+modified  +1     -0     packages/queue/vitest.config.ts
+modified  +33    -21    packages/shared-react/__tests__/recipe-share-hooks.test.tsx
+modified  +2     -1     packages/shared-react/package.json
+added     +106   -0     packages/shared-react/src/contexts/groceries/groceries-context.ts
+added     +1     -0     packages/shared-react/src/contexts/groceries/index.ts
+modified  +2     -2     packages/shared-react/src/contexts/households/household-context.tsx
+modified  +2     -0     packages/shared-react/src/contexts/index.ts
+modified  +2     -3     packages/shared-react/src/contexts/permissions/permissions-context.tsx
+modified  +3     -4     packages/shared-react/src/contexts/recipes/recipe-filters-context.tsx
+modified  +0     -1     packages/shared-react/src/contexts/recipes/recipe-toast-adapter.ts
+modified  +3     -4     packages/shared-react/src/contexts/recipes/recipes-context.tsx
+added     +1     -0     packages/shared-react/src/contexts/stores/index.ts
+added     +80    -0     packages/shared-react/src/contexts/stores/stores-context.ts
+modified  +1     -2     packages/shared-react/src/contexts/user/user-context.tsx
+modified  +1     -2     packages/shared-react/src/contexts/user/user-settings-context.tsx
+modified  +0     -1     packages/shared-react/src/hooks/admin/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/admin/types.ts
+modified  +2     -2     packages/shared-react/src/hooks/admin/use-admin-mutations.ts
+modified  +2     -2     packages/shared-react/src/hooks/admin/use-admin-query.ts
+modified  +0     -1     packages/shared-react/src/hooks/archive/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/archive/types.ts
+modified  +2     -2     packages/shared-react/src/hooks/archive/use-archive-cache.ts
+modified  +5     -4     packages/shared-react/src/hooks/archive/use-archive-mutation.ts
+modified  +2     -2     packages/shared-react/src/hooks/archive/use-archive-query.ts
+modified  +2     -2     packages/shared-react/src/hooks/archive/use-archive-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/caldav/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/caldav/types.ts
+modified  +4     -5     packages/shared-react/src/hooks/caldav/use-caldav-cache.ts
+modified  +2     -3     packages/shared-react/src/hooks/caldav/use-caldav-mutations.ts
+modified  +2     -3     packages/shared-react/src/hooks/caldav/use-caldav-query.ts
+modified  +3     -3     packages/shared-react/src/hooks/caldav/use-caldav-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/calendar/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/calendar/types.ts
+modified  +2     -3     packages/shared-react/src/hooks/calendar/use-calendar-cache.ts
+modified  +2     -2     packages/shared-react/src/hooks/calendar/use-calendar-mutations.ts
+modified  +2     -3     packages/shared-react/src/hooks/calendar/use-calendar-query.ts
+modified  +117   -97    packages/shared-react/src/hooks/calendar/use-calendar-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/config/index.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/normalize-locale-config.ts
+modified  +1     -0     packages/shared-react/src/hooks/config/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-locale-config-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-recurrence-config-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-tags-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-timer-keywords-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-timers-enabled-base-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-units-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/config/use-upload-limits-query.ts
+modified  +1     -0     packages/shared-react/src/hooks/config/use-version-query.ts
+modified  +0     -1     packages/shared-react/src/hooks/favorites/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/favorites/types.ts
+modified  +1     -1     packages/shared-react/src/hooks/groceries/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/groceries/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/groceries/use-groceries-cache.ts
+modified  +249   -8     packages/shared-react/src/hooks/groceries/use-groceries-mutations.ts
+modified  +2     -3     packages/shared-react/src/hooks/groceries/use-groceries-query.ts
+modified  +56    -15    packages/shared-react/src/hooks/groceries/use-groceries-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/households/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/households/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/households/use-household-cache.ts
+modified  +2     -2     packages/shared-react/src/hooks/households/use-household-mutations.ts
+modified  +1     -2     packages/shared-react/src/hooks/households/use-household-query.ts
+modified  +2     -2     packages/shared-react/src/hooks/households/use-household-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/permissions/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/permissions/selectors.ts
+modified  +1     -0     packages/shared-react/src/hooks/permissions/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/permissions/use-permissions-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/permissions/use-server-settings-query.ts
+modified  +0     -2     packages/shared-react/src/hooks/ratings/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/ratings/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/ratings/use-ratings-mutation.ts
+modified  +1     -2     packages/shared-react/src/hooks/ratings/use-ratings-query.ts
+modified  +16    -6     packages/shared-react/src/hooks/recipe-detail/recipe-detail-context.tsx
+modified  +0     -1     packages/shared-react/src/hooks/recipes/dashboard/index.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/dashboard/use-favorites-mutation.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/dashboard/use-favorites-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/dashboard/use-pending-recipes-query.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/dashboard/use-random-recipe.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/dashboard/use-ratings-subscription.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/dashboard/use-recipe-autocomplete.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/dashboard/use-recipes-cache.ts
+modified  +259   -10    packages/shared-react/src/hooks/recipes/dashboard/use-recipes-mutations.ts
+modified  +4     -3     packages/shared-react/src/hooks/recipes/dashboard/use-recipes-query.ts
+modified  +3     -3     packages/shared-react/src/hooks/recipes/dashboard/use-recipes-subscription.ts
+modified  +0     -1     packages/shared-react/src/hooks/recipes/index.ts
+modified  +0     -1     packages/shared-react/src/hooks/recipes/recipe/index.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-allergy-detection-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-allergy-detection-subscription.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-auto-categorization-subscription.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-auto-tagging-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-auto-tagging-subscription.ts
+modified  +3     -3     packages/shared-react/src/hooks/recipes/recipe/use-convert-mutation.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-nutrition-mutation.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-nutrition-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-nutrition-subscription.ts
+modified  +2     -2     packages/shared-react/src/hooks/recipes/recipe/use-recipe-id.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-recipe-images.ts
+modified  +1     -0     packages/shared-react/src/hooks/recipes/recipe/use-recipe-ingredients.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/recipe/use-recipe-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-recipe-subscription.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/recipe/use-recipe-videos.ts
+modified  +0     -1     packages/shared-react/src/hooks/recipes/shares/index.ts
+modified  +1     -2     packages/shared-react/src/hooks/recipes/shares/use-recipe-share-cache.ts
+modified  +9     -6     packages/shared-react/src/hooks/recipes/shares/use-recipe-share-mutations.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/shares/use-recipe-share-query.ts
+modified  +2     -2     packages/shared-react/src/hooks/recipes/shares/use-recipe-share-subscription.ts
+modified  +4     -5     packages/shared-react/src/hooks/recipes/shares/use-recipe-shares-query.ts
+modified  +2     -3     packages/shared-react/src/hooks/recipes/shares/use-shared-recipe-query.ts
+modified  +1     -0     packages/shared-react/src/hooks/recipes/types.ts
+modified  +0     -1     packages/shared-react/src/hooks/stores/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/stores/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/stores/use-stores-cache.ts
+modified  +2     -2     packages/shared-react/src/hooks/stores/use-stores-mutations.ts
+modified  +1     -2     packages/shared-react/src/hooks/stores/use-stores-query.ts
+modified  +1     -2     packages/shared-react/src/hooks/stores/use-stores-subscription.ts
+modified  +1     -2     packages/shared-react/src/hooks/use-amount-display-preference.ts
+modified  +1     -1     packages/shared-react/src/hooks/use-connection-monitor.tsx
+modified  +1     -2     packages/shared-react/src/hooks/use-grocery-form-state.ts
+modified  +2     -2     packages/shared-react/src/hooks/use-recurrence-detection.ts
+modified  +4     -9     packages/shared-react/src/hooks/use-servings-scaler.ts
+modified  +0     -1     packages/shared-react/src/hooks/use-unit-formatter.ts
+modified  +0     -1     packages/shared-react/src/hooks/use-user.ts
+modified  +0     -1     packages/shared-react/src/hooks/user/index.ts
+modified  +1     -0     packages/shared-react/src/hooks/user/types.ts
+modified  +1     -2     packages/shared-react/src/hooks/user/use-user-allergies-query.ts
+modified  +1     -1     packages/shared-react/src/providers/operation-id-link.ts
+modified  +4     -5     packages/shared-react/src/providers/trpc-links.ts
+modified  +36    -2     packages/shared-react/src/providers/trpc-provider.test.ts
+modified  +27    -4     packages/shared-react/src/providers/trpc-provider.tsx   <== código ligado à spec
+added     +1     -0     packages/shared-react/src/text/index.ts
+added     +109   -0     packages/shared-react/src/text/ingredient-links.test.ts
+added     +254   -0     packages/shared-react/src/text/ingredient-links.ts
+modified  +1     -1     packages/shared-server/__tests__/archive/mealie-legacy-parser.test.ts
+modified  +1     -1     packages/shared-server/__tests__/archive/mealie-parser.test.ts
+modified  +1     -1     packages/shared-server/__tests__/archive/paprika-parser.test.ts
+modified  +1     -1     packages/shared-server/__tests__/archive/parser-helpers.test.ts
+modified  +1     -1     packages/shared-server/__tests__/archive/tandoor-parser.test.ts
+renamed   +21    -14    packages/shared-server/__tests__/config/server-config-loader.test.ts
+renamed   +1     -1     packages/shared-server/__tests__/recipes/randomizer.test.ts
+modified  +15    -2     packages/shared-server/package.json
+modified  +1     -0     packages/shared-server/src/ai/helpers.ts
+modified  +2     -3     packages/shared-server/src/ai/prompts/loader.ts
+modified  +3     -3     packages/shared-server/src/ai/providers/factory.ts
+modified  +3     -3     packages/shared-server/src/ai/providers/listing.ts
+modified  +1     -0     packages/shared-server/src/ai/providers/types.ts
+modified  +5     -6     packages/shared-server/src/ai/unit-converter.ts
+modified  +2     -2     packages/shared-server/src/ai/utils/category-matcher.ts
+modified  +5     -5     packages/shared-server/src/archive/mealie-legacy-parser.ts
+modified  +2     -2     packages/shared-server/src/archive/mealie-parser.ts
+modified  +1     -0     packages/shared-server/src/archive/mela-parser.ts
+modified  +1     -1     packages/shared-server/src/archive/paprika-parser.ts
+modified  +1     -1     packages/shared-server/src/archive/parser-helpers.ts
+modified  +1     -1     packages/shared-server/src/archive/parser.ts
+modified  +1     -0     packages/shared-server/src/archive/tandoor-parser.ts
+renamed   +2     -2     packages/shared-server/src/cache/household.ts
+modified  +6     -4     packages/shared-server/src/caldav/client.ts
+modified  +1     -2     packages/shared-server/src/config/defaults.ts
+renamed   +10    -12    packages/shared-server/src/config/server-config-loader.ts
+modified  +1     -2     packages/shared-server/src/lib/operation-context.ts
+modified  +2     -2     packages/shared-server/src/media/storage.ts
+added     +29    -0     packages/shared-server/src/realtime/caldav.ts
+added     +19    -0     packages/shared-server/src/realtime/connection-invalidation.ts
+added     +21    -0     packages/shared-server/src/realtime/groceries.ts
+added     +42    -0     packages/shared-server/src/realtime/households.ts
+added     +39    -0     packages/shared-server/src/realtime/policy.ts
+added     +51    -0     packages/shared-server/src/realtime/recipes.ts
+added     +92    -0     packages/shared-server/src/redis/channel-metadata.ts
+added     +119   -0     packages/shared-server/src/redis/client.ts
+added     +174   -0     packages/shared-server/src/redis/pubsub.ts
+added     +314   -0     packages/shared-server/src/redis/subscription-multiplexer.ts
+modified  +40    -0     packages/shared/__tests__/lib/operation-helpers.test.ts
+modified  +2     -2     packages/shared/package.json
+modified  +1     -0     packages/shared/src/contracts/dto/caldav-config.d.ts
+modified  +2     -0     packages/shared/src/contracts/dto/caldav-sync-status.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/groceries.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/household.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/ingredient.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/notes.d.ts
+modified  +2     -0     packages/shared/src/contracts/dto/planned-recipe.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/recipe-ingredient.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/recipe-shares.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/recipe.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/recurring-groceries.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/site-auth-tokens.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/steps.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/stores.d.ts
+modified  +1     -0     packages/shared/src/contracts/dto/tag.d.ts
+modified  +2     -1     packages/shared/src/contracts/zod/caldav-config.ts
+modified  +2     -1     packages/shared/src/contracts/zod/caldav-sync-status.ts
+modified  +2     -1     packages/shared/src/contracts/zod/groceries.ts
+modified  +2     -1     packages/shared/src/contracts/zod/household.ts
+modified  +2     -1     packages/shared/src/contracts/zod/ingredient.ts
+modified  +2     -1     packages/shared/src/contracts/zod/recipe-images.ts
+modified  +2     -1     packages/shared/src/contracts/zod/recipe-ingredients.ts
+modified  +2     -1     packages/shared/src/contracts/zod/recipe-videos.ts
+modified  +2     -1     packages/shared/src/contracts/zod/recipe.ts
+modified  +2     -1     packages/shared/src/contracts/zod/recurring-groceries.ts
+modified  +2     -1     packages/shared/src/contracts/zod/site-auth-tokens.ts
+modified  +2     -1     packages/shared/src/contracts/zod/step-images.ts
+modified  +2     -1     packages/shared/src/contracts/zod/steps.ts
+modified  +2     -1     packages/shared/src/contracts/zod/stores.ts
+modified  +2     -1     packages/shared/src/contracts/zod/tag.ts
+modified  +7     -6     packages/shared/src/lib/determine-recipe-system.ts
+modified  +3     -3     packages/shared/src/lib/helpers.ts
+modified  +40    -8     packages/shared/src/lib/operation-helpers.ts
+modified  +1     -4     packages/shared/src/lib/recurrence/calculator.ts
+modified  +1     -2     packages/shared/src/lib/recurrence/formatter.ts
+modified  +0     -4     packages/shared/src/lib/recurrence/parser.ts
+modified  +3     -3     packages/trpc/__tests__/admin/admin.test.ts
+modified  +2     -2     packages/trpc/__tests__/archive/archive-import-validation.test.ts
+modified  +1     -1     packages/trpc/__tests__/caldav/procedures.test.ts
+added     +109   -0     packages/trpc/__tests__/calendar/planned-items-household-events.test.ts
+modified  +1     -1     packages/trpc/__tests__/calendar/planned-items.test.ts
+modified  +1     -1     packages/trpc/__tests__/groceries/groceries.test.ts
+added     +162   -0     packages/trpc/__tests__/helpers.test.ts
+modified  +2     -2     packages/trpc/__tests__/households/households-stale.test.ts
+modified  +1     -1     packages/trpc/__tests__/mocks/config.ts
+modified  +1     -1     packages/trpc/__tests__/openapi/health.test.ts
+modified  +1     -1     packages/trpc/__tests__/ratings/ratings.test.ts
+modified  +124   -1     packages/trpc/__tests__/recipes/recipes.test.ts
+modified  +1     -1     packages/trpc/__tests__/recipes/shares.test.ts
+modified  +2     -2     packages/trpc/__tests__/user/user-procedures-get.test.ts
+modified  +6     -1     packages/trpc/package.json
+modified  +27    -33    packages/trpc/src/connection-manager.ts
+modified  +2     -2     packages/trpc/src/context.ts
+modified  +4     -1     packages/trpc/src/emitter.ts
+added     +40    -0     packages/trpc/src/form-data.ts
+modified  +66    -81    packages/trpc/src/helpers.ts
+modified  +6     -1     packages/trpc/src/index.ts
+modified  +2     -4     packages/trpc/src/logger.ts
+modified  +6     -7     packages/trpc/src/middleware.ts
+modified  +2     -2     packages/trpc/src/openapi.ts
+modified  +3     -3     packages/trpc/src/routers/admin/ai-config.ts
+modified  +2     -2     packages/trpc/src/routers/admin/auth-providers.ts
+modified  +2     -2     packages/trpc/src/routers/admin/config.ts
+modified  +2     -2     packages/trpc/src/routers/admin/content-config.ts
+modified  +2     -2     packages/trpc/src/routers/admin/general.ts
+modified  +0     -1     packages/trpc/src/routers/admin/index.ts
+modified  +2     -2     packages/trpc/src/routers/admin/system.ts
+modified  +3     -4     packages/trpc/src/routers/archive/archive.ts
+modified  +0     -1     packages/trpc/src/routers/archive/index.ts
+modified  +0     -1     packages/trpc/src/routers/archive/subscriptions.ts
+modified  +1     -12    packages/trpc/src/routers/caldav/emitter.ts
+modified  +2     -3     packages/trpc/src/routers/caldav/procedures.ts
+modified  +1     -3     packages/trpc/src/routers/caldav/subscriptions.ts
+modified  +24    -2     packages/trpc/src/routers/caldav/types.ts
+modified  +0     -1     packages/trpc/src/routers/calendar/emitter.ts
+modified  +0     -1     packages/trpc/src/routers/calendar/index.ts
+modified  +3     -4     packages/trpc/src/routers/calendar/planned-items-helpers.ts
+modified  +3     -4     packages/trpc/src/routers/calendar/planned-items.ts
+modified  +1     -3     packages/trpc/src/routers/calendar/subscriptions.ts
+modified  +0     -1     packages/trpc/src/routers/config/index.ts
+modified  +14    -7     packages/trpc/src/routers/config/procedures.ts
+modified  +0     -1     packages/trpc/src/routers/favorites/index.ts
+modified  +1     -12    packages/trpc/src/routers/groceries/emitter.ts
+modified  +2     -2     packages/trpc/src/routers/groceries/groceries-helpers.ts
+modified  +8     -1     packages/trpc/src/routers/groceries/groceries-openapi-types.ts
+modified  +4     -5     packages/trpc/src/routers/groceries/groceries.ts
+modified  +0     -1     packages/trpc/src/routers/groceries/index.ts
+modified  +35    -33    packages/trpc/src/routers/groceries/recurring.ts
+modified  +1     -3     packages/trpc/src/routers/groceries/subscriptions.ts
+modified  +1     -11    packages/trpc/src/routers/groceries/types.ts
+modified  +1     -12    packages/trpc/src/routers/households/emitter.ts
+modified  +6     -8     packages/trpc/src/routers/households/households.ts
+modified  +0     -1     packages/trpc/src/routers/households/index.ts
+modified  +1     -3     packages/trpc/src/routers/households/subscriptions.ts
+modified  +4     -34    packages/trpc/src/routers/households/types.ts
+modified  +0     -1     packages/trpc/src/routers/permissions/emitter.ts
+modified  +0     -1     packages/trpc/src/routers/permissions/index.ts
+modified  +2     -3     packages/trpc/src/routers/permissions/permissions.ts
+modified  +0     -1     packages/trpc/src/routers/permissions/subscriptions.ts
+modified  +0     -1     packages/trpc/src/routers/ratings/emitter.ts
+modified  +0     -1     packages/trpc/src/routers/ratings/index.ts
+modified  +1     -2     packages/trpc/src/routers/ratings/ratings.ts
+modified  +0     -1     packages/trpc/src/routers/ratings/subscriptions.ts
+modified  +1     -12    packages/trpc/src/routers/recipes/emitter.ts
+modified  +2     -4     packages/trpc/src/routers/recipes/helpers.ts
+modified  +28    -27    packages/trpc/src/routers/recipes/images.ts
+modified  +0     -1     packages/trpc/src/routers/recipes/index.ts
+modified  +3     -3     packages/trpc/src/routers/recipes/pending.ts
+modified  +1     -0     packages/trpc/src/routers/recipes/recipes-openapi-types.ts
+modified  +26    -7     packages/trpc/src/routers/recipes/recipes.ts
+modified  +9     -10    packages/trpc/src/routers/recipes/shares.ts
+modified  +0     -1     packages/trpc/src/routers/recipes/subscriptions.ts
+modified  +1     -59    packages/trpc/src/routers/recipes/types.ts
+modified  +8     -6     packages/trpc/src/routers/recipes/videos.ts
+modified  +0     -1     packages/trpc/src/routers/site-auth-tokens/index.ts
+modified  +0     -1     packages/trpc/src/routers/stores/emitter.ts
+modified  +0     -1     packages/trpc/src/routers/stores/index.ts
+modified  +1     -1     packages/trpc/src/routers/stores/stores-helpers.ts
+modified  +1     -0     packages/trpc/src/routers/stores/stores-openapi-types.ts
+modified  +1     -1     packages/trpc/src/routers/stores/stores.ts
+modified  +1     -3     packages/trpc/src/routers/stores/subscriptions.ts
+modified  +0     -1     packages/trpc/src/routers/user/api-keys.ts
+modified  +0     -1     packages/trpc/src/routers/user/index.ts
+modified  +23    -5     packages/trpc/src/routers/user/types.ts
+modified  +64    -63    packages/trpc/src/routers/user/user.ts
+modified  +1     -2     packages/trpc/src/trpc.ts
+modified  +14    -7     packages/trpc/src/ws-server.ts
+modified  +1     -2     packages/ui/package.json
+modified  +0     -1     packages/ui/src/index.ts
+removed   +0     -39    packages/ui/src/rating-stars.tsx
+modified  +47    -9     packages/ui/src/star-rating.tsx
+modified  +4843  -4577  pnpm-lock.yaml
+modified  +10    -3     pnpm-workspace.yaml
+modified  +1     -0     tooling/github/setup/action.yml
+modified  +1     -0     tooling/monorepo/scripts/check-circular-deps.mjs
+added     +159   -0     tooling/monorepo/scripts/check-workspace-imports.mjs
+modified  +41    -5     tooling/monorepo/scripts/print-package-versions.mjs
+removed   +0     -11    tooling/tailwind/hero.ts
+renamed   +75    -20    tooling/tailwind/heroui-theme.css
+added     +2     -0     tooling/tailwind/heroui-theme.js
+removed   +0     -1     tooling/tailwind/native-theme.js
+modified  +5     -16    tooling/tailwind/package.json
+removed   +0     -416   tooling/tailwind/theme.css
+modified  +1     -1     tooling/tailwind/tsconfig.json
+modified  +1     -1     turbo.json
+--- DIFF DO CÓDIGO LIGADO
+### apps/mobile/src/app/_layout.tsx
+@@ -8,12 +8,14 @@ import {
+   useAppearancePreference,
+ } from "@/context/appearance-preference-context";
+ import { AuthProvider, useAuth } from "@/context/auth-context";
++import { GroceriesProvider } from "@/context/groceries-context";
+ import { HouseholdProvider } from "@/context/household-context";
+ import { MobileIntlFallbackProvider, MobileIntlProvider } from "@/context/mobile-i18n-context";
+ import { NetworkProvider } from "@/context/network-context";
+ import { PermissionsProvider } from "@/context/permissions-context";
+ import { RecipeFiltersProvider } from "@/context/recipe-filters-context";
+ import { RecipesProvider } from "@/context/recipes-context";
++import { StoresProvider } from "@/context/stores-context";
+ import { UserProvider } from "@/context/user-context";
+ import { useBackendBaseUrl } from "@/hooks/use-backend-base-url";
+ import { useCacheHydration } from "@/hooks/use-cache-hydration";
+@@ -124,7 +126,11 @@ function AuthenticatedProviders({ children }: { children: React.ReactNode }) {
+         <UserProvider>
+           <AuthenticatedEffects />
+           <HouseholdProvider>
+-            <RecipesProvider>{children}</RecipesProvider>
++            <RecipesProvider>
++              <StoresProvider>
++                <GroceriesProvider>{children}</GroceriesProvider>
++              </StoresProvider>
++            </RecipesProvider>
+           </HouseholdProvider>
+         </UserProvider>
+       </PermissionsProvider>
+
+### apps/mobile/src/providers/trpc-provider.tsx
+@@ -58,6 +58,10 @@ function toWsUrl(baseUrl: string): string {
+ 
+ let currentBaseUrl = "";
+ 
++export function getCurrentBaseUrl(): string {
++  return currentBaseUrl;
++}
++
+ function createMobileWebSocket(): typeof WebSocket | undefined {
+   const NativeWebSocket = globalThis.WebSocket as HeaderCapableWebSocket | undefined;
+ 
+
+### packages/shared-react/src/providers/trpc-provider.tsx
+@@ -2,14 +2,14 @@
+ 
+ import type { AnyTRPCRouter } from "@trpc/server";
+ import type { ReactNode } from "react";
+-import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
+-
+ import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { createTRPCClient } from "@trpc/client";
+ import { createTRPCContext } from "@trpc/tanstack-react-query";
+-import { normalizeSubscriptionData } from "@norish/shared/lib/operation-helpers";
+ 
++import { unwrapPayload } from "@norish/shared/lib/operation-helpers";
++
++import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
+ import {
+   createTRPCClientLinks,
+   defaultGetBaseUrl,
+@@ -31,6 +31,29 @@ type SubscriptionObserverOptions = {
+   onData?: (data: unknown) => void;
+ };
+ 
++function withPayloadCompatibility(data: unknown): unknown {
++  const payload = unwrapPayload(data);
++
++  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
++    return payload;
++  }
++
++  const prototype = Object.getPrototypeOf(payload);
++
++  if (prototype !== Object.prototype && prototype !== null) {
++    return payload;
++  }
++
++  if ("payload" in payload) {
++    return payload;
++  }
++
++  return {
++    ...(payload as Record<string, unknown>),
++    payload,
++  };
++}
++
+ export function wrapSubscriptionObserverOptions(options: unknown): unknown {
+   if (!options || typeof options !== "object") {
+     return options;
+@@ -44,7 +67,7 @@ export function wrapSubscriptionObserverOptions(options: unknown): unknown {
+ 
+   return {
+     ...observerOptions,
+-    onData: (data: unknown) => observerOptions.onData?.(normalizeSubscriptionData(data)),
++    onData: (data: unknown) => observerOptions.onData?.(withPayloadCompatibility(data)),
+   };
+ }
+ 
+

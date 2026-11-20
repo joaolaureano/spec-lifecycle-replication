@@ -1,0 +1,295 @@
+===== P286 | lehuygiang28/vkara PR #2 | capacidade do par: curated-playlist-suggestions
+PR: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates
+arquivos ligados: apps/api/src/youtubei.ts;apps/web/src/services/youtube-api.ts
+--- linhas alteradas (68; mostrando até 40)
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++import { env } from './env';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+--- candidata: platform-redis [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Single Redis options factory
+  | The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > #### Scenario: API redis client uses factory
+  > - **WHEN** `apps/api/src/redis.ts` creates the shared ioredis client
+  > - **THEN** it MUST use `createRedisOptions` from `@vkara/redis` with validated env
+  > - **THEN** they MUST use the same `createRedisOptions` output as the main API client
+  > - **AND** MUST NOT duplicate inline `REDIS_HOST` / `REDIS_PORT` parsing
+  > `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` MUST be declared in `redisEnv()` with defaults matching current behavior (`localhost`, `6379`, optional password).
+  > - **THEN** `createRedisOptions` MUST target `localhost:6379` with no password
+--- candidata: platform-env [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Centralized environment validation
+  | The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > - **WHEN** the API process starts with required Redis and server variables set correctly
+  > `@vkara/env` MUST export domain factories (at minimum `embedEnv()`, `redisEnv()`, `serverEnv()` for API and `webPublicEnv()` for web) that apps compose using `createEnv({ extends: [...] })`.
+  > #### Scenario: API composes embed and redis env
+  > - **THEN** it MUST `extends` embed and redis presets so `VKARA_EMBED_*` and `REDIS_*` variables are available on `env`
+  > Base parsers `parseEnvFlag` and `parseEnvPositiveInt` MUST live in `@vkara/env` and preserve existing semantics: flags accept `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` (case-insensitive); invalid f
+  > ### Requirement: No ad-hoc process.env in application code
+  > After migration, application modules in `apps/api` and `apps/web` MUST NOT read `process.env` directly except inside env definition files (`src/env.ts`, `next.config.ts` edge cases documented in desig
+--- candidata: platform-redis-cache [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Redis cache plumbing package
+  | The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > YouTube cache modules MUST continue to own key prefixes, TTL constants, and response validation logic. `@vkara/cache-redis` MUST NOT hard-code `youtube-embed:` or playlist key shapes.
+  > - **THEN** keys MUST remain `youtube-embed:{videoId}` with values `1` or `0`
+  > - **THEN** keys MUST remain `youtube-playlist-details:{listId}:{scope}` with TTL 3600 seconds
+  > - **THEN** keys MUST remain `youtube-channel:{channelId}` with TTL 86400 seconds
+  > ### Requirement: In-memory youtube continuation cache excluded
+  > Process-local `Map` caches for search/related continuations in `apps/api/src/modules/youtube/cache.ts` MUST NOT move into `@vkara/cache-redis` in this change.
+  > #### Scenario: Search continuation stays in-process
+--- candidata: platform-feature-flags [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: VKARA feature flags are env-backed
+  | Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > `VKARA_EMBED_PREFILTER_AT_LIST` MUST default to disabled (falsy) when unset, preserving current list endpoint behavior per `youtube-embed-playability` spec.
+  > - **THEN** it MUST use the shared embed env helper or `env` field produced by `@vkara/env`
+  > The system MUST define `VKARA_EXPERIMENTS` in `@vkara/env` with `FLAG_DOCS` metadata (default falsy, scope `both`, description for TikTok experiments gating).
+  > API code MUST use a typed helper (e.g. `isExperimentsEnabled()`) to mount TikTok plugins and MUST NOT register `POST /tiktok/search` when the flag is falsy.
+  > - **THEN** the TikTok Elysia plugin MUST NOT be mounted
+  > - **THEN** the TikTok search routes MUST be registered on the API server
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+--- candidata: monorepo-package-boundaries [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Package layers and dependency direction
+  | Internal packages MUST follow dependency direction: **apps → domain → platform → tooling**. Domain packages MUST NOT depend on apps. Platform packages MUST NOT depend on domain packages.
+  > #### Scenario: Env package has no youtube imports
+  > - **WHEN** `@vkara/env` is typechecked
+  > - **THEN** it MUST NOT import from `@vkara/youtube`, `@vkara/room`, or deleted `shared-*` packages
+  > ### Requirement: shared packages removed at completion
+  > The packages `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` MUST be deleted from the workspace when this change is archived. No production code MAY import them.
+  > #### Scenario: Zero shared imports before archive
+  > - **THEN** ripgrep for `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` across `apps/` and `packages/` MUST return zero matches
+  > - **THEN** they MUST NOT reference workspace dependencies on deleted `shared-*` packages
+
+===== P287 | pmcfadin/cqlite PR #2110 | capacidade do par: frozen-inner-udt-decode
+PR: perf(#1583): E1 — box fat Value variants (88B → 32B); Value-v2 train Stage 1 (layout)
+arquivos ligados: cqlite-core/tests/issue_1240_nested_frozen_collection_udt_parity.rs
+--- linhas alteradas (12; mostrando até 40)
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+-    })
++    }))
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+-    })
++    }))
+-    Value::Udt(UdtValue {
++    Value::Udt(Box::new(UdtValue {
+-    })
++    }))
+--- candidata: scan-window-substrate [PR]
+  | # scan-window-substrate
+  | ## ADDED Requirements
+  | ### Requirement: The windowed scan carries chunk bytes as a refcounted substrate
+--- candidata: sstable-value-decode [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Cell decode dispatch is resolved once per column, not per cell
+  | The V5CompressedLegacy cell decode path SHALL resolve each column's decode dispatch
+--- candidata: value-representation [PR]
+  | # value-representation
+  | ## ADDED Requirements
+  | ### Requirement: The `Value` enum fits within a bounded inline size
+
+===== P288 | aehrc/pathling PR #2551 | capacidade do par: fhirpath-to-column-r
+PR: v9.4.0
+arquivos ligados: lib/R/R/context.R;lib/R/tests/testthat/test-context.R
+--- linhas alteradas (174; mostrando até 40)
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
+--- candidata: r-evaluate-fhirpath [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  | The R library SHALL provide an exported function
+  > ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  > `pathling_evaluate_fhirpath(pc, resource_type, resource_json, fhirpath_expression, context_expression, variables)`
+  > that invokes the Java `PathlingContext.evaluateFhirPath()` method via sparklyr's
+  > `j_invoke` and returns an R list containing the typed results and the expected
+  > The `context_expression` and `variables` parameters SHALL be optional, defaulting
+  > #### Scenario: Simple string expression
+  > - **WHEN** `pathling_evaluate_fhirpath(pc, "Patient", patient_json, "name.family")` is called with a Patient JSON containing family name "Smith"
+  > - **THEN** the returned list contains `results` with one entry having `type = "string"` and `value = "Smith"`, and `expectedReturnType = "string"`
+--- candidata: fhirpath-evaluation-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Evaluate FHIRPath expression against a single resource
+  | The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > ### Requirement: Evaluate FHIRPath expression against a single resource
+  > The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > string), a FHIRPath expression string, an optional context expression string,
+  > and optional variables, and returns a list of typed result values.
+  > The method SHALL use the existing Pathling FHIRPath engine (Spark-based) to
+  > evaluate the expression, encoding the resource into a one-row Dataset
+  > internally.
+  > #### Scenario: Simple expression evaluation
+--- candidata: fhirpath-lab-server [PR]
+  | ## ADDED Requirements
+  | ### Requirement: POST /$fhirpath-r4 endpoint
+  | The server SHALL expose a `POST /$fhirpath-r4` endpoint that accepts a FHIR
+  > Parameters resource as the request body (Content-Type: `application/json`) and
+  > returns a FHIR Parameters resource as the response.
+  > #### Scenario: Successful expression evaluation
+  > resource containing an `expression` and a `resource` parameter
+  > - **THEN** the server returns HTTP 200 with a FHIR Parameters resource
+  > containing the evaluation results
+  > #### Scenario: Missing required expression parameter
+  > - **WHEN** a POST request is sent without an `expression` parameter
+--- candidata: r-search-to-column [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Convert FHIR search expression to Spark column
+  | The R library SHALL provide a function `pc_search_to_column(pc, resource_type,
+  > ### Requirement: Convert FHIR search expression to Spark column
+  > The R library SHALL provide a function `pc_search_to_column(pc, resource_type,
+  > search_expression)` that accepts a PathlingContext, a FHIR resource type name,
+  > and a FHIR search query string, and returns a Spark Column object representing
+  > - **WHEN** `pc_search_to_column(pc, "Patient", "gender=male")` is called
+  > - **THEN** a Spark Column object (`spark_jobj`) is returned that evaluates to
+  > true for Patient resources where gender equals male.
+  > - **WHEN** `pc_search_to_column(pc, "Patient", "gender=male&active=true")` is
+--- candidata: r-fhirpath-helpers [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  | The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  > The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > #### Scenario: Filter patients by gender using FHIRPath
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows where gender equals male
+  > #### Scenario: Filter with combined boolean expression
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male' and birthDate > @1970-01-01")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows matching both conditions
+
+===== P289 | lueluelue12138/sharp-gui PR #16 | capacidade do par: model-gallery-smoothness
+PR: feat(video): 添加视频 3DGS 重建能力
+arquivos ligados: frontend/src/types/gallery.ts
+--- linhas alteradas (4; mostrando até 40)
++  source_media_type?: 'video' | 'image' | string | null;
++  source_media_id?: string | null;
++  source_name?: string | null;
++  source_video_url?: string | null;
+--- candidata: local-video-gallery-preview [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: The system SHALL discover supported local video files
+  | The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > ### Requirement: The system SHALL discover supported local video files
+  > The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > #### Scenario: Album contains supported video files
+  > - **WHEN** a configured album contains supported video files
+  > - **THEN** the album media listing SHALL include those videos with stable IDs, names, timestamps, sizes, media type, preview URL, download URL, and playback URL
+  > - **AND** image files in the same album SHALL remain listed
+  > - **WHEN** the system returns a playback URL for a video item
+  > - **THEN** the URL SHALL use a path-style route with the video ID, a short-lived signed token, and a safe filename suffix
+--- candidata: video-3dgs-reconstruction [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 系统 SHALL 从本地视频创建重建任务
+  | 系统 SHALL 允许具备生成权限的用户从已配置本地相册中的受支持视频创建静态 3DGS 重建任务，并且不得向前端暴露源视频的绝对文件系统路径。
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+  > # video-3dgs-reconstruction Specification
+  > Define the local-video-to-3DGS reconstruction workflow, including task creation, runtime pipeline behavior, dependency diagnostics, output compatibility, and UI requirements.
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+--- candidata: windows-portable-release-packages [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Windows Release 必须提供按 GPU 目标区分的完整便携 ZIP 包
+  | Windows Release 必须提供 Windows x64 GPU 完整便携 ZIP 包的外部下载链接，并按支持的 NVIDIA 运行时目标拆分；便携包路径不得要求普通用户再运行在线依赖安装脚本。
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+  > - **WHEN** 用户在解压后的 `cu128-rtx50-video-recon` 包目录运行 `portable-run.bat`
+  > - **THEN** 启动器必须优先把包内 `.video-reconstruction-env\Scripts`、`.video-reconstruction-env\colmap\bin` 和包内 `ffmpeg/ffprobe` 目录加入 `PATH`
+  > - **WHEN** 用户把解压后的 `cu128-rtx50-video-recon` 包目录移动到另一个 Windows 路径或另一个 Windows 用户目录
+  > - **WHEN** 打包流程校验 `cu128-rtx50-video-recon` 包
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+--- candidata: feedforward-reconstruction-engine [PR]
+  | > **状态：已废弃（2026-06-24）**
+  | >
+  | > 本规格仅作为探索记录保留，不再作为当前实现要求。废弃原因：在目标 Windows + RTX 5070 Ti Laptop 12GB 环境验证中，Pi3/Pi3X 路线对多帧一次性推理的显存压力过高并出现 OOM；降低帧数后的 smoke 产物质量异常，无法达到稳定路线的可验收效果；长视频场景需要覆盖足够视角，当前方案的帧预算与质量目标矛盾；同时权重许可/分发要求不适合作为默认能力。当前分支回
+--- candidata: local-photo-album-gallery [termos]
+  | # local-photo-album-gallery Specification
+  | ## Purpose
+  | 为 Sharp GUI 增加本地照片相册图库能力，使用户能够配置多个本地照片目录、按相册浏览照片、以高性能瀑布流查看缩略图、预览和下载原图，并将单张或多张照片加入现有 3D 生成队列。该能力必须同时兼容 Windows、Linux 和 macOS 部署端。
+  > #### Scenario: Album contains supported images
+  > - **WHEN** a configured directory contains supported image files
+  > - **THEN** the album SHALL show a cover image derived from an available photo thumbnail
+  > - **WHEN** a configured directory contains no supported images
+  > - **WHEN** a configured album contains image files with spaces or non-ASCII characters in their names
+  > The system SHALL use dedicated cached thumbnails for album covers and photo grid items, and SHALL regenerate thumbnails when the underlying source image changes.
+  > #### Scenario: Source image changes
+  > - **WHEN** a source image has a different modification time or size from the cached metadata

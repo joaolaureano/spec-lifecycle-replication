@@ -1,0 +1,2692 @@
+===== P243 | repo codeready-toolchain/claw-operator | PR #46: refactor(api)!: rename API group to claw.sandbox.redhat.com | capacidade: standard-library-testing
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Test functions use standard naming
+All test functions MUST follow Go standard library conventions with `Test*` naming and accept `*testing.T` parameter.
+
+#### Scenario: Top-level test function
+- **WHEN** a test file contains tests
+- **THEN** each test MUST be a function named `Test<Name>(t *testing.T)`
+
+#### Scenario: Nested subtests
+- **WHEN** a test has multiple related scenarios
+- **THEN** subtests MUST be created using `t.Run(name, func(t *testing.T) {...})`
+
+### Requirement: Assertions use standard testing methods
+Test assertions MUST use standard `testing` package methods and helper functions instead of external assertion libraries.
+
+#### Scenario: Basic equality check
+- **WHEN** comparing expected and actual values
+- **THEN** test MUST use `if got != want { t.Errorf(...) }` pattern
+
+#### Scenario: Fatal errors
+- **WHEN** a condition prevents further test execution
+- **THEN** test MUST use `t.Fatal()` or `t.Fatalf()` to stop immediately
+
+#### Scenario: Error reporting
+- **WHEN** reporting test failures
+- **THEN** error messages MUST include both expected and actual values using `t.Errorf("got %v, want %v", got, want)`
+
+### Requirement: Async assertions use polling helpers
+Tests requiring eventual consistency MUST use polling helper functions instead of external assertion libraries.
+
+#### Scenario: Wait for condition
+- **WHEN** a test needs to wait for an async condition (e.g., Kubernetes resource ready)
+- **THEN** test MUST use a polling helper that checks condition repeatedly with timeout
+
+#### Scenario: Timeout exceeded
+- **WHEN** polling exceeds timeout without success
+- **THEN** helper MUST call `t.Fatalf()` with clear timeout message
+
+#### Scenario: Polling configuration
+- **WHEN** polling for conditions
+- **THEN** timeout MUST be 10 seconds and poll interval MUST be 250 milliseconds (matching Gomega Eventually defaults)
+
+### Requirement: Test suite setup uses TestMain
+Test suites requiring shared setup (e.g., envtest) MUST use `TestMain` function for initialization and cleanup.
+
+#### Scenario: Envtest initialization
+- **WHEN** tests require Kubernetes API server (envtest)
+- **THEN** `TestMain(m *testing.M)` MUST start envtest before `m.Run()` and stop after
+
+#### Scenario: Cleanup on exit
+- **WHEN** TestMain completes
+- **THEN** cleanup MUST run via `defer` to ensure resources release even on test failure
+
+#### Scenario: Exit code propagation
+- **WHEN** TestMain exits
+- **THEN** it MUST call `os.Exit(m.Run())` to propagate test result code
+
+### Requirement: Table-driven tests for multiple scenarios
+Tests with multiple input/output combinations MUST use table-driven test pattern.
+
+#### Scenario: Test table structure
+- **WHEN** a test has multiple scenarios
+- **THEN** test MUST define a slice of structs containing `name`, `input`, and `want` fields
+
+#### Scenario: Subtest per table entry
+- **WHEN** iterating table entries
+- **THEN** each entry MUST run as subtest using `t.Run(tt.name, func(t *testing.T) {...})`
+
+#### Scenario: Parallel execution
+- **WHEN** table-driven tests are independent
+- **THEN** subtests MAY call `t.Parallel()` for concurrent execution
+
+### Requirement: Test cleanup uses t.Cleanup
+Tests requiring cleanup MUST use `t.Cleanup()` instead of `defer` for resource cleanup.
+
+#### Scenario: Resource cleanup
+- **WHEN** a test creates resources (e.g., Kubernetes objects)
+- **THEN** test MUST register cleanup using `t.Cleanup(func() {...})` immediately after creation
+
+#### Scenario: Cleanup order
+- **WHEN** multiple cleanup handlers registered
+- **THEN** handlers MUST execute in LIFO order (last registered runs first)
+
+#### Scenario: Cleanup on failure
+- **WHEN** test fails or panics
+- **THEN** all registered cleanup handlers MUST still execute
+
+### Requirement: No external test dependencies
+Unit tests MUST NOT depend on Ginkgo or Gomega packages.
+
+#### Scenario: Import statements
+- **WHEN** reviewing test file imports
+- **THEN** imports MUST NOT include `github.com/onsi/ginkgo` or `github.com/onsi/gomega`
+
+#### Scenario: Module dependencies
+- **WHEN** running `go mod tidy` after migration
+- **THEN** `go.mod` MUST NOT contain Ginkgo or Gomega dependencies
+
+### Requirement: Test coverage preserved
+Migrated tests MUST maintain 100% coverage of existing test scenarios.
+
+#### Scenario: Existing test scenarios
+- **WHEN** comparing migrated tests to original Ginkgo tests
+- **THEN** every Ginkgo `It` block MUST have corresponding standard library test or subtest
+
+#### Scenario: Assertion count
+- **WHEN** counting assertions in migrated tests
+- **THEN** number of assertions MUST equal or exceed original Ginkgo tests
+
+--- ARQUIVOS DO PR (47)
+modified  +5     -1     .claude/settings.local.json
+modified  +1     -1     .cursor/commands/create-tests.md
+modified  +86    -27    CLAUDE.md
+modified  +1     -1     Makefile
+modified  +3     -3     README.md
+modified  +3     -3     api/v1alpha1/groupversion_info.go
+modified  +2     -2     cmd/main.go
+renamed   +2     -2     config/crd/bases/claw.sandbox.redhat.com_claws.yaml
+renamed   +2     -2     config/crd/bases/claw.sandbox.redhat.com_nodepairingrequestapprovals.yaml
+modified  +2     -2     config/crd/kustomization.yaml
+modified  +16    -16    config/rbac/role.yaml
+modified  +1     -1     config/samples/openclaw_v1alpha1_claw.yaml
+modified  +2     -2     docs/proposals/security-hardening-design.md
+modified  +1     -1     docs/proposals/security-hardening-questions.md
+modified  +1     -1     docs/proposals/security-hardening-sketch.md
+renamed   +49    -49    internal/controller/claw_credentials_test.go
+renamed   +33    -33    internal/controller/claw_proxy_test.go
+renamed   +44    -44    internal/controller/claw_resource_controller.go
+renamed   +30    -30    internal/controller/claw_resource_controller_test.go
+renamed   +71    -71    internal/controller/claw_status_test.go
+modified  +6     -6     internal/controller/nodepairingrequestapproval_controller.go
+modified  +18    -18    internal/controller/nodepairingrequestapproval_controller_test.go
+modified  +13    -13    internal/controller/suite_test.go   <== código ligado à spec
+modified  +6     -6     openspec/changes/archive/2026-04-02-reconcile-openclaw-instance/proposal.md
+modified  +2     -2     openspec/changes/archive/2026-04-02-rename-crd-to-openclaw/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-04-03-add-pvc-controller/tasks.md
+modified  +103   -38    openspec/specs/api-key-field/spec.md
+modified  +0     -45    openspec/specs/api-proxy/spec.md
+added     +0     -0     openspec/specs/claw-configmap-controller/spec.md
+renamed   +50    -50    openspec/specs/claw-controller/spec.md
+added     +110   -0     openspec/specs/claw-crd/spec.md
+added     +0     -0     openspec/specs/claw-deployment-controller/spec.md
+added     +0     -0     openspec/specs/claw-pvc-controller/spec.md
+modified  +0     -66    openspec/specs/dynamic-route-config/spec.md
+modified  +0     -39    openspec/specs/external-access/spec.md
+modified  +0     -45    openspec/specs/gateway-token-secret/spec.md
+modified  +0     -33    openspec/specs/network-security/spec.md
+modified  +2     -2     openspec/specs/node-pairing-request-approval/spec.md
+removed   +0     -147   openspec/specs/openclawconfigmap-controller/spec.md
+removed   +0     -159   openspec/specs/openclawdeployment-controller/spec.md
+removed   +0     -79    openspec/specs/openclawinstance-crd/spec.md
+removed   +0     -103   openspec/specs/openclawpvc-controller/spec.md
+modified  +71    -27    openspec/specs/status-conditions/spec.md
+modified  +0     -58    openspec/specs/status-url-field/spec.md
+modified  +51    -51    openspec/specs/unified-kustomize-controller/spec.md
+modified  +0     -38    openspec/specs/version-logging/spec.md
+modified  +2     -2     test/e2e/e2e_test.go
+--- DIFF DO CÓDIGO LIGADO
+### internal/controller/suite_test.go
+@@ -39,7 +39,7 @@ import (
+ 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+ 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+ 
+-	openclawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
++	clawv1alpha1 "github.com/codeready-toolchain/claw-operator/api/v1alpha1"
+ )
+ 
+ var (
+@@ -93,7 +93,7 @@ func TestMain(m *testing.M) {
+ 		panic("cfg is nil")
+ 	}
+ 
+-	err = openclawv1alpha1.AddToScheme(scheme.Scheme)
++	err = clawv1alpha1.AddToScheme(scheme.Scheme)
+ 	if err != nil {
+ 		panic(err)
+ 	}
+@@ -128,7 +128,7 @@ func deleteAndWaitAllResources(t *testing.T, namespace string) {
+ 		obj client.Object
+ 		key client.ObjectKey
+ 	}{
+-		{&openclawv1alpha1.Claw{}, client.ObjectKey{Name: ClawInstanceName, Namespace: namespace}},
++		{&clawv1alpha1.Claw{}, client.ObjectKey{Name: ClawInstanceName, Namespace: namespace}},
+ 		{&corev1.ConfigMap{}, client.ObjectKey{Name: ClawConfigMapName, Namespace: namespace}},
+ 		{&netv1.NetworkPolicy{}, client.ObjectKey{Name: ClawNetworkPolicyName, Namespace: namespace}},
+ 		{&netv1.NetworkPolicy{}, client.ObjectKey{Name: ClawIngressNetworkPolicyName, Namespace: namespace}},
+@@ -237,19 +237,19 @@ func createClawInstance(t *testing.T, ctx context.Context, name, namespace strin
+ 	require.NoError(t, k8sClient.Create(ctx, secret), "failed to create API key Secret")
+ 
+ 	// Create Claw instance with a single apiKey credential
+-	instance := &openclawv1alpha1.Claw{}
++	instance := &clawv1alpha1.Claw{}
+ 	instance.Name = name
+ 	instance.Namespace = namespace
+-	instance.Spec.Credentials = []openclawv1alpha1.CredentialSpec{
++	instance.Spec.Credentials = []clawv1alpha1.CredentialSpec{
+ 		{
+ 			Name: "gemini",
+-			Type: openclawv1alpha1.CredentialTypeAPIKey,
+-			SecretRef: &openclawv1alpha1.SecretRef{
++			Type: clawv1alpha1.CredentialTypeAPIKey,
++			SecretRef: &clawv1alpha1.SecretRef{
+ 				Name: aiModelSecret,
+ 				Key:  aiModelSecretKey,
+ 			},
+ 			Domain: ".googleapis.com",
+-			APIKey: &openclawv1alpha1.APIKeyConfig{
++			APIKey: &clawv1alpha1.APIKeyConfig{
+ 				Header: "x-goog-api-key",
+ 			},
+ 		},
+@@ -258,17 +258,17 @@ func createClawInstance(t *testing.T, ctx context.Context, name, namespace strin
+ }
+ 
+ // testCredentials returns a standard credentials slice for tests.
+-func testCredentials() []openclawv1alpha1.CredentialSpec {
+-	return []openclawv1alpha1.CredentialSpec{
++func testCredentials() []clawv1alpha1.CredentialSpec {
++	return []clawv1alpha1.CredentialSpec{
+ 		{
+ 			Name: "gemini",
+-			Type: openclawv1alpha1.CredentialTypeAPIKey,
+-			SecretRef: &openclawv1alpha1.SecretRef{
++			Type: clawv1alpha1.CredentialTypeAPIKey,
++			SecretRef: &clawv1alpha1.SecretRef{
+ 				Name: aiModelSecret,
+ 				Key:  aiModelSecretKey,
+ 			},
+ 			Domain: ".googleapis.com",
+-			APIKey: &openclawv1alpha1.APIKeyConfig{
++			APIKey: &clawv1alpha1.APIKeyConfig{
+ 				Header: "x-goog-api-key",
+ 			},
+ 		},
+
+===== P244 | repo travishathaway/osmprj | PR #13: Docs updates, better secret handling, plus more! | capacidade: rust-cli
+--- SPEC VIVA
+# rust-cli Specification
+
+## Purpose
+
+This specification contains a high-level overview of all the subcommands available in this CLI tool.
+
+## Requirements
+### Requirement: Rust binary builds and is invocable
+The system SHALL produce a `osmprj` binary via `cargo build` that is executable after a successful build.
+
+#### Scenario: Help output
+- **WHEN** the user runs `osmprj --help`
+- **THEN** the binary prints usage information listing all sub-commands and exits with code 0
+
+#### Scenario: Version output
+- **WHEN** the user runs `osmprj --version`
+- **THEN** the binary prints the version string from `Cargo.toml` and exits with code 0
+
+### Requirement: init sub-command placeholder
+The system SHALL provide an `osmprj init` sub-command.
+
+#### Scenario: Init runs without error
+- **WHEN** the user runs `osmprj init`
+- **THEN** the binary prints a "not yet implemented" message and exits with code 0
+
+#### Scenario: Init help
+- **WHEN** the user runs `osmprj init --help`
+- **THEN** the binary prints usage for init and exits with code 0
+
+### Requirement: add sub-command placeholder
+The system SHALL provide an `osmprj add` sub-command.
+
+#### Scenario: Add runs without error
+- **WHEN** the user runs `osmprj add`
+- **THEN** the binary prints a "not yet implemented" message and exits with code 0
+
+### Requirement: sync sub-command placeholder
+The system SHALL provide an `osmprj sync` sub-command.
+
+#### Scenario: Sync runs without error
+- **WHEN** the user runs `osmprj sync`
+- **THEN** the binary prints a "not yet implemented" message and exits with code 0
+
+### Requirement: remove sub-command placeholder
+The system SHALL provide an `osmprj remove` sub-command.
+
+#### Scenario: Remove runs without error
+- **WHEN** the user runs `osmprj remove`
+- **THEN** the binary prints a "not yet implemented" message and exits with code 0
+
+### Requirement: destroy sub-command placeholder
+The system SHALL provide an `osmprj destroy` sub-command.
+
+#### Scenario: Destroy runs without error
+- **WHEN** the user runs `osmprj destroy`
+- **THEN** the binary prints a "not yet implemented" message and exits with code 0
+
+### Requirement: Global --color and --no-color flags
+The system SHALL provide `--color` and `--no-color` as mutually exclusive global CLI flags available on all sub-commands. These flags SHALL take precedence over the `NO_COLOR` environment variable.
+
+Priority order (highest to lowest):
+1. `--no-color` flag → force ANSI color off
+2. `--color` flag → force ANSI color on (including when stdout is not a TTY)
+3. `NO_COLOR` env var (present and non-empty) → ANSI color off
+4. Default: color on if stdout is a TTY, off otherwise
+
+#### Scenario: --no-color suppresses all color output
+- **WHEN** the user runs `osmprj --no-color sync`
+- **THEN** all output contains no ANSI escape sequences
+
+#### Scenario: --color forces color even when piped
+- **WHEN** the user runs `osmprj --color themes list` with stdout redirected to a pipe
+- **THEN** output contains ANSI color escape sequences
+
+#### Scenario: --color overrides NO_COLOR env var
+- **WHEN** the user runs `NO_COLOR=1 osmprj --color themes list`
+- **THEN** output contains ANSI color escape sequences
+
+#### Scenario: --no-color overrides CLICOLOR_FORCE
+- **WHEN** the user runs `CLICOLOR_FORCE=1 osmprj --no-color sync`
+- **THEN** all output contains no ANSI escape sequences
+
+#### Scenario: Help reflects the flags
+- **WHEN** the user runs `osmprj --help`
+- **THEN** the help output lists both `--color` and `--no-color` flags
+
+--- ARQUIVOS DO PR (60)
+modified  +3     -0     .github/workflows/ci.yml
+modified  +6     -0     .github/workflows/deploy-docs.yml
+modified  +551   -295   Cargo.lock
+modified  +8     -7     Cargo.toml
+modified  +25    -245   README.md
+modified  +9     -2     docs/blog/2026-05-07-introducing-osmprj.md
+modified  +26    -11    docs/docs/getting-started.md
+removed   +0     -46    docs/docs/guides/configuration.md
+added     +65    -0     docs/docs/guides/storing-credentials.md
+modified  +1     -1     docs/docs/guides/syncing-data.md
+modified  +1     -1     docs/docs/guides/themes.md
+added     +7     -0     docs/docs/reference/_category_.json
+added     +8     -0     docs/docs/reference/commands/_category_.json
+added     +43    -0     docs/docs/reference/commands/add.md
+added     +36    -0     docs/docs/reference/commands/init.md
+added     +45    -0     docs/docs/reference/commands/remove.md
+added     +26    -0     docs/docs/reference/commands/status.md
+added     +44    -0     docs/docs/reference/commands/sync.md
+added     +37    -0     docs/docs/reference/commands/themes-list.md
+added     +102   -0     docs/docs/reference/configuration.md
+modified  +21    -5     docs/docusaurus.config.ts
+modified  +125   -5     docs/src/css/custom.css
+modified  +48    -47    docs/src/pages/index.tsx
+added     +42    -0     docs/src/theme/Footer/Layout/index.tsx
+added     +14    -0     docs/src/theme/Footer/index.tsx
+renamed   +0     -0     openspec/changes/archive/2026-05-16-add-pixi-pack-installer/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-16-add-pixi-pack-installer/design.md
+renamed   +0     -0     openspec/changes/archive/2026-05-16-add-pixi-pack-installer/proposal.md
+renamed   +4     -4     openspec/changes/archive/2026-05-16-add-pixi-pack-installer/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-16-secure-credential-handling/.openspec.yaml
+added     +88    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/design.md
+added     +34    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/proposal.md
+added     +27    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/specs/child-process-credential-isolation/spec.md
+added     +23    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/specs/credential-masking/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/specs/credential-resolution/spec.md
+added     +23    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/specs/pgpass-support/spec.md
+added     +23    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/specs/rust-db/spec.md
+added     +56    -0     openspec/changes/archive/2026-05-16-secure-credential-handling/tasks.md
+added     +25    -0     openspec/specs/child-process-credential-isolation/spec.md
+added     +21    -0     openspec/specs/credential-masking/spec.md
+added     +32    -0     openspec/specs/credential-resolution/spec.md
+added     +21    -0     openspec/specs/pgpass-support/spec.md
+modified  +15    -0     openspec/specs/rust-add-command/spec.md
+modified  +11    -7     openspec/specs/rust-db/spec.md
+modified  +4     -2     pixi.toml
+modified  +1     -1     pyproject.toml
+modified  +34    -18    src/commands/add.rs
+modified  +5     -5     src/commands/remove.rs
+modified  +17    -9     src/commands/status.rs   <== código ligado à spec
+modified  +61    -37    src/commands/sync.rs   <== código ligado à spec
+modified  +57    -0     src/config.rs
+modified  +31    -30    src/db.rs   <== código ligado à spec
+modified  +11    -3     src/error.rs
+modified  +6     -0     src/main.rs
+modified  +15    -5     src/tuner.rs
+added     +159   -0     src/url_utils.rs
+added     +33    -0     tests/integration/test_credentials.py
+modified  +17    -6     tests/integration/test_remove.py
+modified  +24    -5     tests/integration/test_status.py
+modified  +33    -18    tests/integration/test_sync_errors.py
+--- DIFF DO CÓDIGO LIGADO
+### src/commands/status.rs
+@@ -1,37 +1,43 @@
+ use crate::config::ProjectConfig;
+ use crate::db;
+ use crate::output;
++use crate::url_utils::mask_db_url;
+ 
+ pub async fn run(config: &ProjectConfig) -> Result<(), crate::error::OsmprjError> {
+     let sources = &config.sources;
+ 
+     // ── Database connection ───────────────────────────────────────────────────
+-    let url = config.project.database_url.as_deref();
++    let url = config.project.effective_database_url()?;
++    let url = url.as_deref();
+ 
+-    let client = match url {
++    let mut client = match url {
+         None => {
+             println!("  database:  not configured");
+             println!(
+-                "             Add database_url to [project] in osmprj.toml to enable \
+-                 connection checks"
++                "             Add database_url to [project] in osmprj.toml,\n\
++                 \n             or set the OSMPRJ_DATABASE_URL environment variable."
+             );
+             print_sources_no_db(config);
+             return Ok(());
+         }
+         Some(u) => match db::connect(u).await {
+             Ok(c) => {
+-                println!("  database:  {u}  {} connected", output::icon_success());
++                println!(
++                    "  database:  {}  {} connected",
++                    mask_db_url(u),
++                    output::icon_success()
++                );
+                 c
+             }
+             Err(e) => {
+                 println!(
+-                    "  database:  {u}  {} connection failed",
++                    "  database:  {}  {} connection failed",
++                    mask_db_url(u),
+                     output::icon_error()
+                 );
+                 println!("             {e}");
+                 println!(
+-                    "             Check that PostgreSQL is running and the URL is correct.\n\
+-                     \n             Tip: run `psql \"{u}\"` to test the connection directly."
++                    "             Check that PostgreSQL is running and verify your database credentials."
+                 );
+                 print_sources_no_db(config);
+                 return Ok(());
+@@ -65,7 +71,9 @@ pub async fn run(config: &ProjectConfig) -> Result<(), crate::error::OsmprjError
+ 
+     for (name, source) in sorted {
+         let schema = source.effective_schema(name);
+-        let exists = db::schema_exists(&client, &schema).await.unwrap_or(false);
++        let exists = db::schema_exists(&mut client, &schema)
++            .await
++            .unwrap_or(false);
+         let indicator = if exists {
+             output::icon_success().to_string()
+         } else {
+
+### src/commands/sync.rs
+@@ -3,6 +3,7 @@ use crate::error::OsmprjError;
+ use crate::lock::{LockFile, SourceLockEntry};
+ use crate::output;
+ use crate::theme_registry::{ThemeRegistry, ThemeType};
++use crate::url_utils::{parse_db_url, PgConnParams};
+ use crate::{db, tuner};
+ use chrono::Utc;
+ use console::style;
+@@ -277,10 +278,9 @@ async fn run_subprocess(
+ /// Execute a list of SQL files against the database, substituting `{schema}` in each file.
+ ///
+ /// Files are executed in the order provided. Each file is split on `;` and each
+-/// non-empty statement is executed individually (tokio-postgres does not support
+-/// multi-statement queries via its standard API).
++/// non-empty statement is executed individually.
+ pub async fn run_postprocess(
+-    client: &tokio_postgres::Client,
++    conn: &mut sqlx::PgConnection,
+     source_name: &str,
+     schema: &str,
+     sql_files: &[PathBuf],
+@@ -301,14 +301,13 @@ pub async fn run_postprocess(
+             if stmt.is_empty() {
+                 continue;
+             }
+-            client
+-                .execute(stmt, &[])
+-                .await
+-                .map_err(|e| OsmprjError::PostProcessFailed {
++            sqlx::query(stmt).execute(&mut *conn).await.map_err(|e| {
++                OsmprjError::PostProcessFailed {
+                     source_name: source_name.to_string(),
+                     file: file_name.clone(),
+                     message: e.to_string(),
+-                })?;
++                }
++            })?;
+         }
+     }
+     Ok(())
+@@ -348,16 +347,34 @@ fn collect_sql_files(source: &SourceConfig, registry: &ThemeRegistry) -> Vec<Pat
+     files
+ }
+ 
++/// Build the libpq environment variables to pass to child processes.
++/// The password is included only when present, so that processes without
++/// a password in the URL still consult ~/.pgpass or other libpq credential
++/// sources on their own.
++fn pg_env_vars(pg: &PgConnParams) -> Vec<(String, String)> {
++    let mut vars = vec![
++        ("PGHOST".to_string(), pg.host.clone()),
++        ("PGPORT".to_string(), pg.port.to_string()),
++        ("PGDATABASE".to_string(), pg.database.clone()),
++        ("PGUSER".to_string(), pg.user.clone()),
++    ];
++    if let Some(ref pw) = pg.password {
++        vars.push(("PGPASSWORD".to_string(), pw.clone()));
++    }
++    vars
++}
++
+ async fn run_replication_init(
+-    database_url: &str,
++    pg: &PgConnParams,
+     schema: &str,
+     log_path: &Path,
+     verbose: bool,
+ ) -> Result<(), OsmprjError> {
+     let log_file = std::fs::File::create(log_path).map_err(OsmprjError::Io)?;
+     let log = Arc::new(Mutex::new(log_file));
+ 
+-    let repl_args = ["init", "-d", database_url, "--schema", schema];
++    let credential_free_url = pg.credential_free_url();
++    let repl_args = ["init", "-d", &credential_free_url, "--schema", schema];
+     let cmd_line = format!("osm2pgsql-replication {}", repl_args.join(" "));
+     if verbose {
+         println!("  [command] {cmd_line}");
+@@ -368,6 +385,7 @@ async fn run_replication_init(
+ 
+     let mut child = tokio::process::Command::new("osm2pgsql-replication")
+         .args(repl_args)
++        .envs(pg_env_vars(pg))
+         .stdout(Stdio::piped())
+         .stderr(Stdio::piped())
+         .spawn()
+@@ -399,7 +417,7 @@ async fn run_replication_init(
+ /// All data needed to run a single source through the full import pipeline.
+ struct ImportSourceArgs {
+     pub source_name: String,
+-    pub db_url: String,
++    pub pg_conn: PgConnParams,
+     pub effective_schema: String,
+     pub srid: u32,
+     pub argv: Vec<String>,
+@@ -442,10 +460,11 @@ async fn import_source(
+     spinner.enable_steady_tick(std::time::Duration::from_millis(250));
+ 
+     let log_path = args.log_dir.join(format!("{}.log", name.replace('/', "-")));
+-    let env_vars = vec![
++    let mut env_vars = vec![
+         ("OSMPRJ_SCHEMA".to_string(), args.effective_schema.clone()),
+         ("OSMPRJ_SRID".to_string(), args.srid.to_string()),
+     ];
++    env_vars.extend(pg_env_vars(&args.pg_conn));
+ 
+     run_subprocess(&args.argv, &env_vars, &log_path, args.verbose, &spinner)
+         .await
+@@ -458,7 +477,7 @@ async fn import_source(
+     let mut pp_warning: Option<OsmprjError> = None;
+     if !args.sql_files.is_empty() {
+         spinner.set_message(format!("Post-processing {name}..."));
+-        match db::connect(&args.db_url).await {
++        match db::connect(&args.pg_conn.credential_free_url()).await {
+             Err(e) => {
+                 spinner.set_message(format!("Post-processing {name} skipped (no DB)..."));
+                 eprintln!(
+@@ -471,8 +490,9 @@ async fn import_source(
+                     message: e.to_string(),
+                 });
+             }
+-            Ok(client) => {
+-                match run_postprocess(&client, name, &args.effective_schema, &args.sql_files).await
++            Ok(mut client) => {
++                match run_postprocess(&mut client, name, &args.effective_schema, &args.sql_files)
++                    .await
+                 {
+                     Ok(()) => {
+                         // spinner message will update to replication step below
+@@ -495,7 +515,7 @@ async fn import_source(
+         .join(format!("{}-replication-init.log", name.replace('/', "-")));
+ 
+     run_replication_init(
+-        &args.db_url,
++        &args.pg_conn,
+         &args.effective_schema,
+         &repl_log_path,
+         args.verbose,
+@@ -517,22 +537,23 @@ async fn import_source(
+ // ─── replication update ───────────────────────────────────────────────────────
+ 
+ async fn replication_update(
+-    database_url: &str,
++    pg: &PgConnParams,
+     schema: &str,
+     style_path: Option<&PathBuf>,
+     max_diff_size_mb: Option<u32>,
+-    env_vars: &[(String, String)],
++    extra_env_vars: &[(String, String)],
+     log_path: &Path,
+     verbose: bool,
+ ) -> Result<(), OsmprjError> {
+     let log_file = std::fs::File::create(log_path).map_err(OsmprjError::Io)?;
+     let log = Arc::new(Mutex::new(log_file));
+ 
++    let credential_free_url = pg.credential_free_url();
+     let mut args: Vec<String> = vec![
+         "osm2pgsql-replication".into(),
+         "update".into(),
+         "-d".into(),
+-        database_url.into(),
++        credential_free_url.clone(),
+         "--schema".into(),
+         schema.into(),
+     ];
+@@ -558,7 +579,9 @@ async fn replication_update(
+ 
+     let mut cmd = tokio::process::Command::new(&args[0]);
+     cmd.args(&args[1..]);
+-    for (k, v) in env_vars {
++    // Inject libpq credential env vars so passwords don't appear in argv or logs.
++    cmd.envs(pg_env_vars(pg));
++    for (k, v) in extra_env_vars {
+         cmd.env(k, v);
+     }
+     let mut child = cmd
+@@ -614,11 +637,11 @@ pub async fn run(
+     // Re-run post-processing SQL for each source without downloading or importing.
+     // osm2pgsql / osm2pgsql-replication are not required.
+     if postprocess_only {
+-        let db_url = config
++        let db_url_owned = config
+             .project
+-            .database_url
+-            .as_deref()
++            .effective_database_url()?
+             .ok_or(OsmprjError::NoDatabaseUrl)?;
++        let db_url = db_url_owned.as_str();
+ 
+         let theme_registry = ThemeRegistry::build();
+ 
+@@ -657,8 +680,8 @@ pub async fn run(
+                         },
+                     ));
+                 }
+-                Ok(client) => {
+-                    match run_postprocess(&client, name, &effective_schema, &sql_files).await {
++                Ok(mut client) => {
++                    match run_postprocess(&mut client, name, &effective_schema, &sql_files).await {
+                         Ok(()) => {
+                             println!(
+                                 "  {} {name}: post-processing complete",
+@@ -705,11 +728,12 @@ pub async fn run(
+     let data_dir = config.project.effective_data_dir();
+     std::fs::create_dir_all(&data_dir).map_err(OsmprjError::Io)?;
+ 
+-    let db_url = config
++    let db_url_owned = config
+         .project
+-        .database_url
+-        .as_deref()
++        .effective_database_url()?
+         .ok_or(OsmprjError::NoDatabaseUrl)?;
++    let db_url = db_url_owned.as_str();
++    let pg_conn = parse_db_url(db_url)?;
+ 
+     let max_diff_size_mb = config.project.max_diff_size_mb;
+ 
+@@ -721,10 +745,10 @@ pub async fn run(
+ 
+     if !db_url.is_empty() {
+         match db::connect(db_url).await {
+-            Ok(client) => {
++            Ok(mut client) => {
+                 for (name, source) in &sources_to_sync {
+                     let schema = source.effective_schema(name);
+-                    match db::source_is_updatable(&client, &schema).await {
++                    match db::source_is_updatable(&mut client, &schema).await {
+                         Ok(true) => update_sources.push(name),
+                         _ => fresh_sources.push(name),
+                     }
+@@ -912,7 +936,7 @@ pub async fn run(
+             pbf_size_gb,
+             ssd,
+             concurrent_imports: config.project.effective_max_concurrent_imports(),
+-            database_url: db_url.to_string(),
++            pg_conn: pg_conn.clone(),
+             effective_schema: effective_schema.clone(),
+             pbf_path: pbf_path.clone(),
+             style_path,
+@@ -927,7 +951,7 @@ pub async fn run(
+             Arc::clone(&mp),
+             ImportSourceArgs {
+                 source_name: name.to_string(),
+-                db_url: db_url.to_string(),
++                pg_conn: pg_conn.clone(),
+                 effective_schema,
+                 srid,
+                 argv,
+@@ -978,7 +1002,7 @@ pub async fn run(
+                             pbf_size_gb,
+                             ssd,
+                             concurrent_imports: config.project.effective_max_concurrent_imports(),
+-                            database_url: db_url.to_string(),
++                            pg_conn: pg_conn.clone(),
+                             effective_schema: effective_schema.clone(),
+                             pbf_path: dl.pbf_path.clone(),
+                             style_path: style_path.clone(),
+@@ -993,7 +1017,7 @@ pub async fn run(
+                             Arc::clone(&mp),
+                             ImportSourceArgs {
+                                 source_name: dl.source_name,
+-                                db_url: db_url.to_string(),
++                                pg_conn: pg_conn.clone(),
+                                 effective_schema,
+                                 srid,
+                                 argv,
+@@ -1093,7 +1117,7 @@ pub async fn run(
+ 
+         let log_path = log_dir.join(format!("{}-update.log", name.replace('/', "-")));
+ 
+-        let env_vars = vec![
++        let extra_env_vars = vec![
+             ("OSMPRJ_SCHEMA".to_string(), effective_schema.clone()),
+             (
+                 "OSMPRJ_SRID".to_string(),
+@@ -1107,11 +1131,11 @@ pub async fn run(
+         spinner.enable_steady_tick(std::time::Duration::from_millis(250));
+ 
+         match replication_update(
+-            db_url,
++            &pg_conn,
+             &effective_schema,
+             style_path.as_ref(),
+             max_diff_size_mb,
+-            &env_vars,
++            &extra_env_vars,
+             &log_path,
+             verbose,
+         )
+
+### src/db.rs
+@@ -1,65 +1,66 @@
+ use crate::error::OsmprjError;
+-use tokio_postgres::{Client, NoTls};
++use sqlx::postgres::{PgConnectOptions, PgConnection};
++use sqlx::{ConnectOptions, Row};
++use std::str::FromStr;
+ 
+-pub async fn connect(database_url: &str) -> Result<Client, OsmprjError> {
+-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+-        .await
+-        .map_err(|e| OsmprjError::DatabaseConnectFailed {
++pub async fn connect(database_url: &str) -> Result<PgConnection, OsmprjError> {
++    let opts = PgConnectOptions::from_str(database_url).map_err(|e| {
++        OsmprjError::DatabaseConnectFailed {
+             message: e.to_string(),
+             url: database_url.to_string(),
+-        })?;
+-
+-    tokio::spawn(async move {
+-        if let Err(e) = connection.await {
+-            eprintln!("database connection error: {e}");
+         }
+-    });
++    })?;
+ 
+-    Ok(client)
++    opts.connect()
++        .await
++        .map_err(|e| OsmprjError::DatabaseConnectFailed {
++            message: e.to_string(),
++            url: database_url.to_string(),
++        })
+ }
+ 
+-pub async fn schema_exists(client: &Client, schema: &str) -> Result<bool, OsmprjError> {
+-    let row = client
+-        .query_opt(
+-            "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
+-            &[&schema],
+-        )
++pub async fn schema_exists(conn: &mut PgConnection, schema: &str) -> Result<bool, OsmprjError> {
++    let row = sqlx::query("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
++        .bind(schema)
++        .fetch_optional(conn)
+         .await
+         .map_err(|e| OsmprjError::DatabaseQueryFailed {
+             message: e.to_string(),
+         })?;
+     Ok(row.is_some())
+ }
+ 
+-pub async fn source_is_updatable(client: &Client, schema: &str) -> Result<bool, OsmprjError> {
++pub async fn source_is_updatable(
++    conn: &mut PgConnection,
++    schema: &str,
++) -> Result<bool, OsmprjError> {
+     let sql =
+         format!("SELECT value FROM \"{schema}\".osm2pgsql_properties WHERE property = 'updatable'");
+-    let row = client.query_opt(sql.as_str(), &[]).await.map_err(|e| {
++    let row = sqlx::query(&sql).fetch_optional(conn).await.map_err(|e| {
+         OsmprjError::DatabaseQueryFailed {
+             message: e.to_string(),
+         }
+     })?;
+-    Ok(row.map(|r| r.get::<_, &str>(0) == "true").unwrap_or(false))
++    Ok(row
++        .map(|r| r.try_get::<String, _>(0).ok().as_deref() == Some("true"))
++        .unwrap_or(false))
+ }
+ 
+-pub async fn create_schema(client: &Client, schema: &str) -> Result<(), OsmprjError> {
+-    // Schema names are produced by effective_schema() which normalises to
+-    // [a-z0-9_], or are supplied by --schema. Quoting with " " is sufficient
+-    // to prevent injection while allowing any identifier the user might provide.
++pub async fn create_schema(conn: &mut PgConnection, schema: &str) -> Result<(), OsmprjError> {
+     let sql = format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\"");
+-    client
+-        .execute(sql.as_str(), &[])
++    sqlx::query(&sql)
++        .execute(conn)
+         .await
+         .map_err(|e| OsmprjError::DatabaseQueryFailed {
+             message: e.to_string(),
+         })?;
+     Ok(())
+ }
+ 
+-pub async fn drop_schema(client: &Client, schema: &str) -> Result<(), OsmprjError> {
++pub async fn drop_schema(conn: &mut PgConnection, schema: &str) -> Result<(), OsmprjError> {
+     let sql = format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
+-    client
+-        .execute(sql.as_str(), &[])
++    sqlx::query(&sql)
++        .execute(conn)
+         .await
+         .map_err(|e| OsmprjError::DatabaseQueryFailed {
+             message: e.to_string(),
+
+===== P246 | repo lis186/ccxray | PR #37: feat: Codex dashboard parity — write-path abstraction + WS capture + UI fixes | capacidade: ux-card-polish
+--- SPEC VIVA
+# UX Card Polish Specification
+
+## Purpose
+
+Project / Session / Turn card 的 UX 修正集合，七個小型 gap bundled 一起 ship 因為都觸碰相同的 rendering surface（miller-columns.js / entry-rendering.js / style.css）。涵蓋 continue 圖示按鈕、cache TTL 文字格式、last-assistant preview、project dot tooltip、cost 兩位小數、turn time row 主從結構、`hit:` → `cache:` label rename。
+
+## Requirements
+
+### Requirement: Session card SHALL surface a copyable continue command via an icon button
+
+The session card MUST render an icon button (`.launch-btn`) on the first row next to the short session id. Clicking the button MUST write `claude --continue {shortSid}` to the system clipboard and provide brief visual feedback (the shipped UI flashes the button briefly before reverting). The button MUST carry a `title=` attribute reading `Copy: claude --continue {shortSid}` so the action is discoverable on hover. The button glyph is the rocket-ship character (`&#10697;` / U+2629) — a compact icon-only affordance, not a text chip.
+
+> **Drift from earlier draft:** Earlier drafts specified a wide text chip `▶ continue: {shortSid}` with inline label flip (`✓ copied!`). The shipped UI uses a circular icon button instead because the session card horizontal real estate is contested by the title row, the pin button, the held badge, and the intercept-arm dot. The full continue command is discoverable via tooltip rather than primary text.
+
+#### Scenario: Click to copy
+
+- **WHEN** the user clicks the rocket icon button
+- **THEN** `claude --continue 8adc7cfc` is written to the clipboard
+- **AND** the button provides brief visual feedback before reverting
+
+#### Scenario: Tooltip discoverability
+
+- **WHEN** the user hovers the icon button
+- **THEN** the tooltip reads `Copy: claude --continue 8adc7cfc`
+
+#### Scenario: Session with title
+
+- **WHEN** `sess.title` is set (via the session-title-display change)
+- **THEN** the title renders on its own row above the row that contains the short sid + icon button
+
+#### Scenario: Session without title
+
+- **WHEN** `sess.title` is absent
+- **THEN** the short sid appears as the primary label on the first row alongside the icon button
+
+---
+
+### Requirement: Cache TTL row SHALL use unambiguous language and colour-coded urgency
+
+The cache TTL display MUST render as a single `.si-cache` element with text `cache {N}m left` (for `s >= 60`) or `cache {N}s left` (for `s < 60`) or `cache expired` (when remaining ≤ 0). The colour is conveyed by a CSS class on the same element, not by a separate leading dot:
+
+- `.cache-far` (green) when `remaining / cacheTtlMs > 0.6`
+- `.cache-near` (yellow) when `remaining / cacheTtlMs > 0.3` and ≤ 0.6
+- `.cache-close` (red, with pulse animation) when remaining ≤ 30 % of TTL
+- `.cache-expired` (terminal state) when remaining ≤ 0 — the ticker stops touching the element
+
+A single app-level `setInterval(1000)` (`startCountdownTicker` in `public/countdown-ticker.js`) walks every `.si-cache[data-active="1"]` element each tick and rewrites `textContent` / `className` only when the desired value changes (DOM-write throttling). The plan TTL is read from `window.ccxraySettings` populated from `/_api/settings`.
+
+> **Drift from earlier draft:** Earlier drafts specified `cache · {N}m left` with a separate leading coloured `●`, and absolute thresholds (60 s / 300 s) for tier switching. The shipped UI uses pct-based thresholds (`> 0.6`, `> 0.3`) so the same logic works for both 5-min Pro and 1-hr Max plans without per-plan branching, and folds the colour into the element itself so the ticker can update className in one DOM write per element.
+
+#### Scenario: Cache with 57 min left on Max plan
+
+- **WHEN** `cacheTtlMs` = 3600000 and remaining = 57 m (95 %)
+- **THEN** the element renders text `cache 57m left` with class `si-cache cache-far` (green)
+
+#### Scenario: Cache below 30 % of TTL
+
+- **WHEN** remaining is 10 m on a 60 m TTL (17 %)
+- **THEN** the element renders text `cache 10m left` with class `si-cache cache-close` (red, pulsing)
+
+#### Scenario: Cache below 60 seconds
+
+- **WHEN** remaining is 42 s
+- **THEN** the element renders text `cache 42s left` with class `si-cache cache-close`
+
+#### Scenario: Cache expired
+
+- **WHEN** remaining ≤ 0
+- **THEN** the element renders text `cache expired` with class `si-cache cache-expired`
+- **AND** `data-active` is set to `"0"` so the ticker stops touching the element
+
+#### Scenario: No cache row
+
+- **WHEN** the session has no cache data (non-Claude-Code traffic) or plan is `api-key`
+- **THEN** the cache row is absent
+
+---
+
+### Requirement: Tool-stats row SHALL be replaced by a last-assistant-message preview
+
+The second row of a session card MUST display the first 60 characters of the most-recent assistant message text for that session, followed by `…` if truncated. If no assistant message exists for the session yet, the row MUST be omitted entirely (not shown as empty). The preview text MUST be rendered in `var(--dim)` colour and `font-size: 11px`. HTML entities from the original message MUST be stripped before truncation; no markdown formatting is applied.
+
+#### Scenario: Session with assistant messages
+
+- **WHEN** the last assistant message begins with `"全部 312 個測試通過，沒有失敗。實作已完成…"`
+- **THEN** the row shows `全部 312 個測試通過，沒有失敗。實作已完成，所…` (60 chars + `…`)
+
+#### Scenario: No assistant messages yet
+
+- **WHEN** a session only has one turn and it has not received a response
+- **THEN** the tool-stats / preview row is absent
+
+---
+
+### Requirement: Project dots SHALL carry a tooltip describing their status
+
+Every project status dot MUST have a `title` attribute. The value MUST be:
+
+- `"streaming"` when `statusClass === 'sdot-stream'`
+- `"idle · {N}m ago"` when `statusClass === 'sdot-idle'`, where N = `Math.round((Date.now() - proj.lastSeenAt) / 60000)` clamped to a minimum of 1
+- `"offline"` when `statusClass === 'sdot-off'`
+
+`proj.lastSeenAt` is derived from the most recent `lastSeenAt` across all sessions in the project.
+
+#### Scenario: Active project
+
+- **WHEN** a project has one streaming session
+- **THEN** hovering the green dot shows `"streaming"`
+
+#### Scenario: Idle project
+
+- **WHEN** the project's last session was seen 3 m ago
+- **THEN** hovering the yellow dot shows `"idle · 3m ago"`
+
+---
+
+### Requirement: All cost values SHALL render with exactly two decimal places
+
+Every `$`-prefixed cost display in project cards, session cards, and turn cards MUST use `.toFixed(2)`. This applies to: `proj.totalCost`, `sess.cost` (session total), `e.cost` (per-turn), and the topbar ROI display. Hover tooltips MAY show higher precision if desired but MUST NOT be required for the base display.
+
+#### Scenario: Three-decimal cost
+
+- **WHEN** `proj.totalCost` is `297.067`
+- **THEN** the card shows `$297.07`
+
+---
+
+### Requirement: Turn card time row SHALL present `dur` as primary and `wait`/`think` as secondary
+
+The time row MUST render as: `dur:{N}s` in normal text colour, followed by `(wait:{N}s · think:{N}s)` in `var(--dim)` and `font-size: 10px` on the same line. `think` is omitted if `thinkingDuration` is absent or zero. `wait` is omitted if `waitTime` is absent or zero. If all three values are absent the row is omitted.
+
+#### Scenario: All three present
+
+- **WHEN** dur=9s, wait=4s, think=1.9s
+- **THEN** row renders: `dur:9s (wait:4s · think:1.9s)` with `(wait:4s · think:1.9s)` dimmed
+
+#### Scenario: No thinking
+
+- **WHEN** dur=5s, wait=2s, thinkingDuration absent
+- **THEN** row renders: `dur:5s (wait:2s)`
+
+---
+
+### Requirement: Turn card cache hit label SHALL read `cache` not `hit`
+
+The label prefix in the turn card stats line MUST be `cache:{N}%` not `hit:{N}%`. The value, colour, and position are unchanged.
+
+#### Scenario: Rename
+
+- **WHEN** cache hit rate is 100 %
+- **THEN** turn card shows `cache:100%`
+
+--- ARQUIVOS DO PR (91)
+modified  +34    -0     CHANGELOG.md
+modified  +23    -0     CLAUDE.md
+added     +300   -0     docs/normalization-map.md
+added     +750   -0     docs/superpowers/plans/2026-06-03-a1a3-write-path-abstraction.md
+added     +100   -0     docs/superpowers/specs/2026-06-03-a1a3-premortem.md
+added     +193   -0     docs/superpowers/specs/2026-06-03-codex-write-path-abstraction-design.md
+added     +133   -0     docs/war-stories.md
+added     +197   -0     docs/wire-protocol-reference.md
+modified  +27    -9     openspec/changes/2026-05-26-auth-phase-2/design.md
+modified  +82    -51    openspec/changes/2026-05-26-auth-phase-2/tasks.md
+modified  +10    -10    openspec/changes/2026-05-26-auth-phase-3/tasks.md
+added     +2     -0     openspec/changes/2026-05-28-codex-dashboard-parity/.openspec.yaml
+added     +84    -0     openspec/changes/2026-05-28-codex-dashboard-parity/design.md
+added     +38    -0     openspec/changes/2026-05-28-codex-dashboard-parity/proposal.md
+added     +34    -0     openspec/changes/2026-05-28-codex-dashboard-parity/tasks.md
+added     +292   -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/design.md
+added     +50    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/proposal.md
+added     +74    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/tasks.md
+modified  +34    -4     openspec/specs/two-domain-auth/spec.md
+modified  +1     -1     package.json
+modified  +2     -1     public/entry-rendering.js   <== código ligado à spec
+modified  +4     -0     public/index.html
+modified  +62    -92    public/messages.js
+modified  +30    -26    public/miller-columns.js   <== código ligado à spec
+added     +30    -0     public/renderers/anthropic.js
+added     +4     -0     public/renderers/fallback.js
+added     +7     -0     public/renderers/index.js
+added     +65    -0     public/renderers/openai.js
+added     +496   -0     reason/260529-dashboard-agent-abstraction/handoff.md
+added     +66    -0     reason/260603-codex-parity-ledger/ledger.md
+added     +25    -0     reason/260603-codex-parity-ledger/next-session-prompt.md
+added     +143   -0     scripts/rebuild-missing-index.js
+modified  +155   -91    server/auth.js
+modified  +0     -15    server/config.js
+modified  +5     -0     server/cost-worker.js
+added     +16    -0     server/entry.js
+modified  +81    -221   server/forward.js
+modified  +54    -23    server/helpers.js
+modified  +180   -59    server/hub.js
+modified  +176   -146   server/index.js
+added     +71    -0     server/openai-response.js
+removed   +0     -94    server/openai-session.js
+modified  +10    -2     server/pricing.js
+modified  +5     -0     server/providers.js
+modified  +27    -13    server/routes/auth.js
+modified  +2     -1     server/sse-broadcast.js
+modified  +6     -0     server/system-prompt.js
+added     +112   -0     server/wire-parsers/anthropic.js
+added     +15    -0     server/wire-parsers/index.js
+added     +220   -0     server/wire-parsers/openai.js
+modified  +115   -108   server/ws-proxy.js
+modified  +132   -4     test/auth-bootstrap.test.js
+added     +94    -0     test/auth-dashboard-shell.e2e.test.js
+modified  +220   -29    test/auth-dispatcher.test.js
+modified  +58    -52    test/auth-header-injection.e2e.test.js
+modified  +1     -0     test/auth-token-strip.e2e.test.js
+added     +133   -0     test/auth-upstream-credential.test.js
+modified  +3     -50    test/auth-ws.test.js
+removed   +0     -81    test/auth.test.js
+modified  +1     -0     test/codex-noise-suppression.e2e.test.js
+modified  +11    -10    test/config.test.js
+modified  +1     -1     test/dashboard-codex-e2e.test.js
+added     +166   -0     test/entry.test.js
+added     +16    -0     test/fixtures/codex-ws-frames/say-hi.ndjson
+added     +27    -0     test/fixtures/wire-parsers/anthropic/turn1_req.json
+added     +11    -0     test/fixtures/wire-parsers/anthropic/turn1_res.json
+added     +31    -0     test/fixtures/wire-parsers/anthropic/turn2_req.json
+added     +14    -0     test/fixtures/wire-parsers/openai/noise_paths.json
+added     +63    -0     test/fixtures/wire-parsers/openai/sse-events.json
+added     +24    -0     test/fixtures/wire-parsers/openai/turn1_req.json
+added     +27    -0     test/fixtures/wire-parsers/openai/turn1_res.json
+added     +36    -0     test/fixtures/wire-parsers/openai/turn2_req.json
+modified  +49    -60    test/helpers.test.js
+added     +31    -0     test/helpers/upstream-token.js
+added     +456   -0     test/hub-socket.test.js
+modified  +95    -142   test/hub.test.js
+modified  +13    -7     test/messages-ui.test.js
+modified  +7     -1     test/pricing.test.js
+added     +107   -0     test/provider-compat.test.js
+modified  +7     -0     test/providers.test.js
+modified  +1     -0     test/socket-error-survival.e2e.test.js
+modified  +124   -9     test/startup.test.js
+modified  +25    -1     test/system-prompt.test.js
+modified  +1     -0     test/websocket-headers-forward.e2e.test.js
+modified  +129   -5     test/websocket-proxy.test.js
+added     +66    -0     test/wire-parsers-anthropic.test.js
+added     +121   -0     test/wire-parsers-build-entry.test.js
+added     +125   -0     test/wire-parsers-openai.test.js
+added     +142   -0     test/ws-frame-timeline.test.js
+added     +27    -0     test/ws-restore-guard.test.js
+modified  +1     -0     test/ws-shutdown-drain.e2e.test.js
+--- DIFF DO CÓDIGO LIGADO
+### public/entry-rendering.js
+@@ -228,7 +228,7 @@ function addEntry(e) {
+   const entryCwd = e.cwd || null;
+   if (!sessionsMap.has(sid)) {
+     const shortSid = sid.slice(0, 8);
+-    sessionsMap.set(sid, { id: sid, firstTs: e.ts, firstId: entryId, lastId: entryId, count: 0, mainCount: 0, subCount: 0, model, totalCost: 0, cwd: entryCwd, title: null, titleReqTs: 0, lastAssistantText: null });
++    sessionsMap.set(sid, { id: sid, firstTs: e.ts, firstId: entryId, lastId: entryId, count: 0, mainCount: 0, subCount: 0, model, totalCost: 0, cwd: entryCwd, title: null, titleReqTs: 0, lastAssistantText: null, agent: e.agent || 'claude' });
+     const sessEl = document.createElement('div');
+     sessEl.className = 'session-item';
+     sessEl.dataset.sessionId = sid;
+@@ -354,6 +354,7 @@ function addEntry(e) {
+     title: e.title || null,
+     coreHash: e.coreHash || null,
+     thinkingStripped: e.thinkingStripped || false,
++    provider: e.provider || 'anthropic',
+   });
+ 
+   // ── V3 turn card: five-line layout ──
+
+### public/miller-columns.js
+@@ -482,7 +482,7 @@ function _applyStepTargetWhenReady(idx, stepIdx, sub, attempts, opts) {
+         else resolve({ ok: false, reason: 'render-timeout' });
+         return;
+       }
+-      prepareTimelineSteps(current.req?.messages || [], Array.isArray(current.res) ? current.res : []);
++      prepareTimelineSteps(current.req?.messages || current.req?.input || [], Array.isArray(current.res) ? current.res : [], current.provider || 'anthropic');
+       if (!currentSteps[stepIdx]) {
+         resolve({ ok: false, reason: 'missing-step' });
+         return;
+@@ -755,7 +755,7 @@ function _selectTimelineStepWhenReady(turnIdx, stepIdx, sub) {
+       renderDetailCol();
+     }
+     requestAnimationFrame(() => {
+-      prepareTimelineSteps(current.req?.messages || [], Array.isArray(current.res) ? current.res : []);
++      prepareTimelineSteps(current.req?.messages || current.req?.input || [], Array.isArray(current.res) ? current.res : [], current.provider || 'anthropic');
+       selectStep(stepIdx, sub);
+       if (typeof scrollTimelineStepIntoViewWhenReady === 'function') scrollTimelineStepIntoViewWhenReady(stepIdx, sub);
+       else if (typeof scrollTimelineStepIntoView === 'function') scrollTimelineStepIntoView(stepIdx, sub);
+@@ -1386,8 +1386,8 @@ function formatEntryDateShort(id) {
+ }
+ 
+ 
+-function copySessionContinue(sid, btn) {
+-  navigator.clipboard.writeText('claude --resume ' + sid).then(() => {
++function copySessionContinue(sid, btn, agent) {
++  navigator.clipboard.writeText((agent || 'claude') + ' --resume ' + sid).then(() => {
+     const orig = btn.textContent;
+     btn.textContent = '✓ copied!';
+     btn.style.color = 'var(--green)';
+@@ -1488,9 +1488,10 @@ function renderSessionItem(sess, sid) {
+   const titleRow = sess.title
+     ? '<div class="si-title">' + escapeHtml(sess.title) + '</div>'
+     : '';
+-  const copyBtn = sid === 'direct-api'
++  const resumeCmd = (sess.agent || 'claude') + ' --resume ' + sid;
++  const copyBtn = sid === 'direct-api' || sid === 'codex-raw'
+     ? ''
+-    : '<button class="launch-btn" onclick="event.stopPropagation();copySessionContinue(&quot;' + escapeHtml(sid) + '&quot;,this)" title="Copy: claude --resume ' + escapeHtml(sid) + '">&#10697;</button>';
++    : '<button class="launch-btn" onclick="event.stopPropagation();copySessionContinue(&quot;' + escapeHtml(sid) + '&quot;,this,&quot;' + escapeHtml(sess.agent || 'claude') + '&quot;)" title="Copy: ' + escapeHtml(resumeCmd) + '">&#10697;</button>';
+   return '<div class="si-row1">' +
+     '<button class="' + sdotClasses + '"' + (sdotTitle ? ' title="' + sdotTitle + '"' : '') + (sdotOnclick ? ' onclick="' + sdotOnclick + '"' : '') + ' tabindex="-1"></button>' +
+     '<span class="sid" title="' + escapeHtml(tooltip) + '">' + escapeHtml(shortSid) + '</span>' +
+@@ -2059,15 +2060,16 @@ function selectSession(id) {
+   renderBreadcrumb();
+ }
+ 
+-// Coalesced render scheduler — merges multiple async render requests into one rAF
+-let _renderDirty = false;
++// Coalesced render scheduler — merges multiple async render requests into one rAF.
++// Uses cancel-and-requeue so the latest call always wins (avoids race where an
++// earlier RAF fires before new data is available and no re-render is scheduled).
++let _renderRafId = null;
+ let _renderCallback = null;
+ function scheduleRender(afterRender) {
+   if (afterRender) _renderCallback = afterRender;
+-  if (_renderDirty) return;
+-  _renderDirty = true;
+-  requestAnimationFrame(() => {
+-    _renderDirty = false;
++  if (_renderRafId) cancelAnimationFrame(_renderRafId);
++  _renderRafId = requestAnimationFrame(() => {
++    _renderRafId = null;
+     if (selectedTurnIdx >= 0) {
+       renderSectionsCol(selectedTurnIdx);
+       renderDetailCol();
+@@ -2239,8 +2241,8 @@ function renderSectionsCol(idx) {
+     html += '<div style="padding:4px 12px 6px;border-bottom:1px solid var(--border)"><div style="height:8px;border-radius:2px;background:var(--border);margin:4px 0 2px"></div><div style="height:12px;width:80px;border-radius:2px;background:var(--border)"></div></div>';
+   }
+ 
+-  const coreTools = req.tools ? req.tools.filter(t => !t.name.startsWith('mcp__')) : null;
+-  const mcpTools  = req.tools ? req.tools.filter(t =>  t.name.startsWith('mcp__')) : null;
++  const coreTools = req.tools ? req.tools.filter(t => t.name && !t.name.startsWith('mcp__')) : null;
++  const mcpTools  = req.tools ? req.tools.filter(t => t.name &&  t.name.startsWith('mcp__')) : null;
+   const tc = allEntries[idx]?.toolCalls || {};
+   const coreCalls = Object.entries(tc).filter(([n]) => !n.startsWith('mcp__')).reduce((s, [, c]) => s + c, 0);
+   const mcpCalls  = Object.entries(tc).filter(([n]) =>  n.startsWith('mcp__')).reduce((s, [, c]) => s + c, 0);
+@@ -2255,7 +2257,7 @@ function renderSectionsCol(idx) {
+   const sysSubline = ccVer ? 'cc ' + ccVer : '';
+ 
+   // Compute step stats for Timeline badge
+-  const previewSteps = e.reqLoaded ? getCachedSteps(req.messages, resEvents) : [];
++  const previewSteps = e.reqLoaded ? getCachedSteps(req.messages || req.input, resEvents, e.provider || 'anthropic') : [];
+   const stepCount = previewSteps.length;
+   const stepErrorCount = previewSteps.filter(s => s.type === 'tool-group' && s.calls.some(c => c.isError)).length;
+ 
+@@ -2520,15 +2522,15 @@ function renderDetailCol() {
+ 
+   switch (selectedSection) {
+     case 'system':
+-      if (req.system) {
+-        inner = '<div class="detail-content">' + renderSystemBlockViewer(req.system) + '</div>';
++      if (req.system || req.instructions) {
++        inner = '<div class="detail-content">' + renderSystemBlockViewer(req.system || req.instructions) + '</div>';
+       } else { inner = e.reqLoaded ? '<div class="col-empty">No system prompt</div>' : loading; }
+       break;
+     case 'timeline': {
+       if (!isFocusedMode) {
+         // Non-focused: show step summary list with minimap (no detail pane)
+         // User clicks a step or presses Enter to enter split-pane
+-        prepareTimelineSteps(req.messages, resEvents);
++        prepareTimelineSteps(req.messages || req.input, resEvents, e.provider || 'anthropic');
+         if (!currentSteps.length) {
+           inner = e.reqLoaded ? '<div class="col-empty">No messages</div>' : loading;
+           break;
+@@ -2554,7 +2556,7 @@ function renderDetailCol() {
+       }
+ 
+       // Prepare steps if needed
+-      prepareTimelineSteps(req.messages, resEvents);
++      prepareTimelineSteps(req.messages || req.input, resEvents, e.provider || 'anthropic');
+       if (!currentSteps.length) {
+         inner = e.reqLoaded ? '<div class="col-empty">No messages</div>' : loading;
+         break;
+@@ -2606,7 +2608,7 @@ function renderDetailCol() {
+     case 'core-tools':
+     case 'mcp-tools': {
+       const isMcp = selectedSection === 'mcp-tools';
+-      const filtered = req.tools ? req.tools.filter(t => isMcp ? t.name.startsWith('mcp__') : !t.name.startsWith('mcp__')) : null;
++      const filtered = req.tools ? req.tools.filter(t => t.name && (isMcp ? t.name.startsWith('mcp__') : !t.name.startsWith('mcp__'))) : null;
+       if (filtered?.length) {
+         const usageCount = allEntries[selectedTurnIdx]?.toolCalls || {};
+         const sorted = [...filtered].sort((a, b) => (usageCount[b.name] || 0) - (usageCount[a.name] || 0));
+@@ -2705,9 +2707,10 @@ function renderToolDetail(c) {
+ 
+ function renderToolMeta(c) {
+   const inp = c.input || {};
+-  switch (c.name) {
++  const name = (typeof CODEX_TOOL_ALIASES !== 'undefined' && CODEX_TOOL_ALIASES[c.name]) || c.name;
++  switch (name) {
+     case 'Bash': {
+-      const cmd = (inp.command || '');
++      const cmd = (inp.command || inp.cmd || '');
+       const desc = inp.description ? '<div class="detail-meta-line">' + escapeHtml(inp.description) + '</div>' : '';
+       return '<div class="detail-meta"><code class="detail-cmd-block">$ ' + escapeHtml(cmd.split('\n')[0]) + (cmd.includes('\n') ? ' ...' : '') + '</code>' + desc + '</div>';
+     }
+@@ -2745,13 +2748,14 @@ function renderToolMeta(c) {
+ 
+ function renderToolInput(c) {
+   const inp = c.input || {};
++  const name = (typeof CODEX_TOOL_ALIASES !== 'undefined' && CODEX_TOOL_ALIASES[c.name]) || c.name;
+ 
+-  if (c.name === 'Edit' && inp.old_string != null) {
++  if (name === 'Edit' && inp.old_string != null) {
+     return renderEditDiff(inp.old_string, inp.new_string || '');
+   }
+ 
+-  if (c.name === 'Bash') {
+-    const cmd = inp.command || '';
++  if (name === 'Bash') {
++    const cmd = inp.command || inp.cmd || '';
+     const lines = cmd.split('\n');
+     let html = '<div class="content-block"><div class="type">COMMAND</div>';
+     if (lines.length > COLLAPSE_THRESHOLD) {
+@@ -2767,7 +2771,7 @@ function renderToolInput(c) {
+   // For tools where meta already shows the key info, collapse JSON by default
+   const metaTools = ['Read', 'Write', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Agent', 'TaskCreate', 'TaskUpdate'];
+   const json = JSON.stringify(inp, null, 2);
+-  if (metaTools.includes(c.name)) {
++  if (metaTools.includes(name)) {
+     return '<details class="detail-input-details"><summary>INPUT JSON</summary><pre>' + escapeHtml(json) + '</pre></details>';
+   }
+ 
+
+===== P247 | repo ZanebonoAlter/Syntopica | PR #14: V1.3.3 | capacidade: board-editing-ui
+--- SPEC VIVA
+## Purpose
+
+前端板块编辑功能和方向不符标签的展示控制。
+
+## Requirements
+
+### Requirement: Board editing dialog
+
+TagsPage 板块列表中每个板块新增编辑按钮，点击弹出编辑对话框。对话框支持修改 label 和 description，调用已有 `updateBoard` API。保存成功后刷新板块信息。
+
+#### Scenario: edit board label
+- **WHEN** user clicks edit button on a board, modifies label, and saves
+- **THEN** updateBoard API called with new label, board list refreshed, board embedding regenerated
+
+#### Scenario: edit board description
+- **WHEN** user modifies description and saves
+- **THEN** updateBoard API called with new description, board embedding regenerated
+
+### Requirement: Default hide direction_mismatch tags
+
+TagsPage 的 tag chip 列表默认不显示 direction_mismatch=true 的标签。提供"显示方向不符"开关（checkbox 或 toggle），开启后显示这些标签，用虚线边框 + "⊘" 后缀标记。
+
+#### Scenario: default view
+- **WHEN** article has 3 filtered_tags, 1 with direction_mismatch=true
+- **THEN** only 2 tags shown in chip list
+
+#### Scenario: show direction mismatch toggle
+- **WHEN** user enables "显示方向不符" toggle
+- **THEN** all 3 tags shown, direction_mismatch tag has dashed border and "⊘" suffix
+
+### Requirement: MatchDetailPanel direction check display
+
+MatchDetailPanel 步骤 ④（max_sim）展示方向校验结果：direction_sim 值和是否通过。direction_mismatch=true 时显示警告。
+
+#### Scenario: direction check passed
+- **WHEN** max_sim matched AND direction_sim >= threshold
+- **THEN** step ④ shows "方向校验 ✓ sim=0.72≥0.5"
+
+#### Scenario: direction check failed
+- **WHEN** max_sim matched AND direction_sim < threshold
+- **THEN** step ④ shows "⚠ 方向不符 sim=0.35<0.5"
+
+### Requirement: API type updates
+
+BoardArticleTag 接口新增 `direction_mismatch: boolean`。MatchDetailResponse 新增 `direction_sim: number | null`。
+
+#### Scenario: type definitions updated
+- **WHEN** frontend types are updated
+- **THEN** BoardArticleTag has direction_mismatch field, MatchDetailResponse has direction_sim field
+
+--- ARQUIVOS DO PR (1295)
+added     +7     -0     .agents/skills/canvas-design/.openskills.json
+added     +202   -0     .agents/skills/canvas-design/LICENSE.txt
+added     +130   -0     .agents/skills/canvas-design/SKILL.md
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/ArsenalSC-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/ArsenalSC-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/BigShoulders-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/BigShoulders-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/BigShoulders-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Boldonse-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Boldonse-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/BricolageGrotesque-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/BricolageGrotesque-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/BricolageGrotesque-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/CrimsonPro-Bold.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/CrimsonPro-Italic.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/CrimsonPro-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/CrimsonPro-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/DMMono-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/DMMono-Regular.ttf
+added     +94    -0     .agents/skills/canvas-design/canvas-fonts/EricaOne-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/EricaOne-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/GeistMono-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/GeistMono-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/GeistMono-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Gloock-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Gloock-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexMono-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexMono-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexMono-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexSerif-Bold.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexSerif-BoldItalic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexSerif-Italic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/IBMPlexSerif-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSans-Bold.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSans-BoldItalic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSans-Italic.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSans-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSans-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSerif-Italic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/InstrumentSerif-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Italiana-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Italiana-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/JetBrainsMono-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/JetBrainsMono-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/JetBrainsMono-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Jura-Light.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Jura-Medium.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Jura-OFL.txt
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/LibreBaskerville-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/LibreBaskerville-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Lora-Bold.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Lora-BoldItalic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Lora-Italic.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Lora-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Lora-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/NationalPark-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/NationalPark-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/NationalPark-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/NothingYouCouldDo-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/NothingYouCouldDo-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Outfit-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Outfit-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Outfit-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/PixelifySans-Medium.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/PixelifySans-OFL.txt
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/PoiretOne-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/PoiretOne-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/RedHatMono-Bold.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/RedHatMono-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/RedHatMono-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Silkscreen-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Silkscreen-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/SmoochSans-Medium.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/SmoochSans-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Tektur-Medium.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/Tektur-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/Tektur-Regular.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/WorkSans-Bold.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/WorkSans-BoldItalic.ttf
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/WorkSans-Italic.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/WorkSans-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/WorkSans-Regular.ttf
+added     +93    -0     .agents/skills/canvas-design/canvas-fonts/YoungSerif-OFL.txt
+added     +0     -0     .agents/skills/canvas-design/canvas-fonts/YoungSerif-Regular.ttf
+added     +7     -0     .agents/skills/doc-coauthoring/.openskills.json
+added     +375   -0     .agents/skills/doc-coauthoring/SKILL.md
+added     +7     -0     .agents/skills/docx/.openskills.json
+added     +30    -0     .agents/skills/docx/LICENSE.txt
+added     +590   -0     .agents/skills/docx/SKILL.md
+added     +1     -0     .agents/skills/docx/scripts/__init__.py
+added     +135   -0     .agents/skills/docx/scripts/accept_changes.py
+added     +318   -0     .agents/skills/docx/scripts/comment.py
+renamed   +0     -0     .agents/skills/docx/scripts/office/helpers/__init__.py
+added     +199   -0     .agents/skills/docx/scripts/office/helpers/merge_runs.py
+added     +197   -0     .agents/skills/docx/scripts/office/helpers/simplify_redlines.py
+added     +159   -0     .agents/skills/docx/scripts/office/pack.py
+added     +1499  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chart.xsd
+added     +146   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chartDrawing.xsd
+added     +1085  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-diagram.xsd
+added     +11    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-lockedCanvas.xsd
+added     +3081  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-main.xsd
+added     +23    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-picture.xsd
+added     +185   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-spreadsheetDrawing.xsd
+added     +287   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-wordprocessingDrawing.xsd
+added     +1676  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/pml.xsd
+added     +28    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-additionalCharacteristics.xsd
+added     +144   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-bibliography.xsd
+added     +174   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-commonSimpleTypes.xsd
+added     +25    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlDataProperties.xsd
+added     +18    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlSchemaProperties.xsd
+added     +59    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesCustom.xsd
+added     +56    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesExtended.xsd
+added     +195   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesVariantTypes.xsd
+added     +582   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-math.xsd
+added     +25    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-relationshipReference.xsd
+added     +4439  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/sml.xsd
+added     +570   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-main.xsd
+added     +509   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-officeDrawing.xsd
+added     +12    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-presentationDrawing.xsd
+added     +108   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-spreadsheetDrawing.xsd
+added     +96    -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-wordprocessingDrawing.xsd
+added     +3646  -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/wml.xsd
+added     +116   -0     .agents/skills/docx/scripts/office/schemas/ISO-IEC29500-4_2016/xml.xsd
+added     +42    -0     .agents/skills/docx/scripts/office/schemas/ecma/fouth-edition/opc-contentTypes.xsd
+added     +50    -0     .agents/skills/docx/scripts/office/schemas/ecma/fouth-edition/opc-coreProperties.xsd
+added     +49    -0     .agents/skills/docx/scripts/office/schemas/ecma/fouth-edition/opc-digSig.xsd
+added     +33    -0     .agents/skills/docx/scripts/office/schemas/ecma/fouth-edition/opc-relationships.xsd
+added     +75    -0     .agents/skills/docx/scripts/office/schemas/mce/mc.xsd
+added     +560   -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-2010.xsd
+added     +67    -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-2012.xsd
+added     +14    -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-2018.xsd
+added     +20    -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-cex-2018.xsd
+added     +13    -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-cid-2016.xsd
+added     +4     -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-sdtdatahash-2020.xsd
+added     +8     -0     .agents/skills/docx/scripts/office/schemas/microsoft/wml-symex-2015.xsd
+added     +183   -0     .agents/skills/docx/scripts/office/soffice.py
+added     +132   -0     .agents/skills/docx/scripts/office/unpack.py
+added     +111   -0     .agents/skills/docx/scripts/office/validate.py
+added     +15    -0     .agents/skills/docx/scripts/office/validators/__init__.py
+added     +847   -0     .agents/skills/docx/scripts/office/validators/base.py
+added     +446   -0     .agents/skills/docx/scripts/office/validators/docx.py
+added     +275   -0     .agents/skills/docx/scripts/office/validators/pptx.py
+added     +247   -0     .agents/skills/docx/scripts/office/validators/redlining.py
+added     +3     -0     .agents/skills/docx/scripts/templates/comments.xml
+added     +3     -0     .agents/skills/docx/scripts/templates/commentsExtended.xml
+added     +3     -0     .agents/skills/docx/scripts/templates/commentsExtensible.xml
+added     +3     -0     .agents/skills/docx/scripts/templates/commentsIds.xml
+added     +3     -0     .agents/skills/docx/scripts/templates/people.xml
+added     +7     -0     .agents/skills/frontend-design/.openskills.json
+added     +177   -0     .agents/skills/frontend-design/LICENSE.txt
+added     +42    -0     .agents/skills/frontend-design/SKILL.md
+added     +7     -0     .agents/skills/internal-comms/.openskills.json
+added     +202   -0     .agents/skills/internal-comms/LICENSE.txt
+added     +32    -0     .agents/skills/internal-comms/SKILL.md
+added     +47    -0     .agents/skills/internal-comms/examples/3p-updates.md
+added     +65    -0     .agents/skills/internal-comms/examples/company-newsletter.md
+added     +30    -0     .agents/skills/internal-comms/examples/faq-answers.md
+added     +16    -0     .agents/skills/internal-comms/examples/general-comms.md
+added     +7     -0     .agents/skills/mcp-builder/.openskills.json
+added     +202   -0     .agents/skills/mcp-builder/LICENSE.txt
+added     +236   -0     .agents/skills/mcp-builder/SKILL.md
+added     +602   -0     .agents/skills/mcp-builder/reference/evaluation.md
+added     +249   -0     .agents/skills/mcp-builder/reference/mcp_best_practices.md
+added     +970   -0     .agents/skills/mcp-builder/reference/node_mcp_server.md
+added     +719   -0     .agents/skills/mcp-builder/reference/python_mcp_server.md
+added     +151   -0     .agents/skills/mcp-builder/scripts/connections.py
+added     +373   -0     .agents/skills/mcp-builder/scripts/evaluation.py
+added     +22    -0     .agents/skills/mcp-builder/scripts/example_evaluation.xml
+added     +2     -0     .agents/skills/mcp-builder/scripts/requirements.txt
+added     +156   -0     .agents/skills/openspec-apply-change/SKILL.md
+added     +114   -0     .agents/skills/openspec-archive-change/SKILL.md
+added     +118   -0     .agents/skills/openspec-continue-change/SKILL.md
+added     +288   -0     .agents/skills/openspec-explore/SKILL.md
+added     +74    -0     .agents/skills/openspec-new-change/SKILL.md
+added     +554   -0     .agents/skills/openspec-onboard/SKILL.md
+added     +110   -0     .agents/skills/openspec-propose/SKILL.md
+added     +138   -0     .agents/skills/openspec-sync-specs/SKILL.md
+added     +168   -0     .agents/skills/openspec-verify-change/SKILL.md
+added     +7     -0     .agents/skills/pdf/.openskills.json
+added     +30    -0     .agents/skills/pdf/LICENSE.txt
+added     +314   -0     .agents/skills/pdf/SKILL.md
+added     +294   -0     .agents/skills/pdf/forms.md
+added     +612   -0     .agents/skills/pdf/reference.md
+added     +65    -0     .agents/skills/pdf/scripts/check_bounding_boxes.py
+added     +11    -0     .agents/skills/pdf/scripts/check_fillable_fields.py
+added     +33    -0     .agents/skills/pdf/scripts/convert_pdf_to_images.py
+added     +37    -0     .agents/skills/pdf/scripts/create_validation_image.py
+added     +122   -0     .agents/skills/pdf/scripts/extract_form_field_info.py
+added     +115   -0     .agents/skills/pdf/scripts/extract_form_structure.py
+added     +98    -0     .agents/skills/pdf/scripts/fill_fillable_fields.py
+added     +107   -0     .agents/skills/pdf/scripts/fill_pdf_form_with_annotations.py
+added     +7     -0     .agents/skills/pptx/.openskills.json
+added     +30    -0     .agents/skills/pptx/LICENSE.txt
+added     +232   -0     .agents/skills/pptx/SKILL.md
+added     +205   -0     .agents/skills/pptx/editing.md
+added     +420   -0     .agents/skills/pptx/pptxgenjs.md
+renamed   +0     -0     .agents/skills/pptx/scripts/__init__.py
+added     +195   -0     .agents/skills/pptx/scripts/add_slide.py
+added     +286   -0     .agents/skills/pptx/scripts/clean.py
+added     +0     -0     .agents/skills/pptx/scripts/office/helpers/__init__.py
+added     +199   -0     .agents/skills/pptx/scripts/office/helpers/merge_runs.py
+added     +197   -0     .agents/skills/pptx/scripts/office/helpers/simplify_redlines.py
+added     +159   -0     .agents/skills/pptx/scripts/office/pack.py
+added     +1499  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chart.xsd
+added     +146   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chartDrawing.xsd
+added     +1085  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-diagram.xsd
+added     +11    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-lockedCanvas.xsd
+added     +3081  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-main.xsd
+added     +23    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-picture.xsd
+added     +185   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-spreadsheetDrawing.xsd
+added     +287   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-wordprocessingDrawing.xsd
+added     +1676  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/pml.xsd
+added     +28    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-additionalCharacteristics.xsd
+added     +144   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-bibliography.xsd
+added     +174   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-commonSimpleTypes.xsd
+added     +25    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlDataProperties.xsd
+added     +18    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlSchemaProperties.xsd
+added     +59    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesCustom.xsd
+added     +56    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesExtended.xsd
+added     +195   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesVariantTypes.xsd
+added     +582   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-math.xsd
+added     +25    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-relationshipReference.xsd
+added     +4439  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/sml.xsd
+added     +570   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-main.xsd
+added     +509   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-officeDrawing.xsd
+added     +12    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-presentationDrawing.xsd
+added     +108   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-spreadsheetDrawing.xsd
+added     +96    -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-wordprocessingDrawing.xsd
+added     +3646  -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/wml.xsd
+added     +116   -0     .agents/skills/pptx/scripts/office/schemas/ISO-IEC29500-4_2016/xml.xsd
+added     +42    -0     .agents/skills/pptx/scripts/office/schemas/ecma/fouth-edition/opc-contentTypes.xsd
+added     +50    -0     .agents/skills/pptx/scripts/office/schemas/ecma/fouth-edition/opc-coreProperties.xsd
+added     +49    -0     .agents/skills/pptx/scripts/office/schemas/ecma/fouth-edition/opc-digSig.xsd
+added     +33    -0     .agents/skills/pptx/scripts/office/schemas/ecma/fouth-edition/opc-relationships.xsd
+added     +75    -0     .agents/skills/pptx/scripts/office/schemas/mce/mc.xsd
+added     +560   -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-2010.xsd
+added     +67    -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-2012.xsd
+added     +14    -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-2018.xsd
+added     +20    -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-cex-2018.xsd
+added     +13    -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-cid-2016.xsd
+added     +4     -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-sdtdatahash-2020.xsd
+added     +8     -0     .agents/skills/pptx/scripts/office/schemas/microsoft/wml-symex-2015.xsd
+added     +183   -0     .agents/skills/pptx/scripts/office/soffice.py
+added     +132   -0     .agents/skills/pptx/scripts/office/unpack.py
+added     +111   -0     .agents/skills/pptx/scripts/office/validate.py
+added     +15    -0     .agents/skills/pptx/scripts/office/validators/__init__.py
+added     +847   -0     .agents/skills/pptx/scripts/office/validators/base.py
+added     +446   -0     .agents/skills/pptx/scripts/office/validators/docx.py
+added     +275   -0     .agents/skills/pptx/scripts/office/validators/pptx.py
+added     +247   -0     .agents/skills/pptx/scripts/office/validators/redlining.py
+added     +289   -0     .agents/skills/pptx/scripts/thumbnail.py
+added     +7     -0     .agents/skills/skill-creator/.openskills.json
+added     +202   -0     .agents/skills/skill-creator/LICENSE.txt
+added     +356   -0     .agents/skills/skill-creator/SKILL.md
+added     +82    -0     .agents/skills/skill-creator/references/output-patterns.md
+added     +28    -0     .agents/skills/skill-creator/references/workflows.md
+added     +303   -0     .agents/skills/skill-creator/scripts/init_skill.py
+added     +110   -0     .agents/skills/skill-creator/scripts/package_skill.py
+added     +95    -0     .agents/skills/skill-creator/scripts/quick_validate.py
+added     +156   -0     .agents/skills/source-command-opsx-apply/SKILL.md
+added     +161   -0     .agents/skills/source-command-opsx-archive/SKILL.md
+added     +118   -0     .agents/skills/source-command-opsx-continue/SKILL.md
+added     +177   -0     .agents/skills/source-command-opsx-explore/SKILL.md
+added     +73    -0     .agents/skills/source-command-opsx-new/SKILL.md
+added     +554   -0     .agents/skills/source-command-opsx-onboard/SKILL.md
+added     +110   -0     .agents/skills/source-command-opsx-propose/SKILL.md
+added     +138   -0     .agents/skills/source-command-opsx-sync/SKILL.md
+added     +168   -0     .agents/skills/source-command-opsx-verify/SKILL.md
+added     +7     -0     .agents/skills/theme-factory/.openskills.json
+added     +202   -0     .agents/skills/theme-factory/LICENSE.txt
+added     +59    -0     .agents/skills/theme-factory/SKILL.md
+added     +0     -0     .agents/skills/theme-factory/theme-showcase.pdf
+added     +19    -0     .agents/skills/theme-factory/themes/arctic-frost.md
+added     +19    -0     .agents/skills/theme-factory/themes/botanical-garden.md
+added     +19    -0     .agents/skills/theme-factory/themes/desert-rose.md
+added     +19    -0     .agents/skills/theme-factory/themes/forest-canopy.md
+added     +19    -0     .agents/skills/theme-factory/themes/golden-hour.md
+added     +19    -0     .agents/skills/theme-factory/themes/midnight-galaxy.md
+added     +19    -0     .agents/skills/theme-factory/themes/modern-minimalist.md
+added     +19    -0     .agents/skills/theme-factory/themes/ocean-depths.md
+added     +19    -0     .agents/skills/theme-factory/themes/sunset-boulevard.md
+added     +19    -0     .agents/skills/theme-factory/themes/tech-innovation.md
+added     +552   -0     .agents/skills/threejs-animation/SKILL.md
+added     +488   -0     .agents/skills/threejs-fundamentals/SKILL.md
+added     +548   -0     .agents/skills/threejs-geometry/SKILL.md
+added     +660   -0     .agents/skills/threejs-interaction/SKILL.md
+added     +481   -0     .agents/skills/threejs-lighting/SKILL.md
+added     +623   -0     .agents/skills/threejs-loaders/SKILL.md
+added     +520   -0     .agents/skills/threejs-materials/SKILL.md
+added     +602   -0     .agents/skills/threejs-postprocessing/SKILL.md
+added     +0     -0     .agents/skills/threejs-shaders/SKILL.md
+added     +0     -0     .agents/skills/threejs-textures/SKILL.md
+added     +0     -0     .agents/skills/xlsx/.openskills.json
+added     +0     -0     .agents/skills/xlsx/LICENSE.txt
+added     +0     -0     .agents/skills/xlsx/SKILL.md
+added     +0     -0     .agents/skills/xlsx/scripts/office/helpers/__init__.py
+added     +0     -0     .agents/skills/xlsx/scripts/office/helpers/merge_runs.py
+added     +0     -0     .agents/skills/xlsx/scripts/office/helpers/simplify_redlines.py
+added     +0     -0     .agents/skills/xlsx/scripts/office/pack.py
+added     +0     -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chart.xsd
+added     +146   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-chartDrawing.xsd
+added     +1085  -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-diagram.xsd
+added     +11    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-lockedCanvas.xsd
+added     +3081  -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-main.xsd
+added     +23    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-picture.xsd
+added     +185   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-spreadsheetDrawing.xsd
+added     +287   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/dml-wordprocessingDrawing.xsd
+added     +1676  -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/pml.xsd
+added     +28    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-additionalCharacteristics.xsd
+added     +144   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-bibliography.xsd
+added     +174   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-commonSimpleTypes.xsd
+added     +25    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlDataProperties.xsd
+added     +18    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-customXmlSchemaProperties.xsd
+added     +59    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesCustom.xsd
+added     +56    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesExtended.xsd
+added     +195   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-documentPropertiesVariantTypes.xsd
+added     +582   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-math.xsd
+added     +25    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/shared-relationshipReference.xsd
+added     +4439  -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/sml.xsd
+added     +570   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-main.xsd
+added     +509   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-officeDrawing.xsd
+added     +12    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-presentationDrawing.xsd
+added     +108   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-spreadsheetDrawing.xsd
+added     +96    -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/vml-wordprocessingDrawing.xsd
+added     +3646  -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/wml.xsd
+added     +116   -0     .agents/skills/xlsx/scripts/office/schemas/ISO-IEC29500-4_2016/xml.xsd
+added     +42    -0     .agents/skills/xlsx/scripts/office/schemas/ecma/fouth-edition/opc-contentTypes.xsd
+added     +50    -0     .agents/skills/xlsx/scripts/office/schemas/ecma/fouth-edition/opc-coreProperties.xsd
+added     +49    -0     .agents/skills/xlsx/scripts/office/schemas/ecma/fouth-edition/opc-digSig.xsd
+added     +33    -0     .agents/skills/xlsx/scripts/office/schemas/ecma/fouth-edition/opc-relationships.xsd
+added     +75    -0     .agents/skills/xlsx/scripts/office/schemas/mce/mc.xsd
+added     +560   -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-2010.xsd
+added     +67    -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-2012.xsd
+added     +14    -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-2018.xsd
+added     +20    -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-cex-2018.xsd
+added     +13    -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-cid-2016.xsd
+added     +4     -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-sdtdatahash-2020.xsd
+added     +8     -0     .agents/skills/xlsx/scripts/office/schemas/microsoft/wml-symex-2015.xsd
+added     +183   -0     .agents/skills/xlsx/scripts/office/soffice.py
+added     +132   -0     .agents/skills/xlsx/scripts/office/unpack.py
+added     +111   -0     .agents/skills/xlsx/scripts/office/validate.py
+added     +15    -0     .agents/skills/xlsx/scripts/office/validators/__init__.py
+added     +847   -0     .agents/skills/xlsx/scripts/office/validators/base.py
+added     +446   -0     .agents/skills/xlsx/scripts/office/validators/docx.py
+added     +275   -0     .agents/skills/xlsx/scripts/office/validators/pptx.py
+added     +247   -0     .agents/skills/xlsx/scripts/office/validators/redlining.py
+added     +184   -0     .agents/skills/xlsx/scripts/recalc.py
+modified  +3     -0     .claude/commands/opsx/apply.md
+modified  +12    -9     .claude/commands/opsx/archive.md
+modified  +3     -2     .claude/commands/opsx/continue.md
+modified  +4     -5     .claude/commands/opsx/explore.md
+modified  +3     -3     .claude/commands/opsx/new.md
+modified  +13    -15    .claude/commands/opsx/onboard.md
+modified  +4     -3     .claude/commands/opsx/propose.md
+modified  +14    -5     .claude/commands/opsx/sync.md
+modified  +5     -2     .claude/commands/opsx/verify.md
+removed   +0     -82    .claude/skills/gitnexus/gitnexus-cli/SKILL.md
+removed   +0     -89    .claude/skills/gitnexus/gitnexus-debugging/SKILL.md
+removed   +0     -78    .claude/skills/gitnexus/gitnexus-exploring/SKILL.md
+removed   +0     -64    .claude/skills/gitnexus/gitnexus-guide/SKILL.md
+removed   +0     -97    .claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md
+removed   +0     -121   .claude/skills/gitnexus/gitnexus-refactoring/SKILL.md
+modified  +4     -1     .claude/skills/openspec-apply-change/SKILL.md
+modified  +10    -7     .claude/skills/openspec-archive-change/SKILL.md
+modified  +4     -3     .claude/skills/openspec-continue-change/SKILL.md
+modified  +5     -6     .claude/skills/openspec-explore/SKILL.md
+modified  +4     -4     .claude/skills/openspec-new-change/SKILL.md
+modified  +14    -16    .claude/skills/openspec-onboard/SKILL.md
+modified  +5     -4     .claude/skills/openspec-propose/SKILL.md
+modified  +15    -6     .claude/skills/openspec-sync-specs/SKILL.md
+modified  +6     -3     .claude/skills/openspec-verify-change/SKILL.md
+modified  +3     -3     .codegraph/daemon.pid
+added     +11    -0     .codex/config.toml
+added     +28    -0     .codex/hooks.json
+modified  +4     -1     .codex/skills/openspec-apply-change/SKILL.md
+modified  +10    -7     .codex/skills/openspec-archive-change/SKILL.md
+modified  +4     -3     .codex/skills/openspec-continue-change/SKILL.md
+modified  +5     -6     .codex/skills/openspec-explore/SKILL.md
+modified  +4     -4     .codex/skills/openspec-new-change/SKILL.md
+modified  +14    -16    .codex/skills/openspec-onboard/SKILL.md
+modified  +5     -4     .codex/skills/openspec-propose/SKILL.md
+modified  +15    -6     .codex/skills/openspec-sync-specs/SKILL.md
+modified  +6     -3     .codex/skills/openspec-verify-change/SKILL.md
+removed   +0     -12    .cursor/mcp.json
+modified  +5     -0     .gitignore
+modified  +10    -2     .mcp.json
+modified  +3     -0     .opencode/commands/opsx-apply.md
+modified  +12    -9     .opencode/commands/opsx-archive.md
+modified  +3     -2     .opencode/commands/opsx-continue.md
+modified  +4     -5     .opencode/commands/opsx-explore.md
+modified  +3     -3     .opencode/commands/opsx-new.md
+modified  +13    -15    .opencode/commands/opsx-onboard.md
+modified  +4     -3     .opencode/commands/opsx-propose.md
+modified  +14    -5     .opencode/commands/opsx-sync.md
+modified  +5     -2     .opencode/commands/opsx-verify.md
+modified  +4     -1     .opencode/skills/openspec-apply-change/SKILL.md
+modified  +10    -7     .opencode/skills/openspec-archive-change/SKILL.md
+modified  +4     -3     .opencode/skills/openspec-continue-change/SKILL.md
+modified  +5     -6     .opencode/skills/openspec-explore/SKILL.md
+modified  +4     -4     .opencode/skills/openspec-new-change/SKILL.md
+modified  +14    -16    .opencode/skills/openspec-onboard/SKILL.md
+modified  +5     -4     .opencode/skills/openspec-propose/SKILL.md
+modified  +15    -6     .opencode/skills/openspec-sync-specs/SKILL.md
+modified  +6     -3     .opencode/skills/openspec-verify-change/SKILL.md
+modified  +3     -0     .pi/prompts/opsx-apply.md
+modified  +12    -9     .pi/prompts/opsx-archive.md
+modified  +3     -2     .pi/prompts/opsx-continue.md
+modified  +4     -5     .pi/prompts/opsx-explore.md
+modified  +3     -3     .pi/prompts/opsx-new.md
+modified  +13    -15    .pi/prompts/opsx-onboard.md
+modified  +4     -3     .pi/prompts/opsx-propose.md
+modified  +14    -5     .pi/prompts/opsx-sync.md
+modified  +5     -2     .pi/prompts/opsx-verify.md
+added     +114   -0     .pi/skills/headroom/SKILL.md
+modified  +4     -1     .pi/skills/openspec-apply-change/SKILL.md
+modified  +10    -7     .pi/skills/openspec-archive-change/SKILL.md
+modified  +4     -3     .pi/skills/openspec-continue-change/SKILL.md
+modified  +5     -6     .pi/skills/openspec-explore/SKILL.md
+modified  +4     -4     .pi/skills/openspec-new-change/SKILL.md
+modified  +14    -16    .pi/skills/openspec-onboard/SKILL.md
+modified  +5     -4     .pi/skills/openspec-propose/SKILL.md
+modified  +15    -6     .pi/skills/openspec-sync-specs/SKILL.md
+modified  +6     -3     .pi/skills/openspec-verify-change/SKILL.md
+modified  +67    -55    .pi/superpowers-state.json
+added     +465   -0     .scratch/persistent-topic-design/DESIGN.md
+modified  +18    -2     .scratch/semantic-labels-slow-sql/PRD.md
+added     +90    -0     .scratch/semantic-labels-slow-sql/issues/02-cluster-auxiliary-labels-inmemory.md
+removed   +0     -31    .scratch/thread-lineage-ui/issues/01-thread-browser-not-useful.md
+modified  +73    -14    AGENTS.md
+removed   +0     -82    CLAUDE.md
+added     +74    -0     Dockerfile.demo
+modified  +342   -220   README.md
+added     +55    -0     _analyze_feeds.py
+modified  +25    -2     backend-go/AGENTS.md
+removed   +0     -208   backend-go/REVIEW.md
+added     +314   -0     backend-go/cmd/dump-sanitizer/main.go
+added     +148   -0     backend-go/cmd/dump-sanitizer/sanitize.go
+added     +205   -0     backend-go/cmd/dump-sanitizer/tables.go
+added     +137   -0     backend-go/cmd/rebuild-topics/main.go
+modified  +98    -89    backend-go/cmd/server/main.go
+added     +125   -0     backend-go/cmd/verify-cluster-prompt/main.go
+modified  +1     -0     backend-go/configs/config.yaml
+modified  +130   -97    backend-go/go.mod
+modified  +313   -232   backend-go/go.sum
+added     +389   -0     backend-go/internal/admin/handler/ai_handler.go
+added     +109   -0     backend-go/internal/admin/handler/ai_handler_test.go
+added     +286   -0     backend-go/internal/admin/handler/preferences_handler.go
+added     +598   -0     backend-go/internal/admin/handler/scheduler_handler.go
+added     +390   -0     backend-go/internal/admin/repository/repository.go
+added     +43    -0     backend-go/internal/admin/routes.go
+added     +504   -0     backend-go/internal/admin/scheduler/base.go
+added     +112   -0     backend-go/internal/admin/scheduler/base_test.go
+added     +207   -0     backend-go/internal/admin/scheduler/job_auto_refresh.go
+added     +28    -0     backend-go/internal/admin/scheduler/job_aux_label_cleanup.go
+added     +66    -0     backend-go/internal/admin/scheduler/job_blocked_article_recovery.go
+added     +61    -0     backend-go/internal/admin/scheduler/job_content_completion.go
+added     +168   -0     backend-go/internal/admin/scheduler/job_daily_report.go
+added     +254   -0     backend-go/internal/admin/scheduler/job_firecrawl.go
+added     +37    -0     backend-go/internal/admin/scheduler/job_log_cleanup.go
+added     +22    -0     backend-go/internal/admin/scheduler/job_preference_update.go
+added     +55    -0     backend-go/internal/admin/scheduler/job_tag_quality_score.go
+added     +233   -0     backend-go/internal/admin/scheduler/persistence.go
+added     +94    -0     backend-go/internal/admin/scheduler/registry.go
+added     +310   -0     backend-go/internal/admin/service/preferences_service.go
+added     +108   -0     backend-go/internal/admin/wire.go
+modified  +53    -157   backend-go/internal/app/router.go
+modified  +206   -259   backend-go/internal/app/runtime.go
+removed   +0     -11    backend-go/internal/app/runtimeinfo/schedulers.go
+modified  +45    -45    backend-go/internal/app/static.go
+removed   +0     -343   backend-go/internal/domain/aiadmin/handler.go
+removed   +0     -63    backend-go/internal/domain/aiadmin/handler_test.go
+removed   +0     -569   backend-go/internal/domain/article/handler.go
+removed   +0     -240   backend-go/internal/domain/article/handler_test.go
+removed   +0     -235   backend-go/internal/domain/category/handler.go
+removed   +0     -36    backend-go/internal/domain/content/content_completion_batch.go
+removed   +0     -183   backend-go/internal/domain/content/content_completion_handler.go
+removed   +0     -97    backend-go/internal/domain/content/content_completion_handler_test.go
+removed   +0     -541   backend-go/internal/domain/content/content_completion_service.go
+removed   +0     -181   backend-go/internal/domain/daily_report/cluster.go
+removed   +0     -136   backend-go/internal/domain/daily_report/cluster_test.go
+removed   +0     -122   backend-go/internal/domain/daily_report/dedup.go
+removed   +0     -115   backend-go/internal/domain/daily_report/dedup_test.go
+removed   +0     -1031  backend-go/internal/domain/daily_report/generator.go
+removed   +0     -369   backend-go/internal/domain/daily_report/handler.go
+removed   +0     -30    backend-go/internal/domain/daily_report/handler_test.go
+removed   +0     -431   backend-go/internal/domain/daily_report/matching.go
+removed   +0     -268   backend-go/internal/domain/daily_report/matching_test.go
+removed   +0     -220   backend-go/internal/domain/daily_report/models.go
+removed   +0     -16    backend-go/internal/domain/daily_report/register_models.go
+removed   +0     -637   backend-go/internal/domain/daily_report/repository.go
+removed   +0     -19    backend-go/internal/domain/daily_report/repository_test.go
+removed   +0     -590   backend-go/internal/domain/feed/handler.go
+removed   +0     -231   backend-go/internal/domain/feed/rss_parser.go
+removed   +0     -250   backend-go/internal/domain/feed/service.go
+removed   +0     -412   backend-go/internal/domain/feed/service_test.go
+removed   +0     -26    backend-go/internal/domain/models/embedding_queue.go
+removed   +0     -28    backend-go/internal/domain/models/merge_reembedding_queue.go
+removed   +0     -67    backend-go/internal/domain/models/semantic_label.go   <== código ligado à spec
+removed   +0     -21    backend-go/internal/domain/models/utils.go
+removed   +0     -97    backend-go/internal/domain/narrative/board_collector.go
+removed   +0     -69    backend-go/internal/domain/narrative/board_creation.go
+removed   +0     -345   backend-go/internal/domain/narrative/board_narrative_generator.go
+removed   +0     -217   backend-go/internal/domain/narrative/board_postprocess.go
+removed   +0     -380   backend-go/internal/domain/narrative/collector.go
+removed   +0     -239   backend-go/internal/domain/narrative/generator.go
+removed   +0     -329   backend-go/internal/domain/narrative/generator_test.go
+removed   +0     -330   backend-go/internal/domain/narrative/handler.go
+removed   +0     -1148  backend-go/internal/domain/narrative/service.go
+removed   +0     -828   backend-go/internal/domain/narrative/service_test.go
+removed   +0     -236   backend-go/internal/domain/narrative/watched_narrative.go
+removed   +0     -286   backend-go/internal/domain/preferences/handler.go
+removed   +0     -48    backend-go/internal/domain/preferences/handler_test.go
+removed   +0     -375   backend-go/internal/domain/preferences/service.go
+removed   +0     -445   backend-go/internal/domain/tagging/analysis/ai_analysis.go
+removed   +0     -248   backend-go/internal/domain/tagging/analysis/analysis_handler.go
+removed   +0     -871   backend-go/internal/domain/tagging/analysis/analysis_queue.go
+removed   +0     -83    backend-go/internal/domain/tagging/analysis/analysis_queue_test.go
+removed   +0     -631   backend-go/internal/domain/tagging/analysis/analysis_service.go
+removed   +0     -485   backend-go/internal/domain/tagging/article_tagger.go
+removed   +0     -668   backend-go/internal/domain/tagging/auxiliary_label_service.go
+removed   +0     -96    backend-go/internal/domain/tagging/config_service.go
+removed   +0     -313   backend-go/internal/domain/tagging/cotag_expansion.go
+removed   +0     -38    backend-go/internal/domain/tagging/cotag_expansion_test.go
+removed   +0     -127   backend-go/internal/domain/tagging/description_backfill.go
+removed   +0     -64    backend-go/internal/domain/tagging/embedding_config_handler.go
+removed   +0     -359   backend-go/internal/domain/tagging/embedding_queue.go
+removed   +0     -513   backend-go/internal/domain/tagging/embedding_test.go
+removed   +0     -110   backend-go/internal/domain/tagging/extraction/quality_score_test.go
+removed   +0     -303   backend-go/internal/domain/tagging/merge_reembedding_queue.go
+removed   +0     -87    backend-go/internal/domain/tagging/merge_tags_reembedding_test.go
+removed   +0     -181   backend-go/internal/domain/tagging/metadata_test.go
+removed   +0     -1921  backend-go/internal/domain/tagging/semantic_board_handler.go
+removed   +0     -102   backend-go/internal/domain/tagging/semantic_board_match_detail_test.go
+removed   +0     -692   backend-go/internal/domain/tagging/semantic_board_matching_test.go
+removed   +0     -38    backend-go/internal/domain/tagging/services.go
+removed   +0     -167   backend-go/internal/domain/tagging/tag_clustering_test.go
+removed   +0     -532   backend-go/internal/domain/tagging/tag_context_dump_test.go
+removed   +0     -51    backend-go/internal/domain/tagging/tag_job_queue_test.go
+removed   +0     -216   backend-go/internal/domain/tagging/tag_merge_preview.go
+removed   +0     -549   backend-go/internal/domain/tagging/tagger.go
+removed   +0     -41    backend-go/internal/domain/tagging/tagger_embedding_test.go
+removed   +0     -216   backend-go/internal/domain/tagging/types.go
+removed   +0     -27    backend-go/internal/domain/tagging/workers.go
+removed   +0     -217   backend-go/internal/domain/topicgraph/handler.go
+removed   +0     -400   backend-go/internal/domain/topicgraph/handler_test.go
+removed   +0     -110   backend-go/internal/domain/topicgraph/hotspot_digests.go
+removed   +0     -899   backend-go/internal/domain/topicgraph/service.go
+removed   +0     -525   backend-go/internal/jobs/auto_refresh.go
+removed   +0     -149   backend-go/internal/jobs/auto_refresh_test.go
+removed   +0     -296   backend-go/internal/jobs/aux_label_cleanup.go
+removed   +0     -266   backend-go/internal/jobs/blocked_article_recovery.go
+removed   +0     -123   backend-go/internal/jobs/cleanup_budget.go
+removed   +0     -65    backend-go/internal/jobs/cleanup_budget_test.go
+removed   +0     -583   backend-go/internal/jobs/content_completion.go
+removed   +0     -222   backend-go/internal/jobs/content_completion_test.go
+removed   +0     -411   backend-go/internal/jobs/daily_report.go
+removed   +0     -376   backend-go/internal/jobs/firecrawl.go
+removed   +0     -85    backend-go/internal/jobs/firecrawl_test.go
+removed   +0     -0     backend-go/internal/jobs/handler.go
+removed   +0     -0     backend-go/internal/jobs/handler_test.go
+removed   +0     -0     backend-go/internal/jobs/log_cleanup.go
+removed   +0     -0     backend-go/internal/jobs/narrative_summary.go
+removed   +0     -0     backend-go/internal/jobs/preference_update.go
+removed   +0     -0     backend-go/internal/jobs/preference_update_test.go
+removed   +0     -0     backend-go/internal/jobs/scheduler_status_response_test.go
+removed   +0     -0     backend-go/internal/jobs/tag_quality_score.go
+removed   +0     -0     backend-go/internal/jobs/tag_quality_score_test.go
+removed   +0     -0     backend-go/internal/jobs/trigger_now_status_code_test.go
+renamed   +0     -0     backend-go/internal/models/ai_models.go
+renamed   +0     -0     backend-go/internal/models/article.go
+renamed   +0     -0     backend-go/internal/models/category.go
+renamed   +0     -0     backend-go/internal/models/embedding_config.go
+added     +0     -0     backend-go/internal/models/embedding_queue.go
+renamed   +0     -0     backend-go/internal/models/feed.go
+renamed   +0     -0     backend-go/internal/models/job_queue.go
+added     +0     -0     backend-go/internal/models/merge_reembedding_queue.go
+renamed   +0     -0     backend-go/internal/models/narrative.go
+renamed   +0     -0     backend-go/internal/models/narrative_board.go
+renamed   +0     -0     backend-go/internal/models/reading_behavior.go
+added     +0     -0     backend-go/internal/models/semantic_label.go
+renamed   +0     -0     backend-go/internal/models/semantic_label_test.go
+renamed   +0     -0     backend-go/internal/models/topic_graph.go
+renamed   +0     -0     backend-go/internal/models/topic_graph_test.go
+renamed   +0     -0     backend-go/internal/models/topic_tag_analysis.go
+renamed   +0     -0     backend-go/internal/models/topic_tag_relation.go
+renamed   +0     -0     backend-go/internal/models/user_preference.go
+added     +0     -0     backend-go/internal/models/utils.go
+removed   +0     -0     backend-go/internal/platform/ai/service.go
+modified  +0     -0     backend-go/internal/platform/airouter/embedding.go
+added     +0     -0     backend-go/internal/platform/airouter/fallback.go
+removed   +0     -0     backend-go/internal/platform/airouter/migration.go
+removed   +0     -0     backend-go/internal/platform/airouter/migration_test.go
+modified  +0     -0     backend-go/internal/platform/airouter/openai_compatible.go
+modified  +0     -0     backend-go/internal/platform/airouter/openai_compatible_test.go
+modified  +0     -0     backend-go/internal/platform/airouter/router.go
+modified  +0     -0     backend-go/internal/platform/airouter/router_test.go
+modified  +0     -0     backend-go/internal/platform/airouter/store.go
+modified  +0     -0     backend-go/internal/platform/airouter/store_test.go
+added     +0     -0     backend-go/internal/platform/airouter/test_connection.go
+modified  +0     -0     backend-go/internal/platform/aisettings/config_store.go
+modified  +40    -73    backend-go/internal/platform/aisettings/config_store_test.go
+modified  +141   -141   backend-go/internal/platform/config/config.go
+modified  +26    -26    backend-go/internal/platform/config/config_test.go
+removed   +0     -67    backend-go/internal/platform/database/bootstrap_postgres.go
+modified  +42    -42    backend-go/internal/platform/database/connect_postgres.go
+removed   +0     -200   backend-go/internal/platform/database/datamigrate/reader_sqlite.go
+removed   +0     -94    backend-go/internal/platform/database/datamigrate/types.go
+removed   +0     -316   backend-go/internal/platform/database/datamigrate/verify.go
+removed   +0     -215   backend-go/internal/platform/database/datamigrate/verify_test.go
+removed   +0     -520   backend-go/internal/platform/database/datamigrate/writer_postgres.go
+removed   +0     -44    backend-go/internal/platform/database/datamigrate/writer_postgres_test.go
+modified  +3     -19    backend-go/internal/platform/database/db.go
+modified  +29    -199   backend-go/internal/platform/database/db_test.go
+added     +158   -0     backend-go/internal/platform/database/db_unit_test.go
+modified  +1     -6     backend-go/internal/platform/database/migrator.go
+modified  +261   -12    backend-go/internal/platform/database/postgres_migrations.go
+modified  +197   -197   backend-go/internal/platform/jsonutil/sanitize.go
+modified  +134   -134   backend-go/internal/platform/jsonutil/sanitize_test.go
+removed   +0     -11    backend-go/internal/platform/jsonutil/truncate.go
+modified  +157   -164   backend-go/internal/platform/logging/logging.go
+modified  +73    -73    backend-go/internal/platform/logging/logging_test.go
+modified  +44    -36    backend-go/internal/platform/middleware/cors.go
+added     +60    -0     backend-go/internal/platform/middleware/readonly.go
+added     +131   -0     backend-go/internal/platform/middleware/readonly_test.go
+added     +48    -0     backend-go/internal/platform/testutil/diag_test.go
+added     +257   -0     backend-go/internal/platform/testutil/testutil.go
+modified  +20    -20    backend-go/internal/platform/tracing/config.go
+modified  +181   -181   backend-go/internal/platform/tracing/exporter.go
+modified  +255   -255   backend-go/internal/platform/tracing/handler.go
+modified  +10    -95    backend-go/internal/platform/tracing/helpers.go
+modified  +118   -118   backend-go/internal/platform/tracing/model.go
+modified  +66    -66    backend-go/internal/platform/tracing/provider.go
+modified  +233   -233   backend-go/internal/platform/tracing/query.go
+modified  +28    -32    backend-go/internal/platform/tracing/scheduler.go
+modified  +46    -46    backend-go/internal/platform/ws/hub_test.go
+added     +569   -0     backend-go/internal/reader/handler/article_handler.go
+added     +244   -0     backend-go/internal/reader/handler/article_handler_test.go
+added     +216   -0     backend-go/internal/reader/handler/category_handler.go
+added     +209   -0     backend-go/internal/reader/handler/content_completion_handler.go
+added     +169   -0     backend-go/internal/reader/handler/content_completion_handler_test.go
+added     +595   -0     backend-go/internal/reader/handler/feed_handler.go
+renamed   +249   -248   backend-go/internal/reader/handler/firecrawl_handler.go
+renamed   +247   -227   backend-go/internal/reader/handler/opml.go
+renamed   +159   -159   backend-go/internal/reader/repository/firecrawl_job_queue.go
+renamed   +90    -89    backend-go/internal/reader/repository/firecrawl_job_queue_test.go
+added     +371   -0     backend-go/internal/reader/repository/repository.go
+added     +61    -0     backend-go/internal/reader/routes.go
+added     +463   -0     backend-go/internal/reader/service/content_completion_service.go
+renamed   +441   -439   backend-go/internal/reader/service/content_completion_service_test.go
+added     +258   -0     backend-go/internal/reader/service/feed_service.go
+added     +353   -0     backend-go/internal/reader/service/feed_service_test.go
+added     +156   -0     backend-go/internal/reader/service/feed_service_unit_test.go
+renamed   +85    -93    backend-go/internal/reader/service/firecrawl_config.go
+renamed   +145   -159   backend-go/internal/reader/service/firecrawl_service.go
+added     +87    -0     backend-go/internal/reader/service/firecrawl_service_test.go
+added     +231   -0     backend-go/internal/reader/service/rss_parser.go
+added     +144   -0     backend-go/internal/reader/service/rss_parser_test.go
+added     +75    -0     backend-go/internal/reader/wire.go
+added     +1267  -0     backend-go/internal/tagmanagement/handler/board_crud_handler.go
+added     +516   -0     backend-go/internal/tagmanagement/handler/board_match_handler.go
+added     +307   -0     backend-go/internal/tagmanagement/handler/board_upgrade_handler.go
+renamed   +87    -94    backend-go/internal/tagmanagement/handler/embedding_queue_handler.go
+renamed   +95    -102   backend-go/internal/tagmanagement/handler/merge_reembedding_queue_handler.go
+renamed   +189   -212   backend-go/internal/tagmanagement/handler/merge_reembedding_queue_test.go
+renamed   +354   -356   backend-go/internal/tagmanagement/handler/semantic_board_handler_test.go
+added     +107   -0     backend-go/internal/tagmanagement/handler/semantic_board_match_detail_test.go
+renamed   +99    -98    backend-go/internal/tagmanagement/handler/tag_management_handler.go
+renamed   +462   -461   backend-go/internal/tagmanagement/handler/tag_merge_preview_handler.go
+renamed   +252   -251   backend-go/internal/tagmanagement/handler/tag_queue_handler.go
+renamed   +87    -86    backend-go/internal/tagmanagement/handler/watched_tags_handler.go
+added     +118   -0     backend-go/internal/tagmanagement/repository/repository.go
+renamed   +186   -186   backend-go/internal/tagmanagement/repository/tag_job_queue.go
+added     +35    -0     backend-go/internal/tagmanagement/repository/tag_job_queue_test.go
+added     +16    -0     backend-go/internal/tagmanagement/routes.go
+added     +0     -0     backend-go/internal/tagmanagement/service/auxlabel/auxiliary_label_service.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/auxlabel/auxiliary_label_service_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/auxlabel/bridge.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/bridge.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_backfill.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_backfill_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_cache.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_matching.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_matching_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_matching_unit_test.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_upgrade.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/semantic_board_upgrade_test.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/board/tag_clustering.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/tag_clustering_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/board/tag_clustering_unit_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/article_tagger.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/article_tagger_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/bridge.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/config_service.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/core/embedding.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/embedding_queue.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/embedding_test.go
+added     +0     -0     backend-go/internal/tagmanagement/service/core/embedding_unit_test.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/core/extractor_enhanced.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/core/extractor_heuristic.go
+renamed   +0     -0     backend-go/internal/tagmanagement/service/core/extractor_test.go
+renamed   +96    -96    backend-go/internal/tagmanagement/service/core/hard_merge.go
+renamed   +180   -197   backend-go/internal/tagmanagement/service/core/hard_merge_test.go
+renamed   +83    -83    backend-go/internal/tagmanagement/service/core/helpers.go
+renamed   +78    -78    backend-go/internal/tagmanagement/service/core/helpers_test.go
+added     +303   -0     backend-go/internal/tagmanagement/service/core/merge_reembedding_queue.go
+added     +50    -0     backend-go/internal/tagmanagement/service/core/merge_suggestions.go
+added     +110   -0     backend-go/internal/tagmanagement/service/core/merge_tags_reembedding_test.go
+added     +108   -0     backend-go/internal/tagmanagement/service/core/metadata_test.go
+added     +30    -0     backend-go/internal/tagmanagement/service/core/metadata_unit_test.go
+renamed   +116   -116   backend-go/internal/tagmanagement/service/core/person_metadata_backfill.go
+renamed   +178   -178   backend-go/internal/tagmanagement/service/core/quality_score.go
+added     +65    -0     backend-go/internal/tagmanagement/service/core/quality_score_test.go
+added     +26    -0     backend-go/internal/tagmanagement/service/core/quality_score_unit_test.go
+added     +38    -0     backend-go/internal/tagmanagement/service/core/services.go
+renamed   +59    -59    backend-go/internal/tagmanagement/service/core/tag_cache.go
+renamed   +71    -71    backend-go/internal/tagmanagement/service/core/tag_cache_test.go
+renamed   +380   -380   backend-go/internal/tagmanagement/service/core/tag_queue.go
+renamed   +41    -41    backend-go/internal/tagmanagement/service/core/tag_queue_test.go
+added     +401   -0     backend-go/internal/tagmanagement/service/core/tagger.go
+added     +121   -0     backend-go/internal/tagmanagement/service/core/types.go
+added     +61    -0     backend-go/internal/tagmanagement/service/core/workers.go
+renamed   +19    -55    backend-go/internal/tagmanagement/service/merge/tag_merge_suggest.go
+renamed   +6     -5     backend-go/internal/tagmanagement/service/merge/tag_merge_suggest_test.go
+added     +168   -0     backend-go/internal/tagmanagement/service/service.go
+renamed   +173   -173   backend-go/internal/tagmanagement/service/watched/watched_tags_service.go
+added     +101   -0     backend-go/internal/tagmanagement/wire.go
+added     +620   -0     backend-go/internal/topicgraph/handler/daily_report_handler.go
+added     +30    -0     backend-go/internal/topicgraph/handler/daily_report_handler_test.go
+added     +319   -0     backend-go/internal/topicgraph/repository/daily_report_assignment.go
+added     +153   -0     backend-go/internal/topicgraph/repository/daily_report_assignment_test.go
+added     +207   -0     backend-go/internal/topicgraph/repository/daily_report_backfill_topics.go
+added     +503   -0     backend-go/internal/topicgraph/repository/daily_report_matching.go
+added     +268   -0     backend-go/internal/topicgraph/repository/daily_report_matching_test.go
+added     +356   -0     backend-go/internal/topicgraph/repository/daily_report_models.go
+added     +197   -0     backend-go/internal/topicgraph/repository/daily_report_realdata_test.go
+added     +18    -0     backend-go/internal/topicgraph/repository/daily_report_register_models.go
+added     +874   -0     backend-go/internal/topicgraph/repository/daily_report_repository.go
+added     +327   -0     backend-go/internal/topicgraph/repository/daily_report_repository_test.go
+added     +51    -0     backend-go/internal/topicgraph/repository/daily_report_status_test.go
+added     +186   -0     backend-go/internal/topicgraph/repository/daily_report_topic_integration_test.go
+added     +256   -0     backend-go/internal/topicgraph/repository/daily_report_topic_management_test.go
+added     +530   -0     backend-go/internal/topicgraph/repository/daily_report_topic_repository.go
+added     +30    -0     backend-go/internal/topicgraph/repository/repository.go
+added     +2     -0     backend-go/internal/topicgraph/repository/testdata/persistent_topic_fixture.json
+added     +10    -0     backend-go/internal/topicgraph/routes.go
+added     +226   -0     backend-go/internal/topicgraph/service/daily_report_cluster.go
+added     +215   -0     backend-go/internal/topicgraph/service/daily_report_cluster_test.go
+added     +124   -0     backend-go/internal/topicgraph/service/daily_report_dedup.go
+added     +116   -0     backend-go/internal/topicgraph/service/daily_report_dedup_test.go
+added     +324   -0     backend-go/internal/topicgraph/service/daily_report_llm.go
+added     +263   -0     backend-go/internal/topicgraph/service/daily_report_merge.go
+added     +431   -0     backend-go/internal/topicgraph/service/daily_report_orchestrator.go
+added     +19    -0     backend-go/internal/topicgraph/service/daily_report_service.go
+added     +24    -0     backend-go/internal/topicgraph/wire.go
+removed   +0     -0     backend-go/rss_reader.db-shm
+added     +83    -0     demo/README.md
+added     +64    -0     demo/docker-compose.demo.yml
+added     +62    -0     demo/entrypoint.sh
+added     +66    -0     demo/seed/README.md
+added     +192   -0     design-demos/HANDOFF-daily-report-redesign.md
+added     +936   -0     design-demos/daily-report-magazine.html
+modified  +9     -6     docs/README.md
+renamed   +0     -0     docs/archive/experience/ENCODING_SAFETY.md
+renamed   +0     -0     docs/archive/experience/LESSONS_LEARNED.md
+renamed   +0     -0     docs/archive/experience/llm-cost-analysis/SKILL.md
+renamed   +0     -0     docs/archive/experience/llm-cost-analysis/references/optimization-patterns.md
+renamed   +0     -0     docs/archive/experience/llm-cost-analysis/references/queries.md
+removed   +0     -246   docs/developer/frontend-features.md
+removed   +0     -326   docs/developer/operations.md
+removed   +0     -277   docs/developer/testing.md
+removed   +0     -30    docs/experience/ENCODING_SAFETY.md
+removed   +0     -232   docs/experience/LESSONS_LEARNED.md
+removed   +0     -120   docs/experience/llm-cost-analysis/SKILL.md
+removed   +0     -160   docs/experience/llm-cost-analysis/references/optimization-patterns.md
+removed   +0     -186   docs/experience/llm-cost-analysis/references/queries.md
+added     +153   -0     docs/experience/mimo-tts-and-jianying.md
+added     +60    -0     docs/experience/product-video-tts.json
+added     +119   -0     docs/experience/product-video-v1.md
+added     +185   -0     docs/experience/public-read-only-demo-hard-lessons.md
+removed   +0     -10    docs/operations/README.md
+removed   +0     -72    docs/operations/api-conventions.md
+removed   +0     -21    docs/operations/api-index.md
+removed   +0     -813   docs/operations/architecture/backend-go.md
+removed   +0     -487   docs/operations/architecture/backend-runtime.md
+removed   +0     -318   docs/operations/architecture/data-flow.md
+removed   +0     -244   docs/operations/architecture/overview.md
+removed   +0     -178   docs/operations/configuration.md
+removed   +0     -787   docs/operations/database-operations.md
+removed   +0     -1558  docs/operations/database-schema.md
+removed   +0     -266   docs/operations/database.md
+removed   +0     -226   docs/operations/deployment.md
+removed   +0     -0     docs/operations/postgres-migration.md
+removed   +0     -0     docs/operations/tracing.md
+removed   +0     -0     docs/operations/troubleshooting.md
+added     +0     -0     docs/plans/2026-06-12-unify-ui-components.md
+added     +0     -0     docs/plans/2026-06-23-retire-topic-graph-and-rename-workshop.md
+modified  +0     -0     docs/reference/api/_index.md
+modified  +0     -0     docs/reference/api/ai-admin.md
+modified  +0     -0     docs/reference/api/daily-reports.md
+modified  +0     -0     docs/reference/api/feeds.md
+modified  +4     -10    docs/reference/api/schedulers.md
+removed   +0     -473   docs/reference/api/topic-graph.md
+modified  +174   -163   docs/reference/architecture/backend.md
+modified  +23    -10    docs/reference/architecture/data-flow.md
+modified  +375   -188   docs/reference/architecture/frontend.md
+modified  +26    -33    docs/reference/architecture/overview.md
+modified  +38    -48    docs/reference/architecture/runtime.md
+modified  +11    -7     docs/reference/architecture/tracing.md
+modified  +7     -16    docs/reference/configuration.md
+modified  +26    -6     docs/reference/database/DATABASE_FIELDS.md
+modified  +4     -4     docs/reference/database/DATA_LIFECYCLE.md
+modified  +19    -9     docs/reference/deployment.md
+modified  +17    -22    docs/reference/development.md
+modified  +293   -277   docs/reference/testing.md
+modified  +146   -26    docs/reference/开发执行规范.md
+modified  +1     -1     docs/user-guide/ai-features/api.md
+modified  +35    -198   docs/user-guide/schedulers/api.md
+removed   +0     -473   docs/user-guide/topic-graph/api.md
+removed   +0     -1011  docs/user-guide/topic-graph/guide.md
+removed   +0     -71    docs/user-guide/topic-graph/tag-cleanup-design.md
+removed   +0     -41    docs/userguide/ai-features.md
+removed   +0     -28    docs/userguide/feeds-and-categories.md
+removed   +0     -30    docs/userguide/narrative.md
+removed   +0     -87    docs/userguide/reading.md
+removed   +0     -27    docs/userguide/tags.md
+removed   +0     -22    docs/userguide/topic-graph.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-05-relation-skip-day-filter/.openspec.yaml
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-05-relation-skip-day-filter/design.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-05-relation-skip-day-filter/proposal.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-05-relation-skip-day-filter/specs/section-relations/spec.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-05-relation-skip-day-filter/tasks.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/.openspec.yaml
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/design.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/proposal.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/specs/bipartite-relation-matching/spec.md
+renamed   +0     -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/specs/section-relations/spec.md
+added     +45    -0     docs/v1.3.2-board-section/changes/2026-06-08-bipartite-relation-matching/tasks.md
+added     +64    -0     docs/v1.3.3-good-taste/SUMMARY.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/.openspec.yaml
+added     +263   -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/design.md
+added     +48    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/proposal.md
+added     +124   -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/specs/board-match-cache/spec.md
+added     +82    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/specs/board-upgrade-expand/spec.md
+added     +47    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/specs/board-upgrade/spec.md
+added     +42    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/specs/tag-embedding-management/spec.md
+added     +43    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/specs/tag-to-board-matching/spec.md
+added     +66    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-board-embedding-perf/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/.openspec.yaml
+added     +236   -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/design.md
+added     +45    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/proposal.md
+added     +61    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/specs/scheduler-accuracy/spec.md
+added     +69    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/specs/scheduler-observability/spec.md
+added     +75    -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/tasks.md
+added     +115   -0     docs/v1.3.3-good-taste/changes/addon-feather/2026-06-14-scheduler-cron/verification-report.md
+added     +74    -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/HANDOFF.md
+added     +510   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/design.md
+added     +64    -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/proposal.md
+added     +272   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/specs/detective-wall-camera/spec.md
+added     +399   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/specs/detective-wall-interaction/spec.md
+added     +220   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/specs/detective-wall-scene/spec.md
+added     +197   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-topic-wall/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-wall-ambiance/.openspec.yaml
+added     +206   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-wall-ambiance/design.md
+added     +43    -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-wall-ambiance/proposal.md
+added     +138   -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-wall-ambiance/specs/detective-wall-scene/spec.md
+added     +97    -0     docs/v1.3.3-good-taste/changes/addon-feather/wall/2026-06-17-detective-wall-ambiance/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/.openspec.yaml
+added     +580   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/design.md
+added     +85    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/proposal.md
+added     +52    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/api-normalization/spec.md
+added     +33    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/data-access-pattern/spec.md
+added     +41    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/error-notification/spec.md
+added     +68    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/event-stream-client/spec.md
+added     +30    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/route-self-registration/spec.md
+added     +96    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/scheduler-seam/spec.md
+added     +37    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/specs/store-integrity/spec.md
+added     +304   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-11-deepen-architecture/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/.openspec.yaml
+added     +705   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/design.md
+added     +89    -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/proposal.md
+added     +129   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/specs/settings-workspace/spec.md
+added     +266   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/specs/theme-system/spec.md
+added     +251   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/specs/unified-dialog/spec.md
+added     +298   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/specs/unified-form-controls/spec.md
+added     +236   -0     docs/v1.3.3-good-taste/changes/architecture-improve/2026-06-14-unify-ui-components/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/.openspec.yaml
+added     +154   -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/design.md
+added     +119   -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/proposal.md
+added     +67    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/specs/frontend-narrative-cleanup/spec.md
+added     +99    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/specs/narrative-board-generation/spec.md
+added     +39    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/specs/platform-dead-code/spec.md
+added     +19    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/specs/tag-embedding-management/spec.md
+added     +49    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/specs/tagging-domain/spec.md
+added     +331   -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-11-code-cleanup-dead/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-ai-provider-config-fixes/.openspec.yaml
+added     +86    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-ai-provider-config-fixes/design.md
+added     +41    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-ai-provider-config-fixes/proposal.md
+added     +53    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-ai-provider-config-fixes/specs/ai-capability-routing/spec.md
+added     +57    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-ai-provider-config-fixes/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-remove-dead-embedding-config/.openspec.yaml
+added     +50    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-remove-dead-embedding-config/design.md
+added     +26    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-remove-dead-embedding-config/proposal.md
+added     +20    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-remove-dead-embedding-config/specs/tag-to-board-matching/spec.md
+added     +38    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-remove-dead-embedding-config/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/.openspec.yaml
+added     +85    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/design.md
+added     +30    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/proposal.md
+added     +26    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/specs/ai-capability-routing/spec.md
+added     +16    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/specs/daily-report-system/spec.md
+added     +47    -0     docs/v1.3.3-good-taste/changes/architecture-improve/dead-code-clean/2026-06-14-wire-orphan-capability-routes/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/.openspec.yaml
+added     +219   -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/design.md
+added     +36    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/proposal.md
+added     +64    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/specs/tag-embedding-management/spec.md
+added     +30    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/specs/tagging-domain/spec.md
+added     +130   -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/specs/test-infrastructure/spec.md
+added     +99    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-standardize/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-tagmanagement-fixes/.openspec.yaml
+added     +49    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-tagmanagement-fixes/design.md
+added     +36    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-tagmanagement-fixes/proposal.md
+added     +38    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-tagmanagement-fixes/specs/test-infrastructure/spec.md
+added     +25    -0     docs/v1.3.3-good-taste/changes/architecture-improve/test-standard/2026-06-14-test-tagmanagement-fixes/tasks.md
+added     +213   -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-feed-icon-state-machine/design.md
+added     +60    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-feed-icon-state-machine/proposal.md
+added     +99    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-feed-icon-state-machine/specs/feed-icon-management/spec.md
+added     +90    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-feed-icon-state-machine/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/.openspec.yaml
+added     +136   -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/design.md
+added     +55    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/proposal.md
+added     +134   -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/specs/daily-report-system/spec.md
+added     +77    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/specs/section-lifecycle/spec.md
+added     +56    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/specs/topic-graph-display-controls/spec.md
+added     +77    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/specs/topic-graph-highlight-bfs/spec.md
+added     +57    -0     docs/v1.3.3-good-taste/changes/bug-fix/2026-06-17-topic-graph-fixes/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-dev-spec-test-and-codegraph/.openspec.yaml
+added     +30    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-dev-spec-test-and-codegraph/design.md
+added     +32    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-dev-spec-test-and-codegraph/proposal.md
+added     +45    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-dev-spec-test-and-codegraph/tasks.md
+added     +2     -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/.openspec.yaml
+added     +91    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/design.md
+added     +61    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/proposal.md
+added     +31    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/specs/api-docs/spec.md
+added     +126   -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/specs/architecture-docs/spec.md
+added     +15    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/specs/configuration-docs/spec.md
+added     +29    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/specs/database-docs/spec.md
+added     +63    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/specs/development-docs/spec.md
+added     +80    -0     docs/v1.3.3-good-taste/changes/doc-update/2026-06-17-update-reference-docs/tasks.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/.openspec.yaml
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/design.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/proposal.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/specs/tag-entity-extraction/spec.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/specs/tag-match-identity-protection/spec.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/specs/tag-merge-suggestions/spec.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/entity-aware-tag-merge/tasks.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/tag-merge-ux-polish/.openspec.yaml
+renamed   +0     -0     docs/v1.3.3-good-taste/other/tag-merge-ux-polish/design.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/tag-merge-ux-polish/proposal.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/tag-merge-ux-polish/specs/tag-merge-ui/spec.md
+renamed   +0     -0     docs/v1.3.3-good-taste/other/tag-merge-ux-polish/tasks.md
+modified  +193   -29    front/AGENTS.md
+removed   +0     -334   front/COLOR_SYSTEM.md
+removed   +0     -208   front/app/_deprecated/tags/AddSectorDialog.vue
+removed   +0     -548   front/app/_deprecated/tags/PendingChangePanel.vue
+removed   +0     -791   front/app/_deprecated/tags/SectorApprovalPanel.vue
+removed   +0     -307   front/app/_deprecated/tags/SectorList.vue
+removed   +0     -338   front/app/_deprecated/tags/SectorRegenerateDialog.vue
+removed   +0     -619   front/app/_deprecated/tags/TemplateSettingsDialog.vue
+modified  +6     -8     front/app/api/abstractTags.ts
+modified  +0     -1     front/app/api/aiAdmin.ts
+modified  +0     -11    front/app/api/auxiliaryLabels.ts
+removed   +0     -142   front/app/api/boardConcepts.ts
+modified  +64    -64    front/app/api/categories.ts
+modified  +21    -7     front/app/api/client.ts
+added     +44    -0     front/app/api/createQueueApi.ts
+modified  +88    -0     front/app/api/dailyReports.ts
+removed   +0     -23    front/app/api/embeddingConfig.ts
+modified  +50    -55    front/app/api/embeddingQueue.ts
+modified  +0     -7     front/app/api/firecrawl.ts
+removed   +0     -156   front/app/api/hierarchyConfig.ts
+modified  +0     -9     front/app/api/index.ts
+removed   +0     -62    front/app/api/mergeReembeddingQueue.ts
+added     +97    -0     front/app/api/normalizers/article.ts
+modified  +0     -5     front/app/api/reading_behavior.ts
+modified  +0     -3     front/app/api/scheduler.ts
+modified  +5     -37    front/app/api/semanticBoards.ts
+modified  +6     -7     front/app/api/tagMergePreview.ts
+modified  +55    -59    front/app/api/tagQueue.ts
+removed   +0     -509   front/app/api/topicGraph.ts
+modified  +46    -40    front/app/app.vue
+modified  +243   -103   front/app/assets/css/main.css
+added     +71    -0     front/app/assets/css/onboarding.css
+modified  +3     -21    front/app/components/FeedLayout.css
+modified  +7     -7     front/app/components/article/ArticleCard.css
+modified  +100   -48    front/app/components/article/ArticleContent.css
+removed   +0     -36    front/app/components/category/CategoryCard.css
+removed   +0     -55    front/app/components/category/CategoryCard.vue
+added     +55    -0     front/app/components/common/NotifyContainer.vue
+modified  +190   -245   front/app/components/dialog/AddCategoryDialog.vue
+modified  +191   -250   front/app/components/dialog/AddFeedDialog.vue
+removed   +0     -227   front/app/components/dialog/CategorySelectDialog.vue
+removed   +0     -184   front/app/components/dialog/Dialog.css
+modified  +191   -246   front/app/components/dialog/EditCategoryDialog.vue
+modified  +293   -348   front/app/components/dialog/EditFeedDialog.vue
+added     +211   -0     front/app/components/dialog/FeedSettingsPanel.vue
+added     +129   -0     front/app/components/dialog/FirecrawlConfigPanel.vue
+modified  +143   -1460  front/app/components/dialog/GlobalSettingsDialog.vue
+modified  +174   -190   front/app/components/dialog/ImportOpmlDialog.vue
+added     +245   -0     front/app/components/dialog/ReadingPreferencesPanel.vue
+added     +167   -0     front/app/components/dialog/SchedulerStatusPanel.vue
+added     +670   -0     front/app/components/dialog/TopicManageDialog.vue
+added     +64    -0     front/app/components/feed/FeedIcon.test.ts
+modified  +17    -46    front/app/components/feed/FeedIcon.vue
+removed   +0     -58    front/app/components/feed/RefreshStatusIcon.vue
+modified  +147   -147   front/app/components/layout/AppHeader.css
+modified  +28    -31    front/app/components/layout/AppSidebar.css
+modified  +42    -48    front/app/components/layout/ArticleListPanel.css
+added     +91    -0     front/app/components/ui/AppButton.vue
+added     +169   -0     front/app/components/ui/AppDialog.vue
+added     +87    -0     front/app/components/ui/AppInput.vue
+added     +56    -0     front/app/components/ui/AppSectionHeader.vue
+added     +85    -0     front/app/components/ui/AppToggle.vue
+added     +88    -0     front/app/components/ui/ThemeToggle.vue
+removed   +0     -191   front/app/composables/useDagLayout.ts
+modified  +44    -63    front/app/composables/useDailyReportProgress.ts
+added     +182   -0     front/app/composables/useEventStream.ts
+added     +68    -0     front/app/composables/useFirecrawlConfig.ts
+added     +135   -0     front/app/composables/useGlobalSettings.ts
+added     +66    -0     front/app/composables/useNotify.ts
+added     +237   -0     front/app/composables/useOnboarding.test.ts
+added     +228   -0     front/app/composables/useOnboarding.ts
+added     +52    -0     front/app/composables/useReadingPreferences.ts
+removed   +0     -83    front/app/composables/useRssParser.ts
+added     +94    -0     front/app/composables/useSchedulerStatus.ts
+added     +52    -0     front/app/composables/useTheme.ts
+removed   +0     -136   front/app/composables/useWebSocketRebuild.test.ts
+removed   +0     -100   front/app/composables/useWebSocketRebuild.ts
+added     +141   -0     front/app/features/ai/components/AIProviderManagement.vue
+added     +338   -0     front/app/features/ai/components/AIRouterBackupProviders.vue
+added     +328   -0     front/app/features/ai/components/AIRouterCapabilityRoutes.vue
+modified  +146   -956   front/app/features/ai/components/AIRouterSettingsPanel.vue
+removed   +0     -160   front/app/features/ai/components/EmbeddingConfigPanel.vue
+modified  +278   -283   front/app/features/ai/components/EmbeddingQueuePanel.vue
+removed   +0     -285   front/app/features/ai/components/MergeReembeddingQueuePanel.vue
+added     +439   -0     front/app/features/ai/composables/useAIRouterSettings.ts
+modified  +9     -8     front/app/features/articles/components/ArticleCardView.vue
+added     +254   -0     front/app/features/articles/components/ArticleContentPreviewPanel.vue
+added     +80    -0     front/app/features/articles/components/ArticleContentToolbar.vue
+modified  +182   -1010  front/app/features/articles/components/ArticleContentView.vue
+added     +48    -0     front/app/features/articles/components/ArticleIframeView.vue
+modified  +3     -3     front/app/features/articles/components/ArticleTagList.vue
+removed   +0     -111   front/app/features/articles/components/ContentCompletionView.vue
+added     +396   -0     front/app/features/articles/composables/useArticleContentView.ts
+modified  +1     -1     front/app/features/articles/composables/useArticlePagination.ts
+modified  +107   -130   front/app/features/articles/composables/useTagWebSocket.ts
+added     +11    -0     front/app/features/articles/public.ts
+modified  +5     -91    front/app/features/articles/utils/normalizeArticle.ts
+added     +73    -0     front/app/features/feeds/components/FeedEmptyGuide.vue
+modified  +1     -1     front/app/features/feeds/composables/useAutoRefresh.ts
+added     +9     -0     front/app/features/feeds/public.ts
+removed   +0     -116   front/app/features/hierarchy-config/HierarchyConfigPage.vue
+removed   +0     -91    front/app/features/hierarchy-config/HierarchyPendingList.vue
+removed   +0     -111   front/app/features/hierarchy-config/RebuildTrigger.vue
+added     +7     -0     front/app/features/preferences/public.ts
+added     +356   -0     front/app/features/settings/components/FeedDetailEditor.vue
+added     +272   -0     front/app/features/settings/components/FeedMasterList.vue
+added     +7     -0     front/app/features/settings/components/SettingsSectionAiProviders.vue
+added     +17    -0     front/app/features/settings/components/SettingsSectionCapabilityRoutes.vue
+added     +161   -0     front/app/features/settings/components/SettingsSectionFeeds.vue
+added     +7     -0     front/app/features/settings/components/SettingsSectionFirecrawl.vue
+added     +7     -0     front/app/features/settings/components/SettingsSectionPreferences.vue
+added     +34    -0     front/app/features/settings/components/SettingsSectionQueues.vue
+added     +77    -0     front/app/features/settings/components/SettingsSectionSchedulers.vue
+added     +166   -0     front/app/features/settings/components/SettingsSidebar.vue
+added     +273   -0     front/app/features/settings/components/SettingsWorkspace.vue
+added     +333   -0     front/app/features/settings/components/TagQueuePanel.vue
+modified  +11    -0     front/app/features/shell/components/AppHeaderView.vue
+modified  +23    -33    front/app/features/shell/components/AppSidebarView.vue
+modified  +20    -54    front/app/features/shell/components/ArticleListPanelShell.vue
+modified  +16    -16    front/app/features/shell/components/ArticleListPanelView.vue
+modified  +65    -79    front/app/features/shell/components/FeedLayoutShell.vue
+modified  +164   -300   front/app/features/tags/components/AddSemanticBoardDialog.vue
+added     +55    -0     front/app/features/tags/components/ArticlePreviewModal.vue
+modified  +34    -42    front/app/features/tags/components/AuxiliaryLabelPicker.vue
+modified  +48    -48    front/app/features/tags/components/AuxiliaryLabelPool.vue
+modified  +3     -3     front/app/features/tags/components/BackfillProgress.vue
+modified  +36    -34    front/app/features/tags/components/BoardCompositionPanel.vue
+added     +184   -0     front/app/features/tags/components/BoardDailyReportTimeline.test.ts
+modified  +635   -1109  front/app/features/tags/components/BoardDailyReportTimeline.vue
+added     +113   -0     front/app/features/tags/components/BoardEditDialog.vue
+added     +0     -0     front/app/features/tags/components/BoardListSidebar.vue
+removed   +0     -0     front/app/features/tags/components/BoardNarrativeTimeline.vue
+modified  +0     -0     front/app/features/tags/components/BoardThreadBrowser.vue
+added     +0     -0     front/app/features/tags/components/BoardTimelinePanel.vue
+modified  +0     -0     front/app/features/tags/components/MatchDetailPanel.vue
+modified  +0     -0     front/app/features/tags/components/MatchingConfigDialog.vue
+modified  +0     -0     front/app/features/tags/components/NarrativeGenerateDialog.vue
+added     +0     -0     front/app/features/tags/components/SectionLifecyclePanel.test.ts
+modified  +0     -0     front/app/features/tags/components/SectionLifecyclePanel.vue
+removed   +0     -0     front/app/features/tags/components/SemanticBoardList.vue
+added     +0     -0     front/app/features/tags/components/TagMergeGroup.vue
+added     +369   -0     front/app/features/tags/components/TagMergePreview.vue
+modified  +260   -1879  front/app/features/tags/components/TagsPage.vue
+added     +1536  -0     front/app/features/tags/components/TopicDetectiveWall.client.vue
+added     +123   -0     front/app/features/tags/components/TopicGraphMergeDialog.vue
+modified  +84    -51    front/app/features/tags/components/UpgradeSuggestionPanel.vue
+added     +252   -0     front/app/features/tags/components/daily-report/DailyReportMasthead.vue
+added     +487   -0     front/app/features/tags/components/daily-report/DailyReportMiniLifeline.vue
+added     +181   -0     front/app/features/tags/components/daily-report/DailyReportSidebar.vue
+added     +679   -0     front/app/features/tags/components/daily-report/DailyReportTopicSection.vue
+added     +143   -0     front/app/features/tags/components/daily-report/dailyReportMagazine.test.ts
+added     +250   -0     front/app/features/tags/components/daily-report/dailyReportMagazine.ts
+added     +87    -0     front/app/features/tags/components/detective-wall/AmbientEnv.ts
+added     +571   -0     front/app/features/tags/components/detective-wall/CardGroup.ts
+added     +105   -0     front/app/features/tags/components/detective-wall/ChapterTransition.ts
+added     +176   -0     front/app/features/tags/components/detective-wall/DirectorCamera.ts
+added     +131   -0     front/app/features/tags/components/detective-wall/DustParticles.ts
+added     +53    -0     front/app/features/tags/components/detective-wall/FogSystem.ts
+added     +423   -0     front/app/features/tags/components/detective-wall/InteractionLayer.ts
+added     +178   -0     front/app/features/tags/components/detective-wall/RedString.ts
+added     +233   -0     front/app/features/tags/components/detective-wall/SetDressing.ts
+added     +313   -0     front/app/features/tags/components/detective-wall/TopicWallScene.ts
+added     +110   -0     front/app/features/tags/components/detective-wall/WallCameraControls.ts
+added     +47    -0     front/app/features/tags/components/detective-wall/WallPostProcessing.ts
+added     +56    -0     front/app/features/tags/components/detective-wall/ambiance.test.ts
+added     +60    -0     front/app/features/tags/components/detective-wall/lighting.ts
+added     +93    -0     front/app/features/tags/components/detective-wall/shaders/directionalFog.ts
+added     +216   -0     front/app/features/tags/components/detective-wall/types.ts
+added     +324   -0     front/app/features/tags/components/detective-wall/utils.test.ts
+added     +321   -0     front/app/features/tags/components/detective-wall/utils.ts
+added     +69    -0     front/app/features/tags/composables/useAuxiliaryLabels.ts
+added     +148   -0     front/app/features/tags/composables/useBoardCRUD.ts
+added     +175   -0     front/app/features/tags/composables/useBoardTimeline.ts
+added     +121   -0     front/app/features/tags/composables/useDailyReportReader.test.ts
+added     +192   -0     front/app/features/tags/composables/useDailyReportReader.ts
+added     +274   -0     front/app/features/tags/composables/useTagMergePreview.ts
+added     +276   -0     front/app/features/tags/composables/useTagsPage.ts
+removed   +0     -919   front/app/features/topic-graph/components/AIAnalysisPanel.vue
+removed   +0     -247   front/app/features/topic-graph/components/BoardConceptManager.vue
+removed   +0     -308   front/app/features/topic-graph/components/EventAnalysisView.vue
+removed   +0     -163   front/app/features/topic-graph/components/FeedCategoryFilter.vue
+removed   +0     -483   front/app/features/topic-graph/components/HotspotCategorySelect.vue
+removed   +0     -279   front/app/features/topic-graph/components/KeywordAnalysisView.vue
+removed   +0     -129   front/app/features/topic-graph/components/KeywordCloud.vue
+removed   +0     -207   front/app/features/topic-graph/components/NarrativeDetailCard.vue
+removed   +0     -273   front/app/features/topic-graph/components/PersonAnalysisView.vue
+removed   +0     -84    front/app/features/topic-graph/components/TagHierarchy.test.ts
+removed   +0     -904   front/app/features/topic-graph/components/TagHierarchy.vue
+removed   +0     -357   front/app/features/topic-graph/components/TagHierarchyRow.vue
+removed   +0     -1068  front/app/features/topic-graph/components/TagMergePreview.vue
+removed   +0     -380   front/app/features/topic-graph/components/TagQueuePanel.vue
+removed   +0     -197   front/app/features/topic-graph/components/TimelineHeader.vue
+removed   +0     -301   front/app/features/topic-graph/components/TimelineItem.vue
+removed   +0     -156   front/app/features/topic-graph/components/TimelinePendingItem.vue
+removed   +0     -668   front/app/features/topic-graph/components/TopicAIAnalysisPanel.vue
+removed   +0     -577   front/app/features/topic-graph/components/TopicAnalysisPanel.vue
+removed   +0     -152   front/app/features/topic-graph/components/TopicAnalysisTabs.vue
+removed   +0     -630   front/app/features/topic-graph/components/TopicGraphCanvas.client.vue
+removed   +0     -81    front/app/features/topic-graph/components/TopicGraphFooterPanels.vue
+removed   +0     -0     front/app/features/topic-graph/components/TopicGraphHeader.vue
+removed   +0     -0     front/app/features/topic-graph/components/TopicGraphPage.vue
+removed   +0     -0     front/app/features/topic-graph/components/TopicGraphSidebar.vue
+removed   +0     -0     front/app/features/topic-graph/components/TopicTimeline.test.ts
+removed   +0     -0     front/app/features/topic-graph/components/TopicTimeline.vue
+removed   +0     -0     front/app/features/topic-graph/composables/useOrganizeWebSocket.ts
+removed   +0     -0     front/app/features/topic-graph/utils/buildDisplayedTopicGraph.test.ts
+removed   +0     -0     front/app/features/topic-graph/utils/buildDisplayedTopicGraph.ts
+removed   +0     -0     front/app/features/topic-graph/utils/buildTopicGraphViewModel.test.ts
+removed   +0     -0     front/app/features/topic-graph/utils/buildTopicGraphViewModel.ts
+removed   +0     -0     front/app/features/topic-graph/utils/normalizeTopicCategory.ts
+removed   +0     -0     front/app/features/topic-graph/utils/topicGraphCanvasLinks.test.ts
+removed   +0     -0     front/app/features/topic-graph/utils/topicGraphCanvasLinks.ts
+added     +0     -0     front/app/pages/settings.vue
+removed   +0     -0     front/app/pages/topics.vue
+removed   +0     -0     front/app/stores/aiAnalysis.ts
+modified  +0     -0     front/app/stores/api.test.ts
+modified  +0     -0     front/app/stores/api.ts
+modified  +0     -0     front/app/stores/articles.ts
+modified  +0     -0     front/app/stores/feeds.ts
+modified  +0     -0     front/app/types/ai.ts
+modified  +0     -0     front/app/types/api.ts
+modified  +0     -0     front/app/types/common.ts
+modified  +0     -0     front/app/types/feed.ts
+modified  +0     -0     front/app/types/index.ts
+modified  +0     -0     front/app/types/reading_behavior.ts
+modified  +0     -0     front/app/types/scheduler.ts
+removed   +0     -0     front/app/types/timeline.ts
+modified  +0     -0     front/app/types/topicTag.ts
+added     +0     -0     front/app/utils/api-helpers.ts
+modified  +0     -0     front/app/utils/constants.ts
+modified  +0     -0     front/app/utils/date.ts
+added     +0     -0     front/app/utils/eventTypes.ts
+added     +0     -0     front/app/utils/graphHighlight.ts
+modified  +0     -0     front/app/utils/index.ts
+modified  +0     -0     front/app/utils/schedulerMeta.test.ts
+modified  +0     -0     front/app/utils/schedulerMeta.ts
+removed   +0     -0     front/app/utils/storage.ts
+modified  +0     -0     front/app/utils/text.ts
+modified  +0     -0     front/nuxt.config.ts
+modified  +0     -0     front/package.json
+added     +0     -0     front/patches/three@0.183.2.patch
+modified  +130   -166   front/pnpm-lock.yaml
+added     +2     -0     front/pnpm-workspace.yaml
+added     +6     -0     front/public/textures/detective-wall/README.md
+added     +0     -0     front/public/textures/detective-wall/desk_oak_diff.jpg
+added     +0     -0     front/public/textures/detective-wall/wall_plaster_diff.jpg
+modified  +35    -36    front/tests/e2e/baseline.spec.ts
+added     +206   -0     front/tests/e2e/daily-report-magazine.spec.ts
+removed   +0     -293   front/tests/e2e/topic-graph.spec.ts
+removed   +0     -1     front/three.d.ts
+modified  +1     -0     front/vitest.config.ts
+added     +28    -0     front/vitest.setup.ts
+added     +0     -0     img/1.3.3/daily-2.png
+added     +0     -0     img/1.3.3/daily-report.png
+added     +0     -0     img/1.3.3/feed-setting.png
+added     +0     -0     img/1.3.3/overview.png
+added     +0     -0     img/1.3.3/topic-anage.png
+added     +0     -0     img/1.3.3/topic-relation.png
+added     +0     -0     img/1.3.3/topic-split.png
+added     +0     -0     img/product-video-v2/01-reading-workspace.jpg
+added     +0     -0     img/product-video-v2/02-board-articles.jpg
+added     +0     -0     img/product-video-v2/03-match-detail.jpg
+added     +0     -0     img/product-video-v2/04-upgrade-suggestions.jpg
+added     +0     -0     img/product-video-v2/05-daily-report-list.jpg
+added     +0     -0     img/product-video-v2/06-daily-report-detail.jpg
+added     +0     -0     img/product-video-v2/07-topic-timeline.jpg
+added     +0     -0     img/product-video-v2/08-topic-timeline-detail.jpg
+removed   +0     -36    node_modules/.package-lock.json
+removed   +0     -394   node_modules/headroom-ai/README.md
+removed   +0     -108   node_modules/headroom-ai/package.json
+removed   +0     -2     openspec/changes/acceptance-testing/.openspec.yaml
+removed   +0     -79    openspec/changes/acceptance-testing/design.md
+removed   +0     -30    openspec/changes/acceptance-testing/proposal.md
+removed   +0     -59    openspec/changes/acceptance-testing/specs/acceptance-api-stories/spec.md
+removed   +0     -78    openspec/changes/acceptance-testing/specs/acceptance-framework/spec.md
+removed   +0     -100   openspec/changes/acceptance-testing/specs/acceptance-ui-stories/spec.md
+removed   +0     -32    openspec/changes/acceptance-testing/tasks.md
+removed   +0     -45    openspec/changes/bipartite-relation-matching/tasks.md
+added     +2     -0     openspec/changes/daily-report-magazine-redesign/.openspec.yaml
+added     +141   -0     openspec/changes/daily-report-magazine-redesign/design.md
+added     +34    -0     openspec/changes/daily-report-magazine-redesign/proposal.md
+added     +91    -0     openspec/changes/daily-report-magazine-redesign/specs/daily-report-system/spec.md
+added     +75    -0     openspec/changes/daily-report-magazine-redesign/tasks.md
+added     +38    -0     openspec/changes/daily-report-magazine-redesign/verification-report.md
+added     +2     -0     openspec/changes/persistent-topic/.openspec.yaml
+added     +367   -0     openspec/changes/persistent-topic/design.md
+added     +237   -0     openspec/changes/persistent-topic/handoff-frontend-iteration.md
+added     +100   -0     openspec/changes/persistent-topic/proposal.md
+added     +209   -0     openspec/changes/persistent-topic/specs/persistent-topic/spec.md
+added     +186   -0     openspec/changes/persistent-topic/tasks.md
+added     +367   -0     openspec/changes/persistent-topic/verification-report.md
+added     +179   -0     openspec/changes/public-read-only-demo/design.md
+added     +45    -0     openspec/changes/public-read-only-demo/proposal.md
+added     +80    -0     openspec/changes/public-read-only-demo/specs/public-read-only-demo/spec.md
+added     +133   -0     openspec/changes/public-read-only-demo/tasks.md
+added     +2     -0     openspec/changes/user-onboarding/.openspec.yaml
+added     +219   -0     openspec/changes/user-onboarding/design.md
+added     +47    -0     openspec/changes/user-onboarding/proposal.md
+added     +155   -0     openspec/changes/user-onboarding/specs/user-onboarding/spec.md
+added     +99    -0     openspec/changes/user-onboarding/tasks.md
+modified  +5     -18    openspec/config.yaml
+added     +79    -0     openspec/specs/ai-capability-routing/spec.md
+added     +37    -0     openspec/specs/api-docs/spec.md
+added     +132   -0     openspec/specs/architecture-docs/spec.md
+added     +139   -0     openspec/specs/bipartite-relation-matching/spec.md
+added     +124   -0     openspec/specs/board-match-cache/spec.md
+added     +82    -0     openspec/specs/board-upgrade-expand/spec.md
+modified  +149   -107   openspec/specs/board-upgrade/spec.md
+added     +21    -0     openspec/specs/configuration-docs/spec.md
+modified  +40    -3     openspec/specs/daily-report-system/spec.md
+added     +35    -0     openspec/specs/database-docs/spec.md
+added     +104   -0     openspec/specs/detective-wall-camera/spec.md
+added     +166   -0     openspec/specs/detective-wall-interaction/spec.md
+added     +280   -0     openspec/specs/detective-wall-scene/spec.md
+added     +69    -0     openspec/specs/development-docs/spec.md
+added     +99    -0     openspec/specs/feed-icon-management/spec.md
+added     +61    -0     openspec/specs/scheduler-accuracy/spec.md
+added     +69    -0     openspec/specs/scheduler-observability/spec.md
+modified  +27    -4     openspec/specs/section-lifecycle/spec.md
+modified  +32    -59    openspec/specs/section-relations/spec.md
+added     +129   -0     openspec/specs/settings-workspace/spec.md
+modified  +94    -0     openspec/specs/tag-embedding-management/spec.md
+modified  +188   -131   openspec/specs/tag-to-board-matching/spec.md
+modified  +23    -0     openspec/specs/tagging-domain/spec.md
+added     +167   -0     openspec/specs/test-infrastructure/spec.md
+added     +266   -0     openspec/specs/theme-system/spec.md
+added     +59    -0     openspec/specs/topic-graph-display-controls/spec.md
+added     +81    -0     openspec/specs/topic-graph-highlight-bfs/spec.md
+added     +251   -0     openspec/specs/unified-dialog/spec.md
+added     +298   -0     openspec/specs/unified-form-controls/spec.md
+modified  +1     -36    package-lock.json
+removed   +0     -5     package.json
+added     +139   -0     scripts/backup-postgres.ps1
+added     +403   -0     scripts/mimo_tts.py
+removed   +0     -47    skills-lock.json
+removed   +0     -273   tests/clustering_exp/avg_link_experiment.py
+--- DIFF DO CÓDIGO LIGADO
+### backend-go/internal/domain/models/semantic_label.go
+@@ -1,67 +0,0 @@
+-package models
+-
+-import "time"
+-
+-type SemanticLabel struct {
+-	ID             uint      `gorm:"primaryKey" json:"id"`
+-	Label          string    `gorm:"size:160;not null" json:"label"`
+-	Slug           string    `gorm:"size:160;not null;uniqueIndex:idx_semantic_labels_slug" json:"slug"`
+-	Embedding      *string   `gorm:"type:vector(4096);column:embedding" json:"-"`
+-	MergeEmbedding *string   `gorm:"type:vector(4096);column:merge_embedding" json:"-"`
+-	LabelType      string    `gorm:"size:20;not null;index:idx_semantic_labels_label_type" json:"label_type"`
+-	Aliases        []string  `gorm:"type:jsonb;serializer:json;default:'[]'" json:"aliases"`
+-	RefCount       int       `gorm:"not null;default:0" json:"ref_count"`
+-	Description    string    `gorm:"type:text" json:"description"`
+-	DisplayOrder   int       `gorm:"not null;default:0" json:"display_order"`
+-	Source         string    `gorm:"size:50;not null;default:llm_extract" json:"source"`
+-	Status         string    `gorm:"size:20;not null;default:active;index:idx_semantic_labels_status" json:"status"`
+-	Protected      bool      `gorm:"not null;default:false" json:"protected"`
+-	CreatedAt      time.Time `json:"created_at"`
+-	UpdatedAt      time.Time `json:"updated_at"`
+-}
+-
+-func (SemanticLabel) TableName() string {
+-	return "semantic_labels"
+-}
+-
+-type TopicTagSemanticLabel struct {
+-	TopicTagID      uint `gorm:"primaryKey;not null" json:"topic_tag_id"`
+-	SemanticLabelID uint `gorm:"primaryKey;not null" json:"semantic_label_id"`
+-
+-	TopicTag      *TopicTag      `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
+-	SemanticLabel *SemanticLabel `gorm:"foreignKey:SemanticLabelID;constraint:OnDelete:CASCADE" json:"semantic_label,omitempty"`
+-}
+-
+-func (TopicTagSemanticLabel) TableName() string {
+-	return "topic_tag_semantic_labels"
+-}
+-
+-type TopicTagBoardLabel struct {
+-	TopicTagID      uint      `gorm:"primaryKey;not null" json:"topic_tag_id"`
+-	SemanticBoardID uint      `gorm:"primaryKey;not null" json:"semantic_board_id"`
+-	Score           float64   `gorm:"not null;default:0" json:"score"`
+-	MatchReason     string    `gorm:"type:text" json:"match_reason"`
+-	Downgraded      bool      `gorm:"not null;default:false" json:"downgraded"`
+-	DirectionMismatch bool    `gorm:"not null;default:false" json:"direction_mismatch"`
+-	CreatedAt       time.Time `json:"created_at"`
+-	UpdatedAt       time.Time `json:"updated_at"`
+-
+-	TopicTag      *TopicTag      `gorm:"foreignKey:TopicTagID;constraint:OnDelete:CASCADE" json:"topic_tag,omitempty"`
+-	SemanticBoard *SemanticLabel `gorm:"foreignKey:SemanticBoardID;constraint:OnDelete:CASCADE" json:"semantic_board,omitempty"`
+-}
+-
+-func (TopicTagBoardLabel) TableName() string {
+-	return "topic_tag_board_labels"
+-}
+-
+-type BoardComposition struct {
+-	BoardID          uint `gorm:"primaryKey;not null" json:"board_id"`
+-	AuxiliaryLabelID uint `gorm:"primaryKey;not null" json:"auxiliary_label_id"`
+-
+-	Board          *SemanticLabel `gorm:"foreignKey:BoardID;constraint:OnDelete:CASCADE" json:"board,omitempty"`
+-	AuxiliaryLabel *SemanticLabel `gorm:"foreignKey:AuxiliaryLabelID;constraint:OnDelete:CASCADE" json:"auxiliary_label,omitempty"`
+-}
+-
+-func (BoardComposition) TableName() string {
+-	return "board_composition"
+-}
+

@@ -1,0 +1,545 @@
+===== P155 | jdjingdian/StaticRouteHelper PR #16 | capacidade do par: swiftdata-persistence
+PR:  fix(ui): unify settings entry and align route edit sheets
+arquivos ligados: StaticRouter/View/LegacyRouteListView.swift
+--- linhas alteradas (72; mostrando até 40)
+-        VStack(alignment: .leading, spacing: 20) {
+-            Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
+-                .font(.headline)
++        VStack(alignment: .leading, spacing: 14) {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
++                    .font(.title2.bold())
++                Text("Network / Gateway")
++                    .font(.footnote)
++                    .foregroundStyle(.secondary)
++            }
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.destination.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.destination.label"), systemImage: "dot.scope")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+-                                .stroke(networkError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(networkError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                        .multilineTextAlignment(.center)
+-                        .frame(width: 50)
++                        .frame(width: 68)
+-                                .stroke(prefixLengthError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(prefixLengthError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
++                Text("= \(subnetMaskPreview)")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++                }
++                if let err = prefixLengthError {
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+-            VStack(alignment: .leading, spacing: 6) {
+--- candidata: route-crud [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: 添加路由规则
+  | 用户 SHALL 能够通过路由列表视图中的 "添加路由" 按钮打开 Sheet 表单，输入路由信息并保存。
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - 网关类型使用 segmented 选择，不使用 radio 纵向堆叠
+  > - **THEN** 弹窗使用与 14+ 一致的卡片与错误样式语言，不显示分组区块，网关类型为 segmented 选择
+  > - **THEN** 系统创建路由规则，`gatewayType` 为 `.interface`（或等效存储值），`gateway` 为 "utun3"
+  > - **THEN** 系统将该路由对应的 route 命令字符串复制到系统剪贴板
+--- candidata: router-service [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: RouterService 统一服务接口
+  | 系统 SHALL 提供 `RouterService` 作为所有路由操作和 Helper 通信的唯一入口。在 macOS 14+ 上 `RouterService` SHALL 遵循 `@Observable`（Observation 框架），通过类型化 `@Environment(RouterService.self)` 注入视图层级。在 macOS 12–13 上 SHALL 遵循 `Obse
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+  > - **WHEN** 视图层调用 `routerService.activateRoute(rule)`（SwiftData RouteRule）
+  > - **WHEN** 视图层调用 `routerService.activateRouteMO(mo)`（Core Data RouteRuleMO）
+  > - **THEN** 解析为 `SystemRouteEntry(destination: "default", gateway: "192.168.1.1", flags: "UGScg", networkInterface: "en0", expire: "")`
+  > - **WHEN** 用户在 macOS 13 上激活路由，route 命令返回 "route: writing to routing socket: File exists"
+--- candidata: os-conditional-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 双持久化栈按 OS 版本条件初始化
+  | 应用启动时 SHALL 根据当前 macOS 版本选择持久化后端：
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+  > - `prefixLength: Int16`（必填）
+  > - `gatewayType: String`（枚举原始值，必填）
+  > - `gateway: String`（必填）
+--- candidata: main-navigation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: NavigationSplitView 两栏主布局
+  | 应用主窗口 SHALL 使用 NavigationSplitView 实现两栏布局，左侧为 Sidebar，右侧为 Detail 内容区。
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+  > - 窗口宽度不足时，Sidebar SHALL 可通过工具栏按钮或手势折叠为 overlay 模式
+--- candidata: os-conditional-observable [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: RouterService 条件式响应式框架
+  | `RouterService` SHALL 在 macOS 14.0 及以上使用 `@Observable`（Observation 框架），在 macOS 12–13 使用 `ObservableObject` + `@Published`。两条路径 SHALL 在同一个源文件中通过 `#if canImport(Observation)` + `@available(macOS 14, *)`
+  > - **THEN** `RouterService` 遵循 `ObservableObject`，所有需响应的属性标注 `@Published`，视图通过 `@EnvironmentObject var routerService: RouterService` 接收实例
+  > - macOS 14+：`.environment(routerService)`（无 EnvironmentKey，依赖 `@Observable` 协议）
+  > - macOS 12–13：`.environmentObject(routerService)`
+  > - **WHEN** 应用在 macOS 14 上运行，`routerService` 作为 `@State` 持有
+  > - **THEN** 视图层通过 `@Environment(RouterService.self)` 正确获取 `routerService`，无运行时崩溃
+  > - **WHEN** 应用在 macOS 13 上运行，`routerService` 作为 `@StateObject` 持有
+  > - **THEN** 视图层通过 `@EnvironmentObject var routerService: RouterService` 正确获取实例，无运行时崩溃
+  > - **THEN** `RouterService` 遵循 `ObservableObject`，所有需响应的属性标注 `@Published`，视图通过 `@EnvironmentObject var routerService: RouterService` 接收实例
+
+===== P157 | IgniteUI/igniteui-theming PR #537 | capacidade do par: resources
+PR: feat: add generic platform detection knowledge
+arquivos ligados: src/mcp/__tests__/generators/sass.test.ts;src/mcp/__tests__/knowledge/platform-detection.test.ts;src/mcp/__tests__/tools/handlers/handlers.test.ts
+--- linhas alteradas (318; mostrando até 40)
+- *
+- * Note: Full Sass compilation tests are limited because generated code
+- * uses variables (like $material-type-scale) that are defined within
+- * the theming library's context. We focus on structural validation.
++ * 4. Generated code compiles as valid Sass (compilation tests)
++ *
++ * Handles:
++ * - Base module: @use 'igniteui-theming' as *; → @use 'sass' as *;
++ * - Angular module: @use "igniteui-angular/theming" as *; → @use 'sass' as *;
++ * - Sub-module presets: @use 'igniteui-theming/sass/...' as *; → @use 'sass/...' as *;
++		.replace(
++			/@use ['"]igniteui-theming\/sass\/(.+?)['"] as \*;/g,
++			"@use 'sass/$1' as *;",
++		)
++	it("includes typography preset import for non-Angular platforms", () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/typography/presets' as *;",
++		);
++	});
++	it("omits typography preset import for Angular platform", () => {
++		const result = generateTypography({
++			platform: "angular",
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++		expect(result.code).not.toContain("typography/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateTypography({
++			platform: "webcomponents",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++	it("generates valid Sass that compiles for react", async () => {
+--- candidata: sass-compilation-tests [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Generated typography Sass compiles without errors
+  | The `create_typography` tool's output SHALL compile as valid Sass for all non-Angular platforms.
+  > ### Requirement: Generated typography Sass compiles without errors
+  > The `create_typography` tool's output SHALL compile as valid Sass for all non-Angular platforms.
+  > #### Scenario: Typography compiles for webcomponents platform
+  > - **GIVEN** `platform: webcomponents` and `fontFamily: 'Roboto'`
+  > - **WHEN** `generateTypography` produces Sass code
+  > - **THEN** the code MUST compile without Sass errors
+  > #### Scenario: Typography compiles for react platform
+  > - **GIVEN** `platform: react` and `fontFamily: 'Roboto'`
+--- candidata: component-theming [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Component token schemas are exposed
+  | The `get_component_design_tokens` tool SHALL explicitly indicate when a component is compound and provide an actionable checklist for generating related themes.
+  > The `get_component_design_tokens` tool SHALL explicitly indicate when a component is compound and provide an actionable checklist for generating related themes.
+  > #### Scenario: Compound component response includes required checklist
+  > - **WHEN** `get_component_design_tokens` is called for a compound component
+  > - **THEN** the response includes a "Compound checklist (required)" section listing each related theme and its scoped selector
+  > - **AND** the checklist instructs the model to call `get_component_design_tokens` and `create_component_theme` for each related theme using the provided selector
+  > - **WHEN** a compound component has related themes without scoped selectors (e.g., selector is `TODO`)
+  > ### Requirement: Component theming requires platform
+  > The `create_component_theme` tool description SHALL specify compound-component completeness rules to reduce incomplete outputs.
+--- candidata: generic-platform [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Generic is a first-class platform value
+  | The `Platform` type SHALL include `"generic"` as a valid member alongside `"angular"`, `"webcomponents"`, `"react"`, and `"blazor"`. All `Record<Platform, ...>` mappings SHALL include a `generic` entr
+  > ### Requirement: Generic is a first-class platform value
+  > The `Platform` type SHALL include `"generic"` as a valid member alongside `"angular"`, `"webcomponents"`, `"react"`, and `"blazor"`. All `Record<Platform, ...>` mappings SHALL include a `generic` entr
+  > #### Scenario: PLATFORMS array includes generic
+  > - **WHEN** the `PLATFORMS` constant is defined
+  > - **THEN** it SHALL contain `"generic"` as a member
+  > - **AND** the derived `Platform` type includes `"generic"` in its union
+  > #### Scenario: Ignite package patterns for generic
+  > - **WHEN** `IGNITE_PACKAGE_PATTERNS` is defined as `Record<Platform, string[]>`
+--- candidata: platform-detection [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Platform detection provides confidence and signals
+  | The system detects a target platform using package dependencies, config files, and framework fallbacks, returning confidence and contributing signals.
+  > ### Requirement: Platform detection provides confidence and signals
+  > The system detects a target platform using package dependencies, config files, and framework fallbacks, returning confidence and contributing signals.
+  > #### Scenario: Ignite UI package detected
+  > - **WHEN** `igniteui-angular`, `igniteui-webcomponents`, `igniteui-react`, or commercial equivalents are found in dependencies
+  > - **THEN** the platform is set to the matching target
+  > - **AND** confidence is `high` with an `ignite_package` signal
+  > - **WHEN** `angular.json`, `vite.config.*` with React plugin, `next.config.js`, or `.csproj` with IgniteUI.Blazor is detected
+  > - **THEN** the platform is set to the matching target
+--- candidata: theme-generation [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Theme generation is platform-aware
+  | The `create_theme` tool generates Sass output that follows platform-specific conventions.
+  > ### Requirement: Theme generation is platform-aware
+  > The `create_theme` tool generates Sass output that follows platform-specific conventions.
+  > #### Scenario: Angular output
+  > - **WHEN** `platform: angular` is provided
+  > - **THEN** the output includes `@include core()`
+  > - **AND** the output includes `@include theme(` with schema and palette
+  > #### Scenario: Web Components output
+  > - **WHEN** `platform: webcomponents` is provided
+
+===== P158 | VimCommando/kibana-object-manager PR #12 | capacidade do par: agents
+PR: Add dependency resolution when adding assets to manifest
+arquivos ligados: src/cli.rs
+--- linhas alteradas (258; mostrando até 40)
+-    kibana::agents::{AgentsExtractor, AgentsLoader, AgentsManifest},
++    kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
++    kibana::dependencies::{
++        Dependency, find_agent_dependencies, find_tool_dependencies, find_workflow_dependencies,
++    },
+-    kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
++    kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
++use serde_json::Value;
++use std::collections::HashSet;
++    exclude_dependencies: bool,
++    let mut all_deps = Vec::new();
++            if !exclude_dependencies {
++                all_deps.extend(find_workflow_dependencies(workflow));
++            }
++    // Resolve dependencies if any
++    let mut dep_summary = DependencySummary::new();
++    if !all_deps.is_empty() {
++        let client = load_kibana_client(project_dir)?;
++        dep_summary =
++            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
++    }
+-    log::info!("✓ Added {} new workflow(s)", added_count);
+-    Ok(added_count)
++    if !dep_summary.is_empty() {
++        log::info!(
++            "✓ Added {} new workflow(s) (plus dependencies: {})",
++            added_count,
++            dep_summary.format_summary()
++        );
++    } else {
++        log::info!("✓ Added {} new workflow(s)", added_count);
++    }
++    Ok(added_count + dep_summary.total())
++    exclude_dependencies: bool,
++    let mut all_deps = Vec::new();
++            if !exclude_dependencies {
++                all_deps.extend(find_agent_dependencies(agent));
++            }
++    // Resolve dependencies if any
++    let mut dep_summary = DependencySummary::new();
+--- candidata: include-dependencies [tasks+PR]
+  | # Capability: Include Dependencies
+  | ## ADDED Requirements
+  | ### Requirement: Automatic Dependency Inclusion
+  > ### Requirement: Automatic Dependency Inclusion
+  > When adding an object to a manifest via the `add` command, `kibob` MUST automatically identify and add all referenced dependencies to their respective manifests, unless the `--exclude-dependencies` fl
+  > #### Scenario: Adding an Agent with Tools
+  > - **Given** an agent that references two tools: `tool-a` and `tool-b`.
+  > - **When** the user runs `kibob add agent my-agent`.
+  > - **Then** `my-agent` is added to `agents.yml`.
+  > - **And** `tool-a` and `tool-b` are added to `tools.yml`.
+  > - **And** the JSON files for the agent and both tools are written to the filesystem.
+--- candidata: cli [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: API Filtering
+  | The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > - **THEN** the system pulls all supported object types (Spaces, Saved Objects, Workflows, Agents, Tools)
+  > - **WHEN** the user runs `kibob pull --api tools`
+  > - **AND** skips Spaces, Saved Objects, Workflows, and Agents
+  > - **WHEN** the user runs `kibob push --api agents,workflows`
+  > - **THEN** the system pushes Agents and Workflows
+  > - **WHEN** the user uses singular aliases (e.g., `tool`, `agent`, `object`)
+  > - **THEN** the system treats them as their plural counterparts (`tools`, `agents`, `saved_objects`)
+--- candidata: concurrency [tasks]
+  | # Spec Delta: Concurrency Control
+  | ## ADDED Requirements
+  | ### Requirement: Global API Concurrency Limit
+  > `KibanaClient` SHALL implement a global limit on the number of simultaneous "in-flight" HTTP requests across all instances (including space-scoped clones).
+  > - **GIVEN** `KibanaClient` initialized with `MAX_REQUESTS = 2`
+  > - **WHEN** `KibanaClient` is initialized
+  > The application SHALL perform asset-level operations concurrently to minimize total execution time.
+  > #### Scenario: Concurrent space processing
+  > - **GIVEN** multiple spaces are being processed during `pull` or `push`
+  > - **THEN** spaces SHALL be processed concurrently up to the global limit
+  > - **GIVEN** an extractor is fetching multiple items by ID (e.g. workflows)
+--- candidata: kibana-sync [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Explicit Client Configuration
+  | The `kibana-sync` crate SHALL construct clients from explicit configuration values rather than CLI project directories.
+  > The `kibana-sync` crate SHALL construct clients from explicit configuration values rather than CLI project directories.
+  > #### Scenario: Construct client with default space
+  > - **WHEN** a consumer builds a client with a Kibana URL, auth configuration, and no explicit spaces
+  > - **THEN** the client is created with the `default` space available
+  > - **AND** no filesystem reads are performed during construction
+  > #### Scenario: Construct client with caller-provided spaces
+  > - **WHEN** a consumer builds a client with a caller-provided list or map of spaces
+  > - **THEN** the client validates space-bound clients against that registry
+--- candidata: workspace-library-packaging [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Multi-Crate Workspace Structure
+  | The repository SHALL be organized as a Cargo workspace with a reusable `kibana-sync` library crate and a `kibana-object-manager` CLI crate.
+  > ### Requirement: Multi-Crate Workspace Structure
+  > The repository SHALL be organized as a Cargo workspace with a reusable `kibana-sync` library crate and a `kibana-object-manager` CLI crate.
+  > #### Scenario: Workspace members are declared
+  > - **THEN** the workspace includes a `kibana-sync` crate
+  > - **AND** the workspace includes a `kibana-object-manager` crate that builds the `kibob` binary
+  > #### Scenario: Library crate builds independently
+  > - **WHEN** `cargo check -p kibana-sync` is run
+  > - **WHEN** `cargo check -p kibana-object-manager` is run
+
+===== P159 | 0verL1nk/PaperSage PR #28 | capacidade do par: trace-middleware
+PR: feat: team architecture upgrade
+arquivos ligados: agent/runtime_agent.py
+--- linhas alteradas (4; mostrando até 40)
++    profile: Any | None = None,
++    deps: Any | None = None,
++        profile=profile,
++        deps=deps,
+--- candidata: a2a-task-execution [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified task execution backend contract
+  | The system SHALL execute teammate todos through a backend abstraction that normalizes local and A2A-backed task execution results.
+--- candidata: leader-teammate-orchestration [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Leader-managed team planning
+  | The system SHALL support a structured Leader-teammate orchestration flow that converts a team-mode request into an explicit team plan before teammate execution begins.
+--- candidata: middleware-architecture [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Middleware 目录结构
+  | 系统 SHALL 在 `agent/middlewares/` 目录下组织所有 middleware 实现，包含 `__init__.py` 和具体的 middleware 模块文件。
+--- candidata: orchestration-middleware [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Context Analysis
+  | The middleware SHALL analyze the conversation context to determine task complexity.
+--- candidata: team-state-machine [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Team runs use explicit workflow states
+  | The system SHALL track structured workflow state for each team run.
+
+===== P160 | ZanebonoAlter/Syntopica PR #14 | capacidade do par: compose-firecrawl
+PR: V1.3.3
+arquivos ligados: backend-go/internal/app/runtime.go;backend-go/internal/domain/content/content_completion_handler.go;backend-go/internal/domain/content/content_completion_service.go
+--- linhas alteradas (1013; mostrando até 40)
+-package app
+-import (
+-	"os"
+-	"os/signal"
+-	"syscall"
+-	"time"
+-	"syntopica-backend/internal/app/runtimeinfo"
+-	"syntopica-backend/internal/domain/content"
+-	"syntopica-backend/internal/domain/models"
+-	"syntopica-backend/internal/domain/tagging"
+-	"syntopica-backend/internal/jobs"
+-	"syntopica-backend/internal/platform/database"
+-	"syntopica-backend/internal/platform/logging"
+-)
+-type Runtime struct {
+-	AutoRefresh            *jobs.AutoRefreshScheduler
+-	PreferenceUpdate       *jobs.PreferenceUpdateScheduler
+-	ContentCompletion      *jobs.ContentCompletionScheduler
+-	Firecrawl              *jobs.FirecrawlScheduler
+-	BlockedArticleRecovery *jobs.BlockedArticleRecoveryScheduler
+-	TagQualityScore        *jobs.TagQualityScoreScheduler
+-	NarrativeSummary       *jobs.NarrativeSummaryScheduler
+-	DailyReport            *jobs.DailyReportScheduler
+-	LogCleanup             *jobs.LogCleanupScheduler
+-	AuxLabelCleanup        *jobs.AuxLabelCleanupScheduler
+-}
+-func resetStaleStates() {
+-	resetCount := 0
+-	result := database.DB.Model(&models.SchedulerTask{}).
+-		Where("status = ?", "running").
+-		Updates(map[string]interface{}{
+-			"status":     "idle",
+-			"last_error": "reset on startup: previous process terminated unexpectedly",
+-		})
+-	resetCount += int(result.RowsAffected)
+-	if resetCount > 0 {
+-		logging.Infof("Reset %d scheduler task(s) stuck in 'running' state", resetCount)
+-	}
+-	feedResult := database.DB.Model(&models.Feed{}).
+-		Where("refresh_status = ?", "refreshing").
+--- candidata: architecture-docs [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: backend.md SHALL accurately describe the current directory structure
+  | The `architecture/backend.md` document SHALL reflect the actual `backend-go/` directory structure as it exists in the codebase.
+  > ### Requirement: backend.md SHALL accurately describe the current directory structure
+  > The `architecture/backend.md` document SHALL reflect the actual `backend-go/` directory structure as it exists in the codebase.
+  > - **WHEN** a developer reads the directory tree in `architecture/backend.md`
+  > - **AND** SHALL NOT list `migrate-db/`, `migrate-tags/`, `migrate-embedding-queue/`, `migrate-digest/`, `test-digest/`, or `test-embedding/` (none exist in `backend-go/cmd/`)
+  > #### Scenario: internal directory matches code
+  > - **WHEN** a developer reads the directory tree in `architecture/backend.md`
+  > - **THEN** the `internal/` tree SHALL match `backend-go/internal/` (including `admin/`, `reader/`, `tagmanagement/`, `topicgraph/`, `platform/`, `models/`, `app/`)
+  > - **AND** SHALL NOT reference deleted directories (`internal/domain/`, `internal/jobs/`, `internal/app/runtimeinfo/`)
+--- candidata: scheduler-seam [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Scheduler 接口定义
+  | 系统 SHALL 在 `internal/jobs/` 中定义一个 `Scheduler` Go 接口，包含 `Start() error`、`Stop()`、`GetStatus() SchedulerStatusResponse`、`TriggerNow() map[string]interface{}`、`UpdateInterval(int) error`、`ResetStats() er
+  > 系统 SHALL 在 `internal/jobs/` 中定义一个 `Scheduler` Go 接口，包含 `Start() error`、`Stop()`、`GetStatus() SchedulerStatusResponse`、`TriggerNow() map[string]interface{}`、`UpdateInterval(int) error`、`ResetStats() er
+  > 系统 SHALL 提供一个 `Registry` 结构体，允许按名称注册和查找 `Scheduler` 实例。
+  > - **WHEN** 调用 `registry.Get("auto_refresh")`
+  > - **THEN** 返回 `*AutoRefreshScheduler` 和 `true`（若已注册），否则返回 `nil` 和 `false`
+  > 系统 SHALL 支持遍历 `Registry` 中所有调度器统一执行 `Start()` 和 `Stop()`。
+  > - **WHEN** 调用 `registry.StartAll()`
+  > - **THEN** 按注册顺序依次调用每个调度器的 `Start()`，任一失败记录日志但不中断后续启动
+  > - **WHEN** 调用 `registry.StopAll(30 * time.Second)`
+--- candidata: tagging-domain [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: FindSimilarTagsByKeywordOverlap function
+  | The system SHALL provide a function `FindSimilarTagsByKeywordOverlap` in the tagging domain that accepts a set of tag IDs and returns similarity edges based on two-stage filtering (keyword overlap + s
+  > The system SHALL provide a function `FindSimilarTagsByKeywordOverlap` in the tagging domain that accepts a set of tag IDs and returns similarity edges based on two-stage filtering (keyword overlap + s
+  > #### Scenario: Event tags processed with keyword overlap
+  > - **THEN** the system SHALL call `FindSimilarTagsByKeywordOverlap` instead of `FindSimilarTagsAmongSet`
+  > - **THEN** the system SHALL load `event_cluster_kw_min_overlap` and `event_cluster_sem_threshold` from `embedding_config`
+  > ### Requirement: Models ownership by domain
+  > 系统 SHALL 将 `models/` 中的 struct 按域分散：
+  > - `feed/model.go` 持有 Feed、FeedStats
+  > - `article/model.go` 持有 Article
+--- candidata: scheduler-observability [PR]
+  | ## Purpose
+  | 调度器的执行结果必须端到端可见：每个调度器的执行产物（如「清理了 N 条日志」「恢复 N 篇文章」）SHALL 持久化到数据库、SHALL 通过 API 可读、SHALL 在前端展示。本能力修复当前「结果只在内存、重启即丢」「前端不展示详情」「部分调度器在 API 不可见」的问题。
+  | ## ADDED Requirements
+  > 全部 9 个调度器（auto_refresh, preference_update, content_completion, firecrawl, tag_quality_score, log_cleanup, daily_report, aux_label_cleanup, blocked_article_recovery）SHALL 在执行后将 `JobResult`（含 `Data` 计数与
+  > #### Scenario: log_cleanup 结果持久化
+  > - **WHEN** `log_cleanup` 调度器执行完成，删除了 42 条 `ai_call_logs` 和 10 条 `otel_spans`
+  > - **THEN** `scheduler_tasks` 中 `log_cleanup` 行的 `last_execution_result` 包含 `last_ai_call_logs_deleted=42`、`last_otel_spans_deleted=10`
+  > #### Scenario: aux_label_cleanup 结果持久化
+  > - **WHEN** `aux_label_cleanup` 执行完成，禁用了 5 个辅助标签
+  > - **THEN** 对应 `scheduler_tasks` 行的 `last_execution_result` 包含 `affected_count=5`
+  > #### Scenario: blocked_article_recovery 结果持久化
+--- candidata: public-read-only-demo [PR]
+  | # Spec — public-read-only-demo
+  | ## ADDED Requirements
+  | ### Requirement: One-command read-only demo launch
+  > The system SHALL provide a self-contained Docker Compose configuration that launches a fully browsable, read-only demo instance with a single command, requiring no external AI credentials, no RSS sour
+  > #### Scenario: First-time visitor launches the demo
+  > - **THEN** the PostgreSQL (pgvector) and syntopica-demo containers start, the schema is auto-created via AutoMigrate + migrations, the sanitized seed data is imported, and `http://localhost:5000` serv
+  > - **AND** all four primary pages (home `/`, topic graph `/topics`, tag management `/tags` with detective wall, settings `/settings`) render real-looking content without errors
+  > #### Scenario: Read-only enforcement blocks all mutations
+  > - **AND** the two side-effecting GET SSE endpoints (`/api/topic-tags/merge-preview/scan/stream`, `/api/topic-tags/merge-preview/evaluate/stream`) return 405
+  > - **AND** no background schedulers run (no RSS refresh, no LLM daily-report generation, no firecrawl crawling)
+  > - **AND** the `/ws` WebSocket endpoint is not registered (frontend degrades silently)
+
+===== P161 | Juniper/nita-webapp PR #62 | capacidade do par: console-streaming
+PR: changes to jenkins integration
+arquivos ligados: build-and-test-webapp/nita-webapp/ngcn_workbench/ngcn/api/views.py;frontend/src/pages/NetworkDetailPage.tsx
+--- linhas alteradas (201; mostrando até 40)
++    @extend_schema(
++        responses={
++            200: {
++                "type": "object",
++                "properties": {
++                    "available": {"type": "boolean"},
++                    "total": {"type": "integer"},
++                    "passed": {"type": "integer"},
++                    "failed": {"type": "integer"},
++                    "skipped": {"type": "integer"},
++                    "pass_percentage": {"type": "number"},
++                },
++            }
++        },
++    )
++    @action(detail=True, methods=["get"], url_path="robot-summary")
++    def robot_summary(self, request, pk=None):
++        """Return the Robot Framework result totals for this run's Jenkins build.
++        Relays the Jenkins Robot Framework plugin summary. Returns
++        ``{"available": false}`` when the build has no Robot results.
++        """
++        from ngcn import jenkins_jobs
++        history = self.get_object()
++        job_url = history.action_id.jenkins_url + "-" + history.campus_network_id.name
++        summary = jenkins_jobs.robot_summary(job_url, history.jenkins_job_build_no)
++        if summary is None:
++            return Response({"available": False})
++        return Response({"available": True, **summary})
+-import { useEffect, useRef, useState } from 'react'
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { useJenkinsStream, stateLabel } from '../components/LifecycleConsole'
++  jenkins_job_name: string
++}
++interface RobotSummary {
++  available: boolean
++  total?: number
++  passed?: number
++  failed?: number
++  skipped?: number
++  pass_percentage?: number
+--- candidata: spa-networks [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Networks page lists all networks
+  | The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > ### Requirement: Networks page lists all networks
+  > The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > - **WHEN** the user navigates to `/networks`
+  > - **THEN** a table is displayed with one row per network showing name, network type name, description, and status
+  > #### Scenario: View link navigates to detail
+  > - **WHEN** the user clicks "View" on a network row
+  > - **THEN** the browser navigates to `/app/networks/:id`
+  > The page SHALL provide an inline form (toggled by "Add Network" button) with fields for name, description, network type (dropdown), host_file, and dynamic_ansible_workspace. On submit it SHALL POST to
+--- candidata: spa-network-types [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Network Types page lists all types
+  | The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > - **WHEN** the user navigates to `/network-types`
+  > - **THEN** a table is displayed with one row per network type showing its name, description, zip filename, role count, and resource count
+  > - **WHEN** the page is fetching network types
+  > #### Scenario: Fetch error
+  > - **WHEN** the fetch request fails
+  > The page SHALL allow the user to select a zip file and upload it via `POST /api/v1/network-types/upload/`. On success the list SHALL refresh.
+  > - **THEN** the file is POSTed to the API, and on a 2xx response the network types list refreshes
+--- candidata: jenkins-trigger-security [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Trigger Succeeds Regardless of Deployment Topology
+  | The system SHALL successfully trigger a Jenkins job via
+  > The system SHALL successfully trigger a Jenkins job via
+  > `POST /api/v1/networks/{id}/trigger/{action_id}/` when NITA is accessed through
+  > internal Jenkins hostname or port.
+  > All Jenkins communication SHALL originate from the Django application container
+  > to the internal Jenkins service (`jenkins:8080`), never from the client browser
+  > - AND the Jenkins job is queued successfully
+  > - WHEN POST /api/v1/networks/{id}/trigger/{action_id}/ is called
+  > - AND the Jenkins job is queued successfully
+--- candidata: networks [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Create a Network
+  | The system SHALL create a new network via POST /api/v1/networks/ with name,
+  > The system SHALL create a new network via POST /api/v1/networks/ with name,
+  > status, description, host_file, and campus_type fields.
+  > Creation SHALL be non-blocking. The system SHALL persist the network row
+  > immediately with status `Initializing`, invoke the `network_template_mgr`
+  > Jenkins job with `operation=create` through the shared invocation library, and
+  > return without waiting for the build to complete. The response SHALL include the
+  > new network's data together with a streaming handle (`job_name` and `build_no`)
+  > so the SPA can watch the live console. If the Jenkins service is unreachable the
+--- candidata: frontend-skeleton [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: SPA Build Tooling
+  | The system SHALL provide a `frontend/` directory at the repo root containing a Vite + React 18 + TypeScript project buildable with `npm run build`. The project SHALL use `@vitejs/plugin-react` and emi
+  > The system SHALL provide a `frontend/` directory at the repo root containing a Vite + React 18 + TypeScript project buildable with `npm run build`. The project SHALL use `@vitejs/plugin-react` and emi
+  > #### Scenario: Production build succeeds
+  > - WHEN `npm run build` is executed in `frontend/`
+  > - THEN the build exits with code 0
+  > - AND requests to `/api/` are proxied to `http://localhost:8000`
+  > - GIVEN the SPA is loaded in a browser
+  > - For GET requests: forwards the request with `credentials: 'include'`.
+  > - For POST/PUT/PATCH/DELETE requests: first calls `GET /api/v1/auth/csrf/` (cached after first call) to obtain the CSRF token, then attaches it as the `X-CSRFToken` request header alongside `credentia

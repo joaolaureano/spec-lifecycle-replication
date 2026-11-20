@@ -1,0 +1,588 @@
+===== P223 | theoden8/webspace_app PR #195 | capacidade do par: webspaces
+PR: Web push notifications with background polling (issue #192)
+arquivos ligados: lib/screens/settings.dart;test/web_view_model_test.dart
+--- linhas alteradas (63; mostrando até 40)
++  final bool useContainers;
++    this.useContainers = false,
++  late bool _notificationsEnabled;
++  late bool _backgroundPoll;
++    _notificationsEnabled = widget.webViewModel.notificationsEnabled;
++    _backgroundPoll = widget.webViewModel.backgroundPoll;
++      widget.webViewModel.notificationsEnabled = _notificationsEnabled;
++      widget.webViewModel.backgroundPoll = _backgroundPoll;
++          if (widget.useContainers)
++            SwitchListTile(
++              title: const Text('Notifications'),
++              subtitle: const Text('Allow this site to show system notifications'),
++              value: _notificationsEnabled,
++              onChanged: (bool value) {
++                setState(() {
++                  _notificationsEnabled = value;
++                });
++              },
++            ),
++          if (widget.useContainers)
++            SwitchListTile(
++              title: const Text('Background polling'),
++              subtitle: Text(
++                Platform.isIOS
++                    ? 'Check for updates periodically (~15-30 min while app is closed)'
++                    : 'Keep checking for updates while app is backgrounded',
++              ),
++              value: _backgroundPoll,
++              onChanged: (bool value) {
++                setState(() {
++                  _backgroundPoll = value;
++                });
++              },
++            ),
++      expect(model.notificationsEnabled, isFalse);
++      expect(model.backgroundPoll, isFalse);
++    test('notificationsEnabled and backgroundPoll default to false when missing from JSON', () {
++      final json = {
++        'initUrl': 'https://example.com',
++        'currentUrl': 'https://example.com',
+--- candidata: web-push-notifications [tasks+PR+termos]
+  | # Web Push Notifications
+  | ## ADDED Requirements
+  | ### Requirement: NOTIF-001 - Notification Permission Handling
+  > # Web Push Notifications
+  > The system SHALL handle JavaScript `Notification.requestPermission()` calls from web pages and grant or deny based on the per-site notification toggle. Requires container mode (`_useContainers == true
+  > **And** a site has `notificationsEnabled` set to `true`
+  > **Given** a site has `notificationsEnabled` set to `false`
+  > **Given** container mode is NOT active (`_useContainers == false`)
+  > **Then** the `notificationsEnabled` and `backgroundPoll` toggles are not shown
+  > The system SHALL inject a JavaScript polyfill at `DOCUMENT_START` (with `forMainFrameOnly: false`) on every site that defines `window.Notification`, `Notification.permission`, `Notification.requestPer
+  > **And** `Notification.permission` is `"granted"` if the site has `notificationsEnabled == true`, otherwise `"denied"`
+--- candidata: lazy-webview-loading [tasks+PR]
+  | # Lazy Webview Loading - Delta for Web Push Notifications
+  | ## MODIFIED Requirements
+  | ### Requirement: LAZY-001 - On-Demand Loading
+  > # Lazy Webview Loading - Delta for Web Push Notifications
+  > Webviews SHALL be created only when the user visits a site, EXCEPT for sites with `notificationsEnabled == true` which SHALL be auto-loaded on app startup so their page JS can fire notifications witho
+  > Implementation: see the auto-load loop in `_restoreAppState` ([lib/main.dart](../../../../../lib/main.dart)) that adds every `notificationsEnabled` site index to `_loadedIndices` after the per-site mo
+  > **And** Site A (`slack.com`) has `notificationsEnabled` set to `true`
+  > **And** Site B (`teams.microsoft.com`) has `notificationsEnabled` set to `true`
+  > **And** Site C (`github.com/personal`) has `notificationsEnabled` set to `true`
+  > **And** sites without `notificationsEnabled` remain as placeholders until visited
+  > **And** Site A (`slack.com`) has `notificationsEnabled` set to `true`
+--- candidata: tracking-protection [tasks]
+  | # Enhanced Tracking Protection — incognito fingerprint randomization delta
+  | ## MODIFIED Requirements
+  | ### Requirement: ETP-004 - Per-site stability and cross-site uniqueness
+  > **Then** the result equals `S1`
+  > **Then** the returned seed equals `'s1'`
+  > **And** `computeAntiFingerprintingSeed(siteId: 's1', incognito: false, launchNonce: 'n2')` also equals `'s1'`
+  > The system SHALL maintain a process-lifetime random nonce, exposed as `LaunchNonce.value` in [lib/services/launch_nonce.dart](../../../../../lib/services/launch_nonce.dart). The nonce SHALL be generat
+  > **Then** the returned value equals `n`
+  > **Then** the returned value equals `'fixed'`
+  > **And** the fingerprint is identical across launches (ETP-004 baseline preserved)
+  > anti-fingerprinting JS shim under one umbrella per-site toggle, modelled
+--- candidata: link-intent-routing [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: LIR-001 - Per-Site Domain Claim List
+  | Each site SHALL carry a list of domain claims that declare which URLs it handles. A claim has a `kind` of `exactHost`, `wildcardSubdomain`, or `baseDomain`, and a canonical lowercase `value` with no s
+  > Each site SHALL carry a list of domain claims that declare which URLs it handles. A claim has a `kind` of `exactHost`, `wildcardSubdomain`, or `baseDomain`, and a canonical lowercase `value` with no s
+  > - **WHEN** a `WebViewModel` is deserialized from JSON that does not contain `domainClaims`
+  > - **THEN** the site's in-memory `domainClaims` is `[DomainClaim(baseDomain, getBaseDomain(initUrl))]`
+  > - **AND** subsequent serialization omits `domainClaims` when it equals the synthesized default
+  > The system SHALL resolve an incoming `http`/`https` URL to exactly one site (or "no match") using a deterministic specificity ranking: `exactHost` (score 300) > `wildcardSubdomain` (score 200) > `base
+  > - **AND** the incoming URL is `https://mastodon.social/@user`
+  > - **AND** the incoming URL is `https://mastodon.social/`
+  > - **AND** the incoming URL is `https://reddit.com/r/flutter`
+--- candidata: archive [termos]
+  | # Webspace Archive
+  | ## Status
+  | Implemented; manual hardware validation pending. All requirements
+  > ARCH-001 through ARCH-009 are wired end-to-end:
+  > `WebViewModel.isArchiveTier` in `_saveWebViewModels`,
+  > - **ARCH-006 (per-site override matrix):** `effectiveNotificationsEnabled`
+  > `archiveContainerId` plumbed through `WebViewConfig`; teardown on
+  > - **ARCH-009 (background snapshot mask):** `_maskBackground` overlay
+  > flag) so a restored archive keeps its grouping. `_saveWebspaces`
+  > appears while archives are open — at which point their content is
+  > to the slot pool (not opened); the rest can be restored by entering
+
+===== P224 | HiroyukiFuruno/KatanA PR #282 | capacidade do par: markdown-authoring
+PR: release: v0.22.10
+arquivos ligados: crates/katana-ui/src/shell_ui/shell_ui_shortcuts.rs;crates/katana-ui/src/views/panels/editor/logic.rs
+--- linhas alteradas (85; mostrando até 40)
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::app_state::{AppAction, AppState};
++    use crate::editor_undo::EditorUndoIdentity;
++    use katana_core::{ai::AiProviderRegistry, document::Document, plugin::PluginRegistry};
++    use std::path::Path;
++    use std::sync::Arc;
++    fn app_with_focused_editor(ctx: &egui::Context) -> KatanaApp {
++        let mut state = AppState::new(
++            AiProviderRegistry::new(),
++            PluginRegistry::new(),
++            Default::default(),
++            Arc::new(katana_platform::InMemoryCacheService::default()),
++        );
++        state
++            .document
++            .open_documents
++            .push(Document::new("/tmp/editor.md", ""));
++        state.document.active_doc_idx = Some(0);
++        let editor_id = EditorUndoIdentity::text_edit_id(None, Path::new("/tmp/editor.md"));
++        ctx.memory_mut(|mem| {
++            mem.request_focus(editor_id);
++        });
++        KatanaApp::new(state)
++    }
++    fn shifted_primary_v_input() -> egui::RawInput {
++        let mut modifiers = egui::Modifiers::NONE;
++        modifiers.command = true;
++        modifiers.shift = true;
++        let mut input = egui::RawInput::default();
++        input.events.push(egui::Event::Key {
++            key: egui::Key::V,
++            physical_key: None,
++            pressed: true,
++            repeat: false,
++            modifiers,
++        });
++        input
++    }
+--- candidata: markdown-asset-ingest [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: user は local image file を active Markdown document に添付できなければならない
+  | システムは、user が local image file を選択したとき、その画像を active Markdown document を起点にした `./asset/img` 配下へ保存し、相対 path の Markdown image reference を挿入できなければならない（SHALL）。
+  > ### Requirement: user は local image file を active Markdown document に添付できなければならない
+  > システムは、user が local image file を選択したとき、その画像を active Markdown document を起点にした `./asset/img` 配下へ保存し、相対 path の Markdown image reference を挿入できなければならない（SHALL）。
+  > - **WHEN** user が active Markdown document に対して image file attach を実行する
+  > - **THEN** system は active Markdown document の親ディレクトリ配下に `asset/img` を解決する
+  > - **THEN** system は選択した画像を保存し、相対 path の Markdown image reference を editor に挿入する
+  > ### Requirement: user は clipboard image を active Markdown document に貼り付けできなければならない
+  > - **WHEN** user が image data を含む clipboard から paste image を実行する
+  > - **THEN** system は保存した画像への相対 path を editor に挿入する
+--- candidata: renderer-runtime-interface [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Diagram rendering is owned by the `katana-canvas-forge` library
+  | システムは、Mermaid / Draw.io 描画と HTML / PDF / PNG / JPEG export を、KatanA 内部実装ではなく外部 library `katana-canvas-forge`（kcf）が所有しなければならない（MUST）。KatanA は kcf を git tag pinned dependency として consume する。
+  > #### Scenario: Build cache keys from rendering-relevant inputs
+  > システムは、kcf を KatanA preview / editor / `egui` / KatanA UI state に依存させてはならない（MUST NOT）。
+  > - **THEN** kcf crate dependency graph に `egui`、KatanA preview、KatanA editor、KatanA UI state は含まれない
+  > - **WHEN** preview crate（v0.26.0 で分離）が描画を行う
+  > - **THEN** preview crate は kcf を library として呼ぶ
+  > - **THEN** kcf は preview crate へ依存しない
+  > #### Scenario: Compare first render and repeated render time
+--- candidata: diagram-block-preview [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: ダイアグラムプレビューは現在のテーマスナップショットを使用する
+  | システムは、アプリ起動時点のスナップショットや dark/light 切り替えだけに依存するのではなく、現在のテーマスナップショットに基づいてダイアグラムプレビューを描画しなければならない（SHALL）。
+  > - **WHEN** a diagram job completes after the document source has already changed or the preview was explicitly invalidated
+  > - **WHEN** the active Markdown document contains a valid ````mermaid` block
+  > - **WHEN** the active Markdown document contains a valid `~~~mermaid` block
+  > - **THEN** KatanA passes the source, Mermaid.js-compatible `RenderConfig`, KatanA `RenderPolicy`, and theme `RenderContext` to the kcf `Renderer`
+  > - **WHEN** the active Markdown document contains a valid `~~~drawio` block
+  > #### Scenario: kcf の crate version を手書きで固定しない
+  > - **THEN** `crate=katana-canvas-forge:0.1.0` のような古い手書き文字列を cache invalidation の根拠にしない
+  > #### Scenario: kdr を crates.io dependency として参照する
+--- candidata: document-viewer-integration [PR]
+  | # Document Viewer Integration Spec
+  | ## Requirements
+  | ### 1. Local Document Viewing
+  > # Document Viewer Integration Spec
+  > ### 1. Local Document Viewing
+  > KatanA SHALL support viewing various document formats locally.
+  > #### Scenario: Office Document Viewing
+  > - **THEN** The app displays a read-only preview of the document.
+  > ### 2. Web Document Integration
+  > KatanA SHALL support viewing web-based documents via URL.
+  > - **NOTE** Private documents may require the user to log in within the WebView.
+--- candidata: mermaid-rendering-compatibility-investigation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mermaid rendering inherits the useful `mmdc` output contract without depending on `mmdc`
+  | システムは、Mermaid 図形を描画するとき、実行時に `mmdc` を必須とせず、旧 `mmdc` 経路が担っていた安定した出力条件を KatanA 管理下で採用した単一 Mermaid renderer 内で満たさなければならない（MUST）。
+  > - **THEN** it includes screenshot or image evidence generated from reproducible commands or `scripts/screenshot`
+  > - **THEN** the finding records whether it should be fixed in the renderer, deferred to a later versioned change, or accepted as a documented Mermaid.js difference
+  > - **THEN** it includes screenshot or image evidence generated from reproducible commands or `scripts/screenshot`
+  > - **THEN** the finding records whether it should be fixed in the renderer, deferred to a later versioned change, or accepted as a documented Mermaid.js difference
+
+===== P225 | dynatrace-oss/dtwiz PR #134 | capacidade do par: feature-flag-registry
+PR: feat: gcp support
+arquivos ligados: cmd/setup.go;cmd/update.go
+--- linhas alteradas (68; mostrando até 40)
++	"github.com/dynatrace-oss/dtwiz/pkg/installer/gcp"
+-		// Pre-check Azure status so we can badge the Azure entry in the list.
++		// Pre-check Azure/GCP status so we can badge those entries in the list.
++		gcpConfigured := false
+-			if exists, err := azure.ConnectionExists(envURL, platformTok); err != nil {
+-				logger.Debug("azure connection check failed, badging as not configured", "err", err)
+-			} else if exists {
+-				azureConfigured = true
++			if err := installer.RunConcurrently(
++				func() error {
++					exists, err := azure.ConnectionExists(envURL, platformTok)
++					azureConfigured = exists
++					return err
++				},
++				func() error {
++					exists, err := gcp.ConnectionExists(envURL, platformTok)
++					gcpConfigured = exists
++					return err
++				},
++			); err != nil {
++				logger.Debug("connection existence check failed, badging as not configured", "err", err)
++			if r.Method == recommender.MethodGCP {
++				if gcpConfigured {
++					title += "  [update]"
++				} else {
++					title += "  [install]"
++				}
++			}
+-		if selected.Method == recommender.MethodAzure && azureConfigured {
++		if (selected.Method == recommender.MethodAzure && azureConfigured) ||
++			(selected.Method == recommender.MethodGCP && gcpConfigured) {
++		case recommender.MethodGCP:
++			logger.Debug("setup selected GCP", "configured", gcpConfigured)
++			if gcpConfigured {
++				installErr = gcp.UpdateGCP(envURL, platformTok, setupDryRun, StartTime)
++			} else {
++				installErr = gcp.InstallGCP(envURL, platformTok, setupDryRun, StartTime)
++			}
+-		// AWS scopes its watch to the account (WatchIngestAWS) and Azure runs the
+-		// generic watch from inside the installer; both start their own watch, so
+--- candidata: azure-monitor-update [tasks+termos]
+  | # Azure Monitor Update
+  | ## ADDED Requirements
+  | ### Requirement: Update is an in-place monitoring-config reconcile
+  > # Azure Monitor Update
+  > ### Requirement: Update is an in-place monitoring-config reconcile
+  > The system SHALL provide an `UpdateAzure` entry point that refreshes an existing integration in place by reconciling **only** the `da-azure` monitoring configuration to the latest schema-derived defau
+  > - **GIVEN** an Azure connection named `dtwiz-azure` already exists
+  > - **WHEN** the user runs `dtwiz update azure`
+  > - **THEN** it runs the same in-place reconcile as the other entry points
+  > #### Scenario: Setup routes to update when configured
+  > - **GIVEN** an Azure connection named `dtwiz-azure` already exists
+--- candidata: gcp-monitor-install [PR]
+  | # GCP Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install gcp` as the final runnable command for GCP installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Google Cloud integration
+  > - **WHEN** the user runs `dtwiz install gcp`
+  > - **THEN** the GCP installer runs against the resolved environment and platform token
+  > ### Requirement: Service-account impersonation authentication
+  > The system SHALL authenticate Dynatrace to GCP using service-account impersonation and SHALL NOT create, download, or store any service-account key file. The Dynatrace principal SHALL be granted `role
+  > - **GIVEN** the installer creates the GCP service account and grants impersonation
+  > - **THEN** no service-account key is generated, printed, or persisted to disk
+--- candidata: azure-monitor-install [tasks]
+  | # Azure Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > # Azure Monitor Install
+  > ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install azure` as the final runnable command for Azure installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Azure Monitor integr
+  > - **WHEN** the user runs `dtwiz install azure`
+  > - **THEN** the Azure installer runs against the resolved environment and platform token
+  > The system SHALL authenticate Dynatrace to Azure using a federated identity (workload identity) credential and SHALL NOT create or store any Azure client secret. The Service Principal SHALL be created
+  > - **WHEN** the installer registers the Azure Service Principal
+  > - **GIVEN** the environment apps host `<id>.apps.dynatrace.com`
+--- candidata: gcp-monitor-uninstall [PR]
+  | # GCP Monitor Uninstall
+  | ## ADDED Requirements
+  | ### Requirement: Uninstall command and entry point
+  > # GCP Monitor Uninstall
+  > ### Requirement: Uninstall command and entry point
+  > The system SHALL expose `dtwiz uninstall gcp` as the final runnable command for GCP removal, accepting no extra positional arguments. It SHALL remove the Dynatrace GCP integration created by the insta
+  > #### Scenario: Uninstall command registered
+  > - **WHEN** the user runs `dtwiz uninstall gcp`
+  > - **THEN** the uninstaller discovers and removes dtwiz-created GCP integration resources
+  > ### Requirement: Discover all dtwiz-named resources concurrently
+  > The system SHALL discover every Dynatrace connection and every `da-gcp` monitoring configuration whose name equals `dtwiz-gcp`, returning all matches (not just the first) so leftovers from interrupted
+--- candidata: oneagent-init [tasks]
+  | # OneAgent PoC Scaffolding
+  | > **Note:** The `OneAgentPoC` feature flag and the V1/V2 branching described in this spec were temporary development scaffolding. The flag has since been removed: `InstallOneAgentV2` and `UninstallOne
+  | ## ADDED Requirements
+  > > **Note:** The `OneAgentPoC` feature flag and the V1/V2 branching described in this spec were temporary development scaffolding. The flag has since been removed: `InstallOneAgentV2` and `UninstallOne
+  > ### Requirement: New package pkg/installer/oneagent/ with core installer logic
+  > `pkg/installer/oneagent/` SHALL be created as a standalone Go package (`package oneagent`) with the installer split across three source files:
+  > - `oneagent.go`: types, entry point `InstallOneAgentV2`, `DefaultAgentConfig`, `ResolveAgentConfig`, `detectRuntimeEnvironment`
+  > - `download.go`: `DownloadInstaller`, `readErrorBody`, `installerOSSegment`, `installerExtension`, `humanBytes`
+  > - `verify.go`: `VerifyInstallerSignature`, `fetchDynatraceRootCA`, `runOpensslVerify`
+  > - **GIVEN** `pkg/installer/oneagent/` is created
+  > - **WHEN** test code imports `github.com/dynatrace-oss/dtwiz/pkg/installer/oneagent`
+
+===== P226 | datenoio/iterabledata PR #11 | capacidade do par: rdf-formats
+PR: Add LLM readiness roadmap: catalog, agent tools, and AI operations
+arquivos ligados: iterable/helpers/detect.py
+--- linhas alteradas (1561; mostrando até 40)
+-from __future__ import annotations
+-import importlib
+-from typing import Any, Literal, TypedDict
+-import chardet
+-from ..base import BaseCodec, BaseIterable
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-# Plugin discovery flag
+-_plugins_discovered = False
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+-        try:
+-            from ..plugins import discover_plugins
+--- candidata: ai [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Block-Based Documentation Generation
+  | The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > independent blocks and returns a structured result containing per-block markdown and data
+  > #### Scenario: Generate selected blocks
+  > - **WHEN** `ai.doc.generate_blocks()` is called with `blocks=["general", "schema"]`
+  > - **THEN** the result contains a `blocks` mapping with entries for `general` and `schema`
+  > - **AND** each block entry contains a `markdown` string and a `data` dictionary
+  > - **AND** the result contains a `source` descriptor and a `full_document_markdown` string
+  > #### Scenario: Default block set
+--- candidata: convert [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: File Format Conversion
+  | The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > ### Requirement: File Format Conversion
+  > The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > The system SHALL support atomic writes for safer production file operations. When atomic writes are enabled, the system SHALL write to a temporary file and atomically rename it to the final destinatio
+  > #### Scenario: Atomic write on successful conversion
+  > - **WHEN** `convert()` is called with `atomic=True` and conversion completes successfully
+  > - **AND** the temporary file is atomically renamed to the final destination using `os.replace()`
+  > - **AND** the temporary file is removed after successful rename
+  > - **AND** the final output file is only visible when fully written
+--- candidata: format-registry [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Declarative Format Descriptors
+  | The system SHALL define each built-in format with a single declarative descriptor that records
+  > ### Requirement: Declarative Format Descriptors
+  > The system SHALL define each built-in format with a single declarative descriptor that records
+  > its canonical id, aliases, implementing module and class, whether its content is text or binary,
+  > whether it is flat/tabular, whether it supports writing, its optional-dependency extra (if any),
+  > and any leading-byte signatures used for content-based detection. The set of descriptors SHALL be
+  > the single source of truth for built-in format metadata.
+  > #### Scenario: Each format has exactly one descriptor
+  > - **WHEN** the format descriptor table is loaded
+--- candidata: database-engines [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Database Engine Support
+  | The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > ### Requirement: Database Engine Support
+  > The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > #### Scenario: PostgreSQL query as iterable source
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="SELECT id, name, created_at FROM users WHERE active = TRUE")`
+  > - **THEN** the system connects to PostgreSQL, executes the query, and returns an iterable that yields dict rows with keys `id`, `name`, `created_at`
+  > #### Scenario: PostgreSQL table name auto-query
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="users")` with a table name instead of SQL query
+  > - **THEN** the system automatically builds and executes `SELECT * FROM users`, returning an iterable of all rows from the table
+--- candidata: cloud-storage [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Cloud Storage URI Support
+  | The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > ### Requirement: Cloud Storage URI Support
+  > The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > - **WHEN** a user calls `open_iterable('s3://bucket/path/file.csv')`
+  > - **THEN** the system detects the S3 URI scheme, opens the file via fsspec, and returns an iterable that works identically to local files
+  > #### Scenario: Read compressed file from GCS
+  > - **WHEN** a user calls `open_iterable('gs://bucket/data.jsonl.gz')`
+  > - **THEN** the system detects the GCS URI, opens the file via fsspec, detects the gzip compression codec, and returns an iterable that transparently decompresses and parses the JSONL format
+  > #### Scenario: Write to Azure Blob Storage
+
+===== P227 | tatargabor/set-core PR #6 | capacidade do par: verify-gate
+PR: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization)
+arquivos ligados: lib/set_orch/engine.py
+--- linhas alteradas (84; mostrando até 40)
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
+--- candidata: orch-plan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python planning orchestration
+  | The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > #### Scenario: Planning from Python replan
+  > - **WHEN** `auto_replan_cycle()` needs to generate a new plan
+  > - **THEN** it SHALL call `planner.run_planning_pipeline()` which orchestrates the full flow
+  > - **AND** the pipeline SHALL use existing Python functions: `detect_test_infra()`, `build_decomposition_context()`, `validate_plan()`, `enrich_plan_metadata()`
+  > - **WHEN** planning detects a registered design MCP server
+  > - **THEN** it SHALL fetch the design snapshot and include design tokens in the decomposition prompt
+  > The Python planning pipeline SHALL check the triage gate before proceeding with decomposition.
+--- candidata: orch-replan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python auto-replan cycle without bash dependency
+  | The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > ### Requirement: Python auto-replan cycle without bash dependency
+  > The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > #### Scenario: Auto-replan triggered after all changes complete
+  > - **WHEN** all changes reach terminal status and `auto_replan` directive is true
+  > - **THEN** the Python monitor SHALL call `engine.auto_replan_cycle()` directly (Python function)
+  > - **AND** `auto_replan_cycle()` SHALL NOT shell out to bash `planner.sh`
+  > ### Requirement: Python replan collects context via Python functions
+  > The Python `auto_replan_cycle()` SHALL collect replan context by calling Python functions directly.
+--- candidata: replan-domain-plan-reuse [PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - On replan, look up `domains-plans-<lineage>.json` and reuse cached domain plans whose input hasn't changed.
+  > - Domain-input hashing (digest summary + requirements + planning brief).
+  > - Reuse logic for the 3-phase parallel path.
+  > - Reuse logic for the serial path (whole-plan reuse on identical digest input).
+  > - Telemetry recording how many domains were reused vs re-planned.
+  > - Generating the saved domain plans (that's `orch-plan-python`).
+  > - Diff-update digest pipeline (that's `digest-diff-update`).
+  > - The replan trigger logic itself (that's `orch-replan-python`).
+--- candidata: planner-strategy-routing [PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - Directive `planner.strategy` with values `serial | parallel | auto` (default `auto`).
+  > - `auto` mode that picks `serial` or `parallel` based on estimated flat-prompt input tokens.
+  > - Function `estimate_flat_prompt_tokens(digest_dir, replan_ctx)` that returns an integer estimate without invoking Claude.
+  > - Removal of the legacy `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic.
+  > - Single-call decompose path becomes the primary code path (the existing flat path at `planner.py:2674-2693` lifted out of the fallback branch).
+  > - Choosing models per strategy (covered by `model_config` and the cost-optimized preset).
+  > - The 3-phase pipeline implementation itself (covered by `orch-plan-python`).
+  > - Replan strategy selection (covered by `replan-scoped-patch`).
+--- candidata: orchestration-engine [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Monitor loop poll interval
+  | The orchestrator monitor loop SHALL poll active changes every 15 seconds.
+  > The orchestrator monitor loop SHALL poll active changes every 15 seconds.
+  > The orchestrator SHALL pre-create `proposal.md` (not `brief-context.md`) in the change directory during dispatch, providing Ralph with structured scope context.
+  > - **WHEN** `dispatch_change()` creates a new change in a worktree
+  > - **THEN** the orchestrator SHALL create `openspec/changes/{name}/proposal.md` with:
+  > - `## Capabilities` section with the change name
+  > ### Requirement: State initialization with integer verify retry count
+  > The `init_state()` function SHALL initialize `verify_retry_count` as an integer (0), not a boolean.
+  > - **THEN** each change object SHALL include `verify_retry_count: 0` (integer)
+
+===== P228 | RandyChen1985/yunshu-ai-agent-platform PR #21 | capacidade do par: system-config
+PR: Pull Request: ChatBI 查数可靠性加固：联邦 repair、空结果诊断、语义意图与自动引用
+arquivos ligados: frontend/src/views/SystemConfig.vue
+--- linhas alteradas (24; mostrando até 40)
+-                              <select v-model="item.value" :disabled="!canSave" class="shadow-sm focus:ring-primary focus:border-primary block w-full sm:text-s
+-                                 <option value="local">local (本地元数据)</option>
+-                                 <option value="ragflow">ragflow (语义检索 RAG)</option>
+-                              </select>
++                              <div class="flex items-center gap-2">
++                                <select v-model="item.value" :disabled="!canSave" class="shadow-sm focus:ring-primary focus:border-primary block flex-1 min-w-0
++                                   <option value="local">local (本地元数据)</option>
++                                   <option value="ragflow">ragflow (语义检索 RAG)</option>
++                                </select>
++                                <button
++                                  v-if="item.value === 'local'"
++                                  type="button"
++                                  @click="openRebuildConfirm"
++                                  :disabled="loading.rebuild_vector || !canSave"
++                                  class="inline-flex shrink-0 items-center justify-center py-2 px-3 border border-rose-200 rounded-md shadow-sm text-sm font-me
++                                  title="重建本地 Redis 元数据与案例向量索引并全量同步"
++                                >
++                                  <ArrowPathIcon v-if="!loading.rebuild_vector" class="h-4 w-4 mr-1.5" />
++                                  <span v-else class="animate-spin h-4 w-4 mr-1.5 border-2 border-rose-400 border-t-transparent rounded-full"></span>
++                                  {{ loading.rebuild_vector ? '重构中...' : '一键重构' }}
++                                </button>
++                              </div>
+-                                  💡 <strong>本地元数据模式：</strong>直接在本地查询由元数据字典维护的表和字段，并使用全局 Embedding 算法计算向量，通过<strong>本地 Redis (HNSW) 向量索引</strong>进行高速检索，<strong>
++                                  💡 <strong>本地元数据模式：</strong>直接在本地查询由元数据字典维护的表和字段，并使用全局 Embedding 算法计算向量，通过<strong>本地 Redis (HNSW) 向量索引</strong>进行高速检索，<strong>
+--- candidata: chatbi-multi-agent-team [PR]
+  | # chatbi-multi-agent-team Specification
+  | ## Purpose
+  | TBD - created by archiving change refactor-to-agentscope. Update Purpose after archive.
+--- candidata: agent-debug [termos]
+  | # Spec: Agent Debugging UI
+  | ## ADDED Requirements
+  | ### Requirement: Chat Interface
+  > - And The user can click to expand details
+  > - When User clicks "智能体调试" in the sidebar
+  > - When User clicks the "View Logs" button on the message bubble
+  > - When User clicks the "View Logs" button on the message bubble
+  > - When They select "今日" as the time range
+  > - When They hover over a specific tool's line
+  > - When They select "今日" as the time range
+  > - When They hover over a specific tool's line
+--- candidata: agentscope-core-integration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: AgentScope 作为唯一 AI 运行时
+  | 系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+  > - **那么** 系统应保持现有 RAGFlow / OpenClaw API 代理实现
+  > - **并且** 再由 AgentScope adapter 转换为 AgentScope `Msg` 与内容 block
+  > - **并且** AgentScope model、tool、event、permission、workspace、Redis storage/message bus 相关模块可 import
+  > - **那么** 系统应保持现有 RAGFlow / OpenClaw API 代理实现
+  > - **并且** 再由 AgentScope adapter 转换为 AgentScope `Msg` 与内容 block
+  > - **并且** AgentScope model、tool、event、permission、workspace、Redis storage/message bus 相关模块可 import
+  > - **那么** 系统应保持现有 RAGFlow / OpenClaw API 代理实现
+  > - **并且** 再由 AgentScope adapter 转换为 AgentScope `Msg` 与内容 block
+--- candidata: local-redis-vector-search [termos]
+  | ## ADDED Requirements
+  | ### Requirement: 本地元数据向量化与 Redis 同步
+  | 系统 MUST 在数据集（MetaDataset）生命周期发生变更（如新建、修改元数据属性、导入表结构、删除）时，将最新的元数据特征生成 Embedding 向量，并写入指定的 Redis HASH 缓存。
+  > ### Requirement: 本地元数据向量化与 Redis 同步
+  > 系统 MUST 在数据集（MetaDataset）生命周期发生变更（如新建、修改元数据属性、导入表结构、删除）时，将最新的元数据特征生成 Embedding 向量，并写入指定的 Redis HASH 缓存。
+  > - **THEN** 系统遍历该数据集下的每一个物理表及指标，分别利用 `MetadataRagService` 生成各自的单表/指标 YAML 文本，计算向量，并同步写入对应的 Redis Key `metadata:dataset:<id>:table:<table_name>` 和 `metadata:dataset:<id>:metrics`，每个 HASH 结构均对齐包含 `doc_na
+  > 系统在初始化 Redis 向量索引（RediSearch Index）时，MUST 严格通过 PREFIX 参数将扫描范围限定为元数据特定的命名空间，确保向量搜索不会混入非元数据类型的 Redis Key。
+  > - **THEN** 系统向 Redis 执行 `FT.CREATE` 命令，并将 `PREFIX` 参数指定为 `1 metadata:dataset:`，且向量距离度量使用 `COSINE`，以避免混淆诸如 `memory:summary:` 等其他业务的哈希 Key
+  > - **THEN** 系统将 ID 列表拼装成 Tag 过滤条件 `(@dataset_id:{1|3})`，向 Redis 向量数据库发起 HNSW KNN 检索，仅在 ID 为 1 和 3 的子集中搜索，并以 `similarity` 打分高低排序召回前 Top K 个数据集的元数据
+  > - **THEN** 系统跳过有权 ID 列表的前置过滤拼接，向 Redis 向量数据库发起使用 `*` 全量通配符的 HNSW KNN 检索 `*=>[KNN 5 @embedding $vec AS score]`
+  > ### Requirement: 检索返回格式与 RAGFlow 多态对齐

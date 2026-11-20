@@ -1,0 +1,2908 @@
+===== P264 | repo 0verL1nk/PaperSage | PR #20: feat: agent centric orchestration | capacidade: trace-middleware
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: 使用 Node-style Hooks 追踪执行阶段
+系统 SHALL 实现 TraceMiddleware 类，继承自 AgentMiddleware，使用 before_model 和 after_model hooks 自动记录 agent 执行阶段。
+
+#### Scenario: before_model hook 提取当前阶段
+- **WHEN** before_model hook 被调用
+- **THEN** middleware 从 state["messages"] 中提取最新的 performative 字段，调用 phase_label_from_performative 转换为中文标签，并追加到 state 的 trace_labels 列表中
+
+#### Scenario: after_model hook 记录模型响应
+- **WHEN** after_model hook 被调用
+- **THEN** middleware 从新增的 AIMessage 中提取 performative，记录到 trace_labels 列表中
+
+### Requirement: 保持现有 Trace API
+系统 SHALL 保持 `agent/domain/trace.py` 中定义的 `PHASE_BY_PERFORMATIVE`、`phase_label_from_performative` 和 `phase_summary` 函数的公共 API 不变。
+
+#### Scenario: 现有代码继续工作
+- **WHEN** 其他模块调用 `phase_label_from_performative("plan")`
+- **THEN** 返回 "规划"，与之前行为一致
+
+### Requirement: 扩展 AgentState Schema
+系统 SHALL 定义自定义的 AgentState schema，添加 trace_labels 字段（类型为 NotRequired[list[str]]）用于存储执行阶段标签。
+
+#### Scenario: 初始化 trace_labels
+- **WHEN** agent 开始执行且 state 中不存在 trace_labels
+- **THEN** middleware 初始化 trace_labels 为空列表
+
+#### Scenario: 追加阶段标签
+- **WHEN** middleware 提取到新的 performative
+- **THEN** 将对应的中文标签追加到 state["trace_labels"] 列表中
+
+### Requirement: 使用 after_agent Hook 生成阶段摘要
+系统 SHALL 实现 after_agent hook，在 agent 执行完成后调用 phase_summary 函数生成去重的阶段路径摘要。
+
+#### Scenario: 生成去重的阶段路径
+- **WHEN** after_agent hook 被调用且 state["trace_labels"] 包含多个标签
+- **THEN** 调用 phase_summary(state["trace_labels"]) 生成摘要（如 "接收请求 -> 规划 -> 输出最终答案"），并存储到 state["trace_summary"] 中
+
+#### Scenario: 空标签列表处理
+- **WHEN** state["trace_labels"] 为空
+- **THEN** phase_summary 返回 "无"
+
+--- ARQUIVOS DO PR (46)
+modified  +7     -23    agent/a2a/router.py
+modified  +2     -0     agent/application/contracts.py
+modified  +32    -15    agent/application/turn_engine.py
+modified  +2     -28    agent/capabilities.py   <== código ligado à spec
+modified  +2     -0     agent/domain/orchestration.py
+modified  +10    -6     agent/middlewares/__init__.py   <== código ligado à spec
+added     +60    -0     agent/middlewares/builder.py
+added     +244   -0     agent/middlewares/orchestration.py
+added     +40    -0     agent/middlewares/plan.py
+added     +14    -0     agent/middlewares/todolist.py
+added     +146   -0     agent/middlewares/tool_selector.py
+modified  +0     -2     agent/orchestration/__init__.py
+removed   +0     -134   agent/orchestration/async_policy.py
+modified  +168   -160   agent/orchestration/orchestrator.py
+removed   +0     -203   agent/orchestration/policy_engine.py
+modified  +12    -13    agent/paper_agent.py
+modified  +11    -20    agent/runtime_agent.py   <== código ligado à spec
+modified  +110   -559   agent/tools/local_ops.py
+added     +173   -0     agent/tools/plan_tools.py
+added     +2     -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/.openspec.yaml
+added     +203   -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/design.md
+added     +44    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/proposal.md
+added     +40    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/specs/orchestration-middleware/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/specs/orchestration-tools/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/specs/orchestrator-core/spec.md
+added     +89    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/specs/plan-management/spec.md
+added     +51    -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/specs/todolist-middleware/spec.md
+added     +103   -0     openspec/changes/archive/2026-03-17-agent-centric-orchestration/tasks.md
+added     +44    -0     openspec/specs/orchestration-middleware/spec.md
+added     +38    -0     openspec/specs/orchestration-tools/spec.md
+added     +38    -0     openspec/specs/orchestrator-core/spec.md
+added     +92    -0     openspec/specs/plan-management/spec.md
+added     +55    -0     openspec/specs/todolist-middleware/spec.md
+added     +51    -0     tests/integration/test_todolist_middleware_e2e.py
+modified  +0     -107   tests/unit/test_agent_capabilities.py   <== código ligado à spec
+modified  +0     -677   tests/unit/test_orchestration_protocol.py
+removed   +0     -51    tests/unit/test_orchestration_structured_output.py
+added     +94    -0     tests/unit/test_plan_tools.py
+removed   +0     -58    tests/unit/test_policy_engine_llm_fallback.py
+removed   +0     -85    tests/unit/test_request_context_interceptor.py
+modified  +1     -1     tests/unit/test_turn_engine.py
+removed   +0     -117   tests/unit/test_workflow_router.py
+modified  +6     -0     ui/agent_center/controller.py
+modified  +44    -0     ui/agent_center_page.py
+modified  +33    -0     ui/agent_center_sidebar.py
+modified  +1     -1     ui/agent_center_turn_view.py
+--- DIFF DO CÓDIGO LIGADO
+### agent/capabilities.py
+@@ -11,6 +11,7 @@
+ from langchain_core.tools import tool
+ from pydantic import BaseModel, Field
+ 
++from .middlewares.progressive_tool_disclosure import _TOOL_VISIBILITY_ATTR
+ from .scholarly_search import (
+     ScholarlySearchError,
+     format_search_papers_results,
+@@ -134,7 +135,6 @@ class SearchToolsInput(BaseModel):
+     "search_document",
+     "ask_human",
+ }
+-_TOOL_VISIBILITY_ATTR = "_progressive_tool_visibility"
+ _TOOL_METADATA = (
+     ToolMetadata(
+         name="search_document",
+@@ -992,18 +992,6 @@ def start_team(goal: str, reason: str = "", roles_hint: str = "") -> str:
+ 
+         _register_tool(start_team)
+ 
+-    progressive_enabled = _env_flag("AGENT_PROGRESSIVE_TOOL_DISCLOSURE", default=True)
+-    if not progressive_enabled:
+-        for tool_obj in runtime_tools:
+-            setattr(tool_obj, _TOOL_VISIBILITY_ATTR, "fixed")
+-        logger.info(
+-            "Agent tools prepared (legacy): discovered=%s enabled=%s names=%s",
+-            len(discovered_tools),
+-            len(runtime_tools),
+-            ",".join(tool_item.name for tool_item in runtime_tools),
+-        )
+-        return runtime_tools
+-
+     fixed_tool_names = _resolve_fixed_tool_names(enabled_tool_names=set(runtime_tool_map.keys()))
+     lazy_tool_names = sorted(
+         name for name in runtime_tool_map.keys() if name not in fixed_tool_names
+@@ -1083,27 +1071,13 @@ def search_tools(query: str, reason: str = "") -> str:
+             ensure_ascii=False,
+         )
+ 
+-    for tool_name, tool_obj in runtime_tool_map.items():
+-        visibility = "fixed" if tool_name in fixed_tool_names else "lazy"
+-        setattr(tool_obj, _TOOL_VISIBILITY_ATTR, visibility)
+-    setattr(search_tools, _TOOL_VISIBILITY_ATTR, "fixed")
+-
+     all_tools = list(runtime_tools)
+     all_tools.append(search_tools)
+ 
+     logger.info(
+-        "Agent tools prepared (progressive): discovered=%s fixed=%s lazy=%s registered=%s names=%s",
++        "Agent tools prepared: discovered=%s registered=%s names=%s",
+         len(discovered_tools),
+-        len(fixed_tool_names),
+-        len(lazy_tool_names),
+         len(all_tools),
+         ",".join(tool_item.name for tool_item in all_tools),
+     )
+     return all_tools
+-
+-
+-# Deprecated: Import from agent.middlewares instead
+-from .middlewares import (  # noqa: E402, F401
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
+
+### agent/middlewares/__init__.py
+@@ -1,15 +1,19 @@
+ """Middleware implementations for agent execution."""
+ 
+-from .progressive_tool_disclosure import (
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
++from .builder import build_middleware_list
++from .orchestration import OrchestrationMiddleware
++from .plan import plan_middleware
++from .todolist import todolist_middleware
++from .tool_selector import build_tool_selector_middleware
+ from .trace import TraceMiddleware
+ from .types import AgentState
+ 
+ __all__ = [
+     "AgentState",
++    "OrchestrationMiddleware",
+     "TraceMiddleware",
+-    "ProgressiveToolDisclosureMiddleware",
+-    "build_progressive_tool_middleware",
++    "todolist_middleware",
++    "plan_middleware",
++    "build_tool_selector_middleware",
++    "build_middleware_list",
+ ]
+
+### agent/runtime_agent.py
+@@ -2,13 +2,12 @@
+ from typing import Any
+ 
+ from langchain.agents import create_agent
+-from langchain.agents.middleware import AgentMiddleware, SummarizationMiddleware
+ 
+ from .capabilities import (
+     build_agent_tools,
+     discover_available_tools,
+ )
+-from .middlewares import TraceMiddleware, build_progressive_tool_middleware
++from .middlewares import build_middleware_list, todolist_middleware
+ 
+ SPAWN_TOOL_NAMES = {"start_plan", "start_team"}
+ 
+@@ -54,29 +53,21 @@ def create_runtime_agent(
+     tools: list[Any],
+     checkpointer: Any | None = None,
+     enable_auto_summarization: bool = True,
++    enable_tool_selector: bool = True,
+ ) -> Any:
+-    middleware_list: list[AgentMiddleware] = []
++    # Add TodoListMiddleware tools to the tools list
++    all_tools = list(tools) + list(todolist_middleware.tools)
+ 
+-    # Trace middleware
+-    middleware_list.append(TraceMiddleware())
+-
+-    # Progressive tool disclosure middleware
+-    progressive_middleware = build_progressive_tool_middleware(tools)
+-    if progressive_middleware:
+-        middleware_list.extend(progressive_middleware)
+-
+-    # Auto summarization middleware
+-    if enable_auto_summarization:
+-        summarization_middleware = SummarizationMiddleware(
+-            model=model,
+-            trigger=[("fraction", 0.55)],
+-            keep=("messages", 20),
+-        )
+-        middleware_list.append(summarization_middleware)
++    # Build middleware list
++    middleware_list = build_middleware_list(
++        model=model,
++        enable_auto_summarization=enable_auto_summarization,
++        enable_tool_selector=enable_tool_selector,
++    )
+ 
+     create_kwargs: dict[str, Any] = {
+         "model": model,
+-        "tools": tools,
++        "tools": all_tools,
+         "system_prompt": system_prompt,
+     }
+     if checkpointer is not None:
+
+### tests/unit/test_agent_capabilities.py
+@@ -1,9 +1,6 @@
+ import json
+ from pathlib import Path
+ 
+-from langchain.agents.middleware.types import ModelRequest, ModelResponse
+-from langchain_core.messages import AIMessage
+-
+ from agent import capabilities
+ 
+ 
+@@ -52,7 +49,6 @@ def run(self, query):
+         "ask_human",
+         "bash",
+         "edit_file",
+-        "edit_todo",
+         "read_file",
+         "search_document",
+         "search_papers",
+@@ -62,7 +58,6 @@ def run(self, query):
+         "update_file",
+         "use_skill",
+         "write_file",
+-        "write_todo",
+     }
+ 
+     tool_map = _tool_map(tools)
+@@ -83,49 +78,6 @@ def run(self, query):
+     assert "paper:q3" in _invoke_tool(tool_map, "search_papers", {"query": "q3", "limit": 3})
+ 
+ 
+-def test_progressive_tool_middleware_filters_unactivated_tools(monkeypatch):
+-    monkeypatch.setattr(capabilities, "_build_brave_web_search_client", lambda: None)
+-    monkeypatch.setattr(capabilities, "_build_searxng_web_search_client", lambda: None)
+-    monkeypatch.setattr(capabilities, "_build_wikipedia_web_search_client", lambda: None)
+-    monkeypatch.setattr(capabilities, "search_semantic_scholar", lambda query, limit=5: [])
+-    tools = capabilities.build_agent_tools(lambda query: query)
+-    middleware = capabilities.build_progressive_tool_middleware(tools)
+-    assert middleware
+-    handler_calls: list[list[str]] = []
+-
+-    def _handler(request: ModelRequest):
+-        handler_calls.append([tool.name for tool in request.tools])
+-        return ModelResponse(result=[AIMessage(content="ok")])
+-
+-    request_initial = ModelRequest(
+-        model=object(),  # type: ignore[arg-type]
+-        messages=[{"role": "user", "content": "hi"}],
+-        tools=tools,
+-    )
+-    middleware[0].wrap_model_call(request_initial, _handler)
+-    assert handler_calls
+-    first_names = set(handler_calls[0])
+-    assert "search_document" in first_names
+-    assert "search_tools" in first_names
+-    assert "search_web" not in first_names
+-
+-    request_activated = ModelRequest(
+-        model=object(),  # type: ignore[arg-type]
+-        messages=[
+-            {"role": "user", "content": "hi"},
+-            {
+-                "role": "tool",
+-                "name": "search_tools",
+-                "content": '{"type":"tool_search_result","tools":[{"tool_name":"search_web"}]}',
+-            },
+-        ],
+-        tools=tools,
+-    )
+-    middleware[0].wrap_model_call(request_activated, _handler)
+-    second_names = set(handler_calls[1])
+-    assert "search_web" in second_names
+-
+-
+ def test_use_skill_returns_known_and_unknown_guidance(monkeypatch):
+     monkeypatch.setattr(
+         capabilities,
+@@ -407,65 +359,6 @@ def test_ask_human_returns_structured_payload(monkeypatch):
+     assert payload["urgency"] == "high"
+ 
+ 
+-def test_write_and_edit_todo_tools(monkeypatch, tmp_path: Path):
+-    monkeypatch.setenv("AGENT_FILE_TOOLS_ROOT", str(tmp_path))
+-    monkeypatch.setattr(
+-        capabilities,
+-        "_build_brave_web_search_client",
+-        lambda: type("Web", (), {"run": lambda self, q: "ok"})(),
+-    )
+-    monkeypatch.setattr(capabilities, "_build_searxng_web_search_client", lambda: None)
+-    monkeypatch.setattr(capabilities, "_build_wikipedia_web_search_client", lambda: None)
+-    monkeypatch.setattr(capabilities, "search_semantic_scholar", lambda query, limit=5: [])
+-
+-    tools = capabilities.build_agent_tools(lambda query: query)
+-    tool_map = _tool_map(tools)
+-    _activate(tool_map, "write_todo")
+-    create_res = _invoke_tool(
+-        tool_map,
+-        "write_todo",
+-        {
+-            "action": "upsert",
+-            "title": "整理对比实验",
+-            "status": "todo",
+-            "priority": "high",
+-            "assignee": "researcher",
+-            "dependencies": ["task a", "task a", ""],
+-            "plan_id": "plan-1",
+-            "step_ref": "1",
+-            "file_path": ".agent/todo.json",
+-        },
+-    )
+-    assert "Todo saved:" in create_res
+-
+-    todo_path = tmp_path / ".agent" / "todo.json"
+-    records = json.loads(todo_path.read_text(encoding="utf-8"))
+-    todo_id = records[0]["id"]
+-    assert records[0]["assignee"] == "researcher"
+-    assert records[0]["dependencies"] == ["task_a"]
+-
+-    _activate(tool_map, "edit_todo")
+-    edit_res = _invoke_tool(
+-        tool_map,
+-        "edit_todo",
+-        {
+-            "todo_id": todo_id,
+-            "status": "in_progress",
+-            "assignee": "reviewer",
+-            "dependencies": [],
+-            "note": "已开始执行",
+-            "file_path": ".agent/todo.json",
+-        },
+-    )
+-    assert "Todo updated:" in edit_res
+-
+-    updated_records = json.loads(todo_path.read_text(encoding="utf-8"))
+-    assert updated_records[0]["status"] == "in_progress"
+-    assert updated_records[0]["assignee"] == "reviewer"
+-    assert updated_records[0]["dependencies"] == []
+-    assert updated_records[0]["history"][-1]["note"] == "已开始执行"
+-
+-
+ def test_load_secret_reads_from_dotenv(monkeypatch, tmp_path: Path):
+     monkeypatch.chdir(tmp_path)
+     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+
+===== P265 | repo opencom-org/opencom | PR #36: update to main | capacidade: runtime-type-safety-hardening
+--- SPEC VIVA
+# runtime-type-safety-hardening Specification
+
+## Purpose
+TBD - created by archiving change tighten-runtime-types-without-any. Update Purpose after archive.
+## Requirements
+### Requirement: Runtime-critical modules MUST use explicit typed contracts at dynamic boundaries
+
+Covered residual backend runtime-critical modules SHALL route dynamic internal calls through typed adapters or constrained function-reference interfaces instead of repeated broad inline casts or generic string-based ref factories.
+
+#### Scenario: Residual backend runtime boundary schedules or invokes an internal function
+
+- **WHEN** a covered residual backend runtime boundary schedules or invokes another Convex function dynamically
+- **THEN** the invocation SHALL use a typed adapter contract or fixed typed function reference
+- **AND** repeated broad inline cast patterns or arbitrary `name: string` ref helper selection SHALL not expand in the covered backend files
+
+### Requirement: Shared types consumed by runtime-critical paths MUST avoid broad unknown payloads when structure is known
+
+Shared type definitions used by runtime-critical logic MUST model known payload shape with explicit types or constrained unions.
+
+#### Scenario: Runtime logic consumes shared payload field
+
+- **WHEN** runtime-critical code reads a shared payload field with known structure
+- **THEN** that field SHALL be typed with an explicit shape rather than unconstrained `unknown`
+
+### Requirement: Type safety hardening MUST preserve existing runtime behavior
+
+Type tightening changes across covered residual backend runtime paths MUST preserve functional behavior for existing auth, event, series, messaging, notification, and related execution flows.
+
+#### Scenario: Residual backend runtime path executes after hardening
+
+- **WHEN** a covered residual backend runtime flow runs after type hardening cleanup
+- **THEN** runtime outcomes SHALL remain behaviorally equivalent to pre-hardening behavior
+- **AND** only contract-safety boundary enforcement changes, not domain behavior semantics
+
+
+--- ARQUIVOS DO PR (77)
+modified  +9     -0     AGENTS.md
+added     +7     -0     CLAUDE.md
+modified  +3     -1     ROADMAP.md
+modified  +1     -1     apps/landing/package.json
+modified  +1     -1     apps/mobile/package.json
+modified  +1     -1     apps/web/e2e/global-teardown.ts
+modified  +5     -1     apps/web/e2e/helpers/test-data.ts
+modified  +2     -0     apps/web/e2e/helpers/widget-helpers.ts
+modified  +0     -12    apps/web/next.config.js
+modified  +2     -2     apps/web/package.json
+modified  +20    -8     apps/web/src/app/articles/hooks/useArticlesAdminConvex.ts
+modified  +64    -19    apps/web/src/app/articles/page.tsx
+added     +46    -0     apps/web/src/app/inbox/InboxAiReviewPanel.test.tsx
+modified  +6     -0     apps/web/src/app/inbox/InboxAiReviewPanel.tsx
+modified  +385   -387   apps/web/src/app/inbox/InboxThreadPane.tsx
+modified  +38    -11    apps/web/src/app/inbox/hooks/useInboxConvex.ts
+modified  +2     -0     apps/web/src/app/inbox/inboxRenderTypes.ts
+modified  +13    -10    apps/web/src/app/inbox/page.tsx
+added     +87    -0     apps/web/src/app/settings/AIAgentSection.test.tsx
+modified  +45    -24    apps/web/src/app/settings/AIAgentSection.tsx
+modified  +140   -39    apps/web/src/app/settings/hooks/useSettingsSectionsConvex.ts
+added     +95    -0     apps/web/src/components/SuggestionsPanel.test.tsx
+modified  +14    -0     apps/web/src/components/SuggestionsPanel.tsx
+modified  +3     -1     apps/web/src/components/hooks/useSuggestionsPanelConvex.ts
+modified  +1     -1     apps/widget/package.json
+modified  +6     -5     apps/widget/src/components/Home.tsx
+modified  +31    -3     apps/widget/src/components/conversationView/MessageList.tsx
+modified  +184   -47    apps/widget/src/styles.css
+added     +13    -0     convex/_generated/ai/ai-files.state.json
+added     +365   -0     convex/_generated/ai/guidelines.md
+modified  +53    -2     docs/api-reference.md
+added     +2     -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/.openspec.yaml
+added     +79    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/design.md
+added     +30    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/proposal.md
+added     +11    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/ai-help-center-linked-sources/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-insertion/spec.md
+added     +27    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-vector-search/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/shared-markdown-rendering-sanitization/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/tasks.md
+modified  +11    -0     openspec/specs/ai-help-center-linked-sources/spec.md
+modified  +23    -5     openspec/specs/inbox-knowledge-insertion/spec.md
+added     +33    -0     openspec/specs/inbox-knowledge-vector-search/spec.md
+modified  +18    -0     openspec/specs/shared-markdown-rendering-sanitization/spec.md
+modified  +10    -1     package.json
+modified  +2     -0     packages/convex/convex/_generated/api.d.ts
+modified  +201   -40    packages/convex/convex/aiAgent.ts   <== código ligado à spec
+modified  +40    -26    packages/convex/convex/aiAgentActions.ts   <== código ligado à spec
+modified  +4     -2     packages/convex/convex/aiAgentActionsKnowledge.ts   <== código ligado à spec
+modified  +5     -3     packages/convex/convex/embeddings.ts   <== código ligado à spec
+modified  +137   -3     packages/convex/convex/knowledge.ts
+modified  +63    -6     packages/convex/convex/lib/aiGateway.ts
+added     +45    -0     packages/convex/convex/lib/embeddingModels.ts
+modified  +1     -0     packages/convex/convex/schema/inboxConversationTables.ts
+modified  +3     -1     packages/convex/convex/schema/operationsAiTables.ts
+modified  +2     -1     packages/convex/convex/schema/operationsReportingTables.ts
+modified  +36    -14    packages/convex/convex/suggestions.ts
+modified  +22    -3     packages/convex/convex/testAdmin.ts
+modified  +2     -0     packages/convex/convex/testing/helpers.ts
+modified  +14    -0     packages/convex/convex/testing/helpers/ai.ts
+modified  +1     -1     packages/convex/package.json
+modified  +15    -1     packages/convex/tests/aiAgent.test.ts
+modified  +20    -1     packages/convex/tests/aiAgentAuthorizationSemantics.test.ts
+modified  +116   -12    packages/convex/tests/aiAgentRuntimeSafety.test.ts
+added     +42    -0     packages/convex/tests/embeddingModels.test.ts
+modified  +1     -1     packages/convex/tests/helpers/testHelpers.ts
+modified  +14    -0     packages/convex/tests/runtimeTypeHardeningGuard.test.ts   <== código ligado à spec
+modified  +1     -1     packages/convex/tests/setupTestAdminFallback.ts
+modified  +14    -0     packages/convex/tests/suggestions.test.ts
+added     +117   -0     packages/convex/tests/suggestionsMetadataSemantics.test.ts
+modified  +1     -1     packages/react-native-sdk/package.json
+modified  +1     -1     packages/sdk-core/package.json
+modified  +25    -0     packages/web-shared/src/markdown.test.ts
+modified  +38    -10    packages/web-shared/src/markdown.ts
+modified  +150   -145   pnpm-lock.yaml
+modified  +1     -1     scripts/screenshots/seed.ts
+modified  +1     -13    security/convex-v-any-arg-exceptions.json
+modified  +48    -0     security/dependency-audit-allowlist.json
+--- DIFF DO CÓDIGO LIGADO
+### packages/convex/convex/aiAgent.ts
+@@ -12,6 +12,8 @@ import { Doc, Id } from "./_generated/dataModel";
+ import { getAuthenticatedUserFromSession } from "./auth";
+ import { getWorkspaceMembership, requirePermission } from "./permissions";
+ import { authAction, authMutation, authQuery } from "./lib/authWrappers";
++import { DEFAULT_CONTENT_EMBEDDING_MODEL, resolveContentEmbeddingModel } from "./lib/embeddingModels";
++import { getAIGatewayApiKey, getAIBaseURL, getAIGatewayProviderLabel } from "./lib/aiGateway";
+ import { getShallowRunAfter, routeEventRef } from "./notifications/functionRefs";
+ import { resolveVisitorFromSession } from "./widgetSessions";
+ 
+@@ -31,6 +33,41 @@ type RuntimeKnowledgeResult = {
+   relevanceScore: number;
+ };
+ 
++type AvailableAIModel = {
++  id: string;
++  name: string;
++  provider: string;
++};
++
++type OpenAIModelListResponse = {
++  data?: Array<{
++    id?: string;
++    created?: number;
++  }>;
++};
++
++type StoredAIResponse = Doc<"aiResponses">;
++type StoredAIResponseSource = StoredAIResponse["sources"][number];
++type StoredAIResponseWithMessage = StoredAIResponse & {
++  messageId: Id<"messages">;
++};
++
++type ConversationResponse = Omit<StoredAIResponse, "messageId"> & {
++  messageId: Id<"messages">;
++  deliveredResponseContext: {
++    response: string;
++    sources: StoredAIResponseSource[];
++    confidence: number | null;
++  };
++  generatedResponseContext:
++    | {
++        response: string;
++        sources: StoredAIResponseSource[];
++        confidence: number;
++      }
++    | null;
++};
++
+ type GetRelevantKnowledgeForRuntimeActionArgs = {
+   workspaceId: Id<"workspaces">;
+   query: string;
+@@ -77,10 +114,125 @@ const DEFAULT_AI_SETTINGS = {
+   workingHours: null,
+   model: "openai/gpt-5-nano",
+   suggestionsEnabled: false,
+-  embeddingModel: "text-embedding-3-small",
++  embeddingModel: DEFAULT_CONTENT_EMBEDDING_MODEL,
+   lastConfigError: null,
+ };
+ 
++const AVAILABLE_MODEL_DISCOVERY_TIMEOUT_MS = 5000;
++const NON_GENERATION_MODEL_PREFIXES = [
++  "text-embedding-",
++  "omni-moderation-",
++  "whisper-",
++  "tts-",
++  "gpt-image-",
++  "dall-e-",
++  "babbage-",
++  "davinci-",
++];
++
++function normalizeAvailableModelId(value: string | undefined): string | null {
++  const normalized = value?.trim();
++  if (!normalized) {
++    return null;
++  }
++
++  return normalized;
++}
++
++function createAvailableAIModel(value: string | undefined): AvailableAIModel | null {
++  const normalizedId = normalizeAvailableModelId(value);
++  if (!normalizedId) {
++    return null;
++  }
++
++  const defaultProvider = getAIGatewayProviderLabel(getAIBaseURL(getAIGatewayApiKey()));
++  const providerSeparatorIndex = normalizedId.indexOf("/");
++  if (providerSeparatorIndex === -1) {
++    return {
++      id: normalizedId,
++      name: normalizedId,
++      provider: defaultProvider,
++    };
++  }
++
++  const provider = normalizedId.slice(0, providerSeparatorIndex).trim();
++  const model = normalizedId.slice(providerSeparatorIndex + 1).trim();
++  return {
++    id: normalizedId,
++    name: model || normalizedId,
++    provider: provider || defaultProvider,
++  };
++}
++
++function isLikelyGenerationModel(modelId: string): boolean {
++  const normalized = modelId.trim().toLowerCase();
++  if (!normalized) {
++    return false;
++  }
++
++  const modelPathParts = normalized.split("/").map((part) => part.trim()).filter(Boolean);
++  const modelName = modelPathParts[modelPathParts.length - 1] ?? "";
++  if (!modelName) {
++    return false;
++  }
++
++  return !NON_GENERATION_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix));
++}
++
++function dedupeAvailableAIModels(models: AvailableAIModel[]): AvailableAIModel[] {
++  const seen = new Set<string>();
++  return models.filter((model) => {
++    if (seen.has(model.id)) {
++      return false;
++    }
++
++    seen.add(model.id);
++    return true;
++  });
++}
++
++async function discoverAvailableAIModels(): Promise<AvailableAIModel[] | null> {
++  const apiKey = getAIGatewayApiKey();
++  if (!apiKey) {
++    return null;
++  }
++
++  const providerLabel = getAIGatewayProviderLabel(getAIBaseURL(apiKey));
++
++  const controller = new AbortController();
++  const timeout = setTimeout(() => controller.abort(), AVAILABLE_MODEL_DISCOVERY_TIMEOUT_MS);
++  try {
++    const response = await fetch(`${getAIBaseURL(apiKey)}/models`, {
++      headers: {
++        Accept: "application/json",
++        Authorization: `Bearer ${apiKey}`,
++      },
++      signal: controller.signal,
++    });
++    if (!response.ok) {
++      return null;
++    }
++
++    const payload = (await response.json()) as OpenAIModelListResponse;
++    const models = Array.isArray(payload.data) ? payload.data : [];
++
++    return models
++      .filter(
++        (model): model is { id: string; created?: number } =>
++          typeof model.id === "string" && isLikelyGenerationModel(model.id)
++      )
++      .sort((left, right) => (right.created ?? 0) - (left.created ?? 0) || left.id.localeCompare(right.id))
++      .map((model) =>
++        createAvailableAIModel(model.id.includes("/") ? model.id : `${providerLabel}/${model.id}`)
++      )
++      .filter((model): model is AvailableAIModel => model !== null);
++  } catch {
++    return null;
++  } finally {
++    clearTimeout(timeout);
++  }
++}
++
+ function withAISettingDefaults(settings: Doc<"aiAgentSettings"> | null): {
+   _id?: Id<"aiAgentSettings">;
+   _creationTime?: number;
+@@ -115,7 +267,9 @@ function withAISettingDefaults(settings: Doc<"aiAgentSettings"> | null): {
+     handoffMessage: settings.handoffMessage ?? DEFAULT_AI_SETTINGS.handoffMessage,
+     workingHours: settings.workingHours ?? null,
+     suggestionsEnabled: settings.suggestionsEnabled ?? false,
+-    embeddingModel: settings.embeddingModel ?? DEFAULT_AI_SETTINGS.embeddingModel,
++    embeddingModel: resolveContentEmbeddingModel(
++      settings.embeddingModel ?? DEFAULT_AI_SETTINGS.embeddingModel
++    ),
+     lastConfigError: settings.lastConfigError ?? null,
+   };
+ }
+@@ -129,6 +283,7 @@ async function getWorkspaceAISettings(
+     .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+     .first();
+ }
++
+ async function requireConversationAccess(
+   ctx: QueryCtx | MutationCtx,
+   args: {
+@@ -241,7 +396,7 @@ export const updateSettings = authMutation({
+     embeddingModel: v.optional(v.string()),
+   },
+   permission: "settings.workspace",
+-  handler: async (ctx, args) => {
++  handler: async (ctx, args): Promise<Id<"aiAgentSettings">> => {
+     const now = Date.now();
+ 
+     const existing = await ctx.db
+@@ -264,7 +419,8 @@ export const updateSettings = authMutation({
+       if (args.model !== undefined) updates.model = args.model;
+       if (args.suggestionsEnabled !== undefined)
+         updates.suggestionsEnabled = args.suggestionsEnabled;
+-      if (args.embeddingModel !== undefined) updates.embeddingModel = args.embeddingModel;
++      if (args.embeddingModel !== undefined)
++        updates.embeddingModel = resolveContentEmbeddingModel(args.embeddingModel);
+ 
+       await ctx.db.patch(existing._id, updates);
+       return existing._id;
+@@ -281,7 +437,9 @@ export const updateSettings = authMutation({
+       workingHours: args.workingHours ?? undefined,
+       model: args.model ?? "openai/gpt-5-nano",
+       suggestionsEnabled: args.suggestionsEnabled ?? false,
+-      embeddingModel: args.embeddingModel ?? "text-embedding-3-small",
++      embeddingModel: resolveContentEmbeddingModel(
++        args.embeddingModel ?? DEFAULT_CONTENT_EMBEDDING_MODEL
++      ),
+       createdAt: now,
+       updatedAt: now,
+     });
+@@ -382,7 +540,7 @@ export const getRelevantKnowledgeForRuntime = internalQuery({
+     knowledgeSources: v.optional(v.array(knowledgeSourceValidator)),
+     limit: v.optional(v.number()),
+   },
+-  handler: async () => {
++  handler: async (): Promise<RuntimeKnowledgeResult[]> => {
+     return [];
+   },
+ });
+@@ -408,7 +566,7 @@ export const storeResponse = mutation({
+     model: v.string(),
+     provider: v.string(),
+   },
+-  handler: async (ctx, args) => {
++  handler: async (ctx, args): Promise<Id<"aiResponses">> => {
+     await requireConversationAccess(ctx, {
+       conversationId: args.conversationId,
+       visitorId: args.visitorId,
+@@ -454,7 +612,7 @@ export const submitFeedback = mutation({
+     visitorId: v.optional(v.id("visitors")),
+     sessionToken: v.optional(v.string()),
+   },
+-  handler: async (ctx, args) => {
++  handler: async (ctx, args): Promise<void> => {
+     const response = await ctx.db.get(args.responseId);
+     if (!response) {
+       throw new Error("AI response not found");
+@@ -477,7 +635,7 @@ export const getConversationResponses = query({
+     visitorId: v.optional(v.id("visitors")),
+     sessionToken: v.optional(v.string()),
+   },
+-  handler: async (ctx, args) => {
++  handler: async (ctx, args): Promise<ConversationResponse[]> => {
+     await requireConversationAccess(ctx, {
+       conversationId: args.conversationId,
+       visitorId: args.visitorId,
+@@ -489,22 +647,26 @@ export const getConversationResponses = query({
+       .withIndex("by_conversation", (q) => q.eq("conversationId", args.conversationId))
+       .collect();
+ 
+-    return responses.map((response) => ({
+-      ...response,
+-      deliveredResponseContext: {
+-        response: response.response,
+-        sources: response.sources,
+-        confidence: response.handedOff ? null : response.confidence,
+-      },
+-      generatedResponseContext:
+-        response.generatedCandidateResponse === undefined
+-          ? null
+-          : {
+-              response: response.generatedCandidateResponse,
+-              sources: response.generatedCandidateSources ?? [],
+-              confidence: response.generatedCandidateConfidence ?? response.confidence,
+-            },
+-    }));
++    return responses
++      .filter(
++        (response): response is StoredAIResponseWithMessage => response.messageId !== undefined
++      )
++      .map((response) => ({
++        ...response,
++        deliveredResponseContext: {
++          response: response.response,
++          sources: response.sources,
++          confidence: response.handedOff ? null : response.confidence,
++        },
++        generatedResponseContext:
++          response.generatedCandidateResponse === undefined
++            ? null
++            : {
++                response: response.generatedCandidateResponse,
++                sources: response.generatedCandidateSources ?? [],
+
+### packages/convex/convex/aiAgentActions.ts
+@@ -5,7 +5,7 @@ import { v } from "convex/values";
+ import type { Id } from "./_generated/dataModel";
+ import { action } from "./_generated/server";
+ import { generateText } from "ai";
+-import { createAIClient } from "./lib/aiGateway";
++import { createAIClient, getAIGatewayProviderLabel } from "./lib/aiGateway";
+ 
+ type AIConfigurationDiagnostic = {
+   code: string;
+@@ -242,7 +242,13 @@ function getShallowRunAction(ctx: { runAction: unknown }) {
+   ) => Promise<Return>;
+ }
+ 
+-const SUPPORTED_AI_PROVIDERS = new Set(["openai"]);
++function maybeGetShallowRunAction(ctx: { runAction?: unknown }) {
++  if (typeof ctx.runAction !== "function") {
++    return null;
++  }
++  return getShallowRunAction(ctx as { runAction: unknown });
++}
++
+ const GENERATION_FAILURE_FALLBACK_RESPONSE =
+   "I'm having trouble processing your request right now. Let me connect you with a human agent.";
+ const EMPTY_RESPONSE_RETRY_LIMIT = 1;
+@@ -263,17 +269,20 @@ const isGPT5ReasoningModel = (provider: string, model: string): boolean =>
+ 
+ // Parse model string to get provider and model name
+ export const parseModel = (modelString: string): { provider: string; model: string } => {
+-  const parts = modelString.split("/");
++  const trimmedModel = modelString.trim();
++  const parts = trimmedModel.split("/");
+   if (parts.length === 2) {
+     return { provider: parts[0], model: parts[1] };
+   }
+-  return { provider: "openai", model: modelString };
++
++  return { provider: getAIGatewayProviderLabel(), model: trimmedModel };
+ };
+ 
+ export const getAIConfigurationDiagnostic = (
+   modelString: string,
+-  environment: { aiGatewayApiKey?: string } = {
++  environment: { aiGatewayApiKey?: string; aiGatewayProviderLabel?: string } = {
+     aiGatewayApiKey: process.env.AI_GATEWAY_API_KEY,
++    aiGatewayProviderLabel: getAIGatewayProviderLabel(),
+   }
+ ): AIConfigurationDiagnostic | null => {
+   const trimmedModel = modelString.trim();
+@@ -284,21 +293,24 @@ export const getAIConfigurationDiagnostic = (
+     };
+   }
+ 
++  const providerLabel = environment.aiGatewayProviderLabel ?? getAIGatewayProviderLabel();
+   const parts = trimmedModel.split("/");
+-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
++  if (parts.length > 2 || (parts.length === 2 && (!parts[0] || !parts[1]))) {
+     return {
+       code: "INVALID_MODEL_FORMAT",
+-      message: "AI model format is invalid. Use provider/model (for example openai/gpt-5-nano).",
++      message:
++        "AI model format is invalid. Use provider/model or a raw model ID exposed by the configured AI gateway.",
+       model: trimmedModel,
+     };
+   }
+ 
+-  const provider = parts[0];
+-  if (!SUPPORTED_AI_PROVIDERS.has(provider)) {
++  const provider = parts.length === 2 ? parts[0] : providerLabel;
++  const model = parts.length === 2 ? parts[1] : trimmedModel;
++  if (!provider || !model) {
+     return {
+-      code: "UNSUPPORTED_PROVIDER",
+-      message: `Provider '${provider}' is not supported in this runtime.`,
+-      provider,
++      code: "INVALID_MODEL_FORMAT",
++      message:
++        "AI model format is invalid. Use provider/model or a raw model ID exposed by the configured AI gateway.",
+       model: trimmedModel,
+     };
+   }
+@@ -473,7 +485,7 @@ export const generateResponse = action({
+ 
+     const runQuery = getShallowRunQuery(ctx);
+     const runMutation = getShallowRunMutation(ctx);
+-    const runAction = getShallowRunAction(ctx);
++    const runAction = maybeGetShallowRunAction(ctx);
+     const access = await runQuery(AUTHORIZE_CONVERSATION_ACCESS_REF, {
+       conversationId: args.conversationId,
+       visitorId: args.visitorId,
+@@ -576,19 +588,21 @@ export const generateResponse = action({
+ 
+     // Get relevant knowledge
+     let knowledgeResults: RelevantKnowledgeResult[] = [];
+-    try {
+-      knowledgeResults = await runAction(GET_RELEVANT_KNOWLEDGE_FOR_RUNTIME_ACTION_REF, {
+-        workspaceId: args.workspaceId,
+-        query: args.query,
+-        knowledgeSources: settings.knowledgeSources,
+-        limit: 5,
+-        embeddingModel: settings.embeddingModel,
+-      });
+-    } catch (retrievalError) {
+-      console.error(
+-        "Knowledge retrieval failed; continuing without knowledge context:",
+-        retrievalError
+-      );
++    if (runAction) {
++      try {
++        knowledgeResults = await runAction(GET_RELEVANT_KNOWLEDGE_FOR_RUNTIME_ACTION_REF, {
++          workspaceId: args.workspaceId,
++          query: args.query,
++          knowledgeSources: settings.knowledgeSources,
++          limit: 5,
++          embeddingModel: settings.embeddingModel,
++        });
++      } catch (retrievalError) {
++        console.error(
++          "Knowledge retrieval failed; continuing without knowledge context:",
++          retrievalError
++        );
++      }
+     }
+ 
+     // Build knowledge context for prompt
+
+### packages/convex/convex/aiAgentActionsKnowledge.ts
+@@ -2,10 +2,10 @@ import { internalAction } from "./_generated/server";
+ import { v } from "convex/values";
+ import { embed } from "ai";
+ import { createAIClient } from "./lib/aiGateway";
++import { DEFAULT_CONTENT_EMBEDDING_MODEL, resolveContentEmbeddingModel } from "./lib/embeddingModels";
+ import { makeFunctionReference, type FunctionReference } from "convex/server";
+ import type { Id } from "./_generated/dataModel";
+ 
+-const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+ const RUNTIME_KNOWLEDGE_DEFAULT_LIMIT = 5;
+ const RUNTIME_KNOWLEDGE_MAX_LIMIT = 20;
+ 
+@@ -75,7 +75,9 @@ export const getRelevantKnowledgeForRuntimeAction = internalAction({
+     const aiClient = createAIClient();
+     const runQuery = getShallowRunQuery(ctx);
+ 
+-    const embeddingModel = args.embeddingModel?.trim() || DEFAULT_EMBEDDING_MODEL;
++    const embeddingModel = resolveContentEmbeddingModel(
++      args.embeddingModel?.trim() || DEFAULT_CONTENT_EMBEDDING_MODEL
++    );
+ 
+     // 1. Embed the query
+     const { embedding } = await embed({
+
+### packages/convex/convex/embeddings.ts
+@@ -5,13 +5,13 @@ import { Doc, Id } from "./_generated/dataModel";
+ import { embedMany } from "ai";
+ import { authAction } from "./lib/authWrappers";
+ import { createAIClient } from "./lib/aiGateway";
++import { DEFAULT_CONTENT_EMBEDDING_MODEL, resolveContentEmbeddingModel } from "./lib/embeddingModels";
+ import {
+   isInternalArticle,
+   isPublicArticle,
+   listUnifiedArticlesWithLegacyFallback,
+ } from "./lib/unifiedArticles";
+ 
+-const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+ const EMBEDDING_GENERATE_CONCURRENCY = 4;
+ const EMBEDDING_BACKFILL_BATCH_CONCURRENCY = 2;
+ 
+@@ -315,7 +315,9 @@ export const generateInternal = internalAction({
+       return { id: existing[0]._id, skipped: true };
+     }
+ 
+-    const modelName = args.model || DEFAULT_EMBEDDING_MODEL;
++    const modelName = resolveContentEmbeddingModel(
++      args.model?.trim() || DEFAULT_CONTENT_EMBEDDING_MODEL
++    );
+     const aiClient = createAIClient();
+     const chunkTexts = chunks.map((chunk) => `${args.title}\n\n${chunk}`);
+     const { embeddings } = await embedMany({
+@@ -439,7 +441,7 @@ export const backfillExisting = authAction({
+     batchSize: v.optional(v.number()),
+     model: v.optional(v.string()),
+   },
+-  permission: "articles.read",
++  permission: "articles.publish",
+   handler: async (ctx, args) => {
+     const contentTypes = args.contentTypes || ["article", "internalArticle", "snippet"];
+     const batchSize = args.batchSize || 50;
+
+### packages/convex/tests/runtimeTypeHardeningGuard.test.ts
+@@ -9,6 +9,7 @@ const TARGET_FILES = [
+   "../convex/emailChannel.ts",
+   "../convex/events.ts",
+   "../convex/http.ts",
++  "../convex/knowledge.ts",
+   "../convex/push.ts",
+   "../convex/pushCampaigns.ts",
+   "../convex/series/runtime.ts",
+@@ -181,6 +182,19 @@ describe("runtime type hardening guards", () => {
+     expect(suggestionsSource).toContain("VALIDATE_SESSION_TOKEN_REF");
+   });
+ 
++  it("uses fixed typed refs for knowledge vector search", () => {
++    const knowledgeSource = readFileSync(
++      new URL("../convex/knowledge.ts", import.meta.url),
++      "utf8"
++    );
++
++    expect(knowledgeSource).not.toContain("function getQueryRef(name: string)");
++    expect(knowledgeSource).toContain("internal.suggestions.getEmbeddingById");
++    expect(knowledgeSource).toContain("internal.suggestions.getContentById");
++    expect(knowledgeSource).toContain("getShallowRunQuery");
++    expect(knowledgeSource).toContain("NOTE: getShallowRunQuery uses a type escape cast");
++  });
++
+   it("uses fixed typed refs for support attachment cleanup scheduling", () => {
+     const supportAttachmentsSource = readFileSync(
+       new URL("../convex/supportAttachments.ts", import.meta.url),
+
+===== P266 | repo aserowy/yeet | PR #297: directory icon plugin | capacidade: theming
+--- SPEC VIVA
+### Requirement: Theme struct holds all color tokens
+The system SHALL maintain a `Theme` struct that maps named color tokens to resolved color values. Each token represents a single foreground color, background color, or text modifier for a specific UI element.
+
+#### Scenario: Theme is populated from Lua assignments
+- **WHEN** `init.lua` contains `y.theme.StatusLineFg = '#ff5500'`
+- **THEN** the `Theme` struct contains the token `StatusLineFg` mapped to RGB(255, 85, 0)
+
+#### Scenario: Theme provides defaults for unset tokens
+- **WHEN** a token is not set in `init.lua`
+- **THEN** the `Theme` struct returns the compiled-in default color for that token
+
+### Requirement: Color token names cover all UI elements
+The system SHALL define color tokens for at minimum the following UI elements:
+- Tabbar: active tab foreground/background, inactive tab foreground/background, tabbar background
+- Statusline: foreground, background (focused and unfocused variants), diff added/modified/removed colors, permissions foreground, border foreground, border background
+- Buffer: cursor line background, search highlight background, line number foreground, current line number foreground, sign column foreground, file entry foreground, directory entry foreground
+- Directory window: border foreground, border background
+- Split: border foreground, border background
+- Signs: quickfix sign color, mark sign color
+
+The system SHALL NOT define token constants for UI elements that have no rendering code consuming them. Specifically, `CommandLineFg`, `CommandLineBg`, `CursorNormal`, `CursorInsert`, and `syntax` (as a token constant) SHALL NOT exist as constants or default registrations until rendering code uses them.
+
+#### Scenario: All hardcoded colors have corresponding tokens
+- **WHEN** the default theme is loaded with no user overrides
+- **THEN** the rendered UI is visually identical to the current hardcoded appearance
+
+#### Scenario: No dead token constants
+- **WHEN** inspecting the `tokens` module
+- **THEN** every constant is referenced by at least one rendering or theme conversion function outside of the `Default` impl
+
+### Requirement: Theme provides ratatui Style accessors
+The system SHALL provide a method to retrieve a `ratatui::Style` value for any token, suitable for use in ratatui widget rendering.
+
+#### Scenario: Style retrieval for UI chrome
+- **WHEN** the tabbar view requests the style for `TabBarActiveBg`
+- **THEN** the theme returns a `ratatui::Style` with the configured background color
+
+### Requirement: Theme provides ANSI escape code accessors
+The system SHALL provide a method to retrieve an ANSI escape code string for any token, suitable for injection into ANSI-styled buffer content.
+
+#### Scenario: ANSI retrieval for buffer rendering
+- **WHEN** the line renderer requests the ANSI code for `CursorLineBg`
+- **THEN** the theme returns a string like `\x1b[48;2;r;g;bm` representing the 24-bit background color
+
+### Requirement: Hex color string parsing
+The system SHALL parse color values from `init.lua` as hex strings in the format `#rrggbb` (case-insensitive). Invalid color strings SHALL be ignored, and the default color for that token SHALL be used.
+
+#### Scenario: Valid hex color
+- **WHEN** `init.lua` sets `y.theme.StatusLineFg = '#1a2b3c'`
+- **THEN** the token resolves to RGB(26, 43, 60)
+
+#### Scenario: Invalid hex color
+- **WHEN** `init.lua` sets `y.theme.StatusLineFg = 'not-a-color'`
+- **THEN** the token falls back to its default value and an error is logged
+
+### Requirement: Syntect theme selection
+The system SHALL support a `y.theme.syntax` string value that selects a syntect built-in theme by name. If unset or invalid, the system SHALL use `"base16-eighties.dark"` as the default.
+
+#### Scenario: Valid syntect theme name
+- **WHEN** `init.lua` sets `y.theme.syntax = 'base16-ocean.dark'`
+- **THEN** syntax highlighting uses the `base16-ocean.dark` syntect theme
+
+#### Scenario: Invalid syntect theme name
+- **WHEN** `init.lua` sets `y.theme.syntax = 'nonexistent-theme'`
+- **THEN** syntax highlighting falls back to `base16-eighties.dark` and an error is logged
+
+### Requirement: Tabbar uses theme colors
+The tabbar view SHALL use theme tokens instead of hardcoded colors for active tab, inactive tab, and background styling.
+
+#### Scenario: Custom tabbar colors
+- **WHEN** `init.lua` sets `y.theme.TabBarActiveBg = '#0000ff'` and `y.theme.TabBarActiveFg = '#ffffff'`
+- **THEN** the active tab renders with a blue background and white foreground
+
+#### Scenario: Default tabbar colors match current appearance
+- **WHEN** no tabbar theme tokens are set
+- **THEN** the active tab uses light blue background with black foreground, and inactive tabs use dark gray background with white foreground
+
+### Requirement: Statusline uses theme colors
+The statusline view SHALL use theme tokens for all text and background colors, including focused/unfocused states, diff indicators, permissions foreground, and border background.
+
+#### Scenario: Custom statusline colors
+- **WHEN** `init.lua` sets `y.theme.StatusLineFocusedFg = '#00ff00'`
+- **THEN** the focused statusline text renders in green
+
+#### Scenario: Diff indicators use theme colors
+- **WHEN** `init.lua` sets `y.theme.DiffAdded = '#00ff00'`, `y.theme.DiffModified = '#ffff00'`, `y.theme.DiffRemoved = '#ff0000'`
+- **THEN** the statusline diff indicators render in the configured colors
+
+#### Scenario: Permissions text uses theme color
+- **WHEN** `init.lua` sets `y.theme.StatusLinePermissionsFg = '#ffaa00'`
+- **THEN** the permissions string in the statusline renders with the configured color
+
+#### Scenario: Statusline border background uses theme color
+- **WHEN** `init.lua` sets `y.theme.StatusLineBorderBg = '#222222'`
+- **THEN** the statusline border area background renders with the configured color
+
+### Requirement: Statusline permissions foreground is theme-configurable
+The system SHALL apply the `StatusLinePermissionsFg` theme token to file permission text in the statusline.
+
+#### Scenario: Custom permissions color
+- **WHEN** `init.lua` sets `y.theme.StatusLinePermissionsFg = '#ffaa00'`
+- **THEN** the permissions string in the statusline renders with orange foreground
+
+#### Scenario: Default permissions color
+- **WHEN** no `StatusLinePermissionsFg` token is set
+- **THEN** permissions text renders with gray foreground
+
+### Requirement: Statusline border background is theme-configurable
+The system SHALL apply the `StatusLineBorderBg` theme token to the background of the statusline border area.
+
+#### Scenario: Custom statusline border background
+- **WHEN** `init.lua` sets `y.theme.StatusLineBorderBg = '#222222'`
+- **THEN** the statusline border area renders with dark gray background
+
+#### Scenario: Default statusline border background
+- **WHEN** no `StatusLineBorderBg` token is set
+- **THEN** the statusline border background renders as black
+
+### Requirement: Buffer line rendering uses theme colors
+The buffer line renderer SHALL use theme tokens for cursor line background, search highlight, cursor styling, and buffer entry foreground colors (file and directory) instead of hardcoded ANSI codes.
+
+#### Scenario: Custom cursor line color
+- **WHEN** `init.lua` sets `y.theme.CursorLineBg = '#333333'`
+- **THEN** the current line background renders with the configured dark gray
+
+#### Scenario: Custom search highlight
+- **WHEN** `init.lua` sets `y.theme.SearchBg = '#ffaa00'`
+- **THEN** search matches are highlighted with an orange background
+
+#### Scenario: Directory entries use theme foreground color
+- **WHEN** `init.lua` sets `y.theme.BufferDirectoryFg = '#00ff00'`
+- **THEN** directory entries in the buffer render with green foreground instead of hardcoded bright blue
+
+### Requirement: Buffer entry foreground colors are theme-configurable
+The system SHALL apply theme-derived foreground colors to file and directory entries in directory buffers. File entries SHALL use the `BufferFileFg` token. Directory entries SHALL use the `BufferDirectoryFg` token. No hardcoded ANSI color codes SHALL remain for directory entry styling.
+
+#### Scenario: Custom directory entry color
+- **WHEN** `init.lua` sets `y.theme.BufferDirectoryFg = '#00ff00'`
+- **THEN** directory entries in the buffer render with green foreground
+
+#### Scenario: Custom file entry color
+- **WHEN** `init.lua` sets `y.theme.BufferFileFg = '#cccccc'`
+- **THEN** file entries in the buffer render with light gray foreground
+
+#### Scenario: Default directory color matches current appearance
+- **WHEN** no `BufferDirectoryFg` token is set
+- **THEN** directory entries render with light blue foreground (matching current hardcoded `\x1b[94m`)
+
+#### Scenario: Default file color
+- **WHEN** no `BufferFileFg` token is set
+- **THEN** file entries render with white foreground
+
+### Requirement: BufferBg token exists in the token set
+The system SHALL define a `BUFFER_BG` constant in the `tokens` module with the string value `"BufferBg"`. The `Theme::default()` implementation SHALL insert a default value of `Color::Reset` for this token.
+
+#### Scenario: BufferBg token default
+- **WHEN** a default theme is created
+- **THEN** `theme.color(tokens::BUFFER_BG)` returns `Color::Reset`
+
+#### Scenario: BufferBg token override
+- **WHEN** `init.lua` sets `y.theme.BufferBg = '#282828'`
+- **THEN** `theme.color(tokens::BUFFER_BG)` returns `Color::Rgb(40, 40, 40)`
+
+### Requirement: Line number rendering uses theme colors
+The line number prefix renderer SHALL use theme tokens for current line number and relative line number styling.
+
+#### Scenario: Custom line number colors
+- **WHEN** `init.lua` sets `y.theme.LineNr = '#555555'` and `y.theme.CurLineNr = '#ffffff'`
+- **THEN** relative line numbers render in dark gray and the current line number renders in white
+
+### Requirement: Sign colors use theme tokens
+The sign generation function SHALL use the `SignQfix` and `SignMark` theme tokens for sign styling. No hardcoded ANSI color codes SHALL remain in the sign generation code. The `generate_sign` function SHALL accept a `&Theme` parameter.
+
+#### Scenario: Qfix sign uses theme token color
+- **WHEN** a qfix sign is generated with a theme where `SignQfix` is `Color::Rgb(255, 85, 255)`
+- **THEN** the sign's style contains the ANSI escape for that color (`\x1b[38;2;255;85;255m`)
+
+#### Scenario: Mark sign uses theme token color
+- **WHEN** a mark sign is generated with a theme where `SignMark` is `Color::Rgb(85, 255, 255)`
+- **THEN** the sign's style contains the ANSI escape for that color (`\x1b[38;2;85;255;255m`)
+
+#### Scenario: Custom sign color override
+- **WHEN** `init.lua` sets `y.theme.SignQfix = '#ff0000'`
+- **THEN** the qfix sign renders with red foreground
+
+### Requirement: Directory window borders are theme-configurable
+The system SHALL apply `DirectoryBorderFg` and `DirectoryBorderBg` theme tokens to borders inside directory-type windows (parent, current, and preview panes).
+
+#### Scenario: Custom directory window border colors
+- **WHEN** `init.lua` sets `y.theme.DirectoryBorderFg = '#444444'` and `y.theme.DirectoryBorderBg = '#111111'`
+- **THEN** the right-side borders between directory panes render with the configured foreground and background
+
+#### Scenario: Default directory window border colors
+- **WHEN** no `DirectoryBorderFg` or `DirectoryBorderBg` tokens are set
+- **THEN** directory window borders render with black foreground and reset (transparent) background
+
+### Requirement: Split borders are theme-configurable
+The system SHALL rename the existing `BorderFg` token to `SplitBorderFg` and add a `SplitBorderBg` token. These tokens SHALL apply to vertical split separator borders. The `yeet-buffer` view SHALL use border colors from `BufferTheme` when rendering `Block` border widgets. No hardcoded `Color::Black` SHALL remain in the buffer border rendering code.
+
+#### Scenario: Custom split border colors
+- **WHEN** `init.lua` sets `y.theme.SplitBorderFg = '#555555'` and `y.theme.SplitBorderBg = '#000000'`
+- **THEN** the vertical split separator renders with the configured foreground and background
+
+#### Scenario: Default split border colors
+- **WHEN** no `SplitBorderFg` or `SplitBorderBg` tokens are set
+- **THEN** split borders render with black foreground and reset (transparent) background
+
+#### Scenario: BorderFg token is removed
+- **WHEN** `init.lua` references `y.theme.BorderFg`
+- **THEN** the token does not exist; users must use `SplitBorderFg` instead
+
+### Requirement: Syntax highlighting theme is configurable
+The syntax highlighting task SHALL use the theme-configured syntect theme name instead of the hardcoded `"base16-eighties.dark"`.
+
+#### Scenario: User selects a different syntax theme
+- **WHEN** `init.lua` sets `y.theme.syntax = 'Solarized (dark)'`
+- **THEN** file content preview uses Solarized dark syntax highlighting colors
+
+### Requirement: Theme is threaded through the application without global state
+The resolved `Theme` struct SHALL be passed by reference to all view functions. The `yeet-buffer` crate SHALL receive buffer-relevant theme values through a dedicated struct or trait, not the full theme. The `BufferTheme` struct SHALL include ratatui `Color` values for border foreground and background so the buffer view can use them with `Block::border_style()`.
+
+#### Scenario: Buffer crate receives only its theme subset
+- **WHEN** the buffer view function is called
+- **THEN** it receives a `BufferTheme` containing cursor, search, line number, sign color values, and border color values — not the full theme registry
+
+### Requirement: Commandline uses theme colors
+The commandline view SHALL use theme tokens for foreground and background colors.
+
+#### Scenario: Custom commandline colors
+- **WHEN** `init.lua` sets `y.theme.CommandLineFg = '#cccccc'` and `y.theme.CommandLineBg = '#111111'`
+- **THEN** the commandline renders with the configured colors
+
+### Requirement: BufferTheme has no default construction
+The `yeet_buffer::BufferTheme` struct SHALL NOT implement `Default`. Callers MUST provide all field values explicitly when constructing a `BufferTheme`. All fields SHALL be of type `ratatui::style::Color`. The struct SHALL NOT contain ANSI escape code strings, reset sequences, or cursor mode codes.
+
+#### Scenario: Compile-time enforcement
+- **WHEN** a consumer attempts `BufferTheme::default()`
+- **THEN** the code fails to compile with a missing trait implementation error
+
+#### Scenario: All fields are Color type
+- **WHEN** inspecting the `BufferTheme` struct definition
+- **THEN** every field is of type `ratatui::style::Color` with no `String` fields
+
+#### Scenario: No cursor mode or reset fields
+- **WHEN** inspecting the `BufferTheme` struct definition
+- **THEN** there are no fields for cursor normal/insert codes, cursor line reset, or any ANSI escape sequences
+
+### Requirement: Single view entry point requires a theme
+The `yeet_buffer` crate SHALL expose a single public `view()` function whose signature includes a `&BufferTheme` parameter. There SHALL NOT be a convenience variant that supplies a default theme internally.
+
+#### Scenario: Buffer view with explicit theme
+- **WHEN** `yeet_buffer::view(viewport, mode, buffer, theme, frame)` is called with a valid `BufferTheme`
+- **THEN** the buffer is rendered using the colors from the provided theme
+
+#### Scenario: No implicit-default view function exists
+- **WHEN** a consumer attempts to call a `view()` function without a `&BufferTheme` parameter
+- **THEN** the code fails to compile because no such function signature exists
+
+### Requirement: Frontend theme is the sole BufferTheme factory
+The `yeet_frontend::theme::Theme` SHALL expose only `to_buffer_theme_with_border(fg_token, bg_token)` as the construction method for `BufferTheme`. The convenience method `to_buffer_theme()` SHALL NOT exist. All call sites MUST explicitly specify which border fg/bg tokens to use.
+
+#### Scenario: All BufferTheme fields derived from theme tokens
+- **WHEN** `Theme::to_buffer_theme_with_border(fg, bg)` is called
+- **THEN** the returned `BufferTheme` contains `Color` values resolved from the token map, with `border_fg` and `border_bg` from the specified tokens
+
+#### Scenario: BufferTheme fields map to tokens
+- **WHEN** `Theme::to_buffer_theme_with_border(SPLIT_BORDER_FG, SPLIT_BORDER_BG)` is called with default theme
+- **THEN** `cursor_line_bg` equals `Color::Rgb(128, 128, 128)`, `search_bg` equals `Color::Red`, `line_nr` equals `Color::Rgb(128, 128, 128)`, `cur_line_nr` equals `Color::White`, `border_fg` equals `Color::Black`, `border_bg` equals `Color::Reset`
+
+#### Scenario: No convenience method with implicit border tokens
+- **WHEN** a consumer attempts to call `theme.to_buffer_theme()` without border token arguments
+- **THEN** the code fails to compile because no such method exists
+
+#### Scenario: Directory pane uses directory border tokens
+- **WHEN** a directory pane constructs its `BufferTheme`
+- **THEN** it calls `to_buffer_theme_with_border(DIRECTORY_BORDER_FG, DIRECTORY_BORDER_BG)`
+
+#### Scenario: Split pane uses split border tokens
+- **WHEN** a split pane constructs its `BufferTheme`
+- **THEN** it calls `to_buffer_theme_with_border(SPLIT_BORDER_FG, SPLIT_BORDER_BG)`
+
+#### Scenario: Directory window inside a vertical split uses split border for separator
+- **WHEN** a directory window is the first child of a vertical split
+- **THEN** the preview pane's border (the split separator) uses `SPLIT_BORDER_FG`/`SPLIT_BORDER_BG`, not `DIRECTORY_BORDER_FG`/`DIRECTORY_BORDER_BG`
+
+#### Scenario: Directory panes do not inherit draw_borders from split context
+- **WHEN** a directory window is inside a vertical split with `draw_borders: Some(true)`
+- **THEN** the parent and current panes use their own viewport `show_border` setting, not the split's `draw_borders` override
+
+### Requirement: Buffer background color is theme-configurable
+The system SHALL apply the `BufferBg` theme token as the background color for the buffer content area. The `BufferTheme` struct SHALL include a `buffer_bg` field. The buffer rendering layer SHALL use this color as the base background when drawing the content area.
+
+#### Scenario: Custom buffer background
+- **WHEN** `init.lua` sets `y.theme.BufferBg = '#1e1e2e'`
+- **THEN** the buffer content area renders with the configured dark background
+
+#### Scenario: Default buffer background preserves terminal default
+- **WHEN** no `BufferBg` token is set
+- **THEN** the buffer content area renders with `Color::Reset` (terminal default background)
+
+#### Scenario: BufferBg is passed through BufferTheme
+- **WHEN** the frontend converts the theme via `to_buffer_theme_with_border()`
+- **THEN** the resulting `BufferTheme` contains the `buffer_bg` value from the `BufferBg` token
+
+### Requirement: Buffer line content respects BufferBg after ANSI resets
+The system SHALL ensure that every line in the buffer renders with the correct background after ANSI resets. On non-cursor lines, reset sequences SHALL re-apply `BufferBg`. On the cursor line (when cursor line highlighting is active), reset sequences SHALL re-apply `cursor_line_bg` instead of `BufferBg`, so that the cursor line background is continuous across the entire line including after search highlights.
+
+#### Scenario: Non-cursor line has BufferBg background
+- **WHEN** `BufferBg` is set to `#1e1e2e` and a line is not the cursor line
+- **THEN** the line content renders with `#1e1e2e` background, not the terminal default
+
+#### Scenario: ANSI reset in line number does not clear BufferBg
+- **WHEN** `BufferBg` is set to a custom color and a relative line number is rendered with an `\x1b[0m` reset
+- **THEN** the background after the reset is `BufferBg`, not the terminal default
+
+#### Scenario: ANSI reset in search highlight does not clear BufferBg on non-cursor line
+- **WHEN** `BufferBg` is set to a custom color, a search match highlight ends with a reset, and the line is not the cursor line
+- **THEN** the background after the search highlight reset is `BufferBg`, not the terminal default
+
+#### Scenario: ANSI reset in search highlight uses cursor_line_bg on cursor line
+- **WHEN** a search match appears on the cursor line and the search highlight ends with a reset
+- **THEN** the background after the search highlight reset is `cursor_line_bg`, not `BufferBg`
+
+#### Scenario: Multiple search matches on cursor line preserve cursor_line_bg between matches
+- **WHEN** the cursor line contains two or more search matches
+- **THEN** the background between and after each match is `cursor_line_bg`
+
+#### Scenario: Search highlight on cursor line with hide_cursor_line uses BufferBg
+- **WHEN** a search match appears on a line that would be the cursor line, but `hide_cursor_line` is true
+- **THEN** the background after the search highlight reset is `BufferBg`, not `cursor_line_bg`
+
+#### Scenario: ANSI reset in sign does not clear BufferBg
+- **WHEN** `BufferBg` is set to a custom color and a sign is rendered with an `\x1b[0m` reset
+- **THEN** the background after the sign reset is `BufferBg`, not the terminal default
+
+### Requirement: BufferTheme is created at point of use
+Functions that call `yeet_buffer::view()` SHALL create the `BufferTheme` locally via `theme.to_buffer_theme()` or `theme.to_buffer_theme_with_border()` rather than receiving it as a threaded parameter from parent functions. The constructed `BufferTheme` SHALL contain only `Color` values.
+
+#### Scenario: Intermediate layout functions do not accept BufferTheme
+- **WHEN** `render_window` is called to lay out split or directory windows
+- **THEN** its signature does not include a `BufferTheme` parameter
+
+#### Scenario: Leaf rendering functions create BufferTheme locally
+- **WHEN** `render_buffer_slot` or `render_directory_buffer` needs to call `yeet_buffer::view()`
+- **THEN** it creates a `BufferTheme` from the `&Theme` parameter and passes it to the view call
+
+### Requirement: from_enumeration accepts Theme reference
+The `from_enumeration` function SHALL accept a `&Theme` parameter instead of individual ANSI color strings. It SHALL extract the needed color tokens (`BufferFileFg`, `BufferDirectoryFg`) internally from the theme.
+
+#### Scenario: Directory entry uses theme token
+- **WHEN** `from_enumeration` is called with `ContentKind::Directory` and a theme where `BufferDirectoryFg` is `Color::LightBlue`
+- **THEN** the returned `BufferLine` content contains the ANSI code for light blue foreground (`\x1b[94m`)
+
+#### Scenario: File entry uses theme token
+- **WHEN** `from_enumeration` is called with `ContentKind::File` and a theme where `BufferFileFg` is `Color::White`
+- **THEN** the returned `BufferLine` content contains the ANSI code for white foreground (`\x1b[37m`)
+
+#### Scenario: Call sites pass only content, kind, and theme
+- **WHEN** callers invoke `from_enumeration`
+- **THEN** they pass `(content, kind, theme)` with no pre-computed ANSI strings
+
+### Requirement: Cursor mode codes are buffer-view constants
+The buffer view module SHALL define cursor mode codes (`\x1b[7m`, `\x1b[27m`, `\x1b[4m`, `\x1b[24m`) and reset code (`\x1b[0m`) as module-level constants. These SHALL NOT be part of `BufferTheme`.
+
+#### Scenario: Cursor normal mode uses constant
+- **WHEN** the buffer view renders a cursor in Normal mode
+- **THEN** it uses a module-level constant for the reverse-video code, not a `BufferTheme` field
+
+#### Scenario: Cursor line reset uses constant
+- **WHEN** the buffer view renders the cursor line background
+- **THEN** it uses a module-level constant for the ANSI reset code, not a `BufferTheme` field
+
+### Requirement: Semantic status color tokens
+
+The theme SHALL include `ErrorFg`, `WarningFg`, `SuccessFg`, and `InformationFg` color tokens for semantic coloring. These tokens SHALL be configurable via `y.theme.ErrorFg`, `y.theme.WarningFg`, `y.theme.SuccessFg`, and `y.theme.InformationFg` in `init.lua`.
+
+#### Scenario: Default error color
+
+- **WHEN** the user has not configured `y.theme.ErrorFg`
+- **THEN** the system SHALL use red as the default error foreground color
+
+#### Scenario: Default warning color
+
+- **WHEN** the user has not configured `y.theme.WarningFg`
+- **THEN** the system SHALL use yellow as the default warning foreground color
+
+#### Scenario: Default success color
+
+- **WHEN** the user has not configured `y.theme.SuccessFg`
+- **THEN** the system SHALL use green as the default success foreground color
+
+#### Scenario: Default information color
+
+- **WHEN** the user has not configured `y.theme.InformationFg`
+- **THEN** the system SHALL use blue as the default information foreground color
+
+#### Scenario: Custom error color
+
+- **WHEN** `init.lua` contains `y.theme.ErrorFg = '#ff0000'`
+- **THEN** the system SHALL use `#ff0000` as the error foreground color in all error-colored output
+
+### Requirement: Directory icon color tokens follow DirectoryIconsColor naming convention
+The plugin SHALL register theme tokens using the `DirectoryIconsColor*` naming convention (e.g., `DirectoryIconsColorRs`, `DirectoryIconsColorTxt`, `DirectoryIconsColorMakefile`, `DirectoryIconsColorDotEnv`, `DirectoryIconsColorGoMod`, `DirectoryIconsColorDefaultDirectory`, `DirectoryIconsColorDefaultFile`). These tokens SHALL be assignable from `init.lua` via `y.theme.<TokenName>` and participate in the same hex parsing and fallback behavior as existing tokens. Token names are plugin-defined — the core does not standardize icon-color class names. Documentation of these tokens SHALL live in the plugin's own `docs/help/` directory, not in core documentation.
+
+### Requirement: Default filename text color follows icon base color
+When no override is configured, directory entry filename text SHALL use the same base color as the resolved icon's original default color. This color is applied by the plugin directly mutating the bufferline content Ansi string during mutation hooks.
+
+#### Scenario: Rust entry defaults to rust orange for icon and text
+- **WHEN** a file entry matches the `*.rs` mapping and no theme override is set for `DirectoryIconsColorRs`
+- **THEN** the plugin reads `y.theme.DirectoryIconsColorRs` (set to the default during `setup()`) and uses that color for both icon glyph and filename text
+
+#### Scenario: Class override affects icon and text together
+- **WHEN** `init.lua` overrides `DirectoryIconsColorRs` with a valid hex color
+- **THEN** both icon glyph and filename text for `*.rs` entries use the overridden color
+
+### Requirement: Directories use distinct DirectoryIconsColor token from file default
+Directory entries SHALL have their own separate icon color token (`DirectoryIconsColorDefaultDirectory`), distinct from the file default icon token (`DirectoryIconsColorDefaultFile`), allowing independent visual treatment.
+
+#### Scenario: Directory token is separate from file default
+- **WHEN** a directory entry is rendered with an icon
+- **THEN** the applied token is a directory-specific token, not the same as the file default token
+
+### Requirement: Theme plugins can override DirectoryIconsColor tokens
+Theme plugins (e.g., `yeet-bluloco-theme`) SHALL be able to set `DirectoryIconsColor*` theme tokens. When a theme plugin sets a token value before the directory-icons plugin runs `setup()`, the directory-icons plugin SHALL respect the theme-provided value and not overwrite it. The `yeet-bluloco-theme` plugin SHALL provide override values for all `DirectoryIconsColor*` tokens.
+
+#### Scenario: Theme plugin overrides DirectoryIconsColorDefaultDirectory
+- **WHEN** `yeet-bluloco-theme` sets `DirectoryIconsColorDefaultDirectory` to a custom color before `yeet-directory-icons.setup()` runs
+- **THEN** the directory-icons plugin uses the theme-provided color for directory entries instead of its own default
+
+#### Scenario: Theme plugin does not set icon token
+- **WHEN** no theme plugin has set a value for a specific icon token
+- **THEN** the directory-icons plugin uses its built-in default color
+
+### Requirement: Legacy directory-entry colorization is removed without fallback
+The system SHALL remove the previous built-in file/directory colorization path for directory buffers. There is no fallback — without the plugin, directory entries render as plain unstyled text.
+
+#### Scenario: Styling source is plugin mutation only
+- **WHEN** a directory buffer entry is rendered
+- **THEN** foreground styling for icon/text is derived from plugin bufferline mutations and not from any core colorization logic
+
+#### Scenario: No plugin means no color
+- **WHEN** `yeet-directory-icons` is not installed
+- **THEN** directory entries render as plain unstyled text with no foreground color
+
+#### Scenario: Custom icon class color is applied
+- **WHEN** `init.lua` sets `DirectoryIconsColorRs` to a valid hex color
+- **THEN** entries matching the `*.rs` rule render icon and filename text with the configured foreground color
+
+#### Scenario: Unset icon class token uses plugin default
+- **WHEN** no value is provided for an icon class token and no theme plugin overrides it
+- **THEN** the plugin uses the compiled-in Nerd Font default color for that token
+
+### Requirement: Directory icon token fallback exists
+The plugin SHALL expose `DirectoryIconsColorDefaultFile` and `DirectoryIconsColorDefaultDirectory` as fallback color tokens used when an entry has no explicit icon mapping.
+
+#### Scenario: Unknown class falls back to default icon token
+- **WHEN** a bufferline's entry has no explicit icon mapping
+- **THEN** the plugin applies the fallback default icon token color
+
+--- ARQUIVOS DO PR (17)
+modified  +1     -1     .github/workflows/automated-release.yml
+modified  +1     -1     .github/workflows/release.yml
+modified  +27    -31    Cargo.lock
+modified  +2     -2     Cargo.toml
+modified  +8     -8     docs/help/hooks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-buffer-type-property/.openspec.yaml
+added     +70    -0     openspec/changes/archive/2026-04-14-buffer-type-property/design.md
+added     +28    -0     openspec/changes/archive/2026-04-14-buffer-type-property/proposal.md
+added     +113   -0     openspec/changes/archive/2026-04-14-buffer-type-property/specs/lua/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-14-buffer-type-property/specs/plugins/directory-icons/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-14-buffer-type-property/tasks.md
+modified  +66    -18    openspec/specs/lua/spec.md
+modified  +10    -3     openspec/specs/plugins/directory-icons/spec.md
+modified  +1     -1     plugins/directory-icons
+modified  +13    -0     yeet-frontend/src/model/mod.rs
+modified  +20    -9     yeet-frontend/src/update/hook.rs
+modified  +59    -24    yeet-lua/src/hook.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### yeet-lua/src/hook.rs
+@@ -142,11 +142,9 @@ pub fn invoke_on_window_change(
+     lua: &crate::LuaConfiguration,
+     viewport_paths: [Option<&Path>; 3],
+     viewports: &mut [&mut ViewPort],
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+ ) {
+-    if let Err(err) =
+-        try_invoke_on_window_change(lua, viewport_paths, viewports, preview_is_directory)
+-    {
++    if let Err(err) = try_invoke_on_window_change(lua, viewport_paths, viewports, buffer_types) {
+         tracing::error!("error in y.hook.on_window_change: {:?}", err);
+     }
+ }
+@@ -155,7 +153,7 @@ fn try_invoke_on_window_change(
+     lua: &Lua,
+     viewport_paths: [Option<&Path>; 3],
+     viewports: &mut [&mut ViewPort],
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+ ) -> LuaResult<()> {
+     let y: LuaTable = lua.globals().get("y")?;
+     let hook: LuaTable = y.get("hook")?;
+@@ -167,14 +165,16 @@ fn try_invoke_on_window_change(
+     }
+ 
+     let ctx = build_context(lua, "directory", None, viewports)?;
+-    ctx.set("preview_is_directory", preview_is_directory)?;
+ 
+     let viewport_keys = ["parent", "current", "preview"];
+-    for (key, path) in viewport_keys.iter().zip(viewport_paths.iter()) {
+-        if let Some(p) = path {
+-            if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++    for (i, (key, path)) in viewport_keys.iter().zip(viewport_paths.iter()).enumerate() {
++        if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++            if let Some(p) = path {
+                 subtable.set("path", p.to_string_lossy().to_string())?;
+             }
++            if let Some(bt) = buffer_types[i] {
++                subtable.set("buffer_type", bt)?;
++            }
+         }
+     }
+ 
+@@ -823,7 +823,7 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert!(
+@@ -851,19 +851,19 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert_eq!(preview.prefix_column_width, 2);
+         assert_eq!(parent.line_number, LineNumber::Absolute);
+     }
+ 
+     #[test]
+-    fn on_window_change_preview_is_directory_true() {
++    fn on_window_change_preview_buffer_type_directory() {
+         let lua = create_lua_with_hook(
+             r#"
+             y.hook.on_window_change:add(function(ctx)
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+                     ctx.preview.prefix_column_width = 2
+                 else
+                     ctx.preview.prefix_column_width = 0
+@@ -880,21 +880,21 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert_eq!(
+             preview.prefix_column_width, 2,
+-            "prefix_column_width should be 2 when preview_is_directory is true"
++            "prefix_column_width should be 2 when preview buffer_type is directory"
+         );
+     }
+ 
+     #[test]
+-    fn on_window_change_preview_is_directory_false() {
++    fn on_window_change_preview_buffer_type_content() {
+         let lua = create_lua_with_hook(
+             r#"
+             y.hook.on_window_change:add(function(ctx)
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+                     ctx.preview.prefix_column_width = 2
+                 else
+                     ctx.preview.prefix_column_width = 0
+@@ -914,12 +914,12 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            false,
++            [Some("directory"), Some("directory"), Some("content")],
+         );
+ 
+         assert_eq!(
+             preview.prefix_column_width, 0,
+-            "prefix_column_width should be 0 when preview_is_directory is false"
++            "prefix_column_width should be 0 when preview buffer_type is content"
+         );
+     }
+ 
+@@ -944,7 +944,7 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert!(
+@@ -968,7 +968,7 @@ mod tests {
+             &lua,
+             [None, None, None],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert_eq!(
+@@ -1002,7 +1002,7 @@ mod tests {
+                 Some(Path::new("/preview")),
+             ],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         let globals = lua.globals();
+@@ -1021,14 +1021,49 @@ mod tests {
+         assert!(globals.get::<LuaValue>("test_top_level_path").unwrap() == LuaValue::Nil);
+     }
+ 
++    #[test]
++    fn on_window_change_buffer_type_on_subtables() {
++        let lua = create_lua_with_hook(
++            r#"
++            y.hook.on_window_change:add(function(ctx)
++                _G.test_parent_bt = ctx.parent.buffer_type
++                _G.test_current_bt = ctx.current.buffer_type
++                _G.test_preview_bt = ctx.preview.buffer_type
++            end)
++            "#,
++        );
++
++        let mut parent = ViewPort::default();
++        let mut current = ViewPort::default();
++        let mut preview = ViewPort::default();
++
++        invoke_on_window_change(
++            &lua,
++            [None, None, None],
++            &mut [&mut parent, &mut current, &mut preview],
++            [Some("directory"), Some("directory"), Some("content")],
++        );
++
++        let globals = lua.globals();
++        assert_eq!(
++            globals.get::<String>("test_parent_bt").unwrap(),
++            "directory"
++        );
++        assert_eq!(
++            globals.get::<String>("test_current_bt").unwrap(),
++            "directory"
++        );
++        assert_eq!(globals.get::<String>("test_preview_bt").unwrap(), "content");
++    }
++
+     #[test]
+     fn on_window_change_via_real_init() {
+         let mut tmp = NamedTempFile::new().unwrap();
+         write!(
+             tmp,
+             r#"
+             y.hook.on_window_change:add(function(ctx)
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+                     ctx.preview.prefix_column_width = 2
+                 else
+                     ctx.preview.prefix_column_width = 0
+@@ -1053,7 +1088,7 @@ mod tests {
+                 Some(Path::new("/preview")),
+             ],
+             &mut [&mut parent, &mut current, &mut preview],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+         );
+ 
+         assert_eq!(preview.prefix_column_width, 2);
+
+===== P267 | repo Mic92/gitea-mq | PR #5: Add three-level dashboard navigation and clickable commit status links  | capacidade: automerge-integration
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Discover PRs with automerge scheduled
+The system SHALL periodically poll the Gitea API to discover open PRs that have automerge scheduled. Discovery SHALL be done by querying each managed repo's open PRs and checking their timeline for `pull_scheduled_merge` and `pull_cancel_scheduled_merge` comment types. A PR is considered automerge-scheduled if its most recent automerge-related timeline comment is `pull_scheduled_merge`. Poller goroutines SHALL be started dynamically as repos are added to the managed set and stopped when repos are removed.
+
+#### Scenario: PR has automerge scheduled
+- **WHEN** the poller checks repo `org/app` and PR #42 has a `pull_scheduled_merge` timeline comment with no subsequent `pull_cancel_scheduled_merge`
+- **AND** PR #42 is not already in the merge queue
+- **THEN** the system enqueues PR #42
+
+#### Scenario: PR had automerge scheduled then cancelled
+- **WHEN** the poller checks repo `org/app` and PR #42 has a `pull_scheduled_merge` followed by a `pull_cancel_scheduled_merge`
+- **THEN** the system does NOT enqueue PR #42
+
+#### Scenario: PR already in queue
+- **WHEN** the poller discovers PR #42 has automerge scheduled
+- **AND** PR #42 is already in the merge queue
+- **THEN** the system takes no action (no duplicate enqueue)
+
+#### Scenario: Poller starts for dynamically discovered repo
+- **WHEN** the discovery loop adds `org/new-repo` to the managed set
+- **THEN** a poller goroutine is started for `org/new-repo` with the configured poll interval
+- **AND** the first poll runs immediately
+
+#### Scenario: Poller stops for removed repo
+- **WHEN** the discovery loop removes `org/old-repo` from the managed set
+- **THEN** the poller goroutine for `org/old-repo` is stopped (its context is cancelled)
+- **AND** no further polls occur for `org/old-repo`
+
+### Requirement: Detect automerge cancellation
+The system SHALL detect when a user cancels automerge on a queued PR. On the next poll cycle, if a previously-queued PR no longer has automerge scheduled, the system SHALL remove it from the queue.
+
+#### Scenario: User cancels automerge while PR is queued
+- **WHEN** PR #42 is in the merge queue
+- **AND** the poller detects a `pull_cancel_scheduled_merge` comment newer than the last `pull_scheduled_merge`
+- **THEN** the system removes PR #42 from the queue
+- **AND** if PR #42 was head-of-queue, cleans up the merge branch and advances to the next PR
+
+### Requirement: Cancel automerge on failure
+The system SHALL cancel a PR's automerge via the Gitea API (`DELETE /repos/{owner}/{repo}/pulls/{index}/merge`) when the PR is removed from the queue due to failure (check failure, timeout, or merge conflict). The system SHALL also post a comment on the PR explaining why.
+
+#### Scenario: Check failure cancels automerge
+- **WHEN** a required check fails for head-of-queue PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining which check failed
+- **AND** sets `gitea-mq` commit status to `failure`
+
+#### Scenario: Timeout cancels automerge
+- **WHEN** the check timeout is exceeded for head-of-queue PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining the timeout
+- **AND** sets `gitea-mq` commit status to `error`
+
+#### Scenario: Merge conflict cancels automerge
+- **WHEN** the merge branch cannot be created due to conflicts for PR #42
+- **THEN** the system calls `DELETE /repos/org/app/pulls/42/merge` to cancel automerge
+- **AND** posts a comment on PR #42 explaining the merge conflict
+- **AND** sets `gitea-mq` commit status to `failure`
+
+### Requirement: Set gitea-mq commit status to gate merge
+The system SHALL post a `gitea-mq` commit status on the PR's head commit. When the PR is enqueued, the status SHALL be `pending`. When the merge branch CI passes, the status SHALL be `success` — which allows Gitea's automerge to proceed with the actual merge.
+
+#### Scenario: PR enqueued — pending status
+- **WHEN** PR #42 is enqueued
+- **THEN** the system posts a `gitea-mq` commit status of `pending` with description "Queued (position #N)"
+
+#### Scenario: PR becomes head-of-queue — testing status
+- **WHEN** PR #42 becomes head-of-queue and the merge branch is created
+- **THEN** the system updates the `gitea-mq` commit status to `pending` with description "Testing merge result"
+
+#### Scenario: Merge branch CI passes — success status
+- **WHEN** all required checks pass on the merge branch for PR #42
+- **THEN** the system posts a `gitea-mq` commit status of `success` with description "Merge queue passed"
+- **AND** Gitea's automerge will detect all required checks (including `gitea-mq`) have passed and perform the merge
+
+### Requirement: Detect new push to queued PR
+The system SHALL detect when new commits are pushed to a queued PR by comparing the PR's current head SHA (from the API) against the stored head SHA. If they differ, the PR SHALL be removed from the queue with automerge cancelled.
+
+#### Scenario: Head SHA changes for queued PR
+- **WHEN** PR #42 was enqueued with head SHA `abc123`
+- **AND** the poller fetches PR #42 and sees head SHA `def456`
+- **THEN** the system removes PR #42 from the queue
+- **AND** cancels automerge on PR #42
+- **AND** posts a comment explaining the PR was removed due to new commits
+
+### Requirement: Pause when Gitea is unavailable
+The system SHALL pause all queue processing when the Gitea API is unreachable. No queue advances, merge branch creations, or state changes SHALL occur while Gitea is down. The system SHALL resume normal operation when the API becomes reachable again.
+
+#### Scenario: Gitea API returns errors
+- **WHEN** the poller attempts to poll and the Gitea API returns connection errors or 5xx responses
+- **THEN** the system logs the error
+- **AND** pauses all queue processing
+- **AND** retries on the next poll cycle
+
+#### Scenario: Gitea API recovers
+- **WHEN** the Gitea API becomes reachable again after being down
+- **THEN** the system resumes normal polling and queue processing
+- **AND** reconciles queue state against current Gitea state
+
+### Requirement: Handle deleted or transferred repository
+The system SHALL detect when a managed repository no longer exists (API returns 404). The system SHALL remove the repository from its managed set, clean up any queue entries, and log a warning.
+
+#### Scenario: Managed repo deleted
+- **WHEN** the poller attempts to poll repo `org/app` and the Gitea API returns 404
+- **THEN** the system removes `org/app` from its managed repos
+- **AND** cleans up any active queue entries and merge branches for `org/app`
+- **AND** logs a warning that the repository no longer exists
+
+### Requirement: Auto-configure Gitea on startup
+The system SHALL automatically configure each managed repository: ensure `gitea-mq` is in the branch protection's required status checks, and ensure a webhook for `status` events is pointed at this service's webhook endpoint. Auto-configuration SHALL run both at startup for initially-managed repos AND when new repos are added to the managed set by the discovery loop.
+
+#### Scenario: Branch protection missing gitea-mq check
+- **WHEN** the service starts and repo `org/app` has branch protection on `main` but `gitea-mq` is not in `status_check_contexts`
+- **THEN** the system adds `gitea-mq` to the branch protection's required status checks via `PATCH /repos/org/app/branch_protections/{name}`
+
+#### Scenario: Branch protection already has gitea-mq
+- **WHEN** the service starts and repo `org/app` already has `gitea-mq` in required status checks
+- **THEN** the system takes no action
+
+#### Scenario: No branch protection exists
+- **WHEN** the service starts and repo `org/app` has no branch protection on its default branch
+- **THEN** the system logs a warning that branch protection should be configured
+- **AND** continues operating (automerge can still be used, but merges won't be gated by branch protection)
+
+#### Scenario: Webhook not configured
+- **WHEN** the service starts and repo `org/app` has no webhook pointing at this service
+- **THEN** the system creates a webhook for `status` events with the configured shared secret
+
+#### Scenario: Webhook already exists
+- **WHEN** the service starts and repo `org/app` already has a webhook pointing at this service
+- **THEN** the system takes no action
+
+#### Scenario: Newly discovered repo auto-configured
+- **WHEN** the discovery loop finds `org/new-repo` with the matching topic
+- **AND** `org/new-repo` is not yet managed
+- **THEN** the system runs auto-configuration for `org/new-repo` (branch protection + webhook setup)
+- **AND** starts a poller goroutine for `org/new-repo`
+
+### Requirement: Configurable poll interval
+The system SHALL support a configurable poll interval (via environment variable) for checking automerge state. The default poll interval SHALL be 30 seconds.
+
+#### Scenario: Default poll interval
+- **WHEN** no poll interval is configured
+- **THEN** the system polls every 30 seconds
+
+#### Scenario: Custom poll interval
+- **WHEN** `GITEA_MQ_POLL_INTERVAL` is set to `15s`
+- **THEN** the system polls every 15 seconds
+
+--- ARQUIVOS DO PR (24)
+modified  +2     -0     cmd/gitea-mq/main.go
+modified  +6     -3     internal/config/config.go
+modified  +10    -2     internal/gitea/client.go   <== código ligado à spec
+modified  +5     -4     internal/merge/merge.go
+modified  +19    -3     internal/merge/merge_test.go
+modified  +6     -2     internal/monitor/monitor.go
+modified  +7     -3     internal/poller/poller.go
+modified  +3     -0     internal/registry/registry.go
+modified  +165   -59    internal/web/handler.go
+modified  +10    -31    internal/web/templates/overview.html
+added     +52    -0     internal/web/templates/pr.html
+modified  +2     -25    internal/web/templates/repo.html
+modified  +6     -1     internal/web/templates/style.css
+modified  +214   -40    internal/web/web_test.go
+added     +2     -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/.openspec.yaml
+added     +108   -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/design.md
+added     +39    -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/proposal.md
+added     +50    -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/specs/check-monitoring/spec.md
+added     +64    -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/specs/pr-detail-page/spec.md
+added     +104   -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/specs/web-dashboard/spec.md
+added     +87    -0     openspec/changes/archive/2026-02-12-dashboard-project-navigation/tasks.md
+modified  +38    -91    openspec/specs/check-monitoring/spec.md
+added     +64    -0     openspec/specs/pr-detail-page/spec.md
+modified  +42    -13    openspec/specs/web-dashboard/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/gitea/client.go
+@@ -5,6 +5,8 @@ package gitea
+ 
+ import (
+ 	"context"
++	"fmt"
++	"strings"
+ 	"time"
+ )
+ 
+@@ -63,8 +65,14 @@ type CommitStatus struct {
+ 
+ // MQStatus creates a CommitStatus with the "gitea-mq" context.
+ // Centralises the context string so callers don't repeat it.
+-func MQStatus(state, description string) CommitStatus {
+-	return CommitStatus{Context: "gitea-mq", State: state, Description: description}
++func MQStatus(state, description, targetURL string) CommitStatus {
++	return CommitStatus{Context: "gitea-mq", State: state, Description: description, TargetURL: targetURL}
++}
++
++// DashboardPRURL constructs the dashboard URL for a specific PR.
++// The baseURL should be the GITEA_MQ_EXTERNAL_URL value.
++func DashboardPRURL(baseURL, owner, repo string, prNumber int64) string {
++	return strings.TrimRight(baseURL, "/") + fmt.Sprintf("/repo/%s/%s/pr/%d", owner, repo, prNumber)
+ }
+ 
+ // Branch represents a branch from the Gitea API.
+
+===== P268 | repo atman-33/openspec-for-copilot | PR #26: Add specialized agents and individual task execution | capacidade: chat-integration
+--- SPEC VIVA
+# chat-integration Specification
+
+## Purpose
+TBD - created by archiving change add-chat-language-setting. Update Purpose after archive.
+## Requirements
+### Requirement: Append Language Instruction
+All prompts sent to GitHub Copilot via OpenSpec commands MUST include an instruction to respond in the configured language.
+
+#### Scenario: Send Prompt in English (Default)
+- Given the `chatLanguage` setting is `en`
+- When the user executes a command that sends a prompt to chat (e.g., "Run Prompt", "Create Spec")
+- Then the prompt text sent to Copilot should NOT include a specific language instruction (or explicitly request English if needed to override context).
+- *Refinement*: Since Copilot defaults to English, we can omit the instruction for `en` to save tokens, or add "Please respond in English" to be explicit. For this iteration, we will omit it for `en` unless testing shows otherwise.
+
+#### Scenario: Send Prompt in Japanese
+- Given the `chatLanguage` setting is `ja`
+- When the user executes a command that sends a prompt to chat
+- Then the prompt text sent to Copilot should end with the directive "Please respond in Japanese."
+
+#### Scenario: Send Prompt in Other Languages
+- Given the `chatLanguage` setting is set to another supported language (e.g., `es` for Spanish)
+- When the user executes a command that sends a prompt to chat
+- Then the prompt text sent to Copilot should end with the directive "Please respond in Spanish."
+
+#### Scenario: Centralized Handling
+- Given the developer adds a new feature that uses `sendPromptToChat`
+- When the feature is used
+- Then the language instruction should be applied automatically without extra code in the new feature.
+
+### Requirement: Inject Custom Instructions
+The `sendPromptToChat` utility MUST append configured custom instructions to the prompt before the language instruction.
+
+#### Scenario: Specific instruction only (Archive Change)
+- Given the user has configured a specific instruction "Specific Context" for "Archive Change"
+- And no global instruction is configured
+- When an "Archive Change" prompt "Archive this change" is sent
+- Then the final prompt sent to Copilot is "Archive this change\n\nSpecific Context\n\n(Please respond in ...)"
+
+#### Scenario: Global and Specific instructions (Archive Change)
+- Given the user has configured a global instruction "Global Context"
+- And a specific instruction "Specific Context" for "Archive Change"
+- When an "Archive Change" prompt "Archive this change" is sent
+- Then the final prompt sent to Copilot is "Archive this change\n\nGlobal Context\n\nSpecific Context\n\n(Please respond in ...)"
+
+#### Scenario: Order of injection (unchanged)
+- The order MUST be: Original Prompt -> Global Instruction -> Specific Instruction -> Language Instruction.
+
+### Requirement: Codex Temp File Retention
+When Codex mode writes prompt files under `~/.codex/.tmp/`, the extension MUST delete old Markdown files to prevent unbounded growth.
+
+#### Scenario: Cleanup Old Files
+- Given `openspec-for-copilot.aiAgent` is `codex`
+- And there are `.md` files in `~/.codex/.tmp/` older than 7 days
+- When the extension sends a prompt via Codex
+- Then the extension MUST delete those old `.md` files on a best-effort basis.
+
+#### Scenario: Do Not Delete Recent Files
+- Given `openspec-for-copilot.aiAgent` is `codex`
+- And there are `.md` files in `~/.codex/.tmp/` newer than 7 days
+- When the extension sends a prompt via Codex
+- Then the extension MUST NOT delete those recent `.md` files.
+
+### Requirement: AI Agent Configuration
+The extension MUST allow users to configure which AI agent to use for chat interactions.
+
+#### Scenario: Default Configuration
+- Given the user has not configured `openspec-for-copilot.aiAgent`
+- When the extension reads the configuration
+- Then the value MUST be `github-copilot`.
+
+#### Scenario: Select Codex
+- Given the user sets `openspec-for-copilot.aiAgent` to `codex`
+- When the extension sends a prompt to chat
+- Then the extension MUST use the Codex integration workflow.
+
+### Requirement: Codex Integration Workflow
+When the AI agent is set to `codex`, the extension MUST send prompts via the `chatgpt.addToThread` command using a temporary file.
+
+#### Scenario: Send Prompt to Codex
+- Given `openspec-for-copilot.aiAgent` is `codex`
+- When the extension sends a prompt "Create a spec for X"
+- Then a temporary file MUST be created at `~/.codex/.tmp/YYYYMMDD-<UUID>.md`.
+- And the file content MUST be "Create a spec for X".
+- And the file MUST be opened in the editor.
+- And the entire content of the file MUST be selected.
+- And the command `chatgpt.addToThread` MUST be executed.
+
+#### Scenario: Temporary File Path
+- The temporary file path MUST follow the pattern `~/.codex/.tmp/YYYYMMDD-<UUID>.md`.
+- The directory `~/.codex/.tmp/` MUST be created if it does not exist.
+
+
+--- ARQUIVOS DO PR (23)
+added     +241   -0     .github/agents/ardyn.agent.md
+added     +175   -0     .github/agents/cid.agent.md
+added     +173   -0     .github/agents/cor.agent.md
+added     +112   -0     .github/agents/gladiolus.agent.md
+added     +98    -0     .github/agents/ignis.agent.md
+added     +141   -0     .github/agents/iris.agent.md
+added     +84    -0     .github/agents/lunafreya.agent.md
+added     +318   -0     .github/agents/noctis.agent.md
+added     +119   -0     .github/agents/prompto.agent.md
+added     +236   -0     .github/agents/regis.agent.md
+added     +55    -0     .github/prompts/noctis.prompt.md
+modified  +2     -1     biome.json
+added     +123   -0     openspec/changes/add-individual-task-execution/proposal.md
+added     +91    -0     openspec/changes/add-individual-task-execution/specs/codelens/spec.md
+added     +44    -0     openspec/changes/add-individual-task-execution/tasks.md
+modified  +74    -5     openspec/specs/codelens/spec.md
+modified  +1     -1     package.json
+modified  +19    -0     src/activation/commands/register-spec-commands.ts
+modified  +21    -3     src/features/spec/spec-manager.ts
+modified  +37    -16    src/providers/spec-task-code-lens-provider.ts
+modified  +1     -0     src/utils/chat-prompt-runner.ts   <== código ligado à spec
+modified  +1     -0     src/utils/config-manager.test.ts
+modified  +6     -0     src/utils/config-manager.ts   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src/utils/chat-prompt-runner.ts
+@@ -6,6 +6,7 @@ export interface ChatContext {
+ 	instructionType?:
+ 		| "createSpec"
+ 		| "startAllTask"
++		| "startSingleTask"
+ 		| "archiveChange"
+ 		| "runPrompt";
+ }
+
+### src/utils/config-manager.ts
+@@ -25,6 +25,7 @@ export interface OpenSpecSettings {
+ 		global: string;
+ 		createSpec: string;
+ 		startAllTask: string;
++		startSingleTask: string;
+ 		archiveChange: string;
+ 		runPrompt: string;
+ 	};
+@@ -117,6 +118,8 @@ export class ConfigManager {
+ 			global: config.get<string>("customInstructions.global") ?? "",
+ 			createSpec: config.get<string>("customInstructions.createSpec") ?? "",
+ 			startAllTask: config.get<string>("customInstructions.startAllTask") ?? "",
++			startSingleTask:
++				config.get<string>("customInstructions.startSingleTask") ?? "",
+ 			archiveChange:
+ 				config.get<string>("customInstructions.archiveChange") ?? "",
+ 			runPrompt: config.get<string>("customInstructions.runPrompt") ?? "",
+@@ -161,6 +164,9 @@ export class ConfigManager {
+ 			startAllTask:
+ 				overrides.customInstructions?.startAllTask ??
+ 				defaults.customInstructions.startAllTask,
++			startSingleTask:
++				overrides.customInstructions?.startSingleTask ??
++				defaults.customInstructions.startSingleTask,
+ 			archiveChange:
+ 				overrides.customInstructions?.archiveChange ??
+ 				defaults.customInstructions.archiveChange,
+
+===== P269 | repo terwer/siyuan-plugin-picgo | PR #677: feat(shell): improve PicGo plugin shell UX and reload notification  | capacidade: picgo-paste-upload-ownership
+--- SPEC VIVA
+# picgo-paste-upload-ownership 规范
+
+## Purpose
+待定 - 由归档变更 picgo-internal-refactor 创建。归档后更新 Purpose。
+## Requirements
+### Requirement: 粘贴图片上传由插件从事件源头拥有
+当 PicGo 自动粘贴上传启用时，插件 SHALL 在 SiYuan 默认粘贴处理或内部 asset 上传运行之前，独占拥有粘贴图片流程。
+
+#### Scenario: 默认粘贴处理先被阻断
+- **WHEN** 粘贴事件包含图片文件且 PicGo 自动粘贴上传已启用
+- **THEN** 插件在开始任何 PicGo 上传之前，调用真实宿主事件的默认阻断能力，例如 `source.preventDefault()`
+- **AND** SiYuan 的默认图片粘贴/内部 asset 上传路径不会为该图片运行
+
+#### Scenario: 没有 ownership 意味着没有自动接管
+- **WHEN** 插件无法证明真实宿主粘贴事件已被阻断
+- **THEN** 自动 PicGo 接管路径不被视为本次重构的有效路径
+
+### Requirement: 禁止双上传补偿
+本次重构 SHALL NOT 将双上传、延迟轮询、DOM 探测或事后 markdown 链接交换作为正常的粘贴上传架构。
+
+#### Scenario: SiYuan uploadAsset 不作为粘贴补偿使用
+- **WHEN** 处理自动粘贴图片上传
+- **THEN** 正常路径不会先上传到 PicGo，然后调用 SiYuan `uploadAsset`，仅仅为了创建一个稍后替换的本地 asset
+
+#### Scenario: 轮询不是事务边界
+- **WHEN** 处理自动粘贴图片上传
+- **THEN** 正确性不依赖 `waitTimeout`、`retryTimes`、`JsTimer`、等待 DOM 图片出现，或事后搜索 block markdown
+
+#### Scenario: 链接替换不是隐蔽纠正
+- **WHEN** 最终文档链接被写入
+- **THEN** 它由插件拥有的粘贴事务写入，而不是偷取/替换由 SiYuan 默认粘贴行为插入的链接
+
+### Requirement: 粘贴上传是一个明确的单事务
+插件 SHALL 将粘贴图片上传视为一个明确事务，覆盖输入捕获、PicGo 上传、文档变更、元数据更新和失败处理。
+
+#### Scenario: 成功粘贴有一个最终事实源
+- **WHEN** 粘贴图片上传成功
+- **THEN** 文档链接、PicGo 上传结果和 `custom-picgo-file-map-key` 元数据指向同一个插件拥有的图片结果
+- **AND** 不存在稍后必须协调的未托管默认本地 asset 结果
+
+#### Scenario: 失败可理解且有边界
+- **WHEN** PicGo 上传、文档插入或元数据更新失败
+- **THEN** 插件留下有边界、用户可理解的状态，而不是本地 asset、远程 URL、陈旧元数据和待处理重试定时器的半更新混合状态
+
+### Requirement: 粘贴上传架构围绕事务边界重写
+本次重构 SHALL 用产品级事务边界（例如 `PasteUploadTransaction`）替换 legacy 粘贴补偿脚本，而不是包装旧路径。
+
+#### Scenario: 粘贴 listener 委托给事务 use case
+- **WHEN** bootstrap 粘贴 listener 判定 PicGo 应处理一张粘贴图片
+- **THEN** 它在阻止宿主默认行为后，委托给粘贴上传事务/application service
+- **AND** listener 本身不直接编排 PicGo 上传、SiYuan asset 上传、DOM 查找、block markdown 替换和元数据变更
+
+#### Scenario: 职责通过 ports 和 adapters 分离
+- **WHEN** 粘贴上传被重构
+- **THEN** 宿主事件解析/默认阻断被隔离在 paste event adapter 中
+- **AND** 最终文档插入/替换被隔离在 document mutation port 后面
+- **AND** `custom-picgo-file-map-key` 更新被隔离在 metadata repository 或等价边界后面
+
+### Requirement: Legacy 补偿路径被移除，而不是被包装
+旧的双上传补偿路径 SHALL 被视为要从自动粘贴上传中移除的设计缺陷，而不是兼容 fallback。
+
+#### Scenario: ignoreReplaceLink 剪贴板旁路不是新核心
+- **WHEN** 实现新的粘贴事务
+- **THEN** 该事务不依赖 `uploadSingleImageToBed(..., ignoreReplaceLink=true)` 后再跟随一个独立的 bootstrap 轮询/替换 pass
+
+#### Scenario: 默认本地 asset 不是中间事实源
+- **WHEN** 自动粘贴上传成功
+- **THEN** 最终文档状态由插件拥有的远程上传结果产生
+- **AND** 不会仅仅为了让插件稍后替换它而创建 SiYuan 默认本地 asset 路径
+
+### Requirement: 回滚行为在实现前设计
+本次重构 SHALL 在接受实现前，为粘贴事务的每个阶段定义有边界的失败状态。
+
+#### Scenario: 默认粘贴被阻止后 PicGo 上传失败
+- **WHEN** 插件已阻止宿主默认粘贴行为且 PicGo 上传失败
+- **THEN** 插件遵循已定义的回滚策略，例如不插入任何内容并给出清晰错误，或插入明确的重试占位符
+- **AND** 它不会稍后触发 SiYuan 默认上传作为隐式 fallback
+
+#### Scenario: 远程上传成功后文档变更失败
+- **WHEN** PicGo 上传成功但将最终链接写入文档失败
+- **THEN** 插件报告有边界的恢复状态，并且不写入声称文档包含远程图片的元数据
+
+#### Scenario: 文档变更成功后元数据提交失败
+- **WHEN** 最终文档链接已写入但元数据提交失败
+- **THEN** 插件报告可恢复的元数据同步失败，而不启动延迟 DOM 轮询或第二次 asset 上传
+
+### Requirement: 真实宿主验证是强制的
+本次重构 SHALL 针对真实 SiYuan 宿主行为验证粘贴 ownership，而不只针对 mocks 或隔离单元测试。
+
+#### Scenario: 宿主 smoke 证明默认阻断
+- **WHEN** 本次重构准备 review
+- **THEN** 真实 SiYuan 粘贴 smoke 或等价宿主级自动化证明，默认粘贴/内部上传在插件上传开始前已被阻止
+
+#### Scenario: 仅 mock 证明不足
+- **WHEN** 测试只 mock 粘贴 handler 或只断言最终 URL
+- **THEN** 这些测试不足以接受粘贴上传重构
+
+
+--- ARQUIVOS DO PR (27)
+modified  +25    -16    README.md
+modified  +27    -18    README_zh_CN.md
+added     +50    -0     libs/Universal-PicGo-Core/src/db/config/index.spec.ts
+modified  +12    -0     libs/Universal-PicGo-Core/src/db/config/index.ts
+modified  +5     -0     libs/zhi-siyuan-picgo/src/index.ts
+modified  +29    -28    libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts   <== código ligado à spec
+added     +189   -0     libs/zhi-siyuan-picgo/src/lib/siyuanPicgoMigrationState.ts
+modified  +111   -12    libs/zhi-siyuan-picgo/src/lib/siyuanPicgoPostApi.ts
+added     +2     -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/.openspec.yaml
+added     +95    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/design.md
+added     +59    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/implementation-notes.md
+added     +39    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/proposal.md
+added     +93    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/specs/picgo-plugin-shell-ux/spec.md
+added     +39    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/tasks.md
+added     +97    -0     openspec/specs/picgo-plugin-shell-ux/spec.md
+modified  +89    -2     packages/picgo-plugin-app/src/components/setting/PicgoSetting.vue
+added     +108   -0     packages/picgo-plugin-app/src/components/setting/RuntimeReloadNotice.vue
+modified  +16    -2     packages/picgo-plugin-app/src/components/setting/picgo/bundled/PicgoPluginSetting.vue
+added     +72    -0     packages/picgo-plugin-app/src/composables/useRuntimeReloadNotice.ts
+modified  +8     -0     packages/picgo-plugin-app/src/i18n/en_US.ts
+modified  +7     -0     packages/picgo-plugin-app/src/i18n/zh_CN.ts
+modified  +16    -1     packages/picgo-plugin-bootstrap/README.md
+modified  +15    -3     packages/picgo-plugin-bootstrap/src/dialog.ts
+modified  +13    -1     packages/picgo-plugin-bootstrap/src/index.ts
+added     +395   -0     packages/picgo-plugin-bootstrap/src/shell.ts
+modified  +2     -2     packages/picgo-plugin-bootstrap/src/topbar.ts
+modified  +11    -0     scripts/picgo-internal-refactor-audit.cjs
+--- DIFF DO CÓDIGO LIGADO
+### libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts
+@@ -9,7 +9,7 @@
+ 
+ import { SiyuanPicgoPostApi } from "./siyuanPicgoPostApi"
+ import { ILogger, simpleLogger } from "zhi-lib-base"
+-import { migrateV2WorkspacePicGoConfig, resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
++import { resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
+ import type { SiyuanConfigLike } from "./siyuanConfigLike"
+ import { SiyuanKernelApi } from "zhi-siyuan-api"
+ 
+@@ -57,7 +57,6 @@ class SiyuanPicGo {
+     if (!this.picgoInstance) {
+       this.logger.debug("初始化 SiyuanPicgoPostApi 实例")
+       this.logger.info("resolved PicGo paths =>", paths)
+-      migrateV2WorkspacePicGoConfig(paths, this.logger)
+       this.picgoInstance = new SiyuanPicgoPostApi(siyuanConfig, isDev, paths)
+       this.instanceKey = instanceKey
+ 
+@@ -73,34 +72,36 @@ class SiyuanPicGo {
+    * 检查 PicGo 配置迁移的状态
+    */
+   private static async checkConfigMigration(siyuanApi: SiyuanKernelApi, picgo: SiyuanPicgoPostApi): Promise<void> {
+-    const that = this
+-    return new Promise<void>((resolve) => {
+-      let needUpdate = false
++    const initialState = picgo.getConfigMigrationState()
++    if (initialState.status === "running") {
++      siyuanApi.pushMsg({
++        msg: "检测到 PicGo 配置初始化或迁移任务，正在等待完成，请勿进行任何操作...",
++        timeout: 1000,
++      })
++      this.logger?.warn("检测到 PicGo 配置初始化或迁移任务，正在等待完成...")
++      await picgo.waitForConfigMigration()
++    }
+ 
+-      const checkConfig = () => {
+-        if (picgo.cfgUpdating) {
+-          needUpdate = true
+-          siyuanApi.pushMsg({
+-            msg: "检测到旧配置，正在迁移配置，请勿进行任何操作...",
+-            timeout: 1000,
+-          })
+-          that.logger?.warn("检测到旧配置，正在迁移配置，请勿进行任何操作...")
+-          setTimeout(checkConfig, 1000) // 递归检查
+-        } else {
+-          if (needUpdate) {
+-            siyuanApi.pushMsg({
+-              msg: "PicGO 图床历史配置迁移完成",
+-              timeout: 7000,
+-            })
+-            that.logger?.info("PicGO 图床历史配置迁移完成🎉")
+-          }
+-          that.logger?.info("PicGO instance is ready😄")
+-          resolve()
+-        }
+-      }
++    const finalState = picgo.getConfigMigrationState()
++    if (finalState.status === "failed") {
++      const errorText = finalState.error ? `，错误信息：${finalState.error}` : ""
++      siyuanApi.pushErrMsg({
++        msg: `PicGo 配置初始化或迁移失败${errorText}。请在 PicGo 设置页点击“重试初始化”。`,
++        timeout: 7000,
++      })
++      this.logger?.error(`PicGo config migration failed${errorText}`)
++      return
++    }
+ 
+-      checkConfig()
+-    })
++    if (initialState.status === "running" && finalState.status === "done") {
++      siyuanApi.pushMsg({
++        msg: "PicGO 配置初始化或迁移完成",
++        timeout: 7000,
++      })
++      this.logger?.info("PicGO 配置初始化或迁移完成🎉")
++    }
++
++    this.logger?.info("PicGO instance is ready😄")
+   }
+ }
+ 
+
+===== P270 | repo LuSrackhall/KeyTone | PR #129: Add waveform sound trimmer 在裁剪定义声音步骤中, 引入音频波形可视化组件, 降低用户制作键音专辑的难度 | capacidade: encrypted-outputs
+--- SPEC VIVA
+# Encrypted Outputs
+
+## Purpose
+
+定义 KeyTone 在“加密产物”上的兼容性边界与构建身份（build identity）的关联。
+
+本能力覆盖：
+
+- 专辑导出文件（`.ktalbum`）加密
+- 专辑配置加密（AES-GCM，基于 albumUUID 派生 key）
+- 签名导出文件（`.ktsign`）加密
+- 构建时密钥注入（不改源码、开源构建默认可用）
+
+## Requirements
+
+### Requirement: 构建时密钥注入
+
+Normative: The system SHALL support overriding selected symmetric keys/secrets at build-time via Go `-ldflags -X` using XOR-obfuscated hex values; when not injected, it MUST fall back to the default hardcoded values so open-source builds remain functional.
+
+Note: The recommended helper script `sdk/setup_build_env.sh` is intentionally best-effort for compatibility. If `sdk/private_keys.env` is missing, or if individual `KEY_*` entries are missing / still template placeholders, the script SHOULD skip those injections and leave `EXTRA_LDFLAGS` empty or partial, so builds remain compatible with the default open-source behavior.
+
+Note: The obfuscation helper (`tools/key-obfuscator`) MUST keep `stdout` machine-consumable. `stdout` SHALL contain only the obfuscated hex string (no warnings, no extra text). Any warnings (e.g. non-32-byte key length) or errors MUST be printed to `stderr` so CI systems (GitHub Actions secrets) and scripts capturing `$(...)` are not polluted.
+
+#### Scenario: 开源构建未注入
+
+- **GIVEN** 用户从公开源码直接构建且未提供私钥文件/注入参数
+- **WHEN** 系统进行涉及加密的功能
+- **THEN** 使用源码默认密钥/secret，并保持可用
+
+#### Scenario: 私有构建注入
+
+- **GIVEN** 用户提供私钥（例如通过 `sdk/setup_build_env.sh` 生成 `EXTRA_LDFLAGS`）
+- **WHEN** 使用 `-ldflags -X` 注入混淆值构建
+- **THEN** 构建产物的加密身份发生变化，加密产物可与未注入构建不兼容（预期）
+
+### Requirement: `.ktalbum` 版本化 XOR 加密
+
+Normative: The system SHALL encrypt the `.ktalbum` zip body using a versioned XOR key; it MUST store the key version in the file header and MUST select the decryption key by header version, with a v1 fallback on checksum mismatch.
+
+Note: A local debug tool (ktalbum-tools) MAY additionally try both the injected key and the default open-source key for the same version to improve inspection compatibility. This does not change the main application's compatibility boundary.
+
+#### Scenario: 导出写入 v2
+
+- **GIVEN** 用户导出专辑
+- **WHEN** 系统生成 `.ktalbum`
+- **THEN** MUST set `header.Version=2` and encrypt with v2 key
+
+#### Scenario: 导入按版本选择密钥
+
+- **GIVEN** 用户导入 `.ktalbum`
+- **WHEN** 系统解析文件头
+- **THEN** MUST decrypt using the key corresponding to `header.Version`
+
+### Requirement: 专辑配置 AES-GCM 派生密钥
+
+Normative: The system SHALL derive a 32-byte AES key using `SHA256(secret + last6(sha1(albumUUID)))`, where `secret` is configurable via build-time injection; the encrypted config bytes MUST be stored as `nonce + ciphertext`.
+
+Note: The internal debug utility `sdk/audioPackage/cmd/printconfig` can be used to inspect decrypted config; for private builds it must be run/built with the same `-ldflags -X` injection (e.g. via `EXTRA_LDFLAGS`).
+
+#### Scenario: 使用默认 secret 派生 key
+
+- **GIVEN** 未注入自定义 secret
+- **WHEN** 系统派生专辑配置 AES key
+- **THEN** 使用默认 secret，派生结果与当前版本一致
+
+#### Scenario: 注入 secret 改变派生 key
+
+- **GIVEN** 构建时注入了自定义 secret
+- **WHEN** 系统派生专辑配置 AES key
+- **THEN** 派生结果与默认构建不同，导致加密配置不可跨构建身份通用（预期）
+
+### Requirement: 签名导出 KeyB
+
+Normative: The system SHALL encrypt `.ktsign` using KeyB, where KeyB SHALL be build-injectable; when not injected, it MUST use the default hardcoded value.
+
+#### Scenario: KeyB 未注入
+
+- **GIVEN** 未注入 KeyB
+- **WHEN** 导出签名
+- **THEN** 使用默认 KeyB 加密 `.ktsign`
+
+#### Scenario: KeyB 注入
+
+- **GIVEN** 注入了 KeyB
+- **WHEN** 导出签名
+- **THEN** `.ktsign` MUST be encrypted with the injected KeyB
+
+--- ARQUIVOS DO PR (42)
+modified  +27    -3     frontend/package-lock.json
+modified  +2     -1     frontend/package.json
+modified  +22    -1     frontend/src/components/Keytone_album.vue
+added     +3     -0     frontend/src/components/keytone-album/components/.gitattributes
+added     +3539  -0     frontend/src/components/keytone-album/components/WaveformTrimmer.vue
+modified  +6     -3     frontend/src/components/keytone-album/dialogs/AddAudioFileDialog.vue
+modified  +5     -3     frontend/src/components/keytone-album/dialogs/AddSingleKeyEffectSubDialog.vue
+modified  +7     -4     frontend/src/components/keytone-album/dialogs/CreateKeySoundDialog.vue
+modified  +98    -11    frontend/src/components/keytone-album/dialogs/CreateSoundDialog.vue
+modified  +8     -6     frontend/src/components/keytone-album/dialogs/EditKeySoundDialog.vue
+modified  +5     -3     frontend/src/components/keytone-album/dialogs/EditSingleKeyEffectSubDialog.vue
+modified  +91    -10    frontend/src/components/keytone-album/dialogs/EditSoundDialog.vue
+modified  +5     -3     frontend/src/components/keytone-album/dialogs/EveryKeyEffectDialog.vue
+modified  +6     -4     frontend/src/components/keytone-album/dialogs/ManageAudioFilesDialog.vue
+modified  +5     -2     frontend/src/components/keytone-album/dialogs/SingleKeyEffectDialog.vue
+modified  +5     -0     frontend/src/components/keytone-album/steps/StepDefineSounds.vue
+modified  +11    -1     frontend/src/i18n/ar/index.json
+modified  +11    -1     frontend/src/i18n/de-DE/index.json
+modified  +35    -3     frontend/src/i18n/en-US/index.json
+modified  +11    -1     frontend/src/i18n/es-ES/index.json
+modified  +11    -1     frontend/src/i18n/fr-FR/index.json
+modified  +11    -1     frontend/src/i18n/id-ID/index.json
+modified  +11    -1     frontend/src/i18n/it-IT/index.json
+modified  +11    -1     frontend/src/i18n/ja-JP/index.json
+modified  +11    -1     frontend/src/i18n/ko-KR/index.json
+modified  +11    -1     frontend/src/i18n/pl-PL/index.json
+modified  +11    -1     frontend/src/i18n/pt-BR/index.json
+modified  +11    -1     frontend/src/i18n/pt-PT/index.json
+modified  +11    -1     frontend/src/i18n/ru-RU/index.json
+modified  +11    -1     frontend/src/i18n/tr-TR/index.json
+modified  +11    -1     frontend/src/i18n/vi-VN/index.json
+modified  +35    -3     frontend/src/i18n/zh-CN/index.json
+modified  +11    -1     frontend/src/i18n/zh-HK/index.json
+added     +90    -0     frontend/src/pages/SettingPageChildren/KeytoneAlbumPage_setting.vue
+modified  +9     -0     frontend/src/pages/Setting_page.vue
+modified  +29    -0     frontend/src/stores/setting-store.ts
+added     +279   -0     openspec/changes/add-waveform-sound-trimmer/design.md
+added     +100   -0     openspec/changes/add-waveform-sound-trimmer/proposal.md
+added     +352   -0     openspec/changes/add-waveform-sound-trimmer/specs/keytone-album-editor/spec.md
+added     +110   -0     openspec/changes/add-waveform-sound-trimmer/tasks.md
+modified  +4     -0     sdk/config/config.go
+modified  +95    -0     sdk/server/server.go   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### sdk/server/server.go
+@@ -37,6 +37,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
++	"mime"
+ 	"net"
+ 	"net/http"
+ 	"os"
+@@ -1041,6 +1042,23 @@ func keytonePkgRouters(r *gin.Engine) {
+ 			return
+ 		}
+ 
++		// ============================================================================
++		// 体验策略：SDK 预览播放严格限制 <= 5000ms
++		//
++		// 背景：SDK 侧目前缺少“暂停”能力；如果允许长片段预览，将造成体验不可控。
++		// 处理：当 isPreviewMode=true 时，严格拒绝超过 5 秒的预览请求。
++		// 注意：这里既做服务端兜底（权威限制），前端也会做一次提前校验以给更友好的提示。
++		// ============================================================================
++		if arg.IsPreviewMode {
++			const maxPreviewMs = 5000.0
++			if (arg.EndTime - arg.StartTime) > maxPreviewMs {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{
++					"message": "error: SDK预览播放仅支持<=5000ms的片段，请使用前端试听播放条",
++				})
++				return
++			}
++		}
++
+ 		audioPkgUUID, ok := audioPackageConfig.GetValue("audio_pkg_uuid").(string)
+ 		if !ok {
+ 			ctx.JSON(http.StatusInternalServerError, gin.H{
+@@ -1060,6 +1078,83 @@ func keytonePkgRouters(r *gin.Engine) {
+ 		})
+ 	})
+ 
++	// ============================================================================
++	// GET /get_audio_stream - 读取当前编辑专辑下的音频源文件（用于前端波形渲染）
++	//
++	// 说明：
++	// - 前端通过 sha256 + type（扩展名，如 ".wav"）定位 audioFiles/<sha256><type>
++	// - 该接口返回音频文件内容，支持 Range（由 http.ServeContent 处理）
++	// - 仅用于编辑器场景（依赖 audio_pkg_uuid 已加载）
++	// ============================================================================
++	keytonePkgRouters.GET("/get_audio_stream", func(ctx *gin.Context) {
++		type Arg struct {
++			Sha256 string `form:"sha256"`
++			Type   string `form:"type"`
++		}
++
++		var arg Arg
++		if err := ctx.ShouldBindQuery(&arg); err != nil || arg.Sha256 == "" || arg.Type == "" {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{
++				"message": "error: 参数接收失败",
++			})
++			return
++		}
++
++		// 基础校验：防止路径穿越/非法扩展名
++		if len(arg.Sha256) != 64 {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
++			return
++		}
++		if _, err := hex.DecodeString(arg.Sha256); err != nil {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
++			return
++		}
++		if !strings.HasPrefix(arg.Type, ".") {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: type 格式不正确"})
++			return
++		}
++		for _, r := range arg.Type[1:] {
++			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: type 格式不正确"})
++				return
++			}
++		}
++
++		audioPkgUUID, ok := audioPackageConfig.GetValue("audio_pkg_uuid").(string)
++		if !ok || audioPkgUUID == "" {
++			ctx.JSON(http.StatusInternalServerError, gin.H{
++				"message": "error: 获取音频包UUID失败",
++			})
++			return
++		}
++
++		fileName := arg.Sha256 + arg.Type
++		filePath := filepath.Join(audioPackageConfig.AudioPackagePath, audioPkgUUID, "audioFiles", fileName)
++
++		f, err := os.Open(filePath)
++		if err != nil {
++			ctx.JSON(http.StatusNotFound, gin.H{"message": "error: 音频文件不存在"})
++			return
++		}
++		defer f.Close()
++
++		info, err := f.Stat()
++		if err != nil {
++			ctx.JSON(http.StatusInternalServerError, gin.H{"message": "error: 读取音频文件失败"})
++			return
++		}
++
++		// content-type：根据扩展名推断
++		contentType := mime.TypeByExtension(arg.Type)
++		if contentType == "" {
++			contentType = "application/octet-stream"
++		}
++		ctx.Header("Content-Type", contentType)
++		ctx.Header("Content-Disposition", "inline; filename=\""+fileName+"\"")
++
++		http.ServeContent(ctx.Writer, ctx.Request, fileName, info.ModTime(), f)
++	})
++
+ 	// ============================================================================
+ 	// GET /get_audio_package_list - 获取专辑列表（含签名摘要）
+ 	//
+
+===== P271 | repo localstack/lstk | PR #367: Add global --json flag to `lstk`, so commands can support JSON output | capacidade: terraform-proxy
+--- SPEC VIVA
+# terraform-proxy Specification
+
+## Purpose
+
+Provide an `lstk terraform` command (alias `lstk tf`) that proxies the Terraform CLI against a running LocalStack AWS emulator, automatically generating provider override files so Terraform targets LocalStack endpoints.
+
+## Requirements
+
+### Requirement: Terraform command proxy
+
+The system SHALL provide a `lstk terraform` command, with the alias `lstk tf`, that forwards all of its arguments to the underlying `terraform` binary so that Terraform runs against the local LocalStack instance.
+
+The command SHALL pass through the child process's standard input, standard output, and standard error unmodified, and SHALL propagate the child process's exit code as the command's result.
+
+#### Scenario: Arguments are forwarded to terraform
+
+- **WHEN** a user runs `lstk terraform plan -out=tfplan`
+- **THEN** the underlying `terraform` binary is invoked with `plan -out=tfplan`
+- **AND** terraform's stdout and stderr are streamed to the user unaltered
+
+#### Scenario: Alias tf behaves identically
+
+- **WHEN** a user runs `lstk tf apply`
+- **THEN** the behavior is identical to `lstk terraform apply`
+
+#### Scenario: Non-zero terraform exit is propagated
+
+- **WHEN** the underlying `terraform` invocation exits with a non-zero status
+- **THEN** `lstk` exits non-zero without printing an additional lstk-level error message
+
+#### Scenario: Terraform binary missing
+
+- **WHEN** no `terraform` binary (nor the configured `LSTK_TF_CMD`) is found on `PATH`
+- **THEN** the command fails with a clear error explaining that Terraform must be installed and available on `PATH`
+
+### Requirement: LocalStack must be running
+
+The command SHALL require a running LocalStack **AWS** emulator and SHALL resolve its endpoint automatically using lstk's container discovery and host resolution, without requiring the user to specify a host or port. `lstk terraform` operates only against the AWS emulator; other emulator types (e.g. Snowflake, Azure) are not supported.
+
+#### Scenario: No running emulator
+
+- **WHEN** a user runs `lstk terraform plan` and no LocalStack AWS emulator is running
+- **THEN** the command fails with an error stating LocalStack is not running and suggesting how to start it (`lstk`)
+- **AND** the `terraform` binary is not invoked
+
+#### Scenario: A non-AWS emulator is running
+
+- **WHEN** a user runs `lstk terraform plan` while a non-AWS LocalStack emulator (e.g. Snowflake or Azure) is running but the AWS emulator is not
+- **THEN** the command fails with an error that specifically states `lstk terraform` requires the AWS emulator and identifies the running emulator type
+- **AND** the `terraform` binary is not invoked
+
+#### Scenario: Endpoint resolved from running emulator
+
+- **WHEN** a LocalStack AWS emulator is running
+- **THEN** the command resolves the endpoint via the same discovery used by `lstk aws` (container discovery plus host resolution)
+- **AND** uses that endpoint as the base for all generated provider endpoints
+
+#### Scenario: Explicit endpoint override
+
+- **WHEN** the `AWS_ENDPOINT_URL` environment variable is set
+- **THEN** its host and port take precedence over the auto-resolved endpoint when building the provider override
+
+### Requirement: Provider override file generation
+
+Before invoking `terraform` for any command that provisions or reads infrastructure, the system SHALL generate a Terraform override file (named `localstack_providers_override.tf` by default, configurable via `LSTK_TF_OVERRIDE_FILE_NAME`) that, for each `aws` provider block discovered in the working directory, defines a matching `provider "aws"` block configured to target LocalStack.
+
+Provider-block discovery SHALL recurse into sub-directories of the working directory, so `aws` provider blocks declared in nested modules are also represented. Hidden directories (for example `.terraform`, which holds the downloaded provider/module cache, and `.git`) SHALL be skipped. A `*.tf` file that cannot be parsed SHALL be skipped individually (logged, not fatal) rather than aborting discovery. This recursive scan does not guarantee coverage of every possible layout (e.g. remote modules), but is broader than scanning only the top-level directory.
+
+Each generated provider block SHALL set `secret_key = "test"`, the resolved `access_key` (the target account ID, see "Region and account selection"), the resolved `region`, `skip_credentials_validation = true`, `skip_metadata_api_check = true`, and an `endpoints {}` block mapping supported AWS service keys to the LocalStack endpoint. The block SHALL preserve the `alias` of the source provider block when present.
+
+The resolved `access_key` and `region` values SHALL be encoded directly into the override block (rather than passed as environment variables to the `terraform` subprocess), so that they take deterministic precedence over any values present in the user's own provider configuration.
+
+The system SHALL set `s3_use_path_style = true` when the resolved host does not support virtual-host-style addressing (for example `127.0.0.1`/`localhost`), and `false` when the resolved host is a virtual-host-capable `*.localstack.cloud` domain.
+
+When the resolved host is virtual-host-capable (path style off), the `s3` endpoint value SHALL use a host prefixed with `s3.` (for example `https://s3.localhost.localstack.cloud:4566`), unless the host already begins with `s3.`. When path style is on, the `s3` endpoint SHALL be the bare resolved endpoint, identical to the other services. This prefix applies only to the `s3` endpoint key; all other service endpoints SHALL use the resolved endpoint unchanged.
+
+#### Scenario: Override generated for default provider
+
+- **WHEN** the working directory contains an `aws` provider block with no alias and the user runs `lstk terraform plan`
+- **THEN** an override file is created containing a `provider "aws"` block with LocalStack credentials, region, skip flags, and an `endpoints {}` block
+
+#### Scenario: Override generated per provider alias
+
+- **WHEN** the working directory contains multiple `aws` provider blocks distinguished by `alias`
+- **THEN** the override file contains one matching `provider "aws"` block per alias, each carrying the same `alias`
+
+#### Scenario: Provider blocks in sub-directories are discovered
+
+- **WHEN** an `aws` provider block (e.g. an aliased one) is declared in a `*.tf` file inside a sub-directory of the working directory
+- **THEN** the override file includes a matching `provider "aws"` block for it, in addition to any blocks discovered at the top level
+- **AND** provider blocks under hidden directories such as `.terraform` are not discovered
+
+#### Scenario: Override file name is configurable
+
+- **WHEN** the `LSTK_TF_OVERRIDE_FILE_NAME` environment variable is set to a custom file name
+- **THEN** the override file is written using that name
+
+#### Scenario: S3 endpoint host is prefixed for virtual-host addressing
+
+- **WHEN** the resolved host is a virtual-host-capable `*.localstack.cloud` domain (e.g. `localhost.localstack.cloud`)
+- **THEN** the generated `endpoints {}` block sets the `s3` endpoint to the resolved endpoint with an `s3.` host prefix (e.g. `https://s3.localhost.localstack.cloud:4566`)
+- **AND** `s3_use_path_style` is `false`
+- **AND** all non-S3 endpoints use the resolved endpoint without a prefix
+
+#### Scenario: S3 endpoint uses path style for non-domain hosts
+
+- **WHEN** the resolved host does not support virtual-host addressing (e.g. `127.0.0.1`/`localhost`)
+- **THEN** the `s3` endpoint is the bare resolved endpoint with no `s3.` prefix
+- **AND** `s3_use_path_style` is `true`
+
+### Requirement: Region and account selection
+
+The command SHALL accept two lstk-specific flags, `--region` and `--account`, that set the deployment region and the target AWS account ID for the generated provider override. Because these are not standard `terraform` flags, the command SHALL parse and remove them (together with their values) from the argument list before forwarding the remaining arguments to the `terraform` binary. Both `--flag value` and `--flag=value` forms SHALL be supported.
+
+These flags SHALL be recognized only in leading position — that is, immediately after `terraform`/`tf` and before the terraform action and any other arguments. Parsing SHALL stop at the first argument that is not one of these flags (or their values); any `--region`/`--account` appearing after that point SHALL be treated as ordinary terraform arguments and forwarded unchanged. The flags SHALL NOT be defined as root/persistent flags, so a flag placed before the `terraform` subcommand (e.g. `lstk --account … terraform`) is not accepted.
+
+The resolved region SHALL be selected with precedence: `--region` flag, then the `AWS_REGION` environment variable, then a default of `us-east-1`. The deprecated `AWS_DEFAULT_REGION` environment variable SHALL NOT be consulted.
+
+The resolved account (provider `access_key`) SHALL be selected with precedence: `--account` flag, then the `AWS_ACCESS_KEY_ID` environment variable, then a default of `test`.
+
+The `--account` flag value SHALL be validated to be exactly 12 digits (`^\d{12}$`). A value supplied via `AWS_ACCESS_KEY_ID` SHALL NOT be validated, but SHALL be passed through an access-key deactivation step: if it begins with the letter `A` (the prefix of real AWS access key ids such as `AKIA…` long-term keys and `ASIA…` temporary session keys), the leading `A` SHALL be replaced with `L` before the value is encoded into the override. This guards against a real AWS credential accidentally present in the environment being written into the generated override file or sent to LocalStack. The validated 12-digit `--account` flag value is used as-is (it cannot begin with `A`).
+
+For unproxied subcommands (`fmt`, `validate`, `version`), both flags SHALL be a no-op: they are stripped from the arguments, not forwarded to `terraform`, and have no other effect.
+
+#### Scenario: Region flag encoded into override
+
+- **WHEN** a user runs `lstk terraform --region us-west-2 plan`
+- **THEN** `--region us-west-2` is removed from the forwarded arguments (leaving `plan`)
+- **AND** the generated provider blocks set `region = "us-west-2"`
+
+#### Scenario: Account flag encoded into override
+
+- **WHEN** a user runs `lstk terraform --account 111111111111 apply`
+- **THEN** `--account 111111111111` is removed from the forwarded arguments (leaving `apply`)
+- **AND** the generated provider blocks set `access_key = "111111111111"`
+
+#### Scenario: Flags must lead — placement after the action is not recognized
+
+- **WHEN** a user runs `lstk terraform plan --region us-west-2`
+- **THEN** parsing stops at `plan`, so `--region us-west-2` is NOT consumed by lstk
+- **AND** `--region us-west-2` is forwarded to `terraform` as-is (where terraform rejects it as an unknown flag)
+
+#### Scenario: Flags before the terraform subcommand are rejected
+
+- **WHEN** a user runs `lstk --account 111111111111 terraform plan`
+- **THEN** the command fails with an error stating that `--region`/`--account` must appear after the terraform subcommand
+- **AND** the `terraform` binary is not invoked
+
+#### Scenario: Region falls back to environment then default
+
+- **WHEN** `--region` is not supplied
+- **THEN** the region is taken from `AWS_REGION` if set, otherwise `us-east-1`
+
+#### Scenario: Account falls back to environment then default
+
+- **WHEN** `--account` is not supplied
+- **THEN** the `access_key` is taken from `AWS_ACCESS_KEY_ID` if set, otherwise `test`
+
+#### Scenario: Real AWS access key from the environment is deactivated
+
+- **WHEN** `--account` is not supplied and `AWS_ACCESS_KEY_ID` holds a real-looking AWS access key id beginning with `A` (e.g. `AKIAIOSFODNN7EXAMPLE`)
+- **THEN** the value's leading `A` is replaced with `L` (e.g. `LKIAIOSFODNN7EXAMPLE`) before it is encoded into the override `access_key`
+- **AND** the original (live) key is never written to disk nor sent to LocalStack
+
+#### Scenario: Mock access key from the environment is unchanged
+
+- **WHEN** `--account` is not supplied and `AWS_ACCESS_KEY_ID` holds a value that does not begin with `A` (e.g. `test`)
+- **THEN** the value is used as the `access_key` unchanged
+
+#### Scenario: Flag overrides environment
+
+- **WHEN** both `--region` and `AWS_REGION` are set (or both `--account` and `AWS_ACCESS_KEY_ID`)
+- **THEN** the flag value takes precedence over the environment variable
+
+#### Scenario: Invalid account is rejected
+
+- **WHEN** a user runs `lstk terraform --account 12345 plan`
+- **THEN** the command fails with a clear error stating the account ID must be 12 digits
+- **AND** the `terraform` binary is not invoked
+
+#### Scenario: Flag with missing value
+
+- **WHEN** a user runs `lstk terraform --region` with no value following it
+- **THEN** the command fails with a clear error stating the flag requires a value
+
+#### Scenario: Flags are a no-op for unproxied subcommands
+
+- **WHEN** a user runs `lstk terraform --region us-west-2 --account 111111111111 validate`
+- **THEN** both flags are stripped (leaving `validate`) and not forwarded to `terraform`
+- **AND** no override file is generated and the flags have no other effect
+
+#### Scenario: Resolved values take precedence over user provider config
+
+- **WHEN** the user's own `aws` provider block specifies a `region` or `access_key` and `--region`/`--account` (or their env fallbacks) resolve a value
+- **THEN** the generated override block's encoded `region`/`access_key` take effect over the user's values
+
+### Requirement: Working directory selection (`-chdir`)
+
+The command SHALL support Terraform's global `-chdir=DIR` option, which selects the directory Terraform operates in. Only the `-chdir=DIR` form (with `=`) SHALL be recognized by lstk; the space-separated form is not a valid Terraform spelling and SHALL be forwarded to `terraform` unchanged.
+
+When `-chdir=DIR` is present, the system SHALL compute an effective working directory by resolving `DIR` against the process working directory (an absolute `DIR` SHALL be used as-is; a relative `DIR` SHALL be joined to the process working directory). All directory-relative work — provider-schema discovery (`terraform providers schema -json`), `aws` provider-block discovery, the location the override file is written to, and its cleanup — SHALL be anchored to this effective working directory rather than the process working directory.
+
+The `-chdir=DIR` token SHALL be kept in the arguments forwarded to `terraform` so that `terraform` itself also switches into `DIR`. lstk SHALL read the value for its own directory resolution without removing it (this differs from `--region`/`--account`, which are consumed and removed).
+
+`-chdir=DIR` SHALL be recognized in leading position alongside `--region`/`--account` (Terraform requires `-chdir` to precede the subcommand). The leading-flag scan SHALL treat `-chdir=DIR` as a recognized leading token and continue scanning past it, so a `--region`/`--account` flag positioned after `-chdir` is still consumed.
+
+Before invoking `terraform`, the system SHALL validate that the effective working directory exists; if it does not, the command SHALL fail with a clear error naming the directory and SHALL NOT invoke `terraform` or generate an override.
+
+For unproxied subcommands (`fmt`, `validate`, `version`, `init`), `-chdir=DIR` requires no special handling beyond being forwarded verbatim — lstk does no directory-relative work for them, and `terraform` performs the directory switch itself.
+
+#### Scenario: Override is generated in the chdir directory
+
+- **WHEN** a user runs `lstk terraform -chdir=infra apply` and `infra/` contains an `aws` provider block
+- **THEN** the provider schema is discovered from `infra/`, the override file is written into `infra/`, and `aws` provider blocks are discovered under `infra/`
+- **AND** `terraform` is invoked with `-chdir=infra` retained in its arguments
+- **AND** the generated override file is removed from `infra/` after the run
+
+#### Scenario: chdir directory does not exist
+
+- **WHEN** a user runs `lstk terraform -chdir=missing apply` and `missing/` does not exist
+- **THEN** the command fails with a clear error identifying the missing directory
+- **AND** no override file is generated and the `terraform` binary is not invoked
+
+#### Scenario: chdir is forwarded to terraform
+
+- **WHEN** a user runs `lstk terraform -chdir=infra init`
+- **THEN** `-chdir=infra` is included in the forwarded arguments so `terraform` operates in `infra/`
+
+#### Scenario: chdir combines with leading region/account flags
+
+- **WHEN** a user runs `lstk terraform -chdir=infra --region us-west-2 apply` (or with the two leading flags in the opposite order)
+- **THEN** `--region us-west-2` is consumed and removed, `-chdir=infra` is retained and forwarded, and the effective working directory is `infra/`
+- **AND** the generated provider blocks set `region = "us-west-2"`
+
+#### Scenario: Space-separated chdir form is not interpreted by lstk
+
+- **WHEN** a user runs `lstk terraform -chdir infra apply` (no `=`)
+- **THEN** lstk does not interpret it as a working-directory change
+- **AND** the arguments are forwarded to `terraform`, which reports its own error for the unrecognized form
+
+### Requirement: Dynamic endpoint discovery from provider schema
+
+The set of AWS service endpoint keys written into the `endpoints {}` block SHALL be derived dynamically by querying the installed Terraform AWS provider schema (`terraform providers schema -json`) rather than from a hard-coded service list. The system SHALL read the endpoint attribute keys from the AWS provider's `endpoints` nested block in the schema JSON. Discovery SHALL work for the Terraform AWS provider version 4.0 and higher.
+
+The system SHALL NOT maintain a built-in fallback endpoint-key list. Each endpoint key that is written SHALL appear exactly as named in the provider schema, without case transformation, and SHALL map to the single resolved LocalStack endpoint — except the `s3` key, whose host may carry an `s3.` prefix for virtual-host addressing (see "Provider override file generation"). (Mutually-exclusive aliases are reduced to one member per group, as described below.)
+
+Some endpoint keys reported by the schema are aliases for the same AWS service and are mutually exclusive: setting more than one member of such an alias group in a single `endpoints {}` block makes the provider report an "Invalid Attribute Combination" diagnostic ("Only one of the following attributes should be set …", with a stated intent to become an error in a future provider release). Because the schema JSON does NOT encode this mutual exclusivity, the system SHALL maintain a table of known alias groups and, for each group, write at most one member into the generated block (retaining one and omitting the rest). This table resolves conflicts only; it is not a fallback endpoint-key list — the keys themselves still come from the schema. Since all members of a group address the same service endpoint, retaining any single member SHALL correctly route that service to LocalStack.
+
+#### Scenario: Endpoint keys come from the provider schema
+
+- **WHEN** the override file is generated and the AWS provider is installed
+- **THEN** the endpoint keys written into the `endpoints {}` block are the endpoint attribute names reported by `terraform providers schema -json` for the AWS provider, with mutually-exclusive aliases reduced to a single member per group
+
+#### Scenario: Mutually-exclusive endpoint aliases are de-duplicated
+
+- **WHEN** the provider schema reports multiple endpoint keys that are aliases for the same service (for example `lexmodels`, `lexmodelbuilding`, `lexmodelbuildingservice`, and `lex`; or `databrew` and `gluedatabrew`)
+- **THEN** the generated `endpoints {}` block contains at most one key from each such alias group
+- **AND** the `terraform` invocation does not raise an "Invalid Attribute Combination" diagnostic for those endpoints
+
+#### Scenario: Provider schema unavailable because terraform init has not run
+
+- **WHEN** the AWS provider schema cannot be retrieved because `terraform init` has not installed the provider (the `providers schema` query fails or reports no AWS provider)
+- **THEN** the command fails with a generic error instructing the user to run `terraform init` first, phrased for end users and NOT referencing internal details such as the provider schema
+- **AND** no override file is generated and the `terraform` binary is not invoked
+
+#### Scenario: No endpoint keys discovered
+
+- **WHEN** the AWS provider schema is retrieved but yields no endpoint keys
+- **THEN** the command fails rather than generating an override with an empty `endpoints {}` block
+
+### Requirement: Cleanup of generated files
+
+The system SHALL remove any override file(s) it generated after the `terraform` invocation completes, including when terraform exits non-zero or is interrupted.
+
+#### Scenario: Override removed after run
+
+- **WHEN** `lstk terraform plan` completes (successfully or with an error)
+- **THEN** the generated override file is deleted from the working directory
+
+#### Scenario: Pre-existing override file is not clobbered
+
+- **WHEN** an override file with the target name already exists before the command runs
+- **THEN** the command fails with an error rather than overwriting or deleting it
+- **AND** the error instructs the user to remove the file or set `LSTK_TF_OVERRIDE_FILE_NAME` to a different name
+
+Because lstk keeps no persistent record of whether it created the override file, an existing file is treated as a conflict regardless of its contents — it is either authored by the user or orphaned by a previous lstk run that was interrupted before cleanup, and in both cases the user is asked to resolve it.
+
+### Requirement: Unproxied and dry-run commands
+
+For Terraform subcommands that do not require provider endpoints (`fmt`, `validate`, `version`, `init`), the system SHALL invoke `terraform` directly without generating an override file and without requiring a running LocalStack emulator. The set of unproxied subcommands SHALL be fixed and not configurable via environment variable.
+
+`init` is included because the override's endpoint keys are discovered from the AWS provider schema, which does not exist until `terraform init` has installed the provider. `init` must therefore pass through to bootstrap the provider for subsequent `plan`/`apply`. `init` does not call AWS service endpoints (S3-backend support is out of scope), so it needs no override.
+
+When the `LSTK_TF_DRY_RUN` environment variable is enabled, the system SHALL generate the override file but SHALL NOT invoke `terraform`.
+
+#### Scenario: Unproxied subcommand skips override generation
+
+- **WHEN** a user runs `lstk terraform fmt`
+- **THEN** no override file is generated
+- **AND** `terraform fmt` is invoked directly
+
+#### Scenario: init passes through to bootstrap the provider
+
+- **WHEN** a user runs `lstk terraform init` before the AWS provider is installed
+- **THEN** no override file is generated and schema discovery is not attempted
+- **AND** `terraform init` is invoked directly so it can install the provider
+- **AND** the command does not require a running LocalStack emulator
+
+#### Scenario: Dry run generates override but does not run terraform
+
+- **WHEN** `LSTK_TF_DRY_RUN` is enabled and a user runs `lstk terraform plan`
+- **THEN** the override file is generated and left in place for inspection
+- **AND** `terraform` is not invoked
+
+### Requirement: Configurable Terraform binary
+
+The system SHALL invoke the binary named by the `LSTK_TF_CMD` environment variable when set (for example `tofu`), defaulting to `terraform` otherwise.
+
+#### Scenario: Use OpenTofu binary
+
+- **WHEN** `LSTK_TF_CMD=tofu` is set and the user runs `lstk terraform apply`
+- **THEN** the `tofu` binary is invoked instead of `terraform`
+
+### Requirement: Non-interactive streaming output
+
+The command SHALL NOT display a spinner or other progress animation, since `terraform` is a long-running command whose streaming output must remain unobstructed. The command SHALL honor the `--non-interactive` flag by stripping it from the forwarded arguments.
+
+#### Scenario: No spinner is shown
+
+- **WHEN** a user runs `lstk terraform apply` in an interactive terminal
+- **THEN** no lstk spinner is rendered around terraform's output
+
+#### Scenario: Non-interactive flag is not forwarded
+
+- **WHEN** a user runs `lstk terraform plan --non-interactive`
+- **THEN** the `--non-interactive` flag is consumed by lstk and not passed to the `terraform` binary
+
+--- ARQUIVOS DO PR (21)
+modified  +1     -1     CLAUDE.md
+modified  +3     -0     cmd/aws.go
+modified  +6     -1     cmd/az.go
+modified  +3     -0     cmd/cdk.go
+modified  +1     -0     cmd/extension.go
+added     +61    -0     cmd/json_flag_test.go
+modified  +48    -0     cmd/proxy.go
+modified  +17    -0     cmd/proxy_test.go
+modified  +84    -30    cmd/root.go
+modified  +3     -0     cmd/sam.go
+modified  +3     -0     cmd/terraform.go   <== código ligado à spec
+modified  +3     -1     docs/extensions-authoring.md
+modified  +1     -0     internal/env/env.go
+modified  +5     -4     internal/extension/context.go
+added     +2     -0     openspec/changes/add-json-flag/.openspec.yaml
+added     +89    -0     openspec/changes/add-json-flag/design.md
+added     +34    -0     openspec/changes/add-json-flag/proposal.md
+added     +93    -0     openspec/changes/add-json-flag/specs/json-flag/spec.md
+added     +58    -0     openspec/changes/add-json-flag/tasks.md
+added     +194   -0     test/integration/json_flag_test.go
+modified  +2     -0     test/integration/test-samples/extensions/lstk-ref/main.go
+--- DIFF DO CÓDIGO LIGADO
+### cmd/terraform.go
+@@ -46,6 +46,9 @@ Examples:
+ 			if gf.nonInteractive {
+ 				cfg.NonInteractive = true
+ 			}
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+ 			if gf.configPath != "" {
+ 				if err := cmd.Flags().Set("config", gf.configPath); err != nil {
+ 					return err
+

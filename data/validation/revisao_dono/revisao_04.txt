@@ -1,0 +1,526 @@
+===== P019 | inventage-ai/asylum PR #27 | capacidade do par: project-entrypoint
+PR: Fix Java kit ignoring configured versions
+arquivos ligados: internal/image/image.go
+--- linhas alteradas (26; mostrando até 40)
+-func EnsureBase(profiles []*kit.Kit, agentInstalls []*agent.AgentInstall, version string, noCache bool, previousOrder []string) (bool, []string, error) {
+-	sources := collectSources(profiles, agentInstalls)
++func EnsureBase(profiles []*kit.Kit, agentInstalls []*agent.AgentInstall, kitConfig func(string) *kit.SnippetConfig, version string, noCache bool, previousOrde
++	sources := collectSources(profiles, kitConfig, agentInstalls)
+-// Pre-installed Java versions in the base image.
+-var preinstalledJava = map[string]bool{"17": true, "21": true, "25": true}
+-func EnsureProject(projectProfiles []*kit.Kit, packages map[string][]string, javaVersion string, version string, baseRebuilt bool, noCache bool) (string, error
+-	profileSnippets := kit.AssembleDockerSnippets(projectProfiles)
++func EnsureProject(projectProfiles []*kit.Kit, allKits []*kit.Kit, packages map[string][]string, kitConfig func(string) *kit.SnippetConfig, version string, bas
++	profileSnippets := kit.AssembleDockerSnippets(projectProfiles, kitConfig)
+-	needsCustomJava := javaVersion != "" && !preinstalledJava[javaVersion]
++	kitProjectSnippets := kit.AssembleProjectSnippets(allKits, kitConfig)
+-	if len(packages) == 0 && !needsCustomJava && profileSnippets == "" && projectEntrypoint == nil {
++	if len(packages) == 0 && kitProjectSnippets == "" && profileSnippets == "" && projectEntrypoint == nil {
+-	dockerfile, err := generateProjectDockerfile(profileSnippets, packages, javaVersion, username, projectEntrypoint != nil)
++	dockerfile, err := generateProjectDockerfile(profileSnippets, packages, kitProjectSnippets, username, projectEntrypoint != nil)
+-var validJavaVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+-func generateProjectDockerfile(profileSnippets string, packages map[string][]string, javaVersion string, username string, hasProjectEntrypoint bool) (string, e
++func generateProjectDockerfile(profileSnippets string, packages map[string][]string, kitProjectSnippets string, username string, hasProjectEntrypoint bool) (st
+-	if javaVersion != "" && !preinstalledJava[javaVersion] {
+-		if !validJavaVersion.MatchString(javaVersion) {
+-			return "", fmt.Errorf("invalid java version %q", javaVersion)
+-		}
++	if kitProjectSnippets != "" {
+-		b.WriteString("RUN $HOME/.local/bin/mise install java@" + javaVersion + " && $HOME/.local/bin/mise use --global java@" + javaVersion + "\n")
++		b.WriteString(kitProjectSnippets)
+--- candidata: image-build [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Base image auto-rebuild
+  | The image package SHALL detect when the embedded Dockerfile or entrypoint.sh has changed and rebuild the base image automatically.
+  > ### Requirement: Base image auto-rebuild
+  > The image package SHALL detect when the embedded Dockerfile or entrypoint.sh has changed and rebuild the base image automatically.
+  > - **WHEN** no `asylum:latest` image exists
+  > - **THEN** the base image is built with hash and version labels
+  > - **THEN** the base image is rebuilt and dangling images are pruned
+  > ### Requirement: Project image generation
+  > The image package SHALL generate a project-specific Dockerfile from the packages config and build it when packages are configured.
+  > #### Scenario: No packages configured
+--- candidata: dockerfile-ordering [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Static Dockerfile priority
+  | Each kit and agent install SHALL have a `DockerPriority` integer field that represents its preferred position in the Dockerfile. Lower values indicate earlier placement (more stable, more expensive la
+  > Each kit and agent install SHALL have a `DockerPriority` integer field that represents its preferred position in the Dockerfile. Lower values indicate earlier placement (more stable, more expensive la
+  > #### Scenario: Agent install with priority
+  > - **WHEN** an agent install is registered with `DockerPriority: 20`
+  > - **THEN** the ordering system uses `20` as that agent's priority value
+  > The ordering system SHALL identify each Dockerfile snippet source with a string of the form `"kit:<name>"` for kits and `"agent:<name>"` for agent installs.
+  > - **WHEN** the active agents include an agent named `claude`
+  > - **THEN** its source identifier is `"agent:claude"`
+  > The system SHALL persist the Dockerfile source order in `state.json` as a `docker_source_order` field (string array) after every successful base image build.
+--- candidata: agent-version [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Version file location and format
+  | Agent versions SHALL be stored in a local JSON file at `~/.asylum/versions.json`. The file SHALL use the format `{"agent_name": "version_string", ...}` where keys are agent names (e.g. `"claude"`, `"g
+  > Agent versions SHALL be stored in a local JSON file at `~/.asylum/versions.json`. The file SHALL use the format `{"agent_name": "version_string", ...}` where keys are agent names (e.g. `"claude"`, `"g
+  > - **WHEN** asylum starts and `versions.json` exists
+  > - **THEN** it is loaded as a JSON object mapping agent names to version strings
+  > - **WHEN** asylum starts and `versions.json` does not exist
+  > - **THEN** an empty version map is returned, triggering a blocking fetch before the image build
+  > - **WHEN** `versions.json` exists but contains invalid JSON
+  > When the version file does not exist or is corrupted, asylum SHALL perform a blocking fetch of all agent versions before proceeding with the image build. The image build SHALL NOT proceed until at lea
+  > - **WHEN** the version file is missing and all fetches succeed
+--- candidata: sandbox-rules [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Kit-provided rules snippets
+  | Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > The kit package SHALL provide an `AssembleRulesSnippets` function that concatenates `RulesSnippet` values from a slice of kits, following the same pattern as `AssembleDockerSnippets` and `AssembleBann
+  > The core section of the rules file SHALL describe: the sandbox identity (Asylum Docker container), the Asylum version, the container user (`claude`), host connectivity (`host.docker.internal`), and th
+  > - **THEN** it SHALL mention that the environment is an Asylum Docker sandbox, the Asylum version, the user is `claude` with passwordless sudo, and `host.docker.internal` resolves to the host machine
+  > `RunOpts` SHALL accept a `Version string` field. The rules file header SHALL include the Asylum version.
+  > - **WHEN** a rules file is generated with version "1.2.3"
+  > Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description. At minimum, the docker, java, python, and node kits SHALL have rules snippets.
+  > - **THEN** its rules snippet SHALL mention the available JDK versions and that `mise` manages version switching
+--- candidata: container-image [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: ASYLUM_ environment variables
+  | The entrypoint SHALL use ASYLUM_ prefixed environment variables instead of AGENTBOX_.
+  > #### Scenario: Java version
+  > - **THEN** the entrypoint selects that Java version via mise
+  > **Reason**: Replaced by mise for Java/Gradle version management. mise activates faster and has simpler version selection.
+  > #### Scenario: Java version
+  > - **THEN** the entrypoint selects that Java version via mise
+  > **Reason**: Replaced by mise for Java/Gradle version management. mise activates faster and has simpler version selection.
+  > The entrypoint SHALL display an Asylum-branded welcome banner with tool versions for active profiles only.
+  > #### Scenario: Interactive terminal with all profiles
+
+===== P020 | igamenovoer/houmao PR #10 | capacidade do par: passive-server-request-submission
+PR: chore: release v0.4.2
+arquivos ligados: tests/unit/passive_server/test_app_contracts.py
+--- linhas alteradas (160; mostrando até 40)
++    GatewayReminderCreateBatchV1,
++    GatewayReminderCreateResultV1,
++    GatewayReminderDeleteResultV1,
++    GatewayReminderDefinitionV1,
++    GatewayReminderListV1,
++    GatewayReminderPutV1,
++    GatewayReminderV1,
++def _stub_reminder(
++    *,
++    reminder_id: str = "greminder-1",
++    ranking: int = 0,
++    selection_state: str = "effective",
++    blocked_by_reminder_id: str | None = None,
++) -> GatewayReminderV1:
++    """Create a minimal valid GatewayReminderV1 for mocking."""
++    return GatewayReminderV1(
++        reminder_id=reminder_id,
++        mode="one_off",
++        delivery_kind="prompt",
++        title="Check inbox",
++        prompt="Review the inbox now.",
++        ranking=ranking,
++        paused=False,
++        selection_state=selection_state,  # type: ignore[arg-type]
++        delivery_state="scheduled",
++        created_at_utc="2026-04-09T00:00:00+00:00",
++        next_due_at_utc="2026-04-09T00:05:00+00:00",
++        blocked_by_reminder_id=blocked_by_reminder_id,
++    )
++def _stub_reminder_list() -> GatewayReminderListV1:
++    """Create a minimal valid GatewayReminderListV1 for mocking."""
++    reminder = _stub_reminder()
++    return GatewayReminderListV1(
++        effective_reminder_id=reminder.reminder_id,
++        reminders=[reminder],
++    )
++def _stub_reminder_create_result() -> GatewayReminderCreateResultV1:
++    """Create a minimal valid GatewayReminderCreateResultV1 for mocking."""
++    reminder = _stub_reminder()
++    return GatewayReminderCreateResultV1(
+--- candidata: passive-server-gateway-proxy [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Passive server provides a gateway status proxy endpoint
+  | The passive server SHALL expose `GET /houmao/agents/{agent_ref}/gateway` that resolves the agent, creates a `GatewayClient` from the registry record's gateway coordinates, and forwards the response fr
+  > ### Requirement: Passive server provides a gateway status proxy endpoint
+  > The passive server SHALL expose `GET /houmao/agents/{agent_ref}/gateway` that resolves the agent, creates a `GatewayClient` from the registry record's gateway coordinates, and forwards the response fr
+  > The response body SHALL be a `GatewayStatusV1` payload from the live gateway.
+  > If the agent is not found, the endpoint SHALL return 404. If the agent name is ambiguous, it SHALL return 409. If the agent has no live gateway attached, it SHALL return 502 with a descriptive message
+  > #### Scenario: Gateway status returns the live gateway's status
+  > - **WHEN** the discovery index contains agent `abc123` with a live gateway at `127.0.0.1:9901`
+  > - **AND WHEN** a caller sends `GET /houmao/agents/abc123/gateway`
+  > - **AND THEN** the response body is the `GatewayStatusV1` payload from the gateway's `/v1/status`
+--- candidata: houmao-srv-ctrl-native-cli [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: `houmao-srv-ctrl` exposes a native pair-operations command tree
+  | `houmao-srv-ctrl` SHALL expose a Houmao-owned top-level native command tree in addition to top-level `launch`, `install`, and the explicit `cao` compatibility namespace.
+  > ### Requirement: `houmao-srv-ctrl` exposes a native pair-operations command tree
+  > `houmao-srv-ctrl` SHALL expose a Houmao-owned top-level native command tree in addition to top-level `launch`, `install`, and the explicit `cao` compatibility namespace.
+  > - `agents`
+  > - **WHEN** an operator runs `houmao-srv-ctrl --help`
+  > - **THEN** the help output includes `agents`, `brains`, and `admin`
+  > ### Requirement: `houmao-srv-ctrl agents` is the preferred pair-native managed-agent command family
+  > `houmao-srv-ctrl agents ...` SHALL be the preferred pair-native command family for managed-agent operations.
+  > At minimum, the `agents` family SHALL include commands for:
+--- candidata: brain-launch-runtime [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Launch plan composition from `{brain, role}`
+  | The system SHALL compose a tool launch plan from a resolved brain manifest and a role package.
+  > The system SHALL support a non-CAO interactive mode where callers can send multiple prompts across one logical session, even when backend process lifecycle differs by tool.
+  > - **THEN** they can send multiple prompts over time and receive corresponding replies within one logical session
+  > #### Scenario: Start Codex app-server and run two prompts
+  > - **THEN** the system can send two user prompts as separate turns and receive two replies within the same session
+  > - **WHEN** a developer starts a Claude session in headless mode and sends a first prompt using a constructed brain home
+  > - **AND THEN** the system sends subsequent prompts with `--resume <session_id>` and receives replies in the same logical session
+  > - **WHEN** a developer starts a Gemini session in headless mode and sends a first prompt using a constructed brain home
+  > - **AND THEN** the system sends subsequent prompts with `--resume <session_id>` and receives replies in the same logical session
+--- candidata: docs-cli-reference [PR]
+  | ## ADDED Requirements
+  | ### Requirement: houmao-mgr reference documents all command groups
+  | The CLI reference SHALL include a page for `houmao-mgr` documenting its command groups (`admin`, `agents`, `brains`, `server`, `passthrough`) with subcommand summaries derived from `srv_ctrl/commands/
+  > ### Requirement: houmao-mgr reference documents all command groups
+  > The CLI reference SHALL include a page for `houmao-mgr` documenting its command groups (`admin`, `agents`, `brains`, `server`, `passthrough`) with subcommand summaries derived from `srv_ctrl/commands/
+  > #### Scenario: Reader finds agent lifecycle commands
+  > - **WHEN** a reader looks up `houmao-mgr agents`
+  > - **THEN** they find documented subcommands for launch, terminate, observe, send-prompt, mail, join, and gateway operations
+  > - **WHEN** a reader looks up `houmao-mgr brains`
+  > ### Requirement: houmao-server reference documents serve and query commands
+  > The CLI reference SHALL include a page for `houmao-server` documenting its commands (`serve`, `health`, `current-instance`, `register-launch`, `sessions`, `terminals`) derived from `server/commands/` 
+--- candidata: houmao-agent-gateway-skill [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: `houmao-agent-gateway` routes by gateway-specific intent and keeps ordinary messaging on the existing skills
+  | The packaged `houmao-agent-gateway` skill SHALL select commands by gateway-specific intent:
+  > ### Requirement: `houmao-agent-gateway` routes by gateway-specific intent and keeps ordinary messaging on the existing skills
+  > The packaged `houmao-agent-gateway` skill SHALL select commands by gateway-specific intent:
+  > - use `houmao-mgr agents gateway attach|detach|status` or `/houmao/agents/{agent_ref}/gateway...` for gateway lifecycle and summary state,
+  > - use `houmao-mgr agents gateway mail-notifier ...` or `/houmao/agents/{agent_ref}/gateway/mail-notifier` for unread-mail notifier control,
+  > - use direct `{gateway.base_url}/v1/wakeups...` only for wakeup registration, inspection, and cancellation because the current implementation does not project those operations through a higher-level C
+  > - use direct `{gateway.base_url}/v1/...` only when the task genuinely requires a gateway-only lower-level surface and the exact live base URL is already available from supported discovery.
+  > The packaged `houmao-agent-gateway` skill SHALL delegate ordinary prompt turns, mailbox routing, ordinary mailbox work, or transport-specific mailbox work to:
+  > - `houmao-agent-messaging`
+
+===== P021 | Codagent-AI/agent-validator PR #142 | capacidade do par: agent-command
+PR: feat: add one-shot review suppression for task-compliance
+arquivos ligados: src/config/schema.ts;src/gates/review.ts;src/utils/log-parser.ts
+--- linhas alteradas (177; mostrando até 40)
++  one_shot: z.boolean().default(false),
++    one_shot: z.boolean().optional(),
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
++    one_shot: z.boolean().optional(),
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
++import type { DispatchForDiffArgs } from './review-dispatch-types.js';
++import { prepareOneShotPreservation } from './review-one-shot.js';
++import { invokeAdapter, omitFixBase } from './review-runtime-helpers.js';
++  ReviewOutputEntry,
+-import { REVIEW_ADAPTER_TIMEOUT_MS } from './review-types.js';
+-    const diff = await this.getDiff(entryPointPath, baseBranch, changeOptions);
+-    logDiffStats(diff, mainLogger);
+-    if (!diff.trim()) {
+-      return emptyDiffResult(jobId, startTime, logPaths, mainLogger);
+-    }
+-    const preferences = config.cli_preference || [];
+-    const parallel = config.parallel ?? false;
+-    const healthyAdapters = await collectHealthyAdapters(
+-      preferences,
+-      mainLogger,
++    const oneShotState = await prepareOneShotPreservation({
++      jobId,
++      config,
++      required,
++      loggerFactory,
++      logPathsSet,
++      logPaths,
+-    );
+--- candidata: run-lifecycle [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Automatic Rerun Detection
+  | The `run`, `check`, and `review` commands MUST automatically detect whether to operate in first-run or rerun mode based on the presence of log files. Explicit flags (`--uncommitted`, `--commit`) overr
+  > The `run`, `check`, and `review` commands MUST automatically detect whether to operate in first-run or rerun mode based on the presence of log files. Explicit flags (`--uncommitted`, `--commit`) overr
+  > - **WHEN** the command executes without explicit diff flags
+  > - **WHEN** the command executes without explicit diff flags
+  > - **AND** inject failure context into review gates whose sanitized job ID matches the log file prefix
+  > - **WHEN** the command executes without explicit diff flags
+  > The `rerun` subcommand MUST be removed from the CLI. Its behavior is subsumed by the automatic rerun detection in `run`, `check`, and `review`.
+  > - **WHEN** the user executes `agent-gauntlet rerun`
+  > - **GIVEN** the highest-numbered log for a job prefix contains no failures (status PASS)
+--- candidata: review-config [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Per-Adapter Configuration
+  | The system MUST support optional per-adapter configuration under the `cli.adapters` section of `.gauntlet/config.yml`. Each adapter entry is keyed by adapter name and the system MUST accept optional `
+  > The system MUST support optional per-adapter configuration under the `cli.adapters` section of `.gauntlet/config.yml`. Each adapter entry is keyed by adapter name and the system MUST accept optional `
+  > - **GIVEN** a `.gauntlet/config.yml` with `cli.adapters.gemini.allow_tool_use: false`
+  > - **WHEN** a review is executed using the Gemini adapter
+  > - **GIVEN** a `.gauntlet/config.yml` with no `allow_tool_use` setting for Claude
+  > - **WHEN** a review is executed using the Claude adapter
+  > - **GIVEN** a `.gauntlet/config.yml` with `cli.adapters.codex.thinking_budget: high`
+  > - **WHEN** a review is executed using the Codex adapter
+  > - **THEN** the Codex CLI MUST be invoked with `-c model_reasoning_effort="high"`
+--- candidata: log-management [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: JSON Review Result Files
+  | The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > - **WHEN** a review adapter completes execution
+  > - **THEN** the system SHALL write a `.json` file with the same base name as the log file (e.g., `review_src_claude.1.json` alongside `review_src_claude.1.log`)
+  > - **AND** the JSON file SHALL contain the adapter name, timestamp, status, raw LLM output, and violations array
+  > - **THEN** the violation object SHALL include a `status` field with initial value `"new"`
+  > - **AND** the violation object SHALL include `file`, `line`, `issue`, `priority`, and optional `fix` fields
+  > - **WHEN** the reviewer LLM produces output that cannot be parsed as valid JSON
+  > - **AND** the gate SHALL report an error status
+--- candidata: init-config [tasks]
+  | ## REMOVED Requirements
+  | ### Requirement: Interactive Config Prompts
+  | **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Migration**: Run `/gauntlet-setup` after `init` to configure checks and reviews.
+  > ### Requirement: Init generates YAML review config with built-in reference
+  > The `init` command SHALL generate a `.gauntlet/reviews/code-quality.yml` file that references the built-in code-quality review prompt.
+  > #### Scenario: Default init creates YAML review config
+  > - **THEN** `.gauntlet/reviews/code-quality.yml` SHALL be created with content referencing `builtin: code-quality`
+  > - **AND** the YAML file SHALL include default settings (`num_reviews: 1`)
+  > #### Scenario: Init with --yes flag creates YAML review config
+--- candidata: dynamic-review-control [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Review enabled filtering at job generation
+  | The system SHALL skip reviews with `enabled: false` during job generation unless the review name appears in the `enableReviews` set provided via CLI options. Reviews with `enabled: true` (or no `enabl
+  > ### Requirement: Review enabled filtering at job generation
+  > The system SHALL skip reviews with `enabled: false` during job generation unless the review name appears in the `enableReviews` set provided via CLI options. Reviews with `enabled: true` (or no `enabl
+  > #### Scenario: Disabled review skipped when no override provided
+  > - **WHEN** a review has `enabled: false` in its config
+  > - **AND** no `--enable-review` flag names that review
+  > - **THEN** the review SHALL NOT generate any jobs
+  > #### Scenario: Disabled review activated via CLI override
+  > - **WHEN** a review has `enabled: false` in its config
+
+===== P022 | dynatrace-oss/dtwiz PR #150 | capacidade do par: project-flag
+PR: chore: archive gcp and code cleanup
+arquivos ligados: cmd/install.go;pkg/installer/installer.go
+--- linhas alteradas (43; mostrando até 40)
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-		if err := installer.InstallAWS(c.Platform, envURL, platformTok, installDryRun, StartTime.UTC().Format("2006-01-02T15:04:05Z")); err != nil {
++		if err := installer.InstallAWS(c.Platform, envURL, platformTok, installDryRun, StartTime.UTC().Format(installer.IngestTimeFormat)); err != nil {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
++// IngestTimeFormat is the RFC3339 timestamp format used in DQL from-clauses.
++const IngestTimeFormat = "2006-01-02T15:04:05Z"
++// ShouldProceed handles the dry-run check and user confirmation prompt
++// that appears at the end of every install/update/uninstall preview. verb is
++// the action noun used in the cancellation message ("Installation", "Update",
++// "Uninstall"). Returns (true, nil) to proceed, (false, nil) for dry-run, or
++// (false, err) when the user declines or reading stdin fails.
++func ShouldProceed(dryRun bool, verb string) (bool, error) {
++	if dryRun {
++		fmt.Println("  [dry-run] No changes were made.")
++		return false, nil
++	}
++	ok, err := ConfirmProceed("  Apply?")
++	if err != nil {
++		return false, fmt.Errorf("reading confirmation: %w", err)
++	}
++	if !ok {
++		fmt.Printf("  %s cancelled.\n", verb)
++		return false, ErrInstallCancelled
++	}
+--- candidata: azure-monitor-install [tasks+PR]
+  | # Azure Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install azure` as the final runnable command for Azure installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Azure Monitor integr
+  > - **WHEN** the user runs `dtwiz install azure`
+  > - **THEN** the Azure installer runs against the resolved environment and platform token
+  > - **AND** `--dry-run` previews the workflow without making changes
+  > - **WHEN** the installer registers the Azure Service Principal
+  > ### Requirement: Preflight checks before any mutation
+  > The system SHALL run preflight checks before mutating any resource: the `az` CLI SHALL be present on `PATH`, and `az account show` SHALL succeed (the user is logged in). From the account the system SH
+  > - **WHEN** the installer runs preflight
+--- candidata: azure-monitor-update [tasks+PR]
+  | # Azure Monitor Update
+  | ## ADDED Requirements
+  | ### Requirement: Update is an in-place monitoring-config reconcile
+  > # Azure Monitor Update
+  > ### Requirement: Update is an in-place monitoring-config reconcile
+  > The system SHALL provide an `UpdateAzure` entry point that refreshes an existing integration in place by reconciling **only** the `da-azure` monitoring configuration to the latest schema-derived defau
+  > - **WHEN** the user runs `dtwiz update azure`
+  > #### Scenario: Setup routes to update when configured
+  > - **THEN** the setup flow runs an in-place reconcile instead of a fresh install
+  > #### Scenario: Setup installs fresh when not configured
+  > - **THEN** the setup flow calls the full installer
+--- candidata: java-auto-instrumentation [tasks+termos]
+  | # Spec: Java Auto-Instrumentation
+  | ## ADDED Requirements
+  | ### Requirement: Agent JAR download
+  > The installer SHALL automatically download the OpenTelemetry Java agent JAR from the official GitHub releases to a well-known location.
+  > - **WHEN** `dtwiz install otel-java` is run and `~/.opentelemetry/java/opentelemetry-javaagent.jar` does not exist
+  > - **THEN** the installer SHALL create the directory `~/.opentelemetry/java/` if it does not exist
+  > - **THEN** the installer SHALL re-download the JAR from the same URL and overwrite the existing file (the "latest" URL may point to a newer version)
+  > - **WHEN** the download fails (network error, non-200 HTTP status)
+  > - **THEN** the installer SHALL exit with a clear error message including the URL and the HTTP status or error
+  > The installer SHALL detect runnable entrypoints for the selected Java project without requiring the application to already be running.
+  > - **WHEN** the installer scans for entrypoints
+--- candidata: oneagent-analyze [tasks+termos]
+  | # OneAgent Analyze and Probe
+  | ## ADDED Requirements
+  | ### Requirement: classifyEnvironment maps any GOOS/GOARCH to canonical Environment values
+  > `classifyEnvironment(goos, goarch string) Environment` SHALL map the raw `runtime.GOOS` and `runtime.GOARCH` strings to the canonical OS and arch token sets. It SHALL never return an error. `"linux"` 
+  > ### Requirement: validateEnvironment fails fast on unsupported platforms
+  > `validateEnvironment(env Environment) error` SHALL return a non-nil, actionable error for each unsupported platform. Supported platforms (`"linux"` and `"windows"` with arch `"x86"` or `"arm"`) SHALL 
+  > #### Scenario: macOS rejection preserves existing message
+  > #### Scenario: OS check precedes arch check
+  > - **THEN** the error message mentions `"macOS"` (not the arch)
+  > `runPreflightChecks(env Environment, opts InstallOptions) (preflightResult, error)` SHALL execute all system-readiness checks in order before any network operation. It SHALL be called in `InstallOneAg
+  > IsUpdate bool
+--- candidata: gcp-monitor-install [PR]
+  | # GCP Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install gcp` as the final runnable command for GCP installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Google Cloud integration
+  > - **WHEN** the user runs `dtwiz install gcp`
+  > - **THEN** the GCP installer runs against the resolved environment and platform token
+  > - **AND** `--dry-run` previews the workflow without making changes
+  > - **GIVEN** the installer creates the GCP service account and grants impersonation
+  > ### Requirement: Preflight checks before any mutation
+  > The system SHALL run preflight checks before mutating any resource: the `gcloud` CLI SHALL be present on `PATH`, and `gcloud config get-value project` SHALL resolve to a non-empty, non-`(unset)` activ
+  > - **WHEN** the installer runs preflight
+
+===== P023 | litara-app/litara PR #72 | capacidade do par: bulk-book-actions
+PR: Js/library rework
+arquivos ligados: apps/web/src/store/atoms.ts
+--- linhas alteradas (13; mostrando até 40)
++  path: string;
++  iconKey: string | null;
++  metadataFieldOverrides: Record<string, string> | null;
++  metadataProvidersDisabled: string[];
++  lastScanAt: string | null;
++  createdAt: string;
++  updatedAt: string;
++  bookCount: number;
++  /** For 'recently-added': library ids to filter by; empty = all libraries */
++  libraryIds?: string[];
++  isOrphan: boolean;
++/** Map of libraryId → active scan taskId; set while a scan is in progress */
++export const activeScanTasksAtom = atom<Record<string, string>>({});
+--- candidata: libraries [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Libraries are global and admin-managed
+  | The system SHALL treat libraries as globally-shared entities (no `userId` ownership) and SHALL restrict mutation (create, update, delete, scan) to users whose role is `ADMIN`.
+  > The system SHALL treat libraries as globally-shared entities (no `userId` ownership) and SHALL restrict mutation (create, update, delete, scan) to users whose role is `ADMIN`.
+  > #### Scenario: Non-admin attempts to create a library
+  > - **WHEN** an authenticated non-admin user sends `POST /libraries` with a valid body
+  > - **THEN** the system returns HTTP 403 and does not create the library
+  > #### Scenario: Admin creates a library visible to all users
+  > - **WHEN** an admin creates a library
+  > - **THEN** every authenticated user sees the new library in `GET /libraries`
+  > #### Scenario: Non-admin can read libraries
+--- candidata: library-scanner [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Per-library file watchers
+  | The scanner SHALL register one chokidar watcher per existing library, rooted at `library.path`, on application startup and when libraries are created or deleted. Each watcher SHALL exclude `BOOK_DROP_
+  > ### Requirement: Per-library file watchers
+  > The scanner SHALL register one chokidar watcher per existing library, rooted at `library.path`, on application startup and when libraries are created or deleted. Each watcher SHALL exclude `BOOK_DROP_
+  > #### Scenario: Watcher created on library create
+  > - **WHEN** an admin creates a new library
+  > - **THEN** the scanner registers a chokidar watcher rooted at the library's path
+  > #### Scenario: Watcher removed on library delete
+  > - **WHEN** an admin deletes a library
+  > - **THEN** the scanner closes the chokidar watcher rooted at that library's path
+--- candidata: book-drop-routing [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Pending books carry a target library
+  | `PendingBook` SHALL have a nullable `targetLibraryId` field. `PATCH /book-drop/:id` SHALL accept `targetLibraryId` and persist it on the pending record.
+  > ### Requirement: Pending books carry a target library
+  > #### Scenario: Admin sets target library on a pending book
+  > - **WHEN** an admin sends `PATCH /book-drop/:id` with `{targetLibraryId: <library.id>}`
+  > ### Requirement: Approval requires a target library and writes into its folder
+  > The approval endpoints (`POST /book-drop/:id/approve`, `POST /book-drop/:id/approve-overwrite`, `POST /book-drop/approve-all`) SHALL reject any pending book that lacks a `targetLibraryId` (HTTP 400). 
+  > #### Scenario: Approving a pending book without target library fails
+  > #### Scenario: Approving routes the file into the chosen library
+  > - **GIVEN** a pending book "Foundation" by "Asimov" with `targetLibraryId` referencing a library at `/books/ebooks`
+--- candidata: orphan-books [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Books carry an isOrphan flag
+  | `Book` SHALL have an `isOrphan` boolean column (default `false`). Orphan books SHALL be visible in `All Books` listings but SHALL NOT appear in any library's per-library page (since they have `library
+  > ### Requirement: Books carry an isOrphan flag
+  > `Book` SHALL have an `isOrphan` boolean column (default `false`). Orphan books SHALL be visible in `All Books` listings but SHALL NOT appear in any library's per-library page (since they have `library
+  > - **GIVEN** a book with `isOrphan = true` and `libraryId = null`
+  > #### Scenario: Orphan book is excluded from per-library listing
+  > - **WHEN** a user loads `GET /books?libraryId=<id>`
+  > - **THEN** the response includes every book with `isOrphan = true` and includes each book's first file path
+  > ### Requirement: Admin can reassign an orphan book to a library
+  > The system SHALL expose `PATCH /admin/books/:id/reassign-library` (admin-only) that accepts `{libraryId}`, moves the book's primary file into `{library.path}/{author}/{series}/{title}.{ext}` using the
+--- candidata: folder-browser [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Admin-only folder browse endpoint rooted at EBOOK_LIBRARY_PATH
+  | The system SHALL expose `GET /admin/folders?path=<relative>` (admin-only) that returns the immediate child directories of `{EBOOK_LIBRARY_PATH}/{path}`. The response SHALL be a JSON array of `{name, r
+
+===== P024 | dallay/agentsync PR #315 | capacidade do par: autoskills-discovery
+PR: fix(skills): use provider_skill_id for suggest --install resolution
+arquivos ligados: src/skills/catalog.rs;src/skills/suggest.rs
+--- linhas alteradas (10; mostrando até 40)
++    pub provider_skill_id: String,
++                provider_skill_id: definition.provider_skill_id.clone(),
++                provider_skill_id: definition.provider_skill_id.clone(),
++                provider_skill_id: definition.provider_skill_id.clone(),
++    pub provider_skill_id: String,
++            provider_skill_id: metadata.provider_skill_id.clone(),
++    pub provider_skill_id: String,
+-            match provider.resolve(&recommendation.skill_id) {
++            match provider.resolve(&recommendation.provider_skill_id) {
++                    provider_skill_id: recommendation.provider_skill_id.clone(),
+--- candidata: skill-recommendations [tasks+PR+termos]
+  | # Skill Recommendations Specification
+  | ## Purpose
+  | Define how AgentSync detects repository technologies, generates opinionated skill recommendations,
+  > Define how AgentSync detects repository technologies, generates opinionated skill recommendations,
+  > - AND each detected technology MUST include at least one evidence item naming a matching local
+  > The system MUST keep repository technology detection separate from recommendation generation.
+  > The system MUST be able to report detections even when zero skill recommendations are produced.
+  > #### Scenario: Detections are reported when no catalog match exists
+  > - AND the recommendation policy produces no skill recommendations for that detected technology
+  > - AND the recommendations collection MUST be empty
+  > #### Scenario: Unsupported repository produces no detections and no recommendations
+--- candidata: agents-skills-repo [termos]
+  | # Specification: agents-skills Monorepo
+  | | Field         | Value                  |
+  | |---------------|------------------------|
+  > name: skill-name          # Required. kebab-case, matches directory name
+  > - `name` MUST be kebab-case and MUST match the parent directory name
+  > When the CLI resolves a skill with `provider_skill_id` matching pattern
+  > use the deterministic `provider_skill_id` format:
+  > provider_skill_id = "dallay/agents-skills/accessibility"
+  > local_skill_id = "accessibility"
+  > 3. Verifies `name` matches directory name
+  > 1. Reads all `provider_skill_id` entries from `catalog.v1.toml` that match `dallay/agents-skills/*`
+--- candidata: skill-lifecycle [termos]
+  | # Specification: Skill Lifecycle
+  | **Type**: RETROSPEC (updated with forward specs REQ-020–REQ-022)
+  | **Date**: 2026-04-05
+  > `src/skills/manifest.rs`, `src/skills/registry.rs`, `src/skills/provider.rs`,
+  > atomic swap, rollback), manifest validation, registry persistence, provider resolution, transaction
+  > - **Skill recommendations/suggest behavior**: partially specified in
+  > `openspec/specs/skill-recommendations/spec.md`
+  > - This spec focuses exclusively on the **install/uninstall/update lifecycle**, not recommendation
+  > | `name`        | `String`         | Yes      | Skill identifier, must match `^[a-z0-9]+(-[a-z0-9]+)*$` |
+  > | `provider`      | `Option<String>`      | `provider`     | Provider that resolved this skill |
+  > | `skills`         | `Option<BTreeMap<String, SkillEntry>>` | `skills`        | Map of skill_id to entry |

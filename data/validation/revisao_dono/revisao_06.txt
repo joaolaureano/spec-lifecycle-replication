@@ -1,0 +1,539 @@
+===== P032 | archmaxai/archmax PR #7 | capacidade do par: spa-architecture
+PR: UI improvements, encryption hardening, schema migrations, and testing enhancements
+arquivos ligados: apps/frontend/src/routes/_auth.tsx
+--- linhas alteradas (4; mostrando até 40)
++import { DisclaimerDialog } from "@/components/disclaimer-dialog";
++import { useDisclaimerAccepted } from "@/lib/use-disclaimer-accepted";
++  const { accepted, accept } = useDisclaimerAccepted();
++      {!accepted && <DisclaimerDialog onAccept={accept} />}
+--- candidata: auth [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Admin User Seeding
+  | The system SHALL seed an admin user at startup using the `UI_USERNAME` and `UI_PASSWORD` environment variables. The admin user is created with email `admin@archsem.local` and a hashed password credent
+  > After the first successful login, the system SHALL display a modal disclaimer dialog that blocks access to the admin UI until the user acknowledges all statements. The disclaimer MUST include the foll
+  > The user MUST check an acknowledgment checkbox and confirm to dismiss the dialog. Acceptance SHALL be persisted in the browser's `localStorage`. The dialog SHALL NOT appear again once accepted, unless
+  > - **WHEN** a user logs in for the first time (no acceptance in `localStorage`)
+  > - **THEN** a modal disclaimer dialog is displayed over the admin UI
+  > - **AND** the dialog cannot be dismissed without checking the acknowledgment checkbox and clicking confirm
+  > #### Scenario: Disclaimer not shown after acceptance
+  > - **WHEN** a user has previously accepted the disclaimer (acceptance stored in `localStorage`)
+  > - **THEN** the disclaimer dialog is not displayed
+--- candidata: testing-suite [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Test Agent Model
+  | The system SHALL provide a `TestAgent` Mongoose model with the following fields: `name` (string, required), `project` (ObjectId ref to Project, required, indexed), `semanticModels` (array of strings —
+  > - `POST /` — Create a new test agent (accepts name, semanticModels, systemPrompt, llmBaseUrl, apiKey, llmModel; encrypts and stores the API key)
+  > #### Scenario: Playground reuses chat UI components
+  > - **THEN** messages, tool call cards, markdown rendering, and streaming indicators use the same components as the semantic model builder chat (`agent-chat`, `tool-call-card`, `chat-input`, `markdown-c
+  > - `POST /` — Initiate a batch run (accepts `testAgentId` and `testCaseIds` array)
+  > The frontend SHALL provide a Test Agents page at `/$projectId/testing/agents` displaying a table of all test agents with columns: name, semantic models (as badges), LLM model, base URL, and actions (e
+  > - **THEN** a form dialog opens with current values pre-filled (API key shows placeholder)
+  > The frontend SHALL provide a Test Cases page at `/$projectId/testing/cases` displaying a table of all test cases with columns: title, semantic model, input message (truncated), expected facts count, a
+  > The frontend SHALL provide a Playground page at `/$projectId/testing/playground` with a test agent selector and a chat interface. The chat interface SHALL reuse the existing chat components (`AgentCha
+--- candidata: semantic-model-agent [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: LLM Prompt Caching
+  | The agent SHALL cache the stable prompt prefix (tool definitions and system prompt) so that repeated LLM calls within a single tool-loop turn and across follow-up turns reuse cached input tokens inste
+  > Prompt caching SHALL be provider-aware and configurable. Caching MUST be controlled by an `AGENT_PROMPT_CACHE_ENABLED` environment variable that defaults to enabled, and a cache lifetime controlled by
+  > The deep agent SHALL have access to a custom `executeQuery` tool that runs SQL queries against the project's DuckDB instance (which has all project connections attached as named schemas). The tool acc
+  > When the owning project has `ensureReadonly: true`, the tool MUST validate that the query is read-only (only SELECT, WITH, EXPLAIN, DESCRIBE, SHOW, PRAGMA are allowed, and multi-statement queries are 
+  > - **THEN** the content is rendered as formatted HTML with Tailwind-styled custom components
+  > Agent conversations SHALL be persisted in MongoDB. Each conversation belongs to a project and stores an ordered list of messages (user and assistant roles, tool calls, timestamps). The chat endpoint a
+  > - **THEN** the content is rendered as formatted HTML with Tailwind-styled custom components
+  > Agent conversations SHALL be persisted in MongoDB. Each conversation belongs to a project and stores an ordered list of messages (user and assistant roles, tool calls, timestamps). The chat endpoint a
+  > The conversations list API endpoint SHALL accept `limit` (default 10) and `skip` (default 0) query parameters and return an object with `items` (the conversation summaries) and `total` (the total coun
+--- candidata: mcp-token-management [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: McpToken Model
+  | The system SHALL provide an `McpToken` Mongoose model with the following fields: `name` (string, required), `tokenHash` (string, required, indexed), `project` (ObjectId ref to Project, required, index
+  > - **AND** the token is no longer accepted for MCP authentication
+  > - `POST /` — Create a new token (accepts name, scopes, expiresAt; returns the raw token once)
+  > 3. **Create token dialog** — A form to create a new token with fields: name, scope selection (multi-select from available semantic models), and expiry option (never / custom date)
+  > - **THEN** a dialog shows the raw token with a copy button
+  > - **THEN** a confirmation dialog appears
+  > - **AND** the token is no longer accepted for MCP authentication
+  > - **WHEN** the user opens the create token dialog
+  > - **AND** the token is no longer accepted for MCP authentication
+--- candidata: data-connections [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Connection Model
+  | The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > - **THEN** the connection is accepted and stored
+  > #### Scenario: Firebird type accepted only when active
+  > - **THEN** the connection is accepted and stored
+  > - **THEN** the connection is accepted and stored
+  > - **THEN** the connection is accepted and stored
+  > - **THEN** the connection is accepted and stored
+  > - **THEN** the connection is accepted and stored
+
+===== P033 | Juniper/nita-webapp PR #62 | capacidade do par: network-hosts-editor
+PR: changes to jenkins integration
+arquivos ligados: frontend/src/pages/NetworkDetailPage.tsx
+--- linhas alteradas (173; mostrando até 40)
+-import { useEffect, useRef, useState } from 'react'
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { useJenkinsStream, stateLabel } from '../components/LifecycleConsole'
++  jenkins_job_name: string
++}
++interface RobotSummary {
++  available: boolean
++  total?: number
++  passed?: number
++  failed?: number
++  skipped?: number
++  pass_percentage?: number
+-  if (status === 'SUCCESS') return `${base} bg-green-800 text-green-200`
+-  if (status === 'FAILED' || status === 'FAILURE') return `${base} bg-red-800 text-red-200`
+-  if (status === 'RUNNING' || status === 'PENDING') return `${base} bg-yellow-800 text-yellow-200`
++  const s = (status || '').toUpperCase()
++  if (s === 'SUCCESS') return `${base} bg-green-800 text-green-200`
++  if (s === 'FAILED' || s === 'FAILURE') return `${base} bg-red-800 text-red-200`
++  if (s === 'RUNNING' || s === 'PENDING') return `${base} bg-yellow-800 text-yellow-200`
++  // Robot Framework result summaries for TEST-category runs, keyed by history id.
++  const [robotSummaries, setRobotSummaries] = useState<Record<number, RobotSummary>>({})
+-  // History console viewer
++  // History console viewer (live SSE stream of the run's Jenkins console)
+-  const [consoleViewText, setConsoleViewText] = useState('')
+-  const [consoleViewLoading, setConsoleViewLoading] = useState(false)
+-  const [consoleViewError, setConsoleViewError] = useState<string | null>(null)
++  const {
++    lines: consoleViewLines,
++    state: consoleViewState,
++    startUrl: startConsoleViewStream,
++    reset: resetConsoleViewStream,
++  } = useJenkinsStream()
++  const consoleViewRef = useRef<HTMLPreElement>(null)
+-    setConsoleViewText('')
+-    setConsoleViewError(null)
+-    setConsoleViewLoading(true)
+-    apiFetch(`/api/v1/action-history/${h.id}/console/`)
+-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+-      .then((d: { console: string }) => setConsoleViewText(d.console ?? ''))
+-      .catch(() => setConsoleViewError('Failed to load console output'))
+--- candidata: spa-networks [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Networks page lists all networks
+  | The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > ### Requirement: Networks page lists all networks
+  > The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > - **WHEN** the user navigates to `/networks`
+  > - **THEN** a table is displayed with one row per network showing name, network type name, description, and status
+  > - **WHEN** the user clicks "View" on a network row
+  > - **THEN** the browser navigates to `/app/networks/:id`
+  > The page SHALL provide an inline form (toggled by "Add Network" button) with fields for name, description, network type (dropdown), host_file, and dynamic_ansible_workspace. On submit it SHALL POST to
+  > #### Scenario: Successful network creation
+--- candidata: spa-network-types [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Network Types page lists all types
+  | The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > - **WHEN** the user navigates to `/network-types`
+  > - **THEN** a table is displayed with one row per network type showing its name, description, zip filename, role count, and resource count
+  > - **WHEN** the page is fetching network types
+  > #### Scenario: Fetch error
+  > The page SHALL allow the user to select a zip file and upload it via `POST /api/v1/network-types/upload/`. On success the list SHALL refresh.
+  > - **THEN** the file is POSTed to the API, and on a 2xx response the network types list refreshes
+  > - **THEN** the upload button SHALL be disabled
+--- candidata: console-streaming [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Stream Console Log via SSE
+  | The system SHALL expose a Server-Sent Events endpoint at
+  > ### Requirement: Stream Console Log via SSE
+  > `GET /api/v1/action-history/{id}/stream/` that streams the Jenkins build console
+  > output incrementally for the given action history entry.
+  > - Respond with `Content-Type: text/event-stream`.
+  > - Emit one or more `data: <text>` SSE events containing console output as the build runs.
+  > - Emit `event: done\ndata: \n\n` when the build log is complete, then close the connection.
+  > - Emit `event: error\ndata: <message>\n\n` and close if Jenkins is unreachable or an internal error occurs.
+  > - Emit `event: timeout\ndata: \n\n` and close after 30 minutes of continuous streaming (1800 poll attempts at 1-second intervals) to prevent zombie connections.
+--- candidata: jenkins-trigger-security [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Trigger Succeeds Regardless of Deployment Topology
+  | The system SHALL successfully trigger a Jenkins job via
+  > The system SHALL successfully trigger a Jenkins job via
+  > `POST /api/v1/networks/{id}/trigger/{action_id}/` when NITA is accessed through
+  > internal Jenkins hostname or port.
+  > All Jenkins communication SHALL originate from the Django application container
+  > to the internal Jenkins service (`jenkins:8080`), never from the client browser
+  > - AND the Jenkins job is queued successfully
+  > - WHEN POST /api/v1/networks/{id}/trigger/{action_id}/ is called
+  > - AND the Jenkins job is queued successfully
+--- candidata: network-lifecycle-streaming [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Jenkins Job Invocation Library
+  | The system SHALL provide a single shared backend helper for invoking a Jenkins
+  > ### Requirement: Shared Jenkins Job Invocation Library
+  > The system SHALL provide a single shared backend helper for invoking a Jenkins
+  > job that performs the authenticated build request used by every job-triggering
+  > endpoint. The helper SHALL authenticate using the configured Jenkins username
+  > and password with a CSRF crumb (Jenkins rejects anonymous build requests with
+  > `403`), reserve and return the job's build number (`nextBuildNumber`) for the
+  > invocation, and accept optional build parameters and file attachments. On a
+  > crumb/`Forbidden` failure it SHALL rebuild the server connection and retry once.
+
+===== P034 | Soju06/codex-lb PR #909 | capacidade do par: database-backends
+PR: fix(acc): create `monthly` window for the `free` account due to the policy change
+arquivos ligados: tests/unit/test_hot_path_caches.py
+--- linhas alteradas (17; mostrando até 40)
++    monthly = UsageHistory(
++        id=3,
++        account_id=account.id,
++        recorded_at=now,
++        window="monthly",
++        used_percent=35.0,
++        reset_at=now_epoch + 30 * 24 * 3600,
++        window_minutes=43200,
++    )
++            self.monthly_calls = 0
++            if window == "monthly":
++                self.monthly_calls += 1
++                return {account.id: monthly}
++        assert inputs.latest_monthly[account.id].id == monthly.id
++    assert usage_repo.monthly_calls == 1
++    assert refreshed.latest_monthly[account.id].id == monthly.id
++    assert usage_repo.monthly_calls == 2
+--- candidata: usage-refresh-policy [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Operators can probe an account to wake the upstream limiter
+  | The dashboard MUST expose an admin-only endpoint that sends a single minimal `responses.create` directly to upstream pinned to one account, bypassing load-balancer scoring, then immediately refreshes 
+  > ### Requirement: Operators can probe an account to wake the upstream limiter
+  > The dashboard MUST expose an admin-only endpoint that sends a single minimal `responses.create` directly to upstream pinned to one account, bypassing load-balancer scoring, then immediately refreshes 
+  > - **WHEN** an operator POSTs to `/api/accounts/{account_id}/probe`
+  > - **AND** the account is `active`, `rate_limited`, or `quota_exceeded`
+  > - **AND** the service triggers an immediate `UsageUpdater.refresh_accounts` for that account
+  > - **AND** the response body carries `probe_status_code`, `primary_used_percent_before`, `primary_used_percent_after`, `secondary_used_percent_before`, `secondary_used_percent_after`, `account_status_b
+  > #### Scenario: Probe rejects hard-blocked accounts
+  > - **WHEN** an operator POSTs to `/api/accounts/{account_id}/probe`
+--- candidata: api-keys [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: API key usage_sections controls visible /v1/usage detail sections
+  | The system SHALL accept an optional `usage_sections` field in `POST /api/api-keys` and `PATCH /api/api-keys/{id}`. The field SHALL be a comma-separated string of section names. Supported values SHALL 
+  > The system SHALL accept an optional `usage_sections` field in `POST /api/api-keys` and `PATCH /api/api-keys/{id}`. The field SHALL be a comma-separated string of section names. Supported values SHALL 
+  > - **THEN** the created key returns `usageSections: "upstream_limits,account_pool_usage"`
+  > - **WHEN** admin submits `PATCH /api/api-keys/{id}` with `{ "usageSections": "account_pool_usage" }`
+  > - **THEN** the key returns `usageSections: "account_pool_usage"`
+  > The system SHALL allow the admin to create API keys via `POST /api/api-keys` with a `name` (required), `allowed_models` (optional list), `weekly_token_limit` (optional integer), `expires_at` (optional
+  > When `assigned_account_ids` is omitted or empty, the created key SHALL remain unscoped and apply to all accounts. When `assigned_account_ids` is provided with one or more valid account IDs, the create
+  > #### Scenario: Create unscoped key without assigned accounts
+  > - **THEN** the created key returns `accountAssignmentScopeEnabled = false`
+--- candidata: database-migrations [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Request log client IP migration is nullable and indexed
+  | The database migration MUST add nullable `request_logs.client_ip` storage and an index for client-IP request-log lookup. The migration MUST be safe to run against databases where the table is absent o
+  > ### Requirement: Request-log account deletion preserves historical rows
+  > The database schema SHALL preserve historical `request_logs` rows when their parent account is deleted. The schema MUST support a nullable request-log soft-delete marker and MUST NOT use a cascading a
+  > #### Scenario: Request-log account foreign key no longer cascades
+  > - **THEN** the `request_logs.account_id -> accounts.id` foreign key uses `ON DELETE SET NULL`
+  > - **AND** deleting an account at the database level does not delete matching request-log rows
+  > The database SHALL persist global warm-up settings, per-account opt-in, warm-up attempt history, and request-log source metadata.
+  > - **WHEN** an attempt is stored for an account, window, and reset timestamp
+  > - **THEN** the database enforces uniqueness for that account/window/reset tuple
+--- candidata: account-quota-presentation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Free-account quota surfaces are monthly-only
+  | When an account's normalized quota model is monthly-only, account-facing quota surfaces SHALL present only the monthly window and MUST NOT render synthetic 5h or 7d bars for that account.
+  > ### Requirement: Free-account quota surfaces are monthly-only
+  > When an account's normalized quota model is monthly-only, account-facing quota surfaces SHALL present only the monthly window and MUST NOT render synthetic 5h or 7d bars for that account.
+  > #### Scenario: Account surfaces show only monthly quota
+  > - **WHEN** an account summary carries a normalized monthly quota window with no normalized 5h or 7d windows
+  > - **THEN** the account card, account list row, and account detail usage panel show a single `Monthly` quota bar
+  > - **AND** those surfaces do not render `5h` or `Weekly` bars for that account
+  > ### Requirement: Free-account overview quota hides 5h and 7d semantics
+  > Overview and aggregate quota surfaces SHALL treat normalized monthly-only free-account quota as a 30d window and MUST NOT present that account as a weekly-only or dual-window account.
+--- candidata: api-firewall [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Firewall allowlist management API
+  | Dashboard API MUST expose firewall allowlist management endpoints at `/api/firewall/ips` for listing, creating, and deleting allowed client IP addresses.
+
+===== P035 | theoden8/webspace_app PR #272 | capacidade do par: webspaces
+PR: Drop Android proxy mirror; rely on unload-on-mismatch (issue #251)
+arquivos ligados: lib/screens/settings.dart
+--- linhas alteradas (17; mostrando até 40)
+-  /// Callback to sync proxy settings across all WebViewModels
+-  final void Function(UserProxySettings)? onProxySettingsChanged;
+-    this.onProxySettingsChanged,
+-        // On Android, `inapp.ProxyController` is a process-wide singleton:
+-        // changing the proxy on one site silently changes it for every
+-        // currently-loaded WebView, so the data model is sync'd to match.
+-        // On iOS 17+ / macOS 14+, each site has its own
+-        // `WKWebsiteDataStore.proxyConfigurations`, so per-site values
+-        // are independent and the sync would clobber them. See PROXY-008.
+-        if (Platform.isAndroid) {
+-          LogService.instance.log(
+-            'Proxy',
+-            'Android: mirroring per-site proxy across all loaded models '
+-                '(ProxyController is process-wide)',
+-          );
+-          widget.onProxySettingsChanged?.call(_proxySettings);
+-        }
+--- candidata: proxy [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: PROXY-010 - Android authenticated proxy via local relay
+  | On Android, a proxy whose effective settings carry credentials SHALL be
+  > ### Requirement: PROXY-010 - Android authenticated proxy via local relay
+  > On Android, a proxy whose effective settings carry credentials SHALL be
+  > in the `inapp.ProxyController` proxy rule. Android WebView's
+  > `ProxyController` has no proxy-authentication primitive and Chromium rejects
+  > a proxy rule containing userinfo, which silently degrades to a direct
+  > connection. The relay ([`ProxyRelay`](../../../../android/app/src/main/kotlin/org/codeberg/theoden8/webspace/proxy/ProxyRelay.kt))
+  > SHALL accept HTTP proxy traffic on `127.0.0.1`, forward it to the configured
+  > upstream, and inject the upstream credentials — HTTP `Proxy-Authorization:
+--- candidata: web-push-notifications [tasks]
+  | # Web Push Notifications
+  | ## ADDED Requirements
+  | ### Requirement: NOTIF-001 - Notification Permission Handling
+  > The system SHALL handle JavaScript `Notification.requestPermission()` calls from web pages and grant or deny based on the per-site notification toggle. Requires container mode (`_useContainers == true
+  > **When** the user opens site settings
+  > The system SHALL inject a JavaScript polyfill at `DOCUMENT_START` (with `forMainFrameOnly: false`) on every site that defines `window.Notification`, `Notification.permission`, `Notification.requestPer
+  > #### Scenario: Polyfill is injected on every site
+  > **Given** a webview is being created for a site (iOS or Android)
+  > **Then** the polyfill calls `flutter_inappwebview.callHandler('webNotification', ...)` with title, body, icon, tag, and `siteId`
+  > #### Scenario: User taps a notification for a loaded site
+  > **And** Site A is still loaded in `_loadedIndices`
+--- candidata: link-intent-routing [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: LIR-001 - Per-Site Domain Claim List
+  | Each site SHALL carry a list of domain claims that declare which URLs it handles. A claim has a `kind` of `exactHost`, `wildcardSubdomain`, or `baseDomain`, and a canonical lowercase `value` with no s
+  > Each site SHALL carry a list of domain claims that declare which URLs it handles. A claim has a `kind` of `exactHost`, `wildcardSubdomain`, or `baseDomain`, and a canonical lowercase `value` with no s
+  > - **WHEN** a `WebViewModel` is deserialized from JSON that does not contain `domainClaims`
+  > #### Scenario: User-defined claims persist across restart
+  > The system SHALL resolve an incoming `http`/`https` URL to exactly one site (or "no match") using a deterministic specificity ranking: `exactHost` (score 300) > `wildcardSubdomain` (score 200) > `base
+  > #### Scenario: Wildcard matches subdomain but not base
+  > - **THEN** site A's wildcard claim does not match
+  > #### Scenario: No match offers create
+  > - **WHEN** no site's claims match the incoming URL
+--- candidata: lazy-webview-loading [tasks]
+  | # Lazy Webview Loading - Delta for Web Push Notifications
+  | ## MODIFIED Requirements
+  | ### Requirement: LAZY-001 - On-Demand Loading
+  > Webviews SHALL be created only when the user visits a site, EXCEPT for sites with `notificationsEnabled == true` which SHALL be auto-loaded on app startup so their page JS can fire notifications witho
+  > Implementation: see the auto-load loop in `_restoreAppState` ([lib/main.dart](../../../../../lib/main.dart)) that adds every `notificationsEnabled` site index to `_loadedIndices` after the per-site mo
+  > **Then** Sites A, B, and C are all added to `_loadedIndices`
+  > **When** both sites are loaded
+  > **Then** both coexist in `_loadedIndices` with isolated profiles
+  > **Formal model:** the `LoadSite`/`Evict` actions over the shared `loaded` set are composed into the cross-spec kernel [formal/kernel.tla](../../../formal/kernel.tla); eviction must never drop the visi
+  > The app used an `IndexedStack` widget to manage webviews, which creates ALL child widgets upfront (even though only one is displayed). With 8 demo sites:
+  > 2. All 8 sites would start loading their URLs in the background
+--- candidata: ip-leakage [termos]
+  | ## ADDED Requirements
+  | ### Requirement: LEAK-008 - Android webview auth-proxy fail-closed
+  | On Android, applying a credentialed proxy to the WebView SHALL NOT degrade
+  > ### Requirement: LEAK-008 - Android webview auth-proxy fail-closed
+  > On Android, applying a credentialed proxy to the WebView SHALL NOT degrade
+  > `inapp.ProxyController` proxy rule (Chromium rejects userinfo and silently
+  > (see PROXY-010 / PROXY-011), which only ever connects to the configured
+  > method channel and SHALL NOT appear in any `ProxyController` rule or on any
+  > webview proxy application SHALL fail closed (no override cleared, no direct
+  > #### Scenario: Credentialed Android proxy never sets a userinfo rule
+  > - **GIVEN** the app runs on Android with a credentialed effective proxy
+
+===== P036 | strelov1/freehire PR #425 | capacidade do par: resume-skill-extraction
+PR: Single profile per user + jobs-facet edit modal + menu avatar
+arquivos ligados: web/src/lib/api.ts
+--- linhas alteradas (87; mostrando até 40)
+-  SearchProfile,
++  UserProfile,
+-  // Search profiles: named specialization + skills sets (cookie-only on the server).
++  // The single per-user profile: a specialization + skills set (cookie-only on the server).
+-  /** The current user's search profiles, most recently updated first. */
+-  async function listSearchProfiles(): Promise<SearchProfile[]> {
+-    const res = await request<{ data: SearchProfile[] }>('/api/v1/me/profiles');
++  /** The current user's profile, or null when they have not saved one yet. */
++  async function getProfile(): Promise<UserProfile | null> {
++    const res = await request<{ data: UserProfile | null }>('/api/v1/me/profile');
+-  /** Create a profile from a name, a non-empty set of specializations (job categories),
+-   *  and a non-empty set of skills. A duplicate name or the per-user cap is a 409; a bad
+-   *  specialization or empty skills is a 400. */
+-  async function createSearchProfile(
+-    name: string,
+-    specializations: string[],
+-    skills: string[],
+-  ): Promise<SearchProfile> {
+-    const res = await request<{ data: SearchProfile }>('/api/v1/me/profiles', {
+-      method: 'POST',
++  /** Create-or-replace the user's profile from a non-empty set of specializations (job
++   *  categories) and a non-empty set of skills. A bad specialization or empty skills is a
++   *  400. */
++  async function saveProfile(specializations: string[], skills: string[]): Promise<UserProfile> {
++    const res = await request<{ data: UserProfile }>('/api/v1/me/profile', {
++      method: 'PUT',
+-      body: JSON.stringify({ name, specializations, skills }),
+-    });
+-    return res.data;
+-  }
+-  /** Overwrite a profile's name, specializations, and/or skills; an omitted field is
+-   *  unchanged. */
+-  async function updateSearchProfile(
+-    id: number,
+-    patch: { name?: string; specializations?: string[]; skills?: string[] },
+-  ): Promise<SearchProfile> {
+-    const res = await request<{ data: SearchProfile }>(`/api/v1/me/profiles/${id}`, {
+-      method: 'PATCH',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify(patch),
+--- candidata: search-profiles [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Create a search profile
+  | A signed-in user SHALL be able to create a named search profile capturing a single `specialization` (one job category) and a non-empty set of `skills`. Skills are stored as canonical lowercase tokens,
+  > ### Requirement: Create a search profile
+  > A signed-in user SHALL be able to create a named search profile capturing a single `specialization` (one job category) and a non-empty set of `skills`. Skills are stored as canonical lowercase tokens,
+  > #### Scenario: Create a profile
+  > - **WHEN** an authenticated user sends `POST /api/v1/me/profiles` with a valid `name`, a `specialization` drawn from the category vocabulary, and a non-empty `skills` array
+  > - **THEN** the system stores the profile scoped to that user and responds `201` with `{"data": {id, name, specialization, skills, updated_at}}`
+  > - **WHEN** an authenticated user creates a profile with skills containing mixed case, surrounding whitespace, or duplicates
+  > - **THEN** the system stores each skill lowercased, trimmed, and deduplicated
+  > #### Scenario: Unauthenticated request is rejected
+--- candidata: resume-verdict [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Deterministic market skill-gap scoring
+  | The system SHALL compute a verdict for a search profile by comparing the profile's saved skills against the most in-demand skills on the live market for the profile's specialization(s). The market is 
+  > ### Requirement: Deterministic market skill-gap scoring
+  > The system SHALL compute a verdict for a search profile by comparing the profile's saved skills against the most in-demand skills on the live market for the profile's specialization(s). The market is 
+  > #### Scenario: Stack match reflects coverage of the top skills
+  > - **WHEN** a profile's skills cover 11 of the 20 top market skills for its specializations
+  > - **THEN** the verdict reports `stack_match` = 55 (round(11/20 × 100)) and marks those 11 rows `have: true`
+  > #### Scenario: Fewer than twenty market skills available
+  > - **WHEN** the market for the specializations returns only 8 distinct skills
+  > #### Scenario: No market data available
+--- candidata: header-navigation [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified header layout
+  | The site-wide header SHALL present three slots in a single row — the logo (left,
+  > The site-wide header SHALL present three slots in a single row — the logo (left,
+  > linking to `/`), a large search field (center, growing to fill available width),
+  > and a single menu trigger button (right) — using the same structure on every
+  > - **THEN** the header shows the logo, a centered search field, and one menu
+  > - **THEN** the header shows the logo, the search field, and one menu trigger
+  > ### Requirement: Instant search results
+  > The header search SHALL query as the user types (debounced) and render a
+  > from the existing jobs-search and companies-list APIs. An in-flight query
+--- candidata: web-frontend [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Companies list
+  | The frontend SHALL present companies from `GET /api/v1/companies`, showing each
+  > The page SHALL provide a name-search input. Typing SHALL filter the list against
+  > the API's `q` parameter (debounced), and the current query SHALL be mirrored into
+  > the URL query string (`?q=`) so a search survives reload, sharing, and
+  > a distinct empty state when a search matches nothing.
+  > #### Scenario: User searches companies by name
+  > - **WHEN** a user types a query into the companies search input
+  > is updated to `?q=<query>`
+  > #### Scenario: Search restored from the URL
+--- candidata: saved-searches [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Save a filter set
+  | A signed-in user SHALL be able to save the current job-search filter state under a name. The saved set captures the canonical search query string (the same serialization the filter URL and `GET /api/v
+  > A signed-in user SHALL be able to save the current job-search filter state under a name. The saved set captures the canonical search query string (the same serialization the filter URL and `GET /api/v
+  > #### Scenario: Create a saved search
+  > - **WHEN** an authenticated user sends `POST /api/v1/me/searches` with a valid `name` and a `query` string
+  > - **THEN** the system stores the set scoped to that user and responds `201` with `{"data": {id, name, query, updated_at}}`
+  > - **WHEN** an authenticated user creates a saved search with `query` equal to an empty string
+  > #### Scenario: Unauthenticated request is rejected
+  > - **WHEN** a request without a valid session cookie hits any `/api/v1/me/searches` endpoint
+  > A saved search name SHALL be trimmed and contain between 1 and 100 characters, and SHALL be unique per user (case-sensitive after trim).
+
+===== P037 | norish-recipes/norish PR #468 | capacidade do par: shared-archive-context
+PR: Rc/0.19.0
+arquivos ligados: apps/web/app/(app)/calendar/context.tsx;apps/web/app/(app)/groceries/context.tsx;apps/web/app/(app)/groceries/stores-context.tsx;apps/web/app/(app)/recipes/[id]/context.tsx;apps/web/app/(app)/settings/admin/context.tsx;apps/web/app/(app)/settings/caldav/context.tsx;apps/web/app/(app)/settings/household/context.tsx;apps/web/app/(app)/settings/user/context.tsx;apps/web/context/archive-import-context.tsx;apps/web/context/household-context.tsx;apps/web/context/permissions-context.tsx;apps/web/context/user-context.tsx;apps/web/hooks/admin/shared-admin-hooks.ts;apps/web/hooks/archive/shared-archive-hooks.ts;apps/web/hooks/caldav/shared-caldav-hooks.ts;apps/web/hooks/calendar/shared-calendar-hooks.ts;apps/web/hooks/favorites/shared-favorites-hooks.ts;apps/web/hooks/groceries/shared-groceries-hooks.ts;apps/web/hooks/households/shared-household-hooks.ts;apps/web/hooks/ratings/shared-ratings-hooks.ts;apps/web/hooks/stores/shared-stores-hooks.ts
+--- linhas alteradas (418; mostrando até 40)
+-import type { CalendarData } from "@/hooks/calendar";
+-  ReactNode,
+-import { Slot } from "@norish/shared/contracts";
+-import { addWeeks, dateKey, getWeekEnd, getWeekStart } from "@norish/shared/lib/helpers";
+-type PlannedItem = {
+-  id: string;
+-  userId: string;
+-  date: string;
+-  slot: Slot;
+-  sortOrder: number;
+-  itemType: "recipe" | "note";
+-  recipeId: string | null;
+-  title: string | null;
+-  createdAt: Date;
+-  updatedAt: Date;
+-};
+-type DateRange = {
+-  start: Date;
+-  end: Date;
+-};
+-type Ctx = {
+-  plannedItemsByDate: CalendarData;
+-  isLoading: boolean;
+-  isLoadingMore: boolean;
+-  dateRange: DateRange;
+-  planMeal: (date: string, slot: Slot, recipeId: string) => void;
+-  planNote: (date: string, slot: Slot, title: string) => void;
+-  deletePlanned: (id: string) => void;
+-  moveItem: (itemId: string, targetDate: string, targetSlot: Slot, targetIndex: number) => void;
+-  updateItem: (itemId: string, title: string) => void;
+-  getItemsForSlot: (date: string, slot: Slot) => PlannedItem[];
+-  expandRange: (direction: "past" | "future") => void;
+-  isDateInRange: (date: Date) => boolean;
+-};
+-const CalendarContext = createContext<Ctx | null>(null);
+-type CalendarContextProviderProps = {
+-  children: ReactNode;
+-  /** Initial range mode - desktop loads current week, mobile loads ±2 weeks */
+-  mode?: "desktop" | "mobile";
+-};
+--- candidata: shared-groceries-context [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Shared groceries context factory is provided from shared-react
+  | The system SHALL expose a `createGroceriesContext` factory from `@norish/shared-react/contexts` that creates a groceries data provider, UI provider, and hooks, accepting platform-specific adapters for
+  > ### Requirement: Shared groceries context factory is provided from shared-react
+  > The system SHALL expose a `createGroceriesContext` factory from `@norish/shared-react/contexts` that creates a groceries data provider, UI provider, and hooks, accepting platform-specific adapters for
+  > #### Scenario: Web creates groceries context with all adapters
+  > - **WHEN** the web app calls `createGroceriesContext` with query, mutations, subscription, and localStorage adapters
+  > - **THEN** the returned `GroceriesContextProvider`, `useGroceriesContext`, and `useGroceriesUIContext` SHALL function identically to the current web implementation
+  > #### Scenario: Mobile groceries screen consumes DTOs directly
+  > - **WHEN** the mobile groceries screen renders its grocery list
+  > - **THEN** all components (section cards, rows, sortable lists, editor sheets) SHALL accept `GroceryDto`, `StoreDto`, and `RecurringGroceryDto` as props without any intermediate mapping layer
+--- candidata: shared-groceries-hooks [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable groceries hook family
+  | `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable groceries hook family
+  > `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared groceries hooks are available to both apps
+  > - **WHEN** web and mobile import shared groceries hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared groceries modules SHALL NOT import platform runtime modules
+  > ### Requirement: Groceries hook family includes query, mutation, cache, and subscription hooks
+  > The `createGroceriesHooks` factory SHALL return hooks covering the grocery list lifecycle.
+--- candidata: shared-calendar-context [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared calendar context factory is provided from shared-react
+  | The system SHALL expose a `createCalendarContext` factory from `@norish/shared-react/contexts` that creates a calendar provider and hook, accepting platform-specific adapters for query, mutations, and
+  > ### Requirement: Shared calendar context factory is provided from shared-react
+  > The system SHALL expose a `createCalendarContext` factory from `@norish/shared-react/contexts` that creates a calendar provider and hook, accepting platform-specific adapters for query, mutations, and
+  > #### Scenario: Web creates calendar context with all adapters
+  > - **WHEN** the web app calls `createCalendarContext` with query, mutations, and subscription adapters
+  > - **THEN** the returned `CalendarContextProvider` and `useCalendarContext` SHALL function identically to the current web implementation
+  > ### Requirement: Calendar context supports desktop and mobile range modes
+  > The factory SHALL accept a `mode` parameter that controls initial date range loading.
+  > #### Scenario: Desktop mode loads current week
+--- candidata: shared-stores-hooks [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable stores hook family
+  | `@norish/shared-react` SHALL expose a `createStoresHooks` factory that returns stores query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable stores hook family
+  > `@norish/shared-react` SHALL expose a `createStoresHooks` factory that returns stores query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared stores hooks are available to both apps
+  > - **WHEN** web and mobile import shared stores hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared stores modules SHALL NOT import platform runtime modules
+  > ### Requirement: Stores hook family includes query, mutation, cache, and subscription hooks
+  > The `createStoresHooks` factory SHALL return hooks covering the store management lifecycle.
+--- candidata: shared-stores-context [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Shared stores context factory is provided from shared-react
+  | The system SHALL expose a `createStoresContext` factory from `@norish/shared-react/contexts` that creates a stores provider and hook, accepting platform-specific adapters for query, mutations, and sub
+  > ### Requirement: Shared stores context factory is provided from shared-react
+  > The system SHALL expose a `createStoresContext` factory from `@norish/shared-react/contexts` that creates a stores provider and hook, accepting platform-specific adapters for query, mutations, and sub
+  > #### Scenario: Web creates stores context with all adapters
+  > - **WHEN** the web app calls `createStoresContext` with query, mutations, and subscription adapters
+  > - **THEN** the returned `StoresContextProvider` and `useStoresContext` SHALL function identically to the current web implementation
+  > # shared-stores-context Specification
+  > Defines the shared React shared stores context factory pattern in `@norish/shared-react`, enabling both web and mobile to consume this functionality through a common, app-agnostic factory/adapter patt
+  > ### Requirement: Shared stores context factory is provided from shared-react

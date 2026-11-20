@@ -1,0 +1,3442 @@
+===== P020 | repo igamenovoer/houmao | PR #10: chore: release v0.4.2 | capacidade: passive-server-request-submission
+--- SPEC VIVA
+# passive-server-request-submission Specification
+
+## Purpose
+TBD - synced from change passive-server-requests-and-headless. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: Passive server accepts gateway-mediated prompt requests
+The passive server SHALL expose `POST /houmao/agents/{agent_ref}/requests` that accepts a prompt request envelope and forwards it to the agent's live gateway.
+
+If the resolved agent has no attached gateway, the endpoint SHALL return HTTP 502 with a detail message explaining that the agent requires a gateway for remote prompt delivery.
+
+The request body SHALL accept a JSON object with a `prompt` field (non-empty string).
+
+#### Scenario: Prompt forwarded through gateway
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/requests` with `{"prompt": "hello"}` and the agent has an attached gateway
+- **THEN** the response status code is 200
+- **AND THEN** the response body contains `request_id` and `status` fields indicating acceptance
+
+#### Scenario: No gateway returns 502
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/requests` with `{"prompt": "hello"}` and the agent has no attached gateway
+- **THEN** the response status code is 502
+- **AND THEN** the response body contains a detail message mentioning gateway requirement
+
+#### Scenario: Agent not found returns 404
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/requests` for a nonexistent agent
+- **THEN** the response status code is 404
+
+### Requirement: Passive server resolves server-managed headless agents through stable managed references
+When the passive server launches a headless agent, later managed follow-up routes SHALL be able to resolve that agent through the server-owned managed authority rather than treating it as an unrelated discovered agent.
+
+The passive server SHALL accept the managed `tracked_agent_id` and the published shared-registry `agent_id` as valid references for server-managed headless follow-up operations, including turn submission, interrupt, and stop.
+
+#### Scenario: Custom published agent id still resolves to managed headless turn submission
+- **WHEN** a caller launches a passive-server headless agent with an explicit `agent_id` different from `tracked_agent_id`
+- **THEN** a later `POST /houmao/agents/{agent_ref}/turns` using that published `agent_id` succeeds through the server-managed headless path
+
+#### Scenario: Managed tracked id still resolves after launch
+- **WHEN** a caller uses the returned `tracked_agent_id` from `POST /houmao/agents/headless/launches`
+- **THEN** later `POST /houmao/agents/{agent_ref}/interrupt` and `POST /houmao/agents/{agent_ref}/stop` calls resolve the same server-managed headless authority
+
+### Requirement: Passive server accepts interrupt requests
+The passive server SHALL expose `POST /houmao/agents/{agent_ref}/interrupt`.
+
+For agents launched by this passive server instance, the endpoint SHALL resolve the authoritative managed-headless authority first and signal the interrupt through the managed `RuntimeSessionController` before falling back to generic discovered-agent behavior.
+
+For agents that are not server-managed headless agents but do have an attached gateway, the endpoint SHALL forward the interrupt via the gateway client.
+
+If the agent has no gateway and is not managed by this server, the endpoint SHALL return HTTP 502.
+
+#### Scenario: Interrupt forwarded through gateway
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/interrupt` and the agent has an attached gateway
+- **THEN** the response status code is 200
+- **AND THEN** the response body indicates the interrupt was accepted
+
+#### Scenario: Interrupt for server-managed headless agent
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/interrupt` for a headless agent managed by this server
+- **THEN** the response status code is 200
+- **AND THEN** the active turn is interrupted
+
+#### Scenario: Managed interrupt does not fall back to gateway-only handling
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/interrupt` for a passive-server-launched headless agent
+- **THEN** the passive server signals the managed headless runtime controller directly
+- **AND THEN** the request does not fail with the generic "not managed" or "no gateway" behavior
+
+#### Scenario: No gateway and not managed returns 502
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/interrupt` for an agent with no gateway that is not managed by this server
+- **THEN** the response status code is 502
+
+### Requirement: Passive server can stop agents by killing tmux sessions
+The passive server SHALL expose `POST /houmao/agents/{agent_ref}/stop`.
+
+For agents launched by this passive server instance, the endpoint SHALL resolve the authoritative managed-headless authority first, stop the managed session, clear the agent's shared registry record, clean up the `ManagedHeadlessStore` authority record, and remove the in-memory handle before falling back to generic discovered-agent behavior.
+
+For discovered agents that are not managed by this server, the endpoint SHALL terminate the agent's tmux session via `kill_tmux_session()` and clear the agent's shared registry record.
+
+#### Scenario: Stop kills tmux session and clears registry
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/stop` for a discovered agent
+- **THEN** the response status code is 200
+- **AND THEN** the agent's tmux session is terminated
+- **AND THEN** the agent's shared registry record is removed
+
+#### Scenario: Stop cleans up managed headless state
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/stop` for a headless agent managed by this server
+- **THEN** the authoritative managed headless session is stopped
+- **AND THEN** the `ManagedHeadlessStore` authority record is deleted
+- **AND THEN** the in-memory handle is removed
+
+#### Scenario: Managed stop prefers server-owned control
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/stop` for a passive-server-launched headless agent
+- **THEN** the passive server uses the authoritative managed headless control path before any generic gateway or tmux-only fallback
+- **AND THEN** the server-owned managed state is cleaned up
+
+#### Scenario: Agent not found returns 404
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/stop` for a nonexistent agent
+- **THEN** the response status code is 404
+
+### Requirement: Gateway attach and detach return 501 directing to houmao-mgr
+The passive server SHALL expose `POST /houmao/agents/{agent_ref}/gateway/attach` and `POST /houmao/agents/{agent_ref}/gateway/detach`.
+
+Both endpoints SHALL return HTTP 501 Not Implemented with a detail message directing the caller to use `houmao-mgr agents gateway attach <agent-ref>` or `houmao-mgr agents gateway detach <agent-ref>` respectively.
+
+#### Scenario: Gateway attach returns 501
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/gateway/attach`
+- **THEN** the response status code is 501
+- **AND THEN** the response body contains a detail message mentioning `houmao-mgr`
+
+#### Scenario: Gateway detach returns 501
+- **WHEN** a caller sends `POST /houmao/agents/{agent_ref}/gateway/detach`
+- **THEN** the response status code is 501
+- **AND THEN** the response body contains a detail message mentioning `houmao-mgr`
+
+--- ARQUIVOS DO PR (159)
+modified  +27    -0     CHANGELOG.md
+modified  +4     -3     README.md
+modified  +4     -1     docs/getting-started/easy-specialists.md
+modified  +9     -4     docs/getting-started/launch-profiles.md
+added     +102   -0     docs/getting-started/managed-memory-dirs.md
+modified  +1     -1     docs/getting-started/quickstart.md
+modified  +20    -9     docs/getting-started/system-skills-overview.md
+modified  +1     -0     docs/index.md
+modified  +1     -1     docs/reference/build-phase/launch-overrides.md
+modified  +137   -6     docs/reference/cli/agents-gateway.md
+modified  +9     -3     docs/reference/cli/houmao-mgr.md
+modified  +30    -30    docs/reference/cli/system-skills.md
+modified  +132   -64    docs/reference/gateway/operations/mail-notifier.md
+modified  +20    -3     docs/reference/gateway/operations/reminders.md
+modified  +2     -1     docs/reference/run-phase/launch-plan.md
+modified  +29    -12    docs/reference/run-phase/managed-prompt-header.md
+modified  +3     -1     docs/reference/run-phase/role-injection.md
+modified  +23    -1     docs/reference/system-files/agents-and-runtime.md
+modified  +2     -0     docs/reference/system-files/project-aware-operations.md
+added     +2     -0     openspec/changes/add-houmao-agent-loop-pairwise-skill/.openspec.yaml
+added     +208   -0     openspec/changes/add-houmao-agent-loop-pairwise-skill/design.md
+added     +31    -0     openspec/changes/add-houmao-agent-loop-pairwise-skill/proposal.md
+added     +133   -0     openspec/changes/add-houmao-agent-loop-pairwise-skill/specs/houmao-agent-loop-pairwise-skill/spec.md
+added     +17    -0     openspec/changes/add-houmao-agent-loop-pairwise-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/.openspec.yaml
+added     +165   -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/design.md
+added     +31    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/proposal.md
+added     +20    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/docs-readme-system-skills/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/docs-system-skills-overview-guide/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/houmao-mgr-system-skills-cli/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/houmao-system-skill-families/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/houmao-system-skill-installation/spec.md
+added     +120   -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/specs/houmao-touring-skill/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-08-add-houmao-touring-system-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/.openspec.yaml
+added     +118   -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/design.md
+added     +28    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/proposal.md
+added     +46    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/specs/brain-launch-runtime/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/specs/houmao-mgr-agents-launch/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/specs/houmao-mgr-project-easy-cli/spec.md
+added     +73    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/specs/managed-launch-prompt-header/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-08-add-launch-system-prompt-appendix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/.openspec.yaml
+added     +205   -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/design.md
+added     +32    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/proposal.md
+added     +45    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/agent-launch-profiles/spec.md
+added     +69    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/agent-memory-dir/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/brain-launch-runtime/spec.md
+added     +26    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/houmao-mgr-agents-join/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/houmao-mgr-agents-launch/spec.md
+added     +31    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/houmao-mgr-project-agents-launch-profiles/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/specs/houmao-mgr-project-easy-cli/spec.md
+added     +19    -0     openspec/changes/archive/2026-04-08-add-managed-agent-memory-dir/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/.openspec.yaml
+added     +164   -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/design.md
+added     +31    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/proposal.md
+added     +27    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/specs/agent-gateway-reference-docs/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/specs/docs-cli-reference/spec.md
+added     +84    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/specs/houmao-agent-gateway-skill/spec.md
+added     +106   -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/specs/houmao-srv-ctrl-native-cli/spec.md
+added     +39    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/specs/passive-server-gateway-proxy/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-09-add-gateway-reminders-cli/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-09-add-pairwise-edge-loop-adv-usage-pattern/.openspec.yaml
+added     +173   -0     openspec/changes/archive/2026-04-09-add-pairwise-edge-loop-adv-usage-pattern/design.md
+added     +31    -0     openspec/changes/archive/2026-04-09-add-pairwise-edge-loop-adv-usage-pattern/proposal.md
+added     +135   -0     openspec/changes/archive/2026-04-09-add-pairwise-edge-loop-adv-usage-pattern/specs/houmao-adv-usage-pattern-skill/spec.md
+added     +14    -0     openspec/changes/archive/2026-04-09-add-pairwise-edge-loop-adv-usage-pattern/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/.openspec.yaml
+added     +217   -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/design.md
+added     +36    -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/proposal.md
+added     +43    -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/specs/docs-gateway-mail-notifier-reference/spec.md
+added     +105   -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/specs/houmao-adv-usage-pattern-skill/spec.md
+added     +15    -0     openspec/changes/archive/2026-04-09-add-relay-loop-adv-usage-pattern/tasks.md
+modified  +29    -3     openspec/specs/agent-gateway-reference-docs/spec.md
+modified  +43    -0     openspec/specs/agent-launch-profiles/spec.md
+added     +72    -0     openspec/specs/agent-memory-dir/spec.md
+modified  +96    -0     openspec/specs/brain-launch-runtime/spec.md
+modified  +37    -4     openspec/specs/docs-cli-reference/spec.md
+modified  +13    -6     openspec/specs/docs-gateway-mail-notifier-reference/spec.md
+modified  +19    -0     openspec/specs/docs-readme-system-skills/spec.md
+modified  +19    -0     openspec/specs/docs-system-skills-overview-guide/spec.md
+modified  +237   -0     openspec/specs/houmao-adv-usage-pattern-skill/spec.md
+modified  +14    -12    openspec/specs/houmao-agent-gateway-skill/spec.md
+modified  +25    -0     openspec/specs/houmao-mgr-agents-join/spec.md
+modified  +55    -0     openspec/specs/houmao-mgr-agents-launch/spec.md
+modified  +29    -0     openspec/specs/houmao-mgr-project-agents-launch-profiles/spec.md
+modified  +77    -0     openspec/specs/houmao-mgr-project-easy-cli/spec.md
+modified  +26    -0     openspec/specs/houmao-mgr-system-skills-cli/spec.md
+modified  +105   -0     openspec/specs/houmao-srv-ctrl-native-cli/spec.md
+modified  +26    -0     openspec/specs/houmao-system-skill-families/spec.md
+modified  +21    -0     openspec/specs/houmao-system-skill-installation/spec.md
+added     +123   -0     openspec/specs/houmao-touring-skill/spec.md
+modified  +34    -12    openspec/specs/managed-launch-prompt-header/spec.md
+modified  +38    -0     openspec/specs/passive-server-gateway-proxy/spec.md
+modified  +16    -16    pixi.lock
+modified  +1     -1     pyproject.toml
+modified  +13    -3     src/houmao/agents/assets/system_skills/catalog.toml
+modified  +8     -1     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/SKILL.md
+added     +318   -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/patterns/pairwise-edge-loop-via-gateway-and-mailbox.md
+added     +293   -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/patterns/relay-loop-via-gateway-and-mailbox.md
+modified  +3     -2     src/houmao/agents/assets/system_skills/houmao-agent-gateway/SKILL.md
+modified  +30    -5     src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/reminders.md
+modified  +9     -3     src/houmao/agents/assets/system_skills/houmao-agent-gateway/references/http-surface.md
+added     +92    -0     src/houmao/agents/assets/system_skills/houmao-touring/SKILL.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-touring/agents/openai.yaml
+added     +31    -0     src/houmao/agents/assets/system_skills/houmao-touring/branches/author-and-launch.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-touring/branches/lifecycle-follow-up.md
+added     +27    -0     src/houmao/agents/assets/system_skills/houmao-touring/branches/live-operations.md
+added     +35    -0     src/houmao/agents/assets/system_skills/houmao-touring/branches/orient.md
+added     +29    -0     src/houmao/agents/assets/system_skills/houmao-touring/branches/setup-project-and-mailbox.md
+added     +96    -0     src/houmao/agents/assets/system_skills/houmao-touring/references/question-style.md
+modified  +5     -0     src/houmao/agents/brain_builder.py
+modified  +1     -1     src/houmao/agents/launch_policy/provider_hooks.py
+modified  +14    -0     src/houmao/agents/mailbox_runtime_support.py
+modified  +163   -14    src/houmao/agents/managed_prompt_header.py
+added     +137   -0     src/houmao/agents/memory_dir.py
+modified  +17    -0     src/houmao/agents/realm_controller/boundary_models.py
+modified  +7     -0     src/houmao/agents/realm_controller/manifest.py
+modified  +104   -4     src/houmao/agents/realm_controller/runtime.py
+modified  +445   -395   src/houmao/agents/realm_controller/schemas/session_manifest.v4.schema.json
+modified  +129   -79    src/houmao/agents/system_skills.py
+modified  +51    -0     src/houmao/passive_server/app.py
+modified  +81    -0     src/houmao/passive_server/client.py
+modified  +96    -0     src/houmao/passive_server/service.py
+modified  +58    -2     src/houmao/project/catalog.py
+modified  +2     -0     src/houmao/project/launch_profiles.py
+modified  +7     -0     src/houmao/project/overlay.py
+modified  +51    -0     src/houmao/server/app.py
+modified  +97    -0     src/houmao/server/client.py
+modified  +6     -5     src/houmao/server/control_core/core.py
+modified  +11    -3     src/houmao/server/models.py
+modified  +49    -0     src/houmao/server/pair_client.py
+modified  +70    -0     src/houmao/server/service.py
+modified  +80    -1     src/houmao/srv_ctrl/commands/agents/core.py
+modified  +560   -1     src/houmao/srv_ctrl/commands/agents/gateway.py
+modified  +119   -0     src/houmao/srv_ctrl/commands/managed_agents.py
+modified  +136   -0     src/houmao/srv_ctrl/commands/project.py
+modified  +4     -0     src/houmao/srv_ctrl/commands/renderers/agents.py
+modified  +162   -0     src/houmao/srv_ctrl/commands/renderers/gateway.py
+modified  +76    -6     src/houmao/srv_ctrl/commands/runtime_artifacts.py
+modified  +13    -31    src/houmao/srv_ctrl/commands/system_skills.py
+modified  +1     -0     tests/integration/srv_ctrl/test_cli_shape_contract.py
+modified  +8     -5     tests/unit/agents/realm_controller/test_runtime_mailbox.py
+modified  +6     -0     tests/unit/agents/realm_controller/test_schema_and_manifest.py
+modified  +27    -5     tests/unit/agents/test_brain_builder.py
+modified  +16    -4     tests/unit/agents/test_mailbox_runtime_support.py
+added     +62    -0     tests/unit/agents/test_managed_prompt_header.py
+modified  +119   -52    tests/unit/agents/test_system_skills.py
+modified  +184   -0     tests/unit/passive_server/test_app_contracts.py   <== código ligado à spec
+modified  +8     -0     tests/unit/project/test_catalog.py
+modified  +171   -0     tests/unit/server/test_app_contracts.py
+modified  +120   -0     tests/unit/server/test_client.py
+modified  +2     -1     tests/unit/server/test_compatibility_control_core.py
+modified  +6     -0     tests/unit/srv_ctrl/commands/test_agents_core.py
+modified  +135   -5     tests/unit/srv_ctrl/commands/test_runtime_artifacts_join.py
+modified  +41    -2     tests/unit/srv_ctrl/test_cleanup_commands.py
+modified  +374   -1     tests/unit/srv_ctrl/test_commands.py
+modified  +119   -0     tests/unit/srv_ctrl/test_project_commands.py
+modified  +120   -10    tests/unit/srv_ctrl/test_system_skills_commands.py
+--- DIFF DO CÓDIGO LIGADO
+### tests/unit/passive_server/test_app_contracts.py
+@@ -19,6 +19,13 @@
+     GatewayMailStatusV1,
+     GatewayMailboxMessageV1,
+     GatewayMailboxParticipantV1,
++    GatewayReminderCreateBatchV1,
++    GatewayReminderCreateResultV1,
++    GatewayReminderDeleteResultV1,
++    GatewayReminderDefinitionV1,
++    GatewayReminderListV1,
++    GatewayReminderPutV1,
++    GatewayReminderV1,
+     GatewayStatusV1,
+ )
+ from houmao.agents.realm_controller.models import SessionEvent
+@@ -430,6 +437,60 @@ def _stub_mail_notifier_status(
+     )
+ 
+ 
++def _stub_reminder(
++    *,
++    reminder_id: str = "greminder-1",
++    ranking: int = 0,
++    selection_state: str = "effective",
++    blocked_by_reminder_id: str | None = None,
++) -> GatewayReminderV1:
++    """Create a minimal valid GatewayReminderV1 for mocking."""
++
++    return GatewayReminderV1(
++        reminder_id=reminder_id,
++        mode="one_off",
++        delivery_kind="prompt",
++        title="Check inbox",
++        prompt="Review the inbox now.",
++        ranking=ranking,
++        paused=False,
++        selection_state=selection_state,  # type: ignore[arg-type]
++        delivery_state="scheduled",
++        created_at_utc="2026-04-09T00:00:00+00:00",
++        next_due_at_utc="2026-04-09T00:05:00+00:00",
++        blocked_by_reminder_id=blocked_by_reminder_id,
++    )
++
++
++def _stub_reminder_list() -> GatewayReminderListV1:
++    """Create a minimal valid GatewayReminderListV1 for mocking."""
++
++    reminder = _stub_reminder()
++    return GatewayReminderListV1(
++        effective_reminder_id=reminder.reminder_id,
++        reminders=[reminder],
++    )
++
++
++def _stub_reminder_create_result() -> GatewayReminderCreateResultV1:
++    """Create a minimal valid GatewayReminderCreateResultV1 for mocking."""
++
++    reminder = _stub_reminder()
++    return GatewayReminderCreateResultV1(
++        effective_reminder_id=reminder.reminder_id,
++        reminders=[reminder],
++    )
++
++
++def _stub_reminder_delete_result() -> GatewayReminderDeleteResultV1:
++    """Create a minimal valid GatewayReminderDeleteResultV1 for mocking."""
++
++    return GatewayReminderDeleteResultV1(
++        reminder_id="greminder-1",
++        detail="deleted",
++    )
++
++
+ def _stub_tui_state() -> HoumaoTerminalStateResponse:
+     """Create a minimal valid HoumaoTerminalStateResponse for gateway TUI mocks."""
+ 
+@@ -859,6 +920,129 @@ def test_no_gateway_returns_502(self, tmp_path: object) -> None:
+         assert resp.status_code == 502
+ 
+ 
++# ---------------------------------------------------------------------------
++# Gateway reminder endpoints
++# ---------------------------------------------------------------------------
++
++
++class TestGatewayReminderEndpoints:
++    """Reminder proxy routes under `/houmao/agents/{agent_ref}/gateway/reminders...`."""
++
++    def test_list_returns_200_with_mocked_client(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        with client, patch.object(GatewayClient, "list_reminders", return_value=_stub_reminder_list()):
++            resp = client.get("/houmao/agents/abc123/gateway/reminders")
++        assert resp.status_code == 200
++
++    def test_create_returns_200_with_mocked_client(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        request_model = GatewayReminderCreateBatchV1(
++            reminders=[
++                GatewayReminderDefinitionV1(
++                    mode="one_off",
++                    title="Check inbox",
++                    prompt="Review the inbox now.",
++                    ranking=0,
++                    start_after_seconds=60,
++                )
++            ]
++        )
++        with (
++            client,
++            patch.object(
++                GatewayClient,
++                "create_reminders",
++                return_value=_stub_reminder_create_result(),
++            ),
++        ):
++            resp = client.post(
++                "/houmao/agents/abc123/gateway/reminders",
++                json=request_model.model_dump(mode="json"),
++            )
++        assert resp.status_code == 200
++
++    def test_get_returns_200_with_mocked_client(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        with client, patch.object(GatewayClient, "get_reminder", return_value=_stub_reminder()):
++            resp = client.get("/houmao/agents/abc123/gateway/reminders/greminder-1")
++        assert resp.status_code == 200
++
++    def test_put_returns_200_with_mocked_client(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        request_model = GatewayReminderPutV1(
++            mode="one_off",
++            title="Check inbox later",
++            prompt="Review the inbox later.",
++            ranking=1,
++            deliver_at_utc="2026-04-09T12:00:00+00:00",
++        )
++        with client, patch.object(GatewayClient, "put_reminder", return_value=_stub_reminder()):
++            resp = client.put(
++                "/houmao/agents/abc123/gateway/reminders/greminder-1",
++                json=request_model.model_dump(mode="json"),
++            )
++        assert resp.status_code == 200
++
++    def test_delete_returns_200_with_mocked_client(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        with (
++            client,
++            patch.object(
++                GatewayClient,
++                "delete_reminder",
++                return_value=_stub_reminder_delete_result(),
++            ),
++        ):
++            resp = client.delete("/houmao/agents/abc123/gateway/reminders/greminder-1")
++        assert resp.status_code == 200
++
++    def test_not_found_returns_404(self, tmp_path: object) -> None:
++        client = _make_agent_client(tmp_path, [])
++        with client:
++            resp = client.get("/houmao/agents/unknown/gateway/reminders")
++        assert resp.status_code == 404
++
++    def test_no_gateway_returns_502(self, tmp_path: object) -> None:
++        client = _make_agent_client(tmp_path, [_agent()])
++        with client:
++            resp = client.get("/houmao/agents/abc123/gateway/reminders")
++        assert resp.status_code == 502
++
++    def test_gateway_error_status_is_preserved(self, tmp_path: object) -> None:
++        agent = _agent_with_gateway()
++        client = _make_agent_client(tmp_path, [agent])
++        with (
++            client,
++            patch.object(
++                GatewayClient,
++                "put_reminder",
++                side_effect=GatewayHttpError(
++                    method="PUT",
++                    url="http://127.0.0.1:9901/v1/reminders/greminder-1",
++                    status_code=409,
++                    detail="busy",
++                ),
++            ),
++        ):
++            resp = client.put(
++                "/houmao/agents/abc123/gateway/reminders/greminder-1",
++                json={
++                    "schema_version": 1,
++                    "mode": "one_off",
++                    "title": "later",
++                    "prompt": "later",
++                    "ranking": 0,
++                    "deliver_at_utc": "2026-04-09T12:00:00+00:00",
++                },
++            )
++        assert resp.status_code == 409
++
++
+ # ---------------------------------------------------------------------------
+ # Mail status endpoint
+ # ---------------------------------------------------------------------------
+
+===== P021 | repo Codagent-AI/agent-validator | PR #142: feat: add one-shot review suppression for task-compliance | capacidade: agent-command
+--- SPEC VIVA
+# agent-command Specification
+
+## Purpose
+Specifies the agent-facing skill templates and workflows for interacting with Agent Validator.
+
+## Requirements
+### Requirement: Issue Output Path Instructions
+The command template SHALL instruct the agent to infer the log directory from console output paths and delegate file reading to a subagent, rather than reading log and JSON files directly.
+
+#### Scenario: Check failure output
+- **GIVEN** the validator run command has exited with a non-zero code
+- **WHEN** a check gate failure appears in the console output
+- **THEN** the console output includes the log file path
+- **AND** the template instructs the agent to pass the log directory path to an EXTRACT subagent that reads the log file and returns a compact error summary
+
+#### Scenario: Review failure output
+- **GIVEN** the validator run command has exited with a non-zero code
+- **WHEN** a review gate failure appears in the console output
+- **THEN** the console output includes the JSON result file path
+- **AND** the template instructs the agent to pass the log directory path to an EXTRACT subagent that reads the JSON file and returns a compact violation summary
+
+#### Scenario: Log directory inference
+- **GIVEN** the validator run command has produced console output
+- **WHEN** the output contains file paths referencing log or JSON files
+- **THEN** the agent SHALL infer the log directory from the path prefix of any referenced log or JSON file
+- **AND** pass the inferred directory to subagents rather than hardcoding a log directory path
+
+### Requirement: Issue Status Updates
+The command template SHALL instruct the agent to delegate status updates in review JSON files to an UPDATE subagent, passing fix/skip decisions as input.
+
+#### Scenario: Agent fixes an issue
+- **GIVEN** the EXTRACT subagent has returned a violation summary
+- **WHEN** the agent successfully fixes a reported violation
+- **THEN** the agent passes the decision (status `"fixed"` and a brief result description) to an UPDATE subagent
+- **AND** the UPDATE subagent updates the violation's `status` and `result` fields in the JSON file
+
+#### Scenario: Agent skips an issue
+- **GIVEN** the EXTRACT subagent has returned a violation summary
+- **WHEN** the agent decides to skip a reported violation
+- **THEN** the agent passes the decision (status `"skipped"` and a brief reason) to an UPDATE subagent
+- **AND** the UPDATE subagent updates the violation's `status` and `result` fields in the JSON file
+
+#### Scenario: Agent preserves other attributes
+- **GIVEN** the agent has passed fix/skip decisions to the UPDATE subagent
+- **WHEN** the UPDATE subagent updates a violation's status in the JSON file
+- **THEN** it SHALL NOT modify other attributes such as `file`, `line`, `issue`, `fix`, or `priority`
+
+### Requirement: Subagent Delegation Pattern
+The validator-run skill SHALL use a two-phase subagent delegation pattern to keep the main agent's context window free of log and JSON file contents. All log and JSON file access SHALL be performed via subagent Task calls.
+
+#### Scenario: EXTRACT subagent reads failures
+- **GIVEN** the validator run command has exited with a non-zero code
+- **WHEN** the agent detects the failure
+- **THEN** the agent SHALL spawn a synchronous EXTRACT subagent (Task tool, general-purpose, cost-optimized model) with the log directory path
+- **AND** the EXTRACT subagent SHALL find the highest-numbered `console.N.log`, identify `[FAIL]` lines, read the referenced log and JSON files, and return a compact plain-text summary
+
+#### Scenario: EXTRACT subagent extracts check errors
+- **GIVEN** the EXTRACT subagent has identified a failed check gate from the console log
+- **WHEN** the EXTRACT subagent reads the check gate log file
+- **THEN** it SHALL extract error output, any `--- Fix Instructions ---` section content, and any `--- Fix Skill: <name> ---` section references
+
+#### Scenario: EXTRACT subagent extracts review violations
+- **GIVEN** the EXTRACT subagent has identified a failed review gate from the console log
+- **WHEN** the EXTRACT subagent reads the review gate JSON file
+- **THEN** it SHALL extract violations with status `"new"` and return each violation's file, line, issue summary, priority, and fix suggestion
+
+#### Scenario: UPDATE subagent writes decisions
+- **GIVEN** the agent has completed fixing code and determined fix/skip decisions for review violations
+- **WHEN** the agent is ready to record its decisions
+- **THEN** the agent SHALL spawn a synchronous UPDATE subagent (Task tool, general-purpose, cost-optimized model) with the log directory path and the list of decisions
+- **AND** the UPDATE subagent SHALL match violations by exact equality on `file` and `line` fields and by prefix match on the `issue` field, then update `status` and `result` fields
+
+### Requirement: Subagent Safety Constraint
+The validator-run skill SHALL explicitly prohibit background subagent execution to prevent context pollution from the TaskOutput truncation bug.
+
+#### Scenario: Synchronous subagent calls only
+- **GIVEN** the validator-run skill template contains subagent dispatch instructions
+- **WHEN** the agent reads the skill instructions
+- **THEN** the template SHALL include an explicit warning that `run_in_background: true` MUST NOT be used
+- **AND** all subagent Task calls SHALL be synchronous (blocking)
+
+### Requirement: Subagent Prompt Template Files
+The validator-run skill SHALL include separate prompt template files for each subagent role, generated alongside SKILL.md during init.
+
+#### Scenario: Prompt files generated during init
+- **GIVEN** a user runs `agent-validator init`
+- **WHEN** the init command generates the validator-run skill
+- **THEN** it SHALL create three files: `SKILL.md`, `extract-prompt.md`, and `update-prompt.md` in the validator-run skill directory
+
+#### Scenario: SKILL.md references prompt templates
+- **GIVEN** the validator-run skill has been installed
+- **WHEN** the agent reads the validator-run SKILL.md
+- **THEN** it SHALL find instructions to read `extract-prompt.md` and `update-prompt.md` from the same directory and use their content as subagent prompts
+
+### Requirement: Agent Validator-Run Skill Allowed Tools
+The validator-run skill SHALL declare both `Bash` and `Task` in its `allowed-tools` frontmatter to enable subagent delegation.
+
+#### Scenario: Allowed tools include Task
+- **GIVEN** `agent-validator init` generates the validator-run skill
+- **WHEN** the skill frontmatter is written
+- **THEN** the `allowed-tools` field SHALL include both `Bash` and `Task`
+
+### Requirement: Retry Termination
+The command template SHALL NOT include a hardcoded retry limit. Instead, the template SHALL instruct the agent to repeat the run/fix cycle until the script reports a terminal status. The termination conditions SHALL be: "Passed", "Passed with warnings", or "Retry limit exceeded". When "Retry limit exceeded" is reported, the template SHALL instruct the agent to run `agent-validate clean` to archive logs and include any unverified fixes in the session summary.
+
+#### Scenario: Template termination conditions
+- **WHEN** a user views the command template's loop instructions
+- **THEN** the termination conditions SHALL include "Passed", "Passed with warnings", and "Retry limit exceeded"
+- **AND** the template SHALL NOT mention a specific number of attempts
+
+#### Scenario: Script reports retry limit exceeded
+- **WHEN** the script outputs "Status: Retry limit exceeded"
+- **THEN** the agent SHALL stop retrying (no further fix attempts)
+- **AND** the agent SHALL run `agent-validate clean` to archive logs for the session record
+- **AND** the agent SHALL NOT retry after cleaning (clean is for archival, not for resetting the retry count)
+- **AND** the agent SHALL report any unverified fixes in its session summary under "Outstanding Failures"
+
+### Requirement: Validator Help Diagnostic Skill
+The system SHALL provide a `/validator-help` skill for evidence-based diagnosis of validator behavior. The skill SHALL be diagnosis-only (no auto-fix behavior) and SHALL operate without requiring source code access. After completing a diagnosis, the skill SHALL route to bug filing based on confidence level: automatically invoking `validator-issue` on high-confidence bug diagnoses, prompting the user on medium confidence, and taking no action on low confidence.
+
+#### Scenario: Diagnose a "no changes" question from runtime evidence
+- **GIVEN** a user asks "/validator-help: the validator reported no changes, why?"
+- **WHEN** the skill investigates
+- **THEN** it SHALL resolve `log_dir` from `.validator/config.yml`
+- **AND** inspect runtime evidence from `<log_dir>/.debug.log`, `<log_dir>/.execution_state`, and relevant gate/review logs
+- **AND** return a structured response including Diagnosis, Evidence, Confidence (`high`/`medium`/`low`), and Next steps
+
+#### Scenario: High-confidence bug diagnosis
+
+- **WHEN** the skill completes a diagnosis with confidence level High
+- **AND** the diagnosis indicates a likely bug in agent-validator (not a configuration or user error)
+- **THEN** the skill SHALL automatically invoke `validator-issue`
+- **AND** SHALL pass the diagnosis summary as the bug description
+
+#### Scenario: High-confidence non-bug diagnosis
+
+- **WHEN** the skill completes a diagnosis with confidence level High
+- **AND** the diagnosis indicates a configuration issue, user error, or expected behavior
+- **THEN** the skill SHALL NOT invoke `validator-issue`
+
+#### Scenario: Medium-confidence possible bug
+
+- **WHEN** the skill completes a diagnosis with confidence level Medium
+- **AND** the evidence suggests a possible validator bug
+- **THEN** the skill SHALL ask the user: "This may be a validator bug. Want me to file a GitHub issue?"
+- **AND** if the user confirms, SHALL invoke `validator-issue` with the diagnosis as the bug description
+- **AND** if the user declines, SHALL exit without filing
+
+#### Scenario: Low-confidence diagnosis
+
+- **WHEN** the skill completes a diagnosis with confidence level Low
+- **THEN** the skill SHALL NOT prompt the user to file an issue
+- **AND** SHALL NOT invoke `validator-issue`
+
+### Requirement: Situation-Based Skill Structure
+The `validator-help` skill SHALL use a multi-file structure with `SKILL.md` containing always-needed content (evidence sources, output contract, diagnostic workflow, routing logic) and situation-based reference files under `references/` organized by troubleshooting domain.
+
+#### Scenario: Router selects only needed reference for a config question
+- **GIVEN** the `validator-help` skill bundle is installed
+- **WHEN** the user asks about a config validation error
+- **THEN** `SKILL.md` SHALL route to `references/config-troubleshooting.md`
+
+### Requirement: Comprehensive Diagnostic Playbooks
+The `validator-help` skill SHALL provide situation-based troubleshooting references that cover config issues, gate failures, lock conflicts, and adapter health, and SHALL use dynamic evidence acquisition to gather only the additional signals needed for diagnosis.
+
+#### Scenario: Explain gate failures with targeted evidence gathering
+- **GIVEN** a user asks why a gate failed
+- **WHEN** logs/state do not provide enough evidence for a confident explanation
+- **THEN** the skill SHALL run one or more of `agent-validate list`, `agent-validate health`, and `agent-validate detect` as needed
+- **AND** it SHALL explain the observed result using the relevant troubleshooting reference
+
+### Requirement: Skill Directory Structure
+The system SHALL store canonical distributable skill files under `skills/validator-<action>/SKILL.md` using a flat directory structure with hyphenated naming. Runtime installation locations SHALL be owned by the agent-plugin installer for each target agent.
+
+#### Scenario: Canonical skill files are shipped in the package
+- **WHEN** the package is built or published
+- **THEN** skill directories SHALL exist under `skills/` for each action: `validator-run`, `validator-check`, `validator-status`
+- **AND** each directory SHALL contain a `SKILL.md` file with YAML frontmatter
+
+#### Scenario: Skill frontmatter format
+- **WHEN** a skill `SKILL.md` file is created
+- **THEN** it SHALL contain YAML frontmatter with `name`, `description`, and `allowed-tools` fields
+- **AND** no shipped validator skill SHALL set `disable-model-invocation: true`
+- **AND** validator skills that declare `disable-model-invocation` SHALL set it to `false` so explicit validation requests can invoke them through model skill selection
+
+#### Scenario: Hyphenated skill invocation
+- **GIVEN** a target agent has installed the `validator-run` skill from the agent-validator plugin
+- **WHEN** the user types `/validator-run`
+- **THEN** Claude Code SHALL invoke the skill from the flat `validator-run/` directory
+
+### Requirement: Skill Installation Delegation
+
+The init command SHALL delegate skill and plugin installation to agent-plugin rather than writing agent-specific skill files directly.
+
+#### Scenario: Project-level skill installation
+- **GIVEN** a user selects project-level installation during init
+- **AND** one or more development agents are selected
+- **WHEN** skills are installed
+- **THEN** init SHALL invoke agent-plugin with project scope
+- **AND** agent-plugin SHALL choose the target-specific skill location
+
+#### Scenario: User-level skill installation
+- **GIVEN** a user selects user-level installation during init
+- **AND** one or more development agents are selected
+- **WHEN** skills are installed
+- **THEN** init SHALL invoke agent-plugin with user scope
+- **AND** agent-plugin SHALL choose the target-specific skill location
+
+### Requirement: Command Installation for Non-Claude Agents
+
+The init command SHALL rely on agent-plugin for command or skill installation for agents that do not use Claude's skill directory model.
+
+#### Scenario: Gemini command installation
+- **GIVEN** a user selects Gemini as an agent during init
+- **WHEN** commands are installed
+- **THEN** init SHALL pass `--agent gemini` to agent-plugin
+- **AND** init SHALL NOT write Gemini command files directly
+
+#### Scenario: Codex command installation
+- **GIVEN** a user selects Codex as an agent during init
+- **WHEN** commands are installed
+- **THEN** init SHALL pass `--agent codex` to agent-plugin
+- **AND** init SHALL NOT write Codex command files directly
+
+### Requirement: Check Skill
+The system SHALL provide a `/validator-check` skill that runs only check gates (no reviews), following the same iterative fix workflow as `/validator-run`.
+
+#### Scenario: Check skill runs checks only
+- **WHEN** the agent invokes `/validator-check`
+- **THEN** the skill SHALL instruct the agent to run `agent-validate check`
+- **AND** the fix-and-rerun loop SHALL follow the same pattern as `/validator-run`
+
+#### Scenario: Check skill installed during init
+- **GIVEN** a user runs `agent-validate init`
+- **WHEN** skills are installed
+- **THEN** the `validator-check` skill SHALL be included in the installed skills
+
+### Requirement: Status Skill
+The system SHALL provide a `/validator-status` skill that summarizes the most recent validator session from log files.
+
+#### Scenario: Status from active logs
+- **WHEN** the agent invokes `/validator-status`
+- **AND** `validator_logs/` contains active log files
+- **THEN** the skill SHALL run its bundled script to parse the logs
+- **AND** produce a summary including: iteration count, overall status, failures fixed/skipped/outstanding, and per-iteration change statistics
+
+#### Scenario: Status from previous logs
+- **WHEN** the agent invokes `/validator-status`
+- **AND** `validator_logs/` has no active logs but `validator_logs/previous/` contains archived logs
+- **THEN** the skill SHALL parse the previous session's logs and indicate they are from an archived session
+
+#### Scenario: No logs available
+- **WHEN** the agent invokes `/validator-status`
+- **AND** neither `validator_logs/` nor `validator_logs/previous/` contain log files
+- **THEN** the skill SHALL report that no validator session data is available
+
+#### Scenario: Status skill bundled script
+- **GIVEN** the `validator-status` skill is installed
+- **THEN** the shared status script SHALL be present at `.validator/scripts/status.ts`
+- **AND** the SKILL.md SHALL instruct the agent to run the script via `bun`
+- **AND** the script SHALL parse console logs, debug logs, and review JSON files
+
+#### Scenario: Status summary content
+- **WHEN** the status script produces output
+- **THEN** the summary SHALL include:
+  - Number of iterations (runs) in the session
+  - Overall session status (passed, failed, retry limit exceeded, in progress)
+  - Per-iteration: files changed, lines added/removed, gates run, pass/fail counts
+  - Violations fixed, skipped, and outstanding across all iterations
+  - Gate-level results (which specific checks/reviews passed or failed)
+
+### Requirement: Skill Naming Convention
+All validator skills SHALL use a flat `validator-<action>/` directory structure with hyphenated naming to achieve `/validator-<action>` invocation.
+
+#### Scenario: Skill name format
+- **WHEN** a validator skill is registered
+- **THEN** its directory structure SHALL be `validator-<action>/SKILL.md` (e.g., `validator-run/SKILL.md`, `validator-check/SKILL.md`, `validator-status/SKILL.md`)
+- **AND** the `name` field in frontmatter SHALL be `validator-<action>` (e.g., `validator-run`, `validator-check`, `validator-status`)
+
+### Requirement: Setup Skill Installation
+
+The `validator-setup` skill SHALL be distributed alongside existing skills (run, check, status, help). The setup skill SHALL be packaged as a multi-file skill with a SKILL.md and a references directory, and installation SHALL be delegated to agent-plugin.
+
+#### Scenario: Setup skill installed during init
+- **GIVEN** a user runs `agent-validate init`
+- **AND** selects development agents
+- **WHEN** skills are installed
+- **THEN** init SHALL delegate installation to agent-plugin
+- **AND** the plugin source SHALL include `validator-setup/SKILL.md` and `validator-setup/references/check-catalog.md`
+
+#### Scenario: Setup skill overwrite behavior
+- **GIVEN** the `validator-setup` skill already exists
+- **WHEN** `agent-validate init` runs
+- **THEN** overwrite, no-op, or upgrade behavior SHALL be handled by agent-plugin
+
+### Requirement: Setup Skill Fresh Configuration
+
+The `/validator-setup` skill SHALL guide the agent through scanning a project, discovering available tooling, and configuring checks in `.validator/config.yml`. On fresh setup (the generated root entry point exists but has no checks), the skill performs a full project scan.
+
+#### Scenario: Config file missing
+- **GIVEN** `.validator/config.yml` does not exist
+- **WHEN** the agent invokes `/validator-setup`
+- **THEN** the agent SHALL inform the user to run `agent-validate init` first
+- **AND** SHALL NOT proceed with scanning
+
+#### Scenario: Fresh setup with discovered checks
+- **GIVEN** `.validator/config.yml` exists with a generated root entry point and no checks
+- **WHEN** the agent invokes `/validator-setup`
+- **THEN** the agent SHALL scan the project for tooling signals across 6 categories (build, lint, typecheck, test, security-deps, security-code)
+- **AND** present a table of discovered checks with tool names, commands, and confidence levels
+- **AND** ask the user to confirm which checks to enable
+
+#### Scenario: Inline checks created
+- **GIVEN** the user confirms discovered checks
+- **WHEN** the agent creates check configurations
+- **THEN** each confirmed check SHALL be added inline under the relevant entry point's `checks` array
+- **AND** each inline check SHALL follow the check gate schema (command, parallel, run_in_ci, run_locally, etc.)
+
+#### Scenario: Source directory determination
+- **GIVEN** the user has confirmed which checks to enable
+- **WHEN** the agent needs to set the `entry_points[].path` value
+- **THEN** the agent SHALL ask the user for the source directory or infer it from project structure
+- **AND** the agent SHALL skip this step when adding checks to an existing entry point that already has a path
+
+#### Scenario: Entry points updated with checks and built-in review
+- **GIVEN** the user confirms checks and source directory
+- **WHEN** the agent updates `.validator/config.yml`
+- **THEN** `entry_points` SHALL include the confirmed checks and the `code-quality` review
+- **AND** the agent SHALL run `agent-validate validate` to verify the configuration
+
+#### Scenario: Suggest next steps after successful setup
+- **GIVEN** the agent has validated the configuration
+- **WHEN** validation passes
+- **THEN** the agent SHALL inform the user they can run `/validator-run`
+
+#### Scenario: Validation fails after setup
+- **GIVEN** the agent has created inline checks and updated config.yml
+- **WHEN** `agent-validate validate` reports errors
+- **THEN** the agent SHALL display the validation errors to the user
+- **AND** apply one corrective update attempt based on the error messages
+- **AND** rerun `agent-validate validate` once more
+- **AND** if validation still fails, stop and ask the user for guidance
+
+#### Scenario: User declines all discovered checks
+- **GIVEN** the agent presents discovered checks to the user
+- **WHEN** the user declines all of them
+- **THEN** the agent SHALL offer the custom addition flow to manually specify checks or reviews
+- **AND** the agent SHALL still include the `code-quality` review in `entry_points`
+
+#### Scenario: No tools discovered during scan
+- **GIVEN** `.validator/config.yml` exists with a generated root entry point and no checks
+- **WHEN** the agent scans the project and finds no recognizable tooling signals
+- **THEN** the agent SHALL inform the user that no tools were automatically detected
+- **AND** offer the custom addition flow to manually specify checks
+
+### Requirement: Setup Skill Existing Configuration
+
+When `entry_points` is already populated, the `/validator-setup` skill SHALL offer options to extend or reconfigure the existing setup.
+
+#### Scenario: Existing config shows options
+- **GIVEN** `.validator/config.yml` exists with populated `entry_points`
+- **WHEN** the agent invokes `/validator-setup`
+- **THEN** the agent SHALL show a summary of current entry points and checks
+- **AND** offer three options: add checks (scan for unconfigured tools), add custom (user-specified), or reconfigure (start fresh)
+
+#### Scenario: Add checks filters existing
+- **GIVEN** the user selects "add checks" on an existing configuration
+- **WHEN** the agent scans the project
+- **THEN** checks that are already configured SHALL be filtered out of the results
+
+#### Scenario: Reconfigure backs up existing
+- **GIVEN** the user selects "reconfigure" on an existing configuration
+- **WHEN** the agent starts fresh setup
+- **THEN** legacy file-based check files (`.validator/checks/*.yml`) and custom review prompt files (`.validator/reviews/*.md`) SHALL be renamed with a `.bak` suffix before being replaced (overwriting any previous `.bak` files)
+- **AND** the generated `entry_points` configuration in `.validator/config.yml` SHALL be cleared so fresh setup can recreate inline checks and inline built-in reviews
+
+### Requirement: Setup Skill Custom Additions
+
+The `/validator-setup` skill SHALL support adding custom checks and reviews that the agent did not discover through scanning. Custom checks and built-in reviews SHALL be stored inline under the selected entry point; custom prompt reviews MAY use `.validator/reviews/<name>.md` for user-authored prompt text.
+
+#### Scenario: Add custom check
+- **GIVEN** the user wants to add a custom check
+- **WHEN** the agent prompts for details
+- **THEN** the agent SHALL ask for the command, target entry point, and optional settings (timeout, parallel, etc.)
+- **AND** add the check inline under the target entry point's `checks` array
+
+#### Scenario: Add custom review
+- **GIVEN** the user wants to add a custom review
+- **WHEN** the agent prompts for details
+- **THEN** the agent SHALL ask whether to use the built-in code-quality review or write a custom prompt
+- **AND** for built-in reviews, add the review inline under the target entry point's `reviews` array
+- **AND** for custom reviews, create `.validator/reviews/<name>.md` with the user's review prompt
+- **AND** add the review name to the target entry point's `reviews` array in `config.yml`
+
+#### Scenario: Add something else loop
+- **GIVEN** the agent has added inline checks, inline built-in reviews, or custom review prompt files
+- **WHEN** the configuration is updated
+- **THEN** the agent SHALL ask "Add something else?"
+- **AND** if yes, loop back to the custom addition flow
+- **AND** if no, proceed to the validation step (run `agent-validate validate`)
+
+### Requirement: Setup Skill Check Catalog Reference
+
+The setup skill SHALL include a `references/check-catalog.md` file that documents check categories, the inline check schema, and example configurations. This reference is loaded by the agent when the skill is activated.
+
+#### Scenario: Check catalog content
+- **GIVEN** the setup skill is activated
+- **WHEN** the agent loads the check catalog reference
+- **THEN** it SHALL contain definitions for 6 check categories (build, lint, typecheck, test, security-deps, security-code)
+- **AND** the inline check schema with all available fields
+- **AND** at least one inline check example per category
+- **AND** the inline built-in review schema and custom prompt review file schema
+- **AND** the config entry_points schema
+
+### Requirement: Enable-review CLI option on run and review commands
+The `run` and `review` commands SHALL accept a repeatable `--enable-review <name>` option (short: `-e`) that activates disabled reviews for that invocation. The option SHALL collect multiple review names into an array and pass them to the run executor as `enableReviews`.
+
+#### Scenario: Single review enabled via CLI
+- **GIVEN** a configured review named `task-compliance` exists and its config has `enabled: false`
+- **WHEN** `agent-validate run --enable-review task-compliance` is invoked
+- **THEN** the `task-compliance` review SHALL be activated for that run even if its config has `enabled: false`
+
+#### Scenario: Multiple reviews enabled via repeated flag
+- **GIVEN** `task-compliance` and `security` reviews are configured in the project
+- **WHEN** `agent-validate run --enable-review task-compliance --enable-review security` is invoked
+- **THEN** both `task-compliance` and `security` reviews SHALL be activated for that run
+
+#### Scenario: Enable-review on review command
+- **GIVEN** a configured review named `task-compliance` exists in the project
+- **WHEN** `agent-validate review --enable-review task-compliance` is invoked
+- **THEN** the `task-compliance` review SHALL be activated for that review-only run
+
+#### Scenario: Enable-review with unknown name is silently ignored
+- **GIVEN** no review named `nonexistent` is configured in the project
+- **WHEN** `agent-validate run --enable-review nonexistent` is invoked
+- **THEN** the run SHALL proceed normally without error
+
+### Requirement: Validator-Run Skill Model Invocation
+The validator-run skill SHALL allow model invocation for explicit user validation requests. The skill content is stored as static files under `skills/validator-run/` and installed into target agents by agent-plugin.
+
+The validator-run skill SHALL accept `--enable-review <name>` flags from the caller, appending them to the run command for each requested review.
+
+#### Scenario: Validator-run skill model invocation enabled
+- **GIVEN** the validator-run skill is available from `skills/validator-run/SKILL.md`
+- **WHEN** a user views the skill frontmatter
+- **THEN** the skill frontmatter SHALL set `disable-model-invocation: false`
+- **AND** the `description` field SHALL state that the skill runs only when explicitly requested
+- **AND** the invocation policy SHALL tell agents not to choose the skill merely because a coding task was completed
+
+#### Scenario: Agent Validator-run skill passes caller-requested reviews
+- **GIVEN** the validator-run skill is installed and configured
+- **WHEN** the caller requests a specific review to be enabled
+- **THEN** the run command SHALL include `--enable-review <name>` for each requested review
+
+#### Scenario: Agent Validator-run skill omits flag when no reviews requested
+- **GIVEN** the validator-run skill is installed and configured
+- **WHEN** the validator-run skill is executed without any review requests from the caller
+- **THEN** the run command SHALL NOT include any `--enable-review` flags
+
+--- ARQUIVOS DO PR (37)
+modified  +1     -1     .claude-plugin/marketplace.json
+modified  +1     -1     .claude-plugin/plugin.json
+modified  +1     -1     .cursor-plugin/plugin.json
+modified  +6     -0     CHANGELOG.md
+modified  +3     -1     docs/config-reference.md
+modified  +2     -0     docs/user-guide.md
+added     +2     -0     openspec/changes/archive/2026-05-25-one-shot-review/.openspec.yaml
+added     +111   -0     openspec/changes/archive/2026-05-25-one-shot-review/design.md
+added     +42    -0     openspec/changes/archive/2026-05-25-one-shot-review/proposal.md
+added     +28    -0     openspec/changes/archive/2026-05-25-one-shot-review/specs/dynamic-review-control/spec.md
+added     +161   -0     openspec/changes/archive/2026-05-25-one-shot-review/specs/review-config/spec.md
+added     +121   -0     openspec/changes/archive/2026-05-25-one-shot-review/specs/run-lifecycle/spec.md
+added     +6     -0     openspec/changes/archive/2026-05-25-one-shot-review/tasks.md
+modified  +15    -1     openspec/specs/dynamic-review-control/spec.md
+modified  +57    -0     openspec/specs/review-config/spec.md
+modified  +121   -0     openspec/specs/run-lifecycle/spec.md
+modified  +1     -1     package.json
+modified  +1     -1     skills/validator-help/references/gate-troubleshooting.md
+modified  +3     -0     src/commands/init-config-helpers.ts
+modified  +6     -0     src/config/load-reviews.ts
+modified  +15    -2     src/config/schema.ts   <== código ligado à spec
+modified  +1     -0     src/config/types.ts
+modified  +7     -1     src/gates/result.ts
+added     +26    -0     src/gates/review-dispatch-types.ts
+added     +178   -0     src/gates/review-one-shot.ts
+added     +37    -0     src/gates/review-runtime-helpers.ts
+modified  +2     -9     src/gates/review-types.ts
+modified  +113   -47    src/gates/review.ts   <== código ligado à spec
+modified  +7     -2     src/utils/log-parser-find-helpers.ts
+modified  +5     -1     src/utils/log-parser.ts   <== código ligado à spec
+modified  +1     -1     test/commands/init-copilot.test.ts
+modified  +2     -2     test/commands/init.test.ts
+modified  +66    -0     test/config/loader.test.ts
+modified  +23    -0     test/config/review-enabled-field.test.ts
+modified  +1     -0     test/core/job.test.ts
+modified  +280   -0     test/gates/review.test.ts
+modified  +35    -0     test/gates/skip-passed-reviews.test.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/config/schema.ts
+@@ -63,6 +63,7 @@ export const reviewGateSchema = z.object({
+   run_locally: z.boolean().default(true),
+   timeout: z.number().optional(),
+   enabled: z.boolean().default(true),
++  one_shot: z.boolean().default(false),
+ });
+ 
+ export const reviewPromptFrontmatterSchema = z
+@@ -77,11 +78,17 @@ export const reviewPromptFrontmatterSchema = z
+     prompt_file: z.string().optional(),
+     skill_name: z.string().optional(),
+     enabled: z.boolean().default(true),
++    one_shot: z.boolean().optional(),
+   })
+   .refine((data) => !(data.prompt_file && data.skill_name), {
+     message:
+       "'prompt_file' and 'skill_name' are mutually exclusive. Specify only one.",
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
+ 
+ export const reviewYamlSchema = z
+   .object({
+@@ -96,6 +103,7 @@ export const reviewYamlSchema = z
+     skill_name: z.string().optional(),
+     builtin: z.string().optional(),
+     enabled: z.boolean().default(true),
++    one_shot: z.boolean().optional(),
+   })
+   .superRefine((data, ctx) => {
+     const sources = [data.prompt_file, data.skill_name, data.builtin].filter(
+@@ -115,7 +123,12 @@ export const reviewYamlSchema = z
+           "YAML review files must specify exactly one of 'prompt_file', 'skill_name', or 'builtin'.",
+       });
+     }
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
+ 
+ /** A single item in an entry point's checks array: either a name string or an inline definition. */
+ export const entryPointCheckItemSchema = z.union([
+
+### src/gates/review.ts
+@@ -14,6 +14,7 @@ import {
+   noAdaptersResult,
+ } from './review-agg.js';
+ import { getDiff } from './review-diff.js';
++import type { DispatchForDiffArgs } from './review-dispatch-types.js';
+ import {
+   applyRerunFiltering,
+   buildReviewPrompt,
+@@ -35,12 +36,14 @@ import {
+   type LoggerFactory,
+   logSkipMessages,
+ } from './review-helpers.js';
++import { prepareOneShotPreservation } from './review-one-shot.js';
++import { invokeAdapter, omitFixBase } from './review-runtime-helpers.js';
+ import type {
+   EvaluationResult,
+   ReviewConfig,
++  ReviewOutputEntry,
+   SingleReviewResult,
+ } from './review-types.js';
+-import { REVIEW_ADAPTER_TIMEOUT_MS } from './review-types.js';
+ 
+ export { JSON_SYSTEM_INSTRUCTION } from './review-types.js';
+ 
+@@ -121,47 +124,132 @@ export class ReviewGateExecutor {
+     await mainLogger(`Entry point: ${entryPointPath}\n`);
+     await mainLogger(`Base branch: ${baseBranch}\n`);
+ 
+-    const diff = await this.getDiff(entryPointPath, baseBranch, changeOptions);
+-    logDiffStats(diff, mainLogger);
+-    if (!diff.trim()) {
+-      return emptyDiffResult(jobId, startTime, logPaths, mainLogger);
+-    }
+-
+-    const preferences = config.cli_preference || [];
+     const required = config.num_reviews ?? 1;
+-    const parallel = config.parallel ?? false;
+-    const healthyAdapters = await collectHealthyAdapters(
+-      preferences,
+-      mainLogger,
++    const oneShotState = await prepareOneShotPreservation({
++      jobId,
++      config,
++      required,
++      loggerFactory,
++      logPathsSet,
++      logPaths,
+       logDir,
+-    );
+-    if (healthyAdapters.length === 0) {
+-      return noAdaptersResult(jobId, startTime, logPaths, mainLogger);
++    });
++    if (oneShotState.outputs.length === required) {
++      return buildFinalResult(
++        jobId,
++        startTime,
++        logPaths,
++        oneShotState.outputs,
++        [],
++        mainLogger,
++      );
+     }
+-    log.debug(`Healthy adapters: ${healthyAdapters.join(', ')}`);
+ 
+-    const assignments = generateReviewAssignments(required, healthyAdapters);
+-    await applyPassedSlotSkips(assignments, required, passedSlots, mainLogger);
+-    await logSkipMessages(assignments, mainLogger);
++    const effectiveChangeOptions = oneShotState.forceFirstRun
++      ? omitFixBase(changeOptions)
++      : changeOptions;
++    const effectivePreviousFailures = oneShotState.forceFirstRun
++      ? undefined
++      : previousFailures;
+ 
+-    return this.dispatchAndCollect(
++    const diff = await this.getDiff(
++      entryPointPath,
++      baseBranch,
++      effectiveChangeOptions,
++    );
++    logDiffStats(diff, mainLogger);
++    if (!diff.trim()) {
++      if (oneShotState.outputs.length > 0) {
++        return buildFinalResult(
++          jobId,
++          startTime,
++          logPaths,
++          oneShotState.outputs,
++          [],
++          mainLogger,
++        );
++      }
++      return emptyDiffResult(jobId, startTime, logPaths, mainLogger);
++    }
++
++    return this.dispatchForDiff({
+       jobId,
+       config,
+       diff,
+-      assignments,
+       required,
+-      parallel,
++      parallel: config.parallel ?? false,
+       mainLogger,
+       getAdapterLogger,
+       loggerFactory,
+       logPaths,
+       logPathsSet,
+       startTime,
+-      previousFailures,
++      previousFailures: effectivePreviousFailures,
+       rerunThreshold,
++      passedSlots,
+       logDir,
+       adapterConfigs,
+       contextContent,
++      oneShotOutputs: oneShotState.outputs,
++      runningSlotIndexes: oneShotState.runningSlotIndexes,
++    });
++  }
++
++  private async dispatchForDiff(
++    args: DispatchForDiffArgs,
++  ): Promise<GateResult> {
++    const healthyAdapters = await collectHealthyAdapters(
++      args.config.cli_preference || [],
++      args.mainLogger,
++      args.logDir,
++    );
++    if (healthyAdapters.length === 0) {
++      return noAdaptersResult(
++        args.jobId,
++        args.startTime,
++        args.logPaths,
++        args.mainLogger,
++      );
++    }
++    log.debug(`Healthy adapters: ${healthyAdapters.join(', ')}`);
++
++    const assignments = generateReviewAssignments(
++      args.required,
++      healthyAdapters,
++    );
++    const effectiveAssignments =
++      args.runningSlotIndexes.size > 0
++        ? assignments.filter((assignment) =>
++            args.runningSlotIndexes.has(assignment.reviewIndex),
++          )
++        : assignments;
++    await applyPassedSlotSkips(
++      assignments,
++      args.required,
++      args.passedSlots,
++      args.mainLogger,
++    );
++    await logSkipMessages(effectiveAssignments, args.mainLogger);
++
++    return this.dispatchAndCollect(
++      args.jobId,
++      args.config,
++      args.diff,
++      effectiveAssignments,
++      args.required,
++      args.parallel,
++      args.mainLogger,
++      args.getAdapterLogger,
++      args.loggerFactory,
++      args.logPaths,
++      args.logPathsSet,
++      args.startTime,
++      args.previousFailures,
++      args.rerunThreshold,
++      args.logDir,
++      args.adapterConfigs,
++      args.contextContent,
++      args.oneShotOutputs,
+     );
+   }
+ 
+@@ -188,6 +276,7 @@ export class ReviewGateExecutor {
+     logDir?: string,
+     adapterConfigs?: Record<string, AdapterConfig>,
+     contextContent?: string,
++    preservedOutputs: ReviewOutputEntry[] = [],
+   ): Promise<GateResult> {
+     const dispatchMsg = `Dispatching ${required} review(s) via round-robin: ${assignments.map((a) => `${a.adapter}@${a.reviewIndex}`).join(', ')}`;
+     log.debug(dispatchMsg);
+@@ -241,7 +330,7 @@ export class ReviewGateExecutor {
+       jobId,
+       startTime,
+       logPaths,
+-      outputs,
++      [...preservedOutputs, ...outputs],
+       skippedSlotOutputs,
+       mainLogger,
+     );
+@@ -399,26 +488,3 @@ export class ReviewGateExecutor {
+     return getDiff(entryPointPath, baseBranch, options);
+   }
+ }
+-
+-async function invokeAdapter(
+-  adapter: CLIAdapter,
+-  prompt: string,
+-  diff: string,
+-  config: ReviewConfig,
+-  adapterCfg: AdapterConfig | undefined,
+-  adapterLogger: (msg: string) => Promise<void>,
+-): Promise<string> {
+-  return adapter.execute({
+-    prompt,
+-    diff,
+-    model: adapterCfg?.model ?? config.model,
+-    timeoutMs: config.timeout
+-      ? config.timeout * 1000
+-      : REVIEW_ADAPTER_TIMEOUT_MS,
+-    onOutput: (chunk: string) => {
+-      adapterLogger(chunk);
+-    },
+-    allowToolUse: adapterCfg?.allow_tool_use,
+-    thinkingBudget: adapterCfg?.thinking_budget,
+-  });
+-}
+
+### src/utils/log-parser.ts
+@@ -54,7 +54,11 @@ export async function parseJsonReviewFile(
+     const parsed = parseReviewFilename(filename);
+     const jobId = parsed ? parsed.jobId : filename.replace(/\.\d+\.json$/, '');
+ 
+-    if (data.status === 'pass' || data.status === 'skipped_prior_pass') {
++    if (
++      data.status === 'pass' ||
++      data.status === 'skipped_prior_pass' ||
++      data.status === 'preserved_one_shot'
++    ) {
+       return null;
+     }
+ 
+
+===== P022 | repo dynatrace-oss/dtwiz | PR #150: chore: archive gcp and code cleanup | capacidade: project-flag
+--- SPEC VIVA
+# Spec: project flag
+
+## ADDED Requirements
+
+### Requirement: --project flag on install otel and install otel-python
+
+`install otel` and `install otel-python` SHALL accept a `--project <path>` flag that skips interactive project scanning and selection, using the given path directly.
+
+#### Scenario: --project provided to install otel
+
+- **WHEN** `--project <path>` is passed to `install otel`
+- **THEN** `InstallOtelCollector` SHALL skip `detectAllProjects` and `selectProject`
+- **AND** SHALL detect the runtime from the files at `<path>`
+- **AND** SHALL build the instrumentation plan directly from that path
+
+#### Scenario: --project provided to install otel-python
+
+- **WHEN** `--project <path>` is passed to `install otel-python`
+- **THEN** `InstallOtelPython` SHALL use the provided path directly without scanning
+
+#### Scenario: --project path does not exist
+
+- **WHEN** `--project <path>` is passed and `<path>` does not exist on disk
+- **THEN** the installer SHALL exit with a clear error: `project path not found: <path>`
+
+#### Scenario: --project not provided (default behavior unchanged)
+
+- **WHEN** `--project` is not passed
+- **THEN** the existing scan → list → select flow SHALL run unchanged
+
+#### Scenario: --project and --yes together
+
+- **WHEN** both `--project <path>` and `--yes` are passed
+- **THEN** the project is pre-selected and no confirmation prompt is shown
+- **AND** installation proceeds fully non-interactively
+
+--- ARQUIVOS DO PR (32)
+modified  +1     -3     cmd/analyze.go
+modified  +35    -0     cmd/auth.go
+modified  +10    -10    cmd/install.go   <== código ligado à spec
+modified  +1     -2     cmd/recommend.go
+modified  +4     -31    cmd/setup.go
+modified  +1     -1     cmd/watch.go
+renamed   +0     -0     openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/.openspec.yaml
+renamed   +13    -13    openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/design.md
+renamed   +1     -1     openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/proposal.md
+renamed   +10    -10    openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/specs/gcp-monitor-install/spec.md
+renamed   +1     -1     openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/specs/gcp-monitor-uninstall/spec.md
+renamed   +4     -4     openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/specs/gcp-monitor-update/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-07-08-add-gcp-monitor-integration/tasks.md
+modified  +8     -8     openspec/specs/azure-monitor-install/spec.md
+modified  +1     -1     openspec/specs/azure-monitor-uninstall/spec.md
+modified  +3     -3     openspec/specs/azure-monitor-update/spec.md
+added     +210   -0     openspec/specs/gcp-monitor-install/spec.md
+added     +98    -0     openspec/specs/gcp-monitor-uninstall/spec.md
+added     +122   -0     openspec/specs/gcp-monitor-update/spec.md
+modified  +3     -8     pkg/installer/azure/dtapi.go
+modified  +3     -23    pkg/installer/azure/install.go
+modified  +2     -13    pkg/installer/azure/uninstall.go
+modified  +3     -14    pkg/installer/azure/update.go
+modified  +16    -0     pkg/installer/extension_client.go
+modified  +74    -0     pkg/installer/extension_client_test.go
+modified  +3     -8     pkg/installer/gcp/dtapi.go
+modified  +3     -23    pkg/installer/gcp/install.go
+modified  +2     -13    pkg/installer/gcp/uninstall.go
+modified  +3     -14    pkg/installer/gcp/update.go
+modified  +9     -0     pkg/installer/ingest_watch.go
+modified  +25    -0     pkg/installer/installer.go   <== código ligado à spec
+modified  +78    -1     pkg/installer/installer_test.go
+--- DIFF DO CÓDIGO LIGADO
+### cmd/install.go
+@@ -79,7 +79,7 @@ var installOneAgentCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -111,7 +111,7 @@ var installKubernetesCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -138,7 +138,7 @@ var installDockerCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -164,7 +164,7 @@ var installOtelCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -190,7 +190,7 @@ var installOtelCollectorCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -218,7 +218,7 @@ var installOtelPythonCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -269,7 +269,7 @@ var installOtelJavaCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -292,7 +292,7 @@ var installAWSCmd = &cobra.Command{
+ 		if err != nil {
+ 			return err
+ 		}
+-		if err := installer.InstallAWS(c.Platform, envURL, platformTok, installDryRun, StartTime.UTC().Format("2006-01-02T15:04:05Z")); err != nil {
++		if err := installer.InstallAWS(c.Platform, envURL, platformTok, installDryRun, StartTime.UTC().Format(installer.IngestTimeFormat)); err != nil {
+ 			if errors.Is(err, installer.ErrInstallCancelled) {
+ 				return nil
+ 			}
+@@ -322,7 +322,7 @@ var installAWSLambdaCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+@@ -393,7 +393,7 @@ var installDemoCmd = &cobra.Command{
+ 			return err
+ 		}
+ 		if !installDryRun {
+-			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
++			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format(installer.IngestTimeFormat))
+ 		}
+ 		return nil
+ 	},
+
+### pkg/installer/installer.go
+@@ -19,6 +19,31 @@ import (
+ // confirmation prompt. Callers should treat it as a clean exit, not an error.
+ var ErrInstallCancelled = errors.New("installation cancelled by user")
+ 
++// IngestTimeFormat is the RFC3339 timestamp format used in DQL from-clauses.
++const IngestTimeFormat = "2006-01-02T15:04:05Z"
++
++// ShouldProceed handles the dry-run check and user confirmation prompt
++// that appears at the end of every install/update/uninstall preview. verb is
++// the action noun used in the cancellation message ("Installation", "Update",
++// "Uninstall"). Returns (true, nil) to proceed, (false, nil) for dry-run, or
++// (false, err) when the user declines or reading stdin fails.
++func ShouldProceed(dryRun bool, verb string) (bool, error) {
++	if dryRun {
++		fmt.Println("  [dry-run] No changes were made.")
++		return false, nil
++	}
++	ok, err := ConfirmProceed("  Apply?")
++	if err != nil {
++		return false, fmt.Errorf("reading confirmation: %w", err)
++	}
++	if !ok {
++		fmt.Printf("  %s cancelled.\n", verb)
++		return false, ErrInstallCancelled
++	}
++	fmt.Println()
++	return true, nil
++}
++
+ // AutoConfirm bypasses all confirmProceed prompts when set to true.
+ // Set by the --yes / -y flag on install, update, and uninstall command groups.
+ var AutoConfirm bool
+
+===== P023 | repo litara-app/litara | PR #72: Js/library rework | capacidade: bulk-book-actions
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: BulkActionBar is visible when books are selected
+
+The system SHALL display a persistent bottom action bar whenever one or more books are selected, showing the selected count and available bulk actions.
+
+#### Scenario: Bar appears on first selection
+
+- **WHEN** the user selects the first book
+- **THEN** the BulkActionBar slides into view at the bottom of the screen
+- **THEN** it displays the number of selected books (e.g., "3 books selected")
+
+#### Scenario: Bar disappears when selection is cleared
+
+- **WHEN** the selected book IDs set becomes empty
+- **THEN** the BulkActionBar slides out of view
+
+---
+
+### Requirement: User can bulk mark books as read or unread
+
+The system SHALL allow marking all selected books as read or unread in a single action, upserting a completed ReadingProgress record for each book.
+
+#### Scenario: Mark selected books as read
+
+- **WHEN** the user clicks "Mark as Read" in the BulkActionBar
+- **THEN** a `PATCH /api/v1/books/bulk-reading-progress` request is sent with `{ bookIds, action: "mark-read" }`
+- **THEN** a ReadingProgress record with `percentage: 100` and `completedAt` set to now is upserted for each selected book for the current user
+- **THEN** the UI updates to reflect the new read state without a full page reload
+
+#### Scenario: Mark selected books as unread
+
+- **WHEN** the user clicks "Mark as Unread" in the BulkActionBar
+- **THEN** a `PATCH /api/v1/books/bulk-reading-progress` request is sent with `{ bookIds, action: "mark-unread" }`
+- **THEN** the ReadingProgress record for each selected book is deleted or reset (percentage 0, completedAt null) for the current user
+
+---
+
+### Requirement: User can bulk add books to a shelf
+
+The system SHALL allow adding all selected books to a chosen shelf in a single action.
+
+#### Scenario: Add selected books to shelf
+
+- **WHEN** the user clicks "Add to Shelf" in the BulkActionBar and selects a shelf from the popover
+- **THEN** a `POST /api/v1/shelves/:id/books/bulk` request is sent with `{ bookIds }`
+- **THEN** all selected books that are not already on the shelf are added
+- **THEN** books already on the shelf are silently skipped (no error)
+- **THEN** the selected count badge updates to reflect success
+
+---
+
+### Requirement: User can bulk remove books from a shelf
+
+The system SHALL allow removing all selected books from the current shelf when viewing a shelf page.
+
+#### Scenario: Remove selected books from current shelf
+
+- **WHEN** the user is on a Shelf or Smart Shelf page, has books selected, and clicks "Remove from Shelf"
+- **THEN** a `DELETE /api/v1/shelves/:id/books/bulk` request is sent with `{ bookIds }`
+- **THEN** all selected books are removed from the shelf
+- **THEN** the book cards for removed books disappear from the current view
+
+---
+
+### Requirement: User can bulk change book reading status
+
+The system SHALL allow setting the reading status (want-to-read / reading / read) of all selected books in a single action.
+
+#### Scenario: Change status for selected books
+
+- **WHEN** the user clicks "Change Status" in the BulkActionBar and selects a status from the popover
+- **THEN** a `PATCH /api/v1/books/bulk-status` request is sent with `{ bookIds, status }`
+- **THEN** the `readingStatus` field is updated for each selected book
+
+---
+
+### Requirement: User can bulk delete books
+
+The system SHALL allow permanently deleting all selected books after explicit confirmation.
+
+#### Scenario: Delete selected books with confirmation
+
+- **WHEN** the user clicks "Delete" in the BulkActionBar
+- **THEN** a confirmation modal is shown listing the number of books to be deleted
+- **WHEN** the user confirms deletion
+- **THEN** a `DELETE /api/v1/books/bulk` request is sent with `{ bookIds }`
+- **THEN** all selected books and their associated files are deleted
+- **THEN** the deleted book cards are removed from the current view and selection is cleared
+
+#### Scenario: Cancel bulk delete
+
+- **WHEN** the user clicks "Delete" in the BulkActionBar but dismisses the confirmation modal
+- **THEN** no books are deleted and the selection remains unchanged
+
+--- ARQUIVOS DO PR (96)
+modified  +20    -0     CLAUDE.md
+added     +76    -0     apps/api/prisma/migrations/20260529000000_add_filesystem_libraries/migration.sql
+modified  +10    -28    apps/api/prisma/schema.prisma
+modified  +3     -2     apps/api/prisma/seed-fake.ts
+modified  +33    -0     apps/api/src/admin/admin.controller.ts
+modified  +4     -2     apps/api/src/admin/admin.module.ts
+modified  +108   -8     apps/api/src/admin/admin.service.ts
+added     +31    -0     apps/api/src/admin/folders/folders.controller.ts
+added     +110   -0     apps/api/src/admin/folders/folders.service.ts
+modified  +12    -2     apps/api/src/annotations/annotations.controller.ts
+modified  +8     -1     apps/api/src/annotations/annotations.service.ts
+modified  +10    -0     apps/api/src/authors/authors.service.ts
+modified  +3     -0     apps/api/src/authors/dto/author-list-item.dto.ts
+modified  +11    -0     apps/api/src/book-drop/book-drop.service.ts
+modified  +8     -0     apps/api/src/book-drop/dto/pending-book.dto.ts
+modified  +3     -0     apps/api/src/books/book-summary.dto.ts
+modified  +10    -25    apps/api/src/books/books.service.ts
+modified  +0     -1     apps/api/src/books/dto/update-book.dto.ts
+modified  +8     -8     apps/api/src/bulk-metadata/bulk-metadata.service.ts
+modified  +3     -1     apps/api/src/config/configuration.ts
+modified  +23    -17    apps/api/src/libraries/libraries.controller.ts
+modified  +5     -2     apps/api/src/libraries/libraries.module.ts
+modified  +185   -19    apps/api/src/libraries/libraries.service.ts
+modified  +82    -5     apps/api/src/libraries/library.dto.ts
+modified  +342   -124   apps/api/src/library/library-scanner.service.ts
+modified  +7     -0     apps/api/src/library/library-write.service.spec.ts
+modified  +48    -11    apps/api/src/library/library-write.service.ts
+modified  +15    -4     apps/api/src/library/library.controller.ts
+modified  +3     -1     apps/api/src/library/library.module.ts
+modified  +32    -1     apps/api/src/metadata/metadata.service.ts
+modified  +3     -0     apps/api/src/reading-progress/dto/in-progress-book.dto.ts
+modified  +3     -0     apps/api/src/reading-progress/reading-progress.service.ts
+modified  +3     -0     apps/api/src/reading-queue/dto/reading-queue-item.dto.ts
+modified  +3     -0     apps/api/src/reading-queue/reading-queue.service.ts
+modified  +3     -0     apps/api/src/series/dto/series-list-item.dto.ts
+modified  +10    -0     apps/api/src/series/series.service.ts
+modified  +46    -1     apps/api/src/setup/setup.controller.ts
+modified  +35    -13    apps/api/src/setup/setup.service.ts
+modified  +1     -0     apps/api/src/shelves/shelves.service.ts
+modified  +1     -0     apps/api/src/smart-shelves/smart-shelves.service.ts
+added     +205   -0     apps/api/test/admin-folders-orphans.e2e-spec.ts
+modified  +4     -26    apps/api/test/books-metadata.e2e-spec.ts
+modified  +4     -1     apps/api/test/books-mocked-metadata.e2e-spec.ts
+modified  +1     -1     apps/api/test/books.e2e-spec.ts
+modified  +4     -1     apps/api/test/bulk-metadata.e2e-spec.ts
+modified  +0     -2     apps/api/test/helpers/db.helper.ts
+modified  +1     -1     apps/api/test/helpers/series.helper.ts
+modified  +62    -86    apps/api/test/libraries.e2e-spec.ts
+added     +115   -0     apps/api/test/library-reconcile.e2e-spec.ts
+modified  +1     -1     apps/api/test/library-scan.e2e-spec.ts
+modified  +5     -2     apps/api/test/mail.e2e-spec.ts
+modified  +4     -1     apps/api/test/metadata-service.e2e-spec.ts
+modified  +6     -3     apps/api/test/opds-v1.e2e-spec.ts
+modified  +1     -1     apps/api/test/opds-v2.e2e-spec.ts
+modified  +4     -5     apps/api/test/scanner.e2e-spec.ts
+modified  +1     -1     apps/api/test/shelves.e2e-spec.ts
+added     +51    -0     apps/docs/docs/libraries.md
+modified  +1     -1     apps/docs/docs/mobile.mdx
+modified  +12    -0     apps/mobile/app/(drawer)/(tabs)/libraries.tsx
+modified  +5     -1     apps/mobile/src/api/libraries.ts
+modified  +25    -100   apps/mobile/src/components/LibraryShelfPickerContent.tsx
+added     +39    -0     apps/mobile/src/utils/libraryIcons.ts
+modified  +2     -0     apps/web/src/App.tsx
+modified  +8     -2     apps/web/src/api/annotations.ts
+modified  +24    -28    apps/web/src/components/AppLayout/NavbarContent.tsx
+modified  +1     -0     apps/web/src/components/AuthorDetailPage.types.ts
+modified  +51    -19    apps/web/src/components/BookCard.tsx
+modified  +47    -25    apps/web/src/components/DashboardSettingsModal.tsx
+added     +160   -0     apps/web/src/components/FolderBrowserModal.tsx
+added     +155   -0     apps/web/src/components/LibraryForm.tsx
+added     +47    -0     apps/web/src/components/LibraryIconPicker.tsx
+modified  +1     -0     apps/web/src/components/ReadingQueueCard.tsx
+modified  +1     -0     apps/web/src/components/ReadingQueueSection.tsx
+added     +63    -0     apps/web/src/components/libraryIcons.ts
+modified  +8     -2     apps/web/src/hooks/useAllAnnotations.ts
+modified  +93    -29    apps/web/src/pages/AdminBookReviewPage.tsx
+modified  +17    -0     apps/web/src/pages/AnnotationsPage.tsx
+modified  +29    -3     apps/web/src/pages/AuthorsPage.tsx
+modified  +17    -75    apps/web/src/pages/BookDetailPage.tsx
+modified  +76    -6     apps/web/src/pages/Dashboard.tsx
+added     +76    -0     apps/web/src/pages/LibraryCreatePage.tsx
+modified  +203   -16    apps/web/src/pages/LibraryPage.tsx
+modified  +30    -5     apps/web/src/pages/SeriesPage.tsx
+modified  +107   -9     apps/web/src/pages/SetupPage.tsx
+modified  +24    -5     apps/web/src/pages/admin/GeneralTab.tsx
+modified  +13    -0     apps/web/src/store/atoms.ts   <== código ligado à spec
+added     +2     -0     openspec/changes/we-are-changing-how-libraries-work/.openspec.yaml
+added     +148   -0     openspec/changes/we-are-changing-how-libraries-work/design.md
+added     +43    -0     openspec/changes/we-are-changing-how-libraries-work/proposal.md
+added     +47    -0     openspec/changes/we-are-changing-how-libraries-work/specs/book-drop-routing/spec.md
+added     +45    -0     openspec/changes/we-are-changing-how-libraries-work/specs/folder-browser/spec.md
+added     +118   -0     openspec/changes/we-are-changing-how-libraries-work/specs/libraries/spec.md
+added     +86    -0     openspec/changes/we-are-changing-how-libraries-work/specs/library-scanner/spec.md
+added     +45    -0     openspec/changes/we-are-changing-how-libraries-work/specs/orphan-books/spec.md
+added     +117   -0     openspec/changes/we-are-changing-how-libraries-work/tasks.md
+modified  +1     -0     package.json
+--- DIFF DO CÓDIGO LIGADO
+### apps/web/src/store/atoms.ts
+@@ -5,6 +5,14 @@ import type { SmartShelfSummary } from '../types/smartShelf';
+ export interface Library {
+   id: string;
+   name: string;
++  path: string;
++  iconKey: string | null;
++  metadataFieldOverrides: Record<string, string> | null;
++  metadataProvidersDisabled: string[];
++  lastScanAt: string | null;
++  createdAt: string;
++  updatedAt: string;
++  bookCount: number;
+ }
+ 
+ export interface Shelf {
+@@ -17,6 +25,8 @@ export interface DashboardSection {
+   label: string;
+   visible: boolean;
+   order: number;
++  /** For 'recently-added': library ids to filter by; empty = all libraries */
++  libraryIds?: string[];
+ }
+ 
+ export type ProgressDisplaySource =
+@@ -64,9 +74,12 @@ export interface ReadingQueueItem {
+   coverUpdatedAt: string;
+   formats: string[];
+   hasFileMissing: boolean;
++  isOrphan: boolean;
+ }
+ 
+ export const librariesAtom = atom<Library[]>([]);
++/** Map of libraryId → active scan taskId; set while a scan is in progress */
++export const activeScanTasksAtom = atom<Record<string, string>>({});
+ export const shelvesAtom = atom<Shelf[]>([]);
+ export const selectedBookIdsAtom = atom<Set<string>>(new Set<string>());
+ export const isSelectModeAtom = atom<boolean>(
+
+===== P024 | repo dallay/agentsync | PR #315: fix(skills): use provider_skill_id for suggest --install resolution | capacidade: autoskills-discovery
+--- SPEC VIVA
+# Autoskills Discovery Specification
+
+## Purpose
+
+Define how AgentSync extends its technology detection and skill recommendation system from a
+hardcoded 7-technology enum to a catalog-driven discovery engine supporting ~46 technologies, ~150
+skills, and ~11 combos from the autoskills ecosystem — all embedded at compile time without network
+dependency.
+
+## Requirements
+
+### Requirement: Dynamic TechnologyId Newtype
+
+The system MUST represent technology identifiers as a `TechnologyId(String)` newtype struct instead
+of a fixed Rust enum.
+
+`TechnologyId` MUST implement `Debug`, `Clone`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`,
+`Serialize`, and `Deserialize`.
+
+`TechnologyId` MUST provide named constants for the 7 existing technologies: `RUST`,
+`NODE_TYPESCRIPT`, `ASTRO`, `GITHUB_ACTIONS`, `DOCKER`, `MAKE`, and `PYTHON`.
+
+`TechnologyId::new()` MUST accept any string and return a valid `TechnologyId`. The previous
+`from_catalog_key()` method MUST be replaced by `TechnologyId::new()`.
+
+`TechnologyId` MUST serialize to its inner string value using `serde`, preserving snake_case
+compatibility for existing technology keys (e.g., `"node_typescript"`, `"github_actions"`).
+
+`TechnologyId` MUST behave as a raw identifier type. Its `Display` implementation MAY render the raw
+identifier string directly. Human-friendly labels, when needed, MUST come from catalog-aware
+presentation logic or helper functions outside the identifier type itself.
+
+#### Scenario: Existing technology key round-trips through serialization
+
+- GIVEN a `TechnologyId` created with value `"node_typescript"`
+- WHEN the value is serialized to JSON and deserialized back
+- THEN the resulting `TechnologyId` MUST equal the original
+- AND the serialized JSON string MUST be `"node_typescript"`
+
+#### Scenario: Arbitrary technology key is accepted
+
+- GIVEN the catalog defines a technology entry with `id = "vue"`
+- WHEN `TechnologyId::new("vue")` is called
+- THEN a valid `TechnologyId` MUST be returned
+- AND it MUST be usable in detection results, catalog lookups, and serialization
+
+#### Scenario: Raw identifier display remains stable
+
+- GIVEN a `TechnologyId` with value `"github_actions"`
+- WHEN the identifier is formatted directly
+- THEN the rendered text MAY be `"github_actions"`
+- AND any human-friendly label such as `"GitHub Actions"` MUST come from catalog-aware presentation
+  logic rather than from the identifier type alone
+
+#### Scenario: Named constants match existing serialized values
+
+- GIVEN the constant `TechnologyId::RUST`
+- WHEN it is serialized to JSON
+- THEN the serialized value MUST be `"rust"`
+- AND `TechnologyId::NODE_TYPESCRIPT` MUST serialize to `"node_typescript"`
+- AND `TechnologyId::GITHUB_ACTIONS` MUST serialize to `"github_actions"`
+
+---
+
+### Requirement: Detection Rules Schema
+
+The catalog MUST support structured detection rules in `[technologies.detect]` blocks that define
+how a technology is detected from repository contents.
+
+Each detection rule block MAY contain any combination of the following fields:
+
+- `packages`: a list of exact package name strings to match against package.json dependencies
+  (dependencies, devDependencies, peerDependencies)
+- `package_patterns`: a list of regex pattern strings to match against package.json dependency names
+- `config_files`: a list of filenames or relative paths whose existence in the repository indicates
+  the technology
+- `config_file_content.files`: a list of filenames to read content from
+- `config_file_content.patterns`: a list of string patterns to search for within those files
+- `config_file_content.scan_gradle_layout`: a boolean flag that, when true, causes the detector to
+  scan Gradle build files (`build.gradle`, `build.gradle.kts`, `settings.gradle`,
+  `settings.gradle.kts`) for the specified patterns
+
+All fields within a detect block MUST be optional. A technology entry with an empty or absent detect
+block MUST NOT cause a catalog loading error.
+
+Regex patterns in `package_patterns` and `config_file_content.patterns` MUST be compiled once during
+catalog loading and reused across all evaluations.
+
+If a regex pattern is invalid, the system MUST reject that specific technology's detection rules
+during catalog loading and MUST log a warning, but MUST NOT fail the entire catalog load.
+
+#### Scenario: Technology with package-based detection
+
+- GIVEN the catalog defines a technology entry with:
+  ```toml
+  [technologies.detect]
+  packages = ["next", "next-auth"]
+  ```
+- WHEN the repository contains a `package.json` with `"next"` in `dependencies`
+- THEN the technology MUST be detected
+
+#### Scenario: Technology with regex package pattern detection
+
+- GIVEN the catalog defines a technology entry with:
+  ```toml
+  [technologies.detect]
+  package_patterns = ["^@angular/"]
+  ```
+- WHEN the repository contains a `package.json` with `"@angular/core"` in `dependencies`
+- THEN the technology MUST be detected
+- AND the evidence MUST reference the matched package name
+
+#### Scenario: Technology with config file existence detection
+
+- GIVEN the catalog defines a technology entry with:
+  ```toml
+  [technologies.detect]
+  config_files = ["tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs"]
+  ```
+- WHEN the repository root contains `tailwind.config.ts`
+- THEN the technology MUST be detected
+- AND the evidence MUST reference `tailwind.config.ts`
+
+#### Scenario: Technology with config file content scanning
+
+- GIVEN the catalog defines a technology entry with:
+  ```toml
+  [technologies.detect.config_file_content]
+  files = ["build.gradle", "build.gradle.kts"]
+  patterns = ["org.springframework"]
+  ```
+- WHEN the repository contains `build.gradle.kts` with the line
+  `implementation("org.springframework.boot:spring-boot-starter")`
+- THEN the technology MUST be detected
+- AND the evidence MUST reference the matched file and pattern
+
+#### Scenario: Technology with Gradle layout scanning
+
+- GIVEN the catalog defines a technology entry with:
+  ```toml
+  [technologies.detect.config_file_content]
+  files = []
+  patterns = ["com.android"]
+  scan_gradle_layout = true
+  ```
+- WHEN the repository contains `build.gradle` with content including `com.android.application`
+- THEN the detector MUST scan `build.gradle`, `build.gradle.kts`, `settings.gradle`, and
+  `settings.gradle.kts` for the specified patterns
+- AND the technology MUST be detected if any Gradle file matches
+
+#### Scenario: Empty detect block does not cause error
+
+- GIVEN the catalog defines a technology entry with `id = "custom_tech"` and no `[detect]` block
+- WHEN the catalog is loaded
+- THEN the technology entry MUST be accepted as valid
+- AND the technology MUST NOT be detected by the `CatalogDrivenDetector` (it has no detection rules)
+
+#### Scenario: Invalid regex pattern is handled gracefully
+
+- GIVEN the catalog defines a technology with `package_patterns = ["[invalid"]`
+- WHEN the catalog is loaded
+- THEN the system MUST log a warning about the invalid pattern
+- AND the technology's detection rules MUST be skipped
+- AND other technologies in the catalog MUST still load successfully
+
+---
+
+### Requirement: CatalogDrivenDetector
+
+The system MUST provide a `CatalogDrivenDetector` struct that implements the `RepoDetector` trait
+and evaluates catalog-defined detection rules against repository contents.
+
+The `CatalogDrivenDetector` MUST accept a reference to a `ResolvedSkillCatalog` at construction
+time.
+
+For each technology in the catalog that has detection rules, the `CatalogDrivenDetector` MUST
+evaluate detection rules in the following order:
+
+1. `packages` — exact match against merged package.json dependency names
+2. `package_patterns` — regex match against merged package.json dependency names
+3. `config_files` — check file existence at the project root
+4. `config_file_content` — read specified files and search for patterns
+
+The detector MUST stop evaluating a technology's rules after the first successful match (
+short-circuit).
+
+Each successful detection MUST produce a `TechnologyDetection` containing the `TechnologyId`,
+a `DetectionConfidence` value, and evidence describing the matched rule and artifact.
+
+The confidence level MUST be `high` when the detection is based on exact package matches or
+canonical config files, and `medium` for pattern-based matches or content scanning.
+
+The `CatalogDrivenDetector` MUST reuse the existing `IGNORED_DIRS` list when walking the filesystem
+to avoid scanning build artifacts, `node_modules`, `.git`, and similar directories.
+
+The `CatalogDrivenDetector` MUST be deterministic for the same repository contents and catalog.
+
+#### Scenario: Detect technology via exact package match
+
+- GIVEN the catalog defines `vue` with `detect.packages = ["vue"]`
+- AND the repository contains a `package.json` with `"vue": "^3.4.0"` in `dependencies`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST include a `TechnologyDetection` for `vue`
+- AND confidence MUST be `high`
+- AND evidence MUST reference the `vue` package in `package.json`
+
+#### Scenario: Detect technology via config file existence
+
+- GIVEN the catalog defines `tailwindcss` with
+  `detect.config_files = ["tailwind.config.js", "tailwind.config.ts"]`
+- AND the repository root contains `tailwind.config.js`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST include a `TechnologyDetection` for `tailwindcss`
+- AND confidence MUST be `high`
+- AND evidence MUST reference `tailwind.config.js`
+
+#### Scenario: No detection when rules do not match
+
+- GIVEN the catalog defines `svelte` with `detect.packages = ["svelte"]`
+- AND the repository's `package.json` does not contain `"svelte"` in any dependency field
+- AND no config files for svelte exist
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST NOT include `svelte`
+
+#### Scenario: Multiple technologies detected from same package.json
+
+- GIVEN the catalog defines `react` with `detect.packages = ["react"]` and `vue` with
+  `detect.packages = ["vue"]`
+- AND the repository's `package.json` contains both `"react"` and `"vue"` in `dependencies`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST include both `react` and `vue`
+
+#### Scenario: Short-circuit after first matching rule
+
+- GIVEN the catalog defines a technology with both `packages = ["express"]` and
+  `config_files = ["express.config.js"]`
+- AND the repository's `package.json` contains `"express"` in `dependencies`
+- WHEN the `CatalogDrivenDetector` evaluates that technology's rules
+- THEN the technology MUST be detected via the `packages` rule
+- AND the `config_files` rule MUST NOT be evaluated for that technology
+
+---
+
+### Requirement: Package.json Dependency Parsing
+
+The `CatalogDrivenDetector` MUST parse `package.json` files to extract dependency names from the
+`dependencies`, `devDependencies`, and `peerDependencies` fields.
+
+The parser MUST handle well-formed JSON. If a `package.json` file is malformed or unreadable, the
+system MUST skip it with a warning and MUST NOT fail the entire detection pass.
+
+The parser MUST collect only package names (keys), not version specifiers (values).
+
+The parser MUST merge dependency names from all parsed `package.json` files (root and workspace
+packages) into a single deduplicated set before evaluating package-based detection rules.
+
+#### Scenario: Parse dependencies from all three fields
+
+- GIVEN a `package.json` containing:
+  ```json
+  {
+    "dependencies": { "express": "^4.18.0" },
+    "devDependencies": { "vitest": "^1.0.0" },
+    "peerDependencies": { "react": "^18.0.0" }
+  }
+  ```
+- WHEN the parser extracts dependency names
+- THEN the result MUST include `"express"`, `"vitest"`, and `"react"`
+
+#### Scenario: Malformed package.json is skipped
+
+- GIVEN the repository root contains a `package.json` with invalid JSON
+- WHEN the `CatalogDrivenDetector` attempts to parse it
+- THEN the system MUST log a warning
+- AND the detection pass MUST continue without that file's data
+- AND no error MUST be returned to the caller
+
+#### Scenario: Missing package.json is not an error
+
+- GIVEN the repository root does not contain a `package.json`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the merged package set MUST be empty
+- AND package-based detection rules MUST match nothing
+- AND the detection pass MUST continue with other rule types (config_files, etc.)
+
+---
+
+### Requirement: Monorepo Workspace Resolution
+
+The `CatalogDrivenDetector` MUST resolve monorepo workspaces to discover `package.json` files in
+workspace packages, merging their dependency names with the root `package.json` dependencies.
+
+The detector MUST support the following workspace declaration formats:
+
+- **pnpm**: `pnpm-workspace.yaml` with a `packages` list of glob patterns
+- **npm/yarn**: `package.json` `workspaces` field as an array of glob patterns
+- **yarn (object form)**: `package.json` `workspaces.packages` field as an array of glob patterns
+
+Workspace resolution MUST resolve glob patterns relative to the project root to find workspace
+`package.json` files.
+
+Workspace resolution MUST NOT recursively resolve nested workspace declarations (only the top-level
+workspace config is honored).
+
+If a workspace glob resolves to a directory, the system MUST look for `package.json` inside that
+directory.
+
+If a workspace `package.json` is malformed or unreadable, the system MUST skip it with a warning
+and continue processing other workspaces.
+
+#### Scenario: pnpm workspace resolution
+
+- GIVEN the repository contains `pnpm-workspace.yaml` with:
+  ```yaml
+  packages:
+    - "packages/*"
+  ```
+- AND `packages/ui/package.json` contains `"dependencies": { "vue": "^3.0.0" }`
+- AND `packages/api/package.json` contains `"dependencies": { "express": "^4.0.0" }`
+- AND the root `package.json` contains `"dependencies": { "typescript": "^5.0.0" }`
+- WHEN the `CatalogDrivenDetector` resolves workspaces
+- THEN the merged package set MUST include `"vue"`, `"express"`, and `"typescript"`
+
+#### Scenario: npm/yarn workspaces field resolution
+
+- GIVEN the repository's root `package.json` contains:
+  ```json
+  { "workspaces": ["packages/*", "apps/*"] }
+  ```
+- AND `packages/shared/package.json` contains `"dependencies": { "lodash": "^4.0.0" }`
+- WHEN the `CatalogDrivenDetector` resolves workspaces
+- THEN the merged package set MUST include `"lodash"` along with root dependencies
+
+#### Scenario: yarn object-form workspaces
+
+- GIVEN the repository's root `package.json` contains:
+  ```json
+  { "workspaces": { "packages": ["packages/*"] } }
+  ```
+- WHEN the `CatalogDrivenDetector` resolves workspaces
+- THEN it MUST treat `"packages": ["packages/*"]` as the workspace glob list
+
+#### Scenario: Malformed workspace package.json is skipped
+
+- GIVEN a workspace glob resolves to `packages/broken/package.json` which contains invalid JSON
+- WHEN the `CatalogDrivenDetector` resolves workspaces
+- THEN the system MUST log a warning for that file
+- AND other workspace `package.json` files MUST still be parsed
+- AND the detection pass MUST continue
+
+#### Scenario: No workspace configuration
+
+- GIVEN the repository has no `pnpm-workspace.yaml` and the root `package.json` has no `workspaces`
+  field
+- WHEN the `CatalogDrivenDetector` resolves workspaces
+- THEN only the root `package.json` dependencies MUST be used
+
+---
+
+### Requirement: Web Frontend Detection
+
+The system MUST support a special `web_frontend` technology that is detected by scanning for
+frontend-related file extensions in the repository.
+
+The detector MUST scan for the following file extensions: `.html`, `.css`, `.scss`, `.sass`,
+`.less`,
+`.vue`, `.svelte`, `.jsx`, `.tsx`, `.astro`, `.mdx`.
+
+The scan depth MUST be limited to a maximum of 3 directory levels from the project root.
+
+The scan MUST respect the existing `IGNORED_DIRS` list.
+
+If at least one matching file is found, the `web_frontend` technology MUST be detected with
+confidence `medium`.
+
+The evidence MUST list the matched file extensions found (not every individual file).
+
+The `web_frontend` technology MUST be associated with bonus skills for frontend design,
+accessibility, and SEO in the catalog.
+
+#### Scenario: Frontend files trigger web_frontend detection
+
+- GIVEN a repository containing `src/App.tsx` and `src/styles/main.scss`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST include `web_frontend`
+- AND confidence MUST be `medium`
+- AND evidence MUST mention the `.tsx` and `.scss` extensions
+
+#### Scenario: No frontend files means no web_frontend detection
+
+- GIVEN a repository containing only `Cargo.toml`, `src/main.rs`, and `Makefile`
+- WHEN the `CatalogDrivenDetector` runs
+- THEN the detection result MUST NOT include `web_frontend`
+
+#### Scenario: Scan depth limit is respected
+
+- GIVEN a repository containing `deeply/nested/level4/component.vue` (4 levels deep)
+- AND no frontend files exist within the first 3 directory levels
+- WHEN the `CatalogDrivenDetector` runs
+- THEN `web_frontend` MUST NOT be detected
+
+#### Scenario: web_frontend maps to bonus skills
+
+- GIVEN the catalog defines `web_frontend` with skills
+  `["frontend-design", "accessibility", "seo"]`
+- AND `web_frontend` is detected in a repository
+- WHEN the recommendation engine evaluates detections
+- THEN the recommendations MUST include `frontend-design`, `accessibility`, and `seo`
+
+---
+
+### Requirement: Combo Evaluation
+
+The system MUST evaluate combo entries with `enabled = true` after all individual technology
+detections have been collected.
+
+A combo MUST be considered matching when ALL technologies listed in its `requires` field are present
+in the detection results.
+
+When a combo matches, its listed skills MUST be added to the skill recommendations with a reason
+referencing the combo name and the contributing technologies.
+
+Combos with `enabled = false` or without an explicit `enabled` field MUST NOT be evaluated.
+
+Combo skill recommendations MUST participate in the same deduplication logic as technology skill
+recommendations — if a combo recommends a skill already recommended by a technology, the reasons
+and matched technologies MUST be merged into a single recommendation entry.
+
+#### Scenario: Enabled combo matches and adds skills
+
+- GIVEN the catalog defines a combo:
+  ```toml
+  [[combos]]
+  id = "fullstack-node"
+  name = "Full-Stack Node"
+  requires = ["node_typescript", "web_frontend"]
+  skills = ["performance"]
+  enabled = true
+  ```
+- AND the detection results include both `node_typescript` and `web_frontend`
+- WHEN combo evaluation runs
+- THEN the recommendations MUST include `performance`
+- AND the recommendation reason MUST reference the combo name "Full-Stack Node"
+
+#### Scenario: Disabled combo is not evaluated
+
+- GIVEN the catalog defines a combo with `enabled = false`
+- AND all its required technologies are detected
+- WHEN combo evaluation runs
+- THEN the combo's skills MUST NOT be added to recommendations
+
+#### Scenario: Combo with missing required technology does not match
+
+- GIVEN the catalog defines a combo requiring `["docker", "kubernetes"]`
+- AND only `docker` is detected (no `kubernetes`)
+- WHEN combo evaluation runs
+- THEN the combo MUST NOT match
+- AND its skills MUST NOT be added to recommendations
+
+#### Scenario: Combo skill deduplication with technology skill
+
+- GIVEN the catalog defines technology `astro` with skills `["frontend-design"]`
+- AND a combo with skills `["frontend-design"]` also matches
+- WHEN recommendations are generated
+- THEN `frontend-design` MUST appear only once in the recommendations
+- AND its `matched_technologies` and `reasons` MUST include contributions from both the technology
+  and the combo
+
+---
+
+### Requirement: Expanded Catalog Content
+
+The embedded `catalog.v1.toml` MUST be expanded to include the full autoskills ecosystem data:
+approximately 46 technologies, approximately 150 skills, and approximately 11 combos.
+
+Each skill entry MUST include `provider_skill_id`, `local_skill_id`, `title`, and `summary`.
+
+Skills from the autoskills ecosystem MUST use the `owner/repo/skill-name` format for
+`provider_skill_id` (e.g., `"acosta/agentsync-skills/vue"`).
+
+Each technology entry MUST include `id`, `name`, `skills`, and MAY include `detect`,
+`min_confidence`, and `reason_template`.
+
+Each combo entry MUST include `id`, `name`, `requires`, `skills`, and `enabled`.
+
+The catalog MUST remain valid TOML and MUST pass schema validation on load.
+
+The catalog MUST be embedded at compile time via `include_str!` with no runtime network access.
+
+#### Scenario: Catalog loads successfully with expanded content
+
+- GIVEN the embedded `catalog.v1.toml` contains ~46 technologies, ~150 skills, and ~11 combos
+- WHEN the system loads the embedded catalog
+- THEN the catalog MUST parse without errors
+- AND all technology entries MUST have valid `id`, `name`, and `skills` fields
+- AND all combo entries MUST have valid `id`, `name`, `requires`, and `skills` fields
+
+#### Scenario: Skills use owner/repo/skill-name format
+
+- GIVEN the catalog defines a skill with `provider_skill_id = "acosta/agentsync-skills/vue"`
+- WHEN the catalog is loaded
+- THEN the skill definition MUST be accepted as valid
+- AND the `provider_skill_id` MUST be preserved for use in provider resolution
+
+---
+
+### Requirement: Provider Resolve for owner/repo/skill-name Format
+
+`SkillsShProvider.resolve()` MUST handle the `owner/repo/skill-name` format used by autoskills
+skill IDs.
+
+When the skill ID contains two or more `/` separators (indicating `owner/repo/skill-name` format),
+the resolver MUST construct the GitHub download URL deterministically from the first two path
+segments (`owner/repo`) and the final path segment (`skill-name`) without requiring a search API
+round-trip.
+
+The resolver MUST preserve backward compatibility with simple skill IDs (e.g., `"docker-expert"`)
+that contain no `/` separators.
+
+#### Scenario: Resolve owner/repo/skill-name format
+
+- GIVEN a skill ID `"acosta/agentsync-skills/vue"`
+- WHEN `SkillsShProvider.resolve()` is called with that ID
+- THEN the download URL MUST be constructed from `"acosta/agentsync-skills"`
+- AND the resolver MUST preserve the `"vue"` path segment when deriving the archive subpath
+
+#### Scenario: Simple skill ID still resolves
+
+- GIVEN a skill ID `"docker-expert"`
+- WHEN `SkillsShProvider.resolve()` is called with that ID
+- THEN the resolver MUST behave identically to the current implementation
+- AND backward compatibility MUST be preserved
+
+---
+
+### Requirement: Backward Compatibility
+
+The system MUST maintain full backward compatibility for the 7 existing technologies (`rust`,
+`node_typescript`, `astro`, `github_actions`, `docker`, `make`, `python`).
+
+The migration to catalog-driven detection MUST preserve the observable behavior of the original 7
+technologies even though detection is now performed by `CatalogDrivenDetector` alone.
+
+`FileSystemRepoDetector` is not required to remain in the runtime architecture once the original 7
+technology patterns have been fully migrated into catalog `detect` blocks.
+
+The JSON output contract for `skill suggest` MUST remain unchanged: `detections`,
+`recommendations`, and `summary` with the same field shapes.
+
+The human-readable CLI output format for `skill suggest` MUST remain materially equivalent.
+
+The `skill suggest --install` flow MUST continue to work with both existing and newly discovered
+skills.
+
+No breaking changes MUST be introduced to any CLI subcommand interface.
+
+#### Scenario: Existing 7 technologies produce identical results
+
+- GIVEN a repository containing `Cargo.toml`, `package.json`, `Dockerfile`, `Makefile`, and
+  `.github/workflows/ci.yml`
+- AND no new catalog-driven technologies match additional rules
+- WHEN the user runs `skill suggest --json`
+- THEN the JSON output MUST be identical to the output produced before this change
+  (same detections, same recommendations, same summary counts)
+
+#### Scenario: New technologies extend but do not break existing output
+
+- GIVEN a repository containing `Cargo.toml` and `package.json` with `"vue": "^3.0.0"`
+- WHEN the user runs `skill suggest --json`
+- THEN the JSON output MUST include the existing `rust` and `node_typescript` detections
+- AND the JSON output MUST additionally include the `vue` detection
+- AND the `summary.detected_count` MUST reflect the total including new detections
+
+#### Scenario: Catalog-driven detection preserves legacy rust result
+
+- GIVEN a repository containing `Cargo.toml`
+- AND the catalog defines `rust` with `config_files = ["Cargo.toml"]`
+- WHEN detection runs through `CatalogDrivenDetector`
+- THEN the final result MUST contain exactly one `rust` detection
+- AND the confidence MUST be `high`
+
+#### Scenario: skill suggest --install works with new skills
+
+- GIVEN a repository where `vue` is detected and `vue` skill is recommended but not installed
+- WHEN the user runs `skill suggest --install`
+- THEN the `vue` skill MUST appear in the interactive selection
+- AND selecting it MUST trigger installation through the existing `SkillsShProvider` flow
+
+---
+
+### Requirement: Detection Performance
+
+The `CatalogDrivenDetector` MUST complete detection within 2 seconds for typical repositories
+(< 10,000 files, < 50 workspace packages).
+
+The detector MUST compile all regex patterns once during catalog loading, not per evaluation.
+
+The detector MUST reuse the `IGNORED_DIRS` list to skip irrelevant directories.
+
+The detector MUST limit web frontend file extension scanning to a maximum depth of 3 directory
+levels.
+
+The detector SHOULD parse `package.json` files only once and cache the merged dependency set for
+reuse across all technology rule evaluations.
+
+#### Scenario: Detection completes within time budget
+
+- GIVEN a typical monorepo with 5,000 files and 10 workspace packages
+- WHEN the user runs `skill suggest`
+- THEN the detection phase MUST complete within 2 seconds
+
+#### Scenario: Regex patterns are compiled once
+
+- GIVEN the catalog defines 20 technologies with `package_patterns` containing regex
+- WHEN the catalog is loaded
+- THEN all regex patterns MUST be compiled during loading
+- AND subsequent detection evaluations MUST NOT recompile patterns
+
+--- ARQUIVOS DO PR (11)
+added     +201   -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/design.md
+added     +67    -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/proposal.md
+added     +164   -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/specs/skill-recommendations/spec.md
+added     +12    -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/state.yaml
+added     +25    -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/tasks.md
+added     +104   -0     openspec/changes/archive/2026-04-04-fix-suggest-install-provider-skill-id/verify-report.md
+modified  +151   -0     openspec/specs/skill-recommendations/spec.md
+modified  +4     -1     src/commands/skill.rs
+modified  +4     -0     src/skills/catalog.rs   <== código ligado à spec
+modified  +5     -1     src/skills/suggest.rs   <== código ligado à spec
+modified  +41    -11    tests/unit/suggest_install.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/skills/catalog.rs
+@@ -18,6 +18,7 @@ const DEFAULT_REASON_TEMPLATE: &str =
+ 
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct CatalogSkillMetadata {
++    pub provider_skill_id: String,
+     pub skill_id: String,
+     pub title: String,
+     pub summary: String,
+@@ -295,6 +296,7 @@ pub fn recommend_skills(
+             };
+ 
+             let metadata = CatalogSkillMetadata {
++                provider_skill_id: definition.provider_skill_id.clone(),
+                 skill_id: definition.local_skill_id.clone(),
+                 title: definition.title.clone(),
+                 summary: definition.summary.clone(),
+@@ -331,6 +333,7 @@ pub fn recommend_skills(
+             };
+ 
+             let metadata = CatalogSkillMetadata {
++                provider_skill_id: definition.provider_skill_id.clone(),
+                 skill_id: definition.local_skill_id.clone(),
+                 title: definition.title.clone(),
+                 summary: definition.summary.clone(),
+@@ -729,6 +732,7 @@ fn rebuild_local_skill_index(catalog: &mut ResolvedSkillCatalog) -> Result<()> {
+         local_skills.insert(
+             definition.local_skill_id.clone(),
+             CatalogSkillMetadata {
++                provider_skill_id: definition.provider_skill_id.clone(),
+                 skill_id: definition.local_skill_id.clone(),
+                 title: definition.title.clone(),
+                 summary: definition.summary.clone(),
+
+### src/skills/suggest.rs
+@@ -91,6 +91,7 @@ pub struct TechnologyDetection {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct SkillSuggestion {
+     pub skill_id: String,
++    pub provider_skill_id: String,
+     pub title: String,
+     pub summary: String,
+     pub reasons: Vec<String>,
+@@ -104,6 +105,7 @@ impl SkillSuggestion {
+     pub fn new(metadata: &CatalogSkillMetadata, catalog: &ResolvedSkillCatalog) -> Self {
+         Self {
+             skill_id: metadata.skill_id.clone(),
++            provider_skill_id: metadata.provider_skill_id.clone(),
+             title: metadata.title.clone(),
+             summary: metadata.summary.clone(),
+             reasons: Vec::new(),
+@@ -188,6 +190,7 @@ pub struct SuggestJsonDetection {
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+ pub struct SuggestJsonRecommendation {
+     pub skill_id: String,
++    pub provider_skill_id: String,
+     pub matched_technologies: Vec<TechnologyId>,
+     pub reasons: Vec<String>,
+     pub installed: bool,
+@@ -367,7 +370,7 @@ impl SuggestionService {
+                 continue;
+             }
+ 
+-            match provider.resolve(&recommendation.skill_id) {
++            match provider.resolve(&recommendation.provider_skill_id) {
+                 Ok(resolved) => match install_fn(
+                     &recommendation.skill_id,
+                     &resolved.download_url,
+@@ -449,6 +452,7 @@ impl SuggestResponse {
+                 .iter()
+                 .map(|recommendation| SuggestJsonRecommendation {
+                     skill_id: recommendation.skill_id.clone(),
++                    provider_skill_id: recommendation.provider_skill_id.clone(),
+                     matched_technologies: recommendation.matched_technologies.clone(),
+                     reasons: recommendation.reasons.clone(),
+                     installed: recommendation.installed,
+
+===== P025 | repo kniwase/WebComPy | PR #177: feat: async rendering pipeline | capacidade: lockfile
+--- SPEC VIVA
+# Lock File
+
+## Purpose
+
+The lock file (`webcompy-lock.json`) ensures reproducible builds by recording the exact dependency classifications, versions, and sources used for browser deployment. It serves a similar role to `uv.lock` or `poetry.lock` — pinning the dependency graph so that all environments produce consistent output.
+
+## Requirements
+
+### Requirement: The lock file shall use v2 schema with wasm_packages and pure_python_packages
+The lock file SHALL use schema version 2, which replaces `pyodide_packages` with `wasm_packages` and `bundled_packages` with `pure_python_packages`. Version 1 lock files SHALL be treated as invalid (returning `None` from `load_lockfile()`), triggering full regeneration. `webcompy-lock.json` SHALL be a JSON file placed in the app package directory (next to `webcompy_config.py`) that records WASM package versions, pure-Python package versions and CDN metadata, and the Pyodide/PyScript versions used. The lock file SHALL be version-controlled (like `uv.lock` or `poetry.lock`). CDN-available pure-Python package entries include `in_pyodide_cdn`, `pyodide_file_name`, and `pyodide_sha256` fields. Additional keys (e.g., `standalone_assets`) may be added by other changes. Population of `wasm_packages` and `pure_python_packages` SHALL be determined by `PackageKind` from `classify_dependencies()`: `PackageKind.WASM` entries go to `wasm_packages`, `PackageKind.CDN_PURE_PYTHON` and `PackageKind.LOCAL_PURE_PYTHON` entries go to `pure_python_packages`.
+
+#### Scenario: Lock file generated on first run
+- **WHEN** a developer runs `webcompy start` or `webcompy generate` without an existing lock file
+- **THEN** the lock file SHALL be automatically generated and saved
+- **AND** the developer SHOULD commit the lock file to version control
+
+#### Scenario: v2 lock file schema
+- **WHEN** a lock file is generated
+- **THEN** it SHALL contain `version: 2`, `pyodide_version`, `pyscript_version`, `wasm_packages`, and `pure_python_packages`
+
+#### Scenario: v1 lock file rejection
+- **WHEN** `load_lockfile()` encounters a lock file with `version: 1`
+- **THEN** it SHALL return `None`
+- **AND** the build system SHALL regenerate the lock file
+
+### Requirement: wasm_packages shall contain only WASM packages
+`wasm_packages` SHALL contain only WASM packages that must be loaded from the Pyodide CDN by name via `py-config.packages`. Pure-Python packages available in the Pyodide CDN SHALL NOT appear in `wasm_packages`.
+
+#### Scenario: WASM package entry in v2 lock file
+- **WHEN** a dependency `numpy` is a WASM package
+- **THEN** it SHALL be recorded in `wasm_packages` with `version`, `file_name`, and `source`
+
+#### Scenario: Pure-Python CDN package not in wasm_packages
+- **WHEN** a dependency `httpx` is a pure-Python package in the Pyodide CDN
+- **THEN** it SHALL NOT appear in `wasm_packages`
+- **AND** it SHALL appear in `pure_python_packages`
+
+### Requirement: pure_python_packages shall contain all pure-Python packages with CDN metadata
+`pure_python_packages` SHALL contain all pure-Python dependencies regardless of CDN availability. Entries for CDN-available packages SHALL include `in_pyodide_cdn: true` with `pyodide_file_name` and `pyodide_sha256` for download. Entries for local-only packages SHALL have `in_pyodide_cdn: false`.
+
+#### Scenario: CDN-available pure-Python package entry
+- **WHEN** a pure-Python package `httpx` is available in the Pyodide CDN
+- **THEN** the entry SHALL include `in_pyodide_cdn: true`, `pyodide_file_name: "httpx-0.28.1-py3-none-any.whl"`, and `pyodide_sha256`
+- **AND** `serve_all_deps=True` SHALL cause this package to be downloaded at build time
+
+#### Scenario: Local-only pure-Python package entry
+- **WHEN** a pure-Python package `flask` is NOT available in the Pyodide CDN
+- **THEN** the entry SHALL include `in_pyodide_cdn: false`
+- **AND** it SHALL NOT have `pyodide_file_name` or `pyodide_sha256`
+- **AND** this package SHALL always be bundled from local installation
+
+#### Scenario: Pure-Python CDN package is bundled when serve_all_deps=True
+- **WHEN** `serve_all_deps=True` and a pure-Python package has `in_pyodide_cdn: true`
+- **THEN** the build system SHALL download the wheel, verify SHA256, extract, and bundle it
+
+#### Scenario: Pure-Python CDN package is loaded from CDN when serve_all_deps=False
+- **WHEN** `serve_all_deps=False` and a pure-Python package has `in_pyodide_cdn: true`
+- **THEN** the package name SHALL be included in `py-config.packages` for CDN loading
+- **AND** the package SHALL NOT be bundled
+
+### Requirement: The lock file shall be validated against current dependencies
+When loading an existing lock file, the CLI SHALL validate that `AppConfig.dependencies` matches the union of `explicit` entries in `pure_python_packages` and `explicit` entries in `wasm_packages`. If dependencies have changed, the lock file SHALL be regenerated. Additionally, the CLI SHALL validate that the local environment provides the packages recorded in the lock file with matching versions.
+
+#### Scenario: Lock file matches dependencies
+- **WHEN** the lock file's explicit dependencies match `AppConfig.dependencies`
+- **THEN** the lock file SHALL be used as-is
+
+#### Scenario: Lock file is stale
+- **WHEN** `AppConfig.dependencies` has been modified since the lock file was generated
+- **THEN** the lock file SHALL be regenerated automatically
+
+#### Scenario: Pure-Python package missing from local environment
+- **WHEN** a package listed in `pure_python_packages` with `in_pyodide_cdn=false` is not found in the local Python environment via `importlib.util.find_spec()`
+- **THEN** an error SHALL be reported with the package name, the lock file version, and a suggestion to install it (e.g., `pip install <package>==<version>`)
+- **AND** the build SHALL fail
+
+#### Scenario: CDN-available pure-Python package missing locally with serve_all_deps=True
+- **WHEN** a package listed in `pure_python_packages` with `in_pyodide_cdn=true` is not found in the local environment
+- **AND** `serve_all_deps=True`
+- **THEN** a warning SHALL be reported indicating the package will be downloaded from the Pyodide CDN
+- **AND** the build SHALL continue
+
+#### Scenario: Pure-Python package version mismatch
+- **WHEN** a pure-Python package listed in `pure_python_packages` has version `X.Y.Z` in the lock file, but `importlib.metadata.version()` reports a different version
+- **THEN** an error SHALL be reported indicating the version mismatch (lock file version vs. local version)
+- **AND** the error SHALL suggest installing the lock file version (e.g., `pip install <package>==X.Y.Z`)
+- **AND** the build SHALL fail
+
+#### Scenario: Pure-Python package version unknown locally
+- **WHEN** a pure-Python package listed in `pure_python_packages` is found locally via `importlib.util.find_spec()`, but `importlib.metadata.version()` returns `None` (version cannot be determined)
+- **THEN** an error SHALL be reported indicating the version could not be determined locally
+- **AND** the error SHALL include the lock file version requirement
+- **AND** the build SHALL fail
+
+#### Scenario: CDN-available pure-Python package version mismatch
+- **WHEN** a pure-Python package listed in `pure_python_packages` with `in_pyodide_cdn=true` has a version in the lock file that differs from the locally installed version
+- **THEN** a warning SHALL be reported indicating the version mismatch
+- **AND** the build SHALL continue (the local version will be used for SSR while the CDN version is recorded in the lock file)
+- **AND** the warning SHALL note that the local version will be used for SSR/SSG
+
+#### Scenario: WASM package not locally installed
+- **WHEN** a package listed in `wasm_packages` is not found in the local environment
+- **THEN** a warning SHALL be reported indicating the package is needed locally for SSR/SSG
+- **AND** the build SHALL continue
+
+#### Scenario: WASM package version mismatch
+- **WHEN** a WASM package listed in `wasm_packages` has a version in the lock file that differs from the locally installed version
+- **THEN** a warning SHALL be reported indicating the version mismatch
+- **AND** the build SHALL continue (the local version will be used for SSR/SSG)
+- **AND** the warning SHALL note that the local version will be used for SSR/SSG
+
+### Requirement: The lock file shall be version-controlled for reproducibility
+The lock file SHALL be committed to version control (e.g., git) to ensure reproducible builds across environments. Like `uv.lock` or `poetry.lock`, it records the exact dependency classifications and versions used. Developers SHOULD NOT add `webcompy-lock.json` to `.gitignore`.
+
+#### Scenario: Lock file committed to version control
+- **WHEN** a developer generates a lock file via `webcompy lock` or auto-generation
+- **THEN** the lock file SHALL be committed to the project repository
+- **AND** other developers cloning the repository SHALL get the same dependency classification without re-resolving
+
+#### Scenario: Lock file in CI
+- **WHEN** a CI pipeline runs `webcompy generate`
+- **AND** the lock file is present in the repository
+- **THEN** the lock file SHALL be used as-is (no re-resolution) if `AppConfig.dependencies` has not changed
+
+### Requirement: The lock file position shall be in the app package directory alongside webcompy_config.py
+The lock file SHALL be stored at `app_package_path / "webcompy-lock.json"`, which is the same directory containing `webcompy_config.py` and `webcompy_server_config.py`.
+
+#### Scenario: Finding the lock file path
+- **WHEN** the app package is at `/project/myapp/` with `webcompy_config.py` at `/project/myapp/webcompy_config.py`
+- **THEN** the lock file path SHALL be `/project/myapp/webcompy-lock.json`
+
+### Requirement: The lock file shall support querying CDN-available pure-Python package names
+`get_cdn_pure_python_package_names(lockfile)` SHALL return the names of pure-Python packages with `in_pyodide_cdn=True`. This is used when `serve_all_deps=False` to generate the `py-config.packages` list.
+
+#### Scenario: Querying CDN pure-Python names
+- **WHEN** a lock file contains `pure_python_packages` with `httpx (in_pyodide_cdn=true)` and `flask (in_pyodide_cdn=false)`
+- **THEN** `get_cdn_pure_python_package_names()` SHALL return `["httpx"]`
+
+### Requirement: export_requirements shall include all packages from v2 lock file
+`export_requirements()` SHALL write a `requirements.txt` containing pinned versions for all packages in `pure_python_packages` and `wasm_packages`. The v2 schema no longer uses an `is_wasm` flag; all packages are included because the developer may need them locally for SSR/SSG. This replaces the v1 behavior where WASM-only `pyodide_packages` were excluded.
+
+#### Scenario: Exporting all packages from v2 lock file
+- **WHEN** a developer runs `webcompy lock --export`
+- **AND** the v2 lock file contains `wasm_packages` with `numpy` and `pure_python_packages` with `httpx` and `flask`
+- **THEN** `requirements.txt` SHALL contain `numpy==<version>`, `httpx==<version>`, and `flask==<version>`
+
+#### Scenario: Exporting requirements when project root is auto-discovered
+- **WHEN** a developer runs `webcompy lock --export`
+- **AND** `LockfileSyncConfig.requirements_path` is not set
+- **THEN** the project root SHALL be discovered by walking up from `app_package_path` until a directory containing `pyproject.toml` is found
+- **AND** the `requirements.txt` file SHALL be written to the project root directory
+
+#### Scenario: Exporting requirements with explicit path configuration
+- **WHEN** a developer has `LockfileSyncConfig(requirements_path="../requirements.txt")` in `webcompy_server_config.py`
+- **THEN** the requirements file SHALL be written to the path resolved relative to `app_package_path`
+- **AND** auto-discovery SHALL be skipped
+
+#### Scenario: Exporting requirements with no pyproject.toml found
+- **WHEN** a developer runs `webcompy lock --export`
+- **AND** `LockfileSyncConfig.requirements_path` is not set
+- **AND** no `pyproject.toml` is found above `app_package_path`
+- **THEN** an error SHALL be reported instructing the developer to set `LockfileSyncConfig.requirements_path` in `webcompy_server_config.py`
+
+#### Scenario: Exporting requirements with no lock file
+- **WHEN** a developer runs `webcompy lock --export` without an existing lock file
+- **THEN** an error SHALL be reported indicating that the lock file must be generated first by running `webcompy lock`
+
+### Requirement: get_bundled_deps shall consider serve_all_deps
+`get_bundled_deps(lockfile, serve_all_deps=True)` SHALL return pure-Python packages to be bundled from local installation. CDN-available packages are handled separately via the download pipeline and are NEVER returned by `get_bundled_deps()`.
+
+#### Scenario: get_bundled_deps with serve_all_deps=True
+- **WHEN** `serve_all_deps=True`
+- **THEN** `get_bundled_deps()` SHALL return only `pure_python_packages` entries with `in_pyodide_cdn=False` that have local `pkg_dir` available
+- **AND** CDN packages to be downloaded are handled separately via the download pipeline
+
+#### Scenario: get_bundled_deps with serve_all_deps=False
+- **WHEN** `serve_all_deps=False`
+- **THEN** `get_bundled_deps()` SHALL return only `pure_python_packages` entries with `in_pyodide_cdn=False`
+
+### Requirement: The lock file shall support comparison with external dependency specifications
+`webcompy lock --sync` SHALL auto-discover `requirements.txt` and `pyproject.toml` at the project root and compare their dependency entries with the lock file. The command SHALL report matching versions, mismatches, and missing entries without modifying the lock file.
+
+#### Scenario: Sync from requirements.txt with matching versions
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `requirements.txt` exists at the project root
+- **AND** all entries in `requirements.txt` match the versions in `webcompy-lock.json`
+- **THEN** the command SHALL report that all versions match
+
+#### Scenario: Sync from requirements.txt with version mismatches
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `requirements.txt` has `markupsafe==3.0.2` but the lock file has `markupsafe` version `2.1.5`
+- **THEN** the command SHALL report the mismatch (lock file: `2.1.5`, requirements.txt: `3.0.2`)
+- **AND** the command SHALL suggest installing the lock file version (`pip install markupsafe==2.1.5`)
+
+#### Scenario: Sync from requirements.txt with extra entries
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `requirements.txt` contains a package not present in the lock file
+- **THEN** the command SHALL report the extra entry as informational (it may be a non-browser dependency)
+
+#### Scenario: Sync from pyproject.toml with sync_group
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `LockfileSyncConfig(sync_group="browser")` is set
+- **AND** the `pyproject.toml` contains `[project.optional-dependencies]` with a `browser` key
+- **THEN** the command SHALL compare `[project.optional-dependencies.browser]` entries against the lock file
+- **AND** the command SHALL NOT compare `[project.dependencies]` entries
+
+#### Scenario: Sync from pyproject.toml without sync_group
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `LockfileSyncConfig.sync_group` is `None` (default)
+- **THEN** the command SHALL compare `[project.dependencies]` entries against the lock file
+
+#### Scenario: Sync from pyproject.toml with version ranges
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** `[project.dependencies]` contains `requests>=2.31` (not pinned)
+- **THEN** the command SHALL report that the dependency is not pinned
+- **AND** the command SHALL suggest pinning it to the lock file version (e.g., `requests==2.32.4`)
+
+#### Scenario: Sync with both requirements.txt and pyproject.toml
+- **WHEN** a developer runs `webcompy lock --sync`
+- **AND** both `requirements.txt` and `pyproject.toml` exist at the project root
+- **THEN** the command SHALL compare against both sources
+- **AND** the command SHALL report results from each source separately
+
+### Requirement: The lock file shall support installing dependencies from the lock file
+`webcompy lock --install` SHALL export the lock file dependencies to `requirements.txt` (via auto-discovery) and run a package manager to install matching versions locally.
+
+#### Scenario: Installing dependencies from lock file with uv available
+- **WHEN** a developer runs `webcompy lock --install`
+- **AND** `uv` is available in the system PATH
+- **THEN** a `requirements.txt` SHALL be generated via auto-discovery
+- **AND** `uv pip install -r {path}` SHALL be executed
+- **AND** the exit code of `uv pip install` SHALL be propagated
+
+#### Scenario: Installing dependencies with pip fallback
+- **WHEN** a developer runs `webcompy lock --install`
+- **AND** `uv` is not available in the system PATH
+- **THEN** `sys.executable -m pip install -r {path}` SHALL be executed
+- **AND** the exit code of `pip install` SHALL be propagated
+
+#### Scenario: Install with no lock file
+- **WHEN** a developer runs `webcompy lock --install` without an existing lock file
+- **THEN** an error SHALL be reported indicating that the lock file must be generated first
+
+### Requirement: Project root discovery shall use pyproject.toml as boundary
+The lock file sync commands SHALL discover the project root by walking up from `app_package_path` until a directory containing `pyproject.toml` is found. This directory is the project root. If `pyproject.toml` is not found, an error SHALL be reported. When `LockfileSyncConfig.requirements_path` is set, auto-discovery SHALL be skipped and the explicit path SHALL be used.
+
+#### Scenario: Project root found via pyproject.toml
+- **WHEN** `app_package_path` is `/home/user/project/my_app/`
+- **AND** `/home/user/project/pyproject.toml` exists
+- **THEN** the project root SHALL be `/home/user/project/`
+- **AND** `requirements.txt` and `pyproject.toml` SHALL be searched in that directory
+
+#### Scenario: Project root not found
+- **WHEN** no `pyproject.toml` is found above `app_package_path`
+- **THEN** an error SHALL be reported instructing the developer to set `LockfileSyncConfig.requirements_path`
+
+#### Scenario: Explicit path overrides auto-discovery
+- **WHEN** `LockfileSyncConfig(requirements_path="../requirements.txt")` is set
+- **THEN** the path SHALL be resolved relative to `app_package_path`
+- **AND** no upward directory walk SHALL be performed
+
+### Requirement: Discovered paths shall be recorded in LockfileSyncConfig
+When auto-discovery finds a project root, the discovered `requirements_path` SHALL be written to `LockfileSyncConfig` in `webcompy_server_config.py` so that subsequent invocations skip the discovery step.
+
+#### Scenario: Recording discovered path
+- **WHEN** a developer runs `webcompy lock --export` for the first time
+- **AND** `LockfileSyncConfig.requirements_path` is not set
+- **AND** auto-discovery finds `pyproject.toml` at `/home/user/project/`
+- **THEN** `LockfileSyncConfig.requirements_path` SHALL be set to a relative path from `app_package_path` to the discovered `requirements.txt` location
+- **AND** the value SHALL be written to `webcompy_server_config.py`
+
+#### Scenario: Using recorded path on subsequent runs
+- **WHEN** a developer runs `webcompy lock --export` again
+- **AND** `LockfileSyncConfig.requirements_path` is already set
+- **THEN** the recorded path SHALL be used without re-running discovery
+
+### Requirement: The lock file shall record the WASM serving mode and local asset metadata
+`webcompy-lock.json` SHALL include a `wasm_serving` field indicating whether WASM packages are served from CDN or locally. When `wasm_serving="local"`, WASM package entries in `wasm_packages` SHALL include their Pyodide CDN download URL and SHA256 hash for build-time verification.
+
+#### Scenario: Lock file with local WASM serving
+- **WHEN** a lock file is generated with `wasm_serving="local"`
+- **THEN** the lock file SHALL contain `"wasm_serving": "local"`
+- **AND** each entry in `wasm_packages` SHALL include `file_name` and `sha256` fields for download verification
+
+#### Scenario: Lock file with CDN WASM serving (default)
+- **WHEN** a lock file is generated with `wasm_serving="cdn"` (default)
+- **THEN** the lock file SHALL contain `"wasm_serving": "cdn"`
+- **AND** WASM package entries SHALL include `file_name` for reference but download verification is not required at build time
+
+### Requirement: The lock file shall record the runtime serving mode
+`webcompy-lock.json` SHALL include a `runtime_serving` field indicating whether PyScript/Pyodide runtime assets are served from CDN or locally.
+
+#### Scenario: Lock file with local runtime serving
+- **WHEN** a lock file is generated with `runtime_serving="local"`
+- **THEN** the lock file SHALL contain `"runtime_serving": "local"`
+- **AND** the lock file SHALL include a `runtime_assets` section
+
+#### Scenario: Lock file with CDN runtime serving (default)
+- **WHEN** a lock file is generated with `runtime_serving="cdn"` (default)
+- **THEN** the lock file SHALL contain `"runtime_serving": "cdn"`
+- **AND** the `runtime_assets` section SHALL NOT be present
+
+### Requirement: The lockfile shall record all runtime assets
+
+When `runtime_serving="local"`, the lockfile SHALL record all runtime asset files in the `runtime_assets` field. This SHALL include all `.js` and `.css` files from the PyScript core bundle (not just `core.js` and `core.css`) and all Pyodide runtime files.
+
+Each entry in `runtime_assets` SHALL have the filename as key and an object with `url` and `sha256` fields.
+
+Lockfile population SHALL be progressive: `generate_lockfile()` initially records `core.js`/`core.css` with placeholder entries (no SHA256). After `download_runtime_assets()` completes, `verify_and_update_runtime_assets()` SHALL replace the `runtime_assets` dict with the complete set of downloaded files, each with verified SHA256.
+
+#### Scenario: Initial lockfile generation with runtime_serving=local
+
+- **WHEN** `webcompy lock` is run with `runtime_serving="local"` (or `standalone=True`)
+- **THEN** the lockfile SHALL contain `runtime_assets` with `core.js` and `core.css` entries
+- **AND** each entry SHALL have a `url` field pointing to the PyScript offline bundle URL
+- **AND** SHA256 fields SHALL be `null` until files are actually downloaded
+
+#### Scenario: Lockfile updated after generate/start downloads bundle
+
+- **WHEN** `webcompy generate` or `webcompy start` runs with `runtime_serving="local"`
+- **AND** the PyScript offline bundle is downloaded and extracted
+- **THEN** `runtime_assets` in the lockfile SHALL be replaced with entries for ALL downloaded `.js` and `.css` files from the bundle
+- **AND** each entry SHALL have the filename as key (e.g., `core-BuLtL7jM.js`)
+- **AND** each entry SHALL have a `sha256` field with the computed hash
+
+#### Scenario: Lockfile regeneration when stale bundle files
+
+- **WHEN** an existing lockfile has `runtime_assets` containing only `core.js` and `core.css`
+- **AND** `webcompy generate` or `webcompy start` is run with `runtime_serving="local"`
+- **THEN** `verify_and_update_runtime_assets()` SHALL replace the `runtime_assets` dict with the complete set of downloaded files
+- **AND** SHA256 hashes SHALL be computed and recorded for all files
+
+#### Scenario: Runtime assets absent in CDN mode
+
+- **WHEN** a lock file is generated with `runtime_serving="cdn"`
+- **THEN** the `runtime_assets` section SHALL NOT be present
+
+### Requirement: The lock file shall record the standalone flag
+When `standalone=True` is set, `webcompy-lock.json` SHALL include a `"standalone": true` field for informational purposes. The actual asset metadata is recorded in the `runtime_assets` section (from `feat-pyscript-local-serving`) and `wasm_packages` entries. No separate `standalone_assets` section is needed.
+
+#### Scenario: Lock file with standalone mode
+- **WHEN** a lock file is generated with `standalone=True`
+- **THEN** the lock file SHALL contain `"standalone": true`
+- **AND** `wasm_serving` SHALL be `"local"`
+- **AND** `runtime_serving` SHALL be `"local"`
+- **AND** the `runtime_assets` section SHALL be populated (as defined by `feat-pyscript-local-serving`)
+
+#### Scenario: Lock file without standalone mode
+- **WHEN** a lock file is generated without standalone mode
+- **THEN** the `standalone` field SHALL be `false`
+
+### Requirement: The lock file shall reflect the current standalone mode when regenerated
+When switching between standalone and non-standalone modes, regenerating the lock file SHALL update all relevant fields to reflect the new configuration. The lock file is not automatically regenerated; the developer must run `webcompy lock` (or a generate/start command) to update it.
+
+#### Scenario: Regenerating lock file after switching from standalone to non-standalone
+- **WHEN** a lock file was generated with `standalone=True` and is regenerated with `standalone=False`
+- **THEN** `standalone` SHALL be `false`
+- **AND** `wasm_serving` SHALL be `"cdn"`
+- **AND** `runtime_serving` SHALL be `"cdn"`
+- **AND** the `runtime_assets` section SHALL be omitted (no longer needed in CDN mode)
+
+#### Scenario: Regenerating lock file after switching from non-standalone to standalone
+- **WHEN** a lock file was generated with `standalone=False` and is regenerated with `standalone=True`
+- **THEN** `standalone` SHALL be `true`
+- **AND** `wasm_serving` SHALL be `"local"`
+- **AND** `runtime_serving` SHALL be `"local"`
+- **AND** the `runtime_assets` section SHALL be populated with URLs for all runtime assets
+--- ARQUIVOS DO PR (68)
+modified  +10    -0     .opencode/agents/ci-review.md
+modified  +5     -4     AGENTS.md
+renamed   +0     -0     openspec/changes/archive/2026-06-24-feat-async-rendering-pipeline/.openspec.yaml
+added     +502   -0     openspec/changes/archive/2026-06-24-feat-async-rendering-pipeline/design.md
+renamed   +9     -9     openspec/changes/archive/2026-06-24-feat-async-rendering-pipeline/proposal.md
+added     +376   -0     openspec/changes/archive/2026-06-24-feat-async-rendering-pipeline/specs/async-rendering/spec.md
+added     +223   -0     openspec/changes/archive/2026-06-24-feat-async-rendering-pipeline/tasks.md
+modified  +36    -1     openspec/changes/feat-async-component-setup/design.md
+modified  +4     -1     openspec/changes/feat-async-component-setup/proposal.md
+modified  +19    -0     openspec/changes/feat-async-component-setup/tasks.md
+removed   +0     -294   openspec/changes/feat-async-rendering-pipeline/design.md
+removed   +0     -208   openspec/changes/feat-async-rendering-pipeline/specs/async-rendering/spec.md
+removed   +0     -128   openspec/changes/feat-async-rendering-pipeline/tasks.md
+modified  +25    -4     openspec/changes/feat-suspense-component/design.md
+modified  +3     -1     openspec/changes/feat-suspense-component/proposal.md
+modified  +3     -0     openspec/changes/feat-suspense-component/tasks.md
+added     +68    -0     openspec/changes/fix-ssr-hydration-skip/design.md
+added     +63    -0     openspec/changes/fix-ssr-hydration-skip/proposal.md
+added     +71    -0     openspec/changes/fix-ssr-hydration-skip/specs/fix-ssr-hydration-skip/spec.md
+added     +34    -0     openspec/changes/fix-ssr-hydration-skip/tasks.md
+added     +372   -0     openspec/specs/async-rendering/spec.md
+modified  +3     -0     pyproject.toml
+modified  +4     -3     tests/e2e_docs/test_home.py
+modified  +16    -10    tests/test_elements.py
+modified  +6     -5     tests/test_full_hydration.py
+modified  +11    -6     tests/test_html_generation.py
+modified  +67    -27    tests/test_keyed_repeat.py
+modified  +31    -20    tests/test_nested_dynamic.py
+modified  +10    -5     tests/test_plugin_script.py
+modified  +5     -2     tests/test_plugin_system.py
+modified  +8     -4     tests/test_prerender_hidden.py
+modified  +26    -16    tests/test_preserve_children.py
+modified  +9     -5     tests/test_request_isolation.py
+modified  +5     -5     tests/test_runtime_local_integration.py
+modified  +16    -11    tests/test_scoped_css.py
+modified  +6     -2     tests/test_switch.py
+modified  +22    -11    tests/test_switch_patch.py
+modified  +6     -5     tests/test_tier1_component.py
+modified  +15    -11    tests/test_tier1_static.py
+modified  +25    -18    tests/test_unified_render_path.py
+modified  +28    -0     uv.lock
+modified  +2     -2     webcompy/__main__.py
+modified  +23    -0     webcompy/aio/_aio.py
+modified  +3     -6     webcompy/app/_app.py
+modified  +2     -2     webcompy/app/_render_context.py
+modified  +16    -5     webcompy/app/_root_component.py
+modified  +4     -4     webcompy/cli/_generate.py   <== código ligado à spec
+modified  +28    -26    webcompy/cli/_html.py
+modified  +109   -29    webcompy/cli/_inspect.py
+modified  +7     -6     webcompy/cli/_server.py   <== código ligado à spec
+modified  +15    -6     webcompy/components/_component.py
+modified  +3     -3     webcompy/components/_hooks.py
+modified  +13    -13    webcompy/components/_libs.py
+modified  +3     -2     webcompy/elements/_head.py
+modified  +2     -2     webcompy/elements/types/_abstract.py
+modified  +5     -3     webcompy/elements/types/_base.py
+modified  +33    -6     webcompy/elements/types/_dynamic.py
+modified  +32    -9     webcompy/elements/types/_repeat.py
+modified  +33    -9     webcompy/elements/types/_switch.py
+modified  +4     -0     webcompy/logging.py
+modified  +3     -3     webcompy/router/_link.py
+modified  +10    -2     webcompy/signal/_base.py
+modified  +1     -1     webcompy/signal/_effect.py
+modified  +2     -2     webcompy/signal/_graph.py
+modified  +5     -1     webcompy/testing/__init__.py
+modified  +9     -4     webcompy/testing/_asgi.py
+modified  +49    -31    webcompy/testing/_renderer.py
+added     +20    -0     webcompy/testing/_utils.py
+--- DIFF DO CÓDIGO LIGADO
+### webcompy/cli/_generate.py
+@@ -34,7 +34,7 @@
+ from webcompy.cli.config._build_config import WebComPyBuildConfig
+ 
+ 
+-def generate_static_site(app: WebComPyApp | None = None):
++async def generate_static_site(app: WebComPyApp | None = None):
+     _, args = get_params()
+     if app is None:
+         build_config = discover_config(args.get("config"))
+@@ -289,20 +289,20 @@ def generate_static_site(app: WebComPyApp | None = None):
+                     if not (path_dir := dist_dir / path).exists():
+                         os.makedirs(path_dir)
+                     ctx = app.create_render_context(path)
+-                    html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++                    html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+                     ctx.dispose()
+                     html_path = path_dir / "index.html"
+                     html_path.open("w", encoding="utf8").write(html)
+                     print(html_path)
+             ctx = app.create_render_context("//:404://")
+-            html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++            html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+             ctx.dispose()
+             html_path = dist_dir / "404.html"
+             html_path.open("w", encoding="utf8").write(html)
+             print(html_path)
+         else:
+             ctx = app.create_render_context("/")
+-            html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++            html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+             ctx.dispose()
+             html_path = dist_dir / "index.html"
+             html_path.open("w", encoding="utf8").write(html)
+
+### webcompy/cli/_server.py
+@@ -304,20 +304,21 @@ async def send_html(request: Request):  # type: ignore
+             if is_matched or "text/html" in accept_types:
+                 ctx = app.create_render_context(requested_path)
+                 try:
+-                    return HTMLResponse(html_generator(ctx))
++                    return HTMLResponse(await html_generator(ctx))
+                 finally:
+                     ctx.dispose()
+             else:
+                 raise HTTPException(404)
+ 
+         html_route = Route("/{path:path}", send_html)
+     else:
+-        ctx = app.create_render_context("/")
+-        html = html_generator(ctx)
+-        ctx.dispose()
+ 
+-        async def send_html(_: Request):  # type: ignore
+-            return HTMLResponse(html)
++        async def send_html(request: Request):  # type: ignore
++            ctx = app.create_render_context("/")
++            try:
++                return HTMLResponse(await html_generator(ctx))
++            finally:
++                ctx.dispose()
+ 
+         html_route = Route("/", send_html)
+ 
+
+===== P026 | repo RandyChen1985/yunshu-ai-agent-platform | PR #21: Pull Request: ChatBI 查数可靠性加固：联邦 repair、空结果诊断、语义意图与自动引用 | capacidade: agentscope-core-integration
+--- SPEC VIVA
+# agentscope-core-integration Specification
+
+## Purpose
+定义云枢平台以 AgentScope 作为唯一 AI 运行时的集成边界：执行器、消息/工具抽象、SSE 协议兼容、AgentState 续跑、权限与外部执行挂起恢复，以及 General/ChatBI 原生 Agent 路径的验收要求。
+## Requirements
+### Requirement: AgentScope 作为唯一 AI 运行时
+
+系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+
+#### Scenario: 运行代码无 LangChain 依赖
+
+- **当** 开发者在 `app` 与 `tests` 目录搜索 LangChain 相关关键字
+- **那么** 不应在运行代码或自动化测试中发现 `langchain`、`ChatOpenAI`、`StructuredTool`、`BaseTool`、`ToolMessage`、`SystemMessage`、`HumanMessage`、`AIMessage` 等 LangChain 依赖
+- **并且** `requirements.txt` 不应包含 `langchain-core`、`langchain-community`、`langchain-openai`、`langchain`
+
+#### Scenario: 运行时入口唯一
+
+- **当** 用户通过 `/api/v1/chat/completions` 发起通用对话或 ChatBI 请求
+- **那么** 请求必须进入 AgentScope runtime 与对应 runner
+- **并且** 不得调用旧 LangChain executor 中的 `bind_tools()` 或 `astream()` 路径
+
+#### Scenario: RAG 与 OpenClaw 保持现有代理实现
+
+- **当** 用户通过 `/api/v1/chat/completions` 发起 RAG 或 OpenClaw 请求
+- **那么** 系统应保持现有 RAGFlow / OpenClaw API 代理实现
+- **并且** 不要求新增 `RagAgentRunner` 或 `OpenClawAgentRunner`
+- **并且** 不得重新引入 LangChain 执行路径
+
+### Requirement: 平台中立运行时边界
+
+系统 MUST 提供平台中立的消息、工具、事件、错误和 workspace 抽象，业务执行器不得直接依赖 AgentScope 具体对象。
+
+#### Scenario: 消息转换
+
+- **当** 会话历史包含 system、user、assistant、tool 结果和图片附件
+- **那么** runtime 必须先转换为平台中立消息结构
+- **并且** 再由 AgentScope adapter 转换为 AgentScope `Msg` 与内容 block
+
+#### Scenario: 工具转换
+
+- **当** 工具来源是静态 Python 工具、通用 API 工具、MCP 工具或类工具
+- **那么** 工具注册中心必须返回统一的 `RuntimeToolSpec`
+- **并且** AgentScope Toolkit 只能从 `RuntimeToolSpec` 构建
+
+### Requirement: 现有 SSE 协议兼容
+
+AgentScope event MUST 在返回前转换为现有 SSE JSON chunk，前端无需因为底层运行时替换而修改聊天渲染逻辑。
+
+#### Scenario: 文本增量
+
+- **当** AgentScope 发出 `TEXT_BLOCK_DELTA`
+- **那么** 服务端必须输出现有 `{"content": "..."}` chunk
+
+#### Scenario: 工具日志
+
+- **当** AgentScope 发出工具开始、工具结束或工具失败事件
+- **那么** 服务端必须输出现有 `{"type": "log", ...}` chunk
+- **并且** 工具名称、参数摘要、状态、耗时应写入审计 trace
+
+#### Scenario: 引用和上下文更新
+
+- **当** 工具结果包含知识库引用或结构化上下文更新
+- **那么** 服务端必须继续输出现有 `citation` 或 `context_update` chunk
+
+### Requirement: 审计 trace 兼容
+
+AgentScope 运行时 MUST 继续写入现有审计表和事件类型，后台日志查询接口不得因运行时替换失效。
+
+#### Scenario: 审计记录生成
+
+- **当** 一次会话经历路由、模型思考、工具调用和最终总结
+- **那么** 系统必须写入 `router`、`thought`、`tool_call`、`synthesis` 等现有类型的 trace
+- **并且** `/api/v1/chat/logs/{trace_id}` 能按原格式查询
+
+### Requirement: Python 与 AgentScope 部署兼容
+
+系统部署环境 MUST 满足 AgentScope 运行要求。
+
+#### Scenario: Docker 运行时版本
+
+- **当** 构建后端 Docker 镜像
+- **那么** Python 基础镜像必须是 Python 3.11 或更高版本
+- **并且** AgentScope model、tool、event、permission、workspace、Redis storage/message bus 相关模块可 import
+
+
+--- ARQUIVOS DO PR (36)
+modified  +2     -4     app/main.py
+added     +256   -0     app/services/ai/chatbi_citation_utils.py
+modified  +44    -0     app/services/ai/chatbi_sql_user_messages.py
+added     +318   -0     app/services/ai/data_query_semantic_intent.py
+added     +1091  -0     app/services/ai/empty_result_filter_diagnostic.py
+modified  +826   -166   app/services/ai/executors/federated_executor.py
+modified  +173   -10    app/services/ai/executors/prompts.py
+added     +200   -0     app/services/ai/federated_column_labels.py
+added     +472   -0     app/services/ai/federated_sql_repair.py
+modified  +26    -0     app/services/ai/knowledge_utils.py
+modified  +13    -6     app/services/ai/rewriters/sql_rewriter.py
+modified  +382   -56    app/services/ai/runners/data_agent_runner.py
+modified  +7     -4     app/services/ai/runners/knowledge_agent_runner.py
+modified  +23    -9     app/services/ai/sql_sandbox_gate.py
+modified  +218   -0     app/services/ai/time_anchor.py
+modified  +12    -3     app/services/ai/tools/data_api.py
+modified  +5     -1     app/services/sql_query_execution_service.py
+modified  +3     -2     architech/design/AGENTSCOPE_RUNTIME.md
+modified  +2     -2     architech/design/chat/CHAT_FLOW.md
+modified  +7     -5     docs/md/ai_agent_gating_contract.md
+added     +248   -0     docs/release/yunshu-platform-intro-wechat.html
+modified  +19    -5     frontend/src/views/SystemConfig.vue
+modified  +9     -2     openspec/specs/chatbi-multi-agent-team/spec.md
+modified  +78    -0     tests/ai/runners/test_auto_upgrade_federated.py
+modified  +384   -0     tests/ai/runners/test_data_agent_runner.py   <== código ligado à spec
+added     +91    -0     tests/ai/test_chatbi_citation_utils.py
+modified  +27    -0     tests/ai/test_chatbi_sql_user_messages.py
+modified  +19    -0     tests/ai/test_data_query_prompts.py
+added     +111   -0     tests/ai/test_data_query_semantic_intent.py
+added     +268   -0     tests/ai/test_empty_result_filter_diagnostic.py
+added     +72    -0     tests/ai/test_federated_column_labels.py
+added     +92    -0     tests/ai/test_federated_sql_repair.py
+modified  +13    -0     tests/ai/test_knowledge_utils.py
+added     +84    -0     tests/ai/test_time_range_gate.py
+modified  +612   -0     tests/test_federated_executor.py
+modified  +47    -1     tests/utils/test_sql_rewriter.py
+--- DIFF DO CÓDIGO LIGADO
+### tests/ai/runners/test_data_agent_runner.py
+@@ -454,6 +454,257 @@ async def test_data_agent_runner_system_content_includes_sql_plan_when_enabled(d
+     assert "<sql_plan>" in system_content
+ 
+ 
++@pytest.mark.asyncio
++async def test_schema_keyword_planner_stores_structured_semantic_intent(data_config, monkeypatch):
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner
++
++    class FakeModel:
++        async def ainvoke(self, messages):
++            class Response:
++                content = (
++                    '{"keywords":"机房 剩余机柜数 上海 区域",'
++                    '"goal":"查询上海区域所有机房的剩余机柜数",'
++                    '"metrics":["剩余机柜数"],"dimensions":["机房"],'
++                    '"filters":[{"phrase":"上海区域","semantic_type":"geographic_region",'
++                    '"expected_column_types":["区域","gxqy","region","area"],'
++                    '"avoid_column_types":["shipName"],"relation":"parent_region_or_scope"}],'
++                    '"time_range":"无","grain":"机房"}'
++                )
++
++            return Response()
++
++    async def fake_get_configured_llm(*args, **kwargs):
++        return FakeModel()
++
++    monkeypatch.setattr(
++        "app.services.ai.runners.data_agent_runner.AgentConfigProvider.get_configured_llm",
++        fake_get_configured_llm,
++    )
++    runner = DataAgentRunner(config=data_config, trace_id="trace-data-intent", trace_buffer=[])
++
++    keywords = await runner._plan_schema_search_keywords(
++        "查询上海区域所有机房的剩余机柜数",
++        "查询上海区域所有机房的剩余机柜数",
++        [],
++    )
++
++    assert keywords == "机房 剩余机柜数 上海 区域"
++    assert runner._semantic_intent is not None
++    assert runner._semantic_intent.metrics == ["剩余机柜数"]
++    assert runner._semantic_intent.filters[0].phrase == "上海区域"
++    assert "gxqy" in runner._semantic_intent.filters[0].expected_column_types
++
++
++@pytest.mark.asyncio
++async def test_schema_keyword_planner_does_not_bypass_short_business_query(data_config, monkeypatch):
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner
++
++    calls = {"count": 0}
++
++    class FakeModel:
++        async def ainvoke(self, messages):
++            calls["count"] += 1
++
++            class Response:
++                content = (
++                    '{"keywords":"上海 机房",'
++                    '"goal":"查询上海机房",'
++                    '"metrics":[],"dimensions":["机房"],'
++                    '"filters":[{"phrase":"上海","semantic_type":"geographic_region",'
++                    '"expected_column_types":["区域","gxqy"],'
++                    '"avoid_column_types":["shipName"],"relation":"parent_region_or_scope"}]}'
++                )
++
++            return Response()
++
++    async def fake_get_configured_llm(*args, **kwargs):
++        return FakeModel()
++
++    monkeypatch.setattr(
++        "app.services.ai.runners.data_agent_runner.AgentConfigProvider.get_configured_llm",
++        fake_get_configured_llm,
++    )
++    runner = DataAgentRunner(config=data_config, trace_id="trace-short-intent", trace_buffer=[])
++
++    keywords = await runner._plan_schema_search_keywords("上海机房", "上海机房", [])
++
++    assert calls["count"] == 1
++    assert keywords == "上海 机房"
++    assert runner._semantic_intent is not None
++    assert runner._semantic_intent.filters[0].relation == "parent_region_or_scope"
++
++
++@pytest.mark.asyncio
++async def test_schema_keyword_planner_derives_keywords_from_intent_when_llm_keywords_invalid(data_config, monkeypatch):
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner
++
++    class FakeModel:
++        async def ainvoke(self, messages):
++            class Response:
++                content = (
++                    '{"keywords":"关键词",'
++                    '"goal":"查询上海区域所有机房的剩余机柜数",'
++                    '"metrics":["剩余机柜数"],"dimensions":["机房"],'
++                    '"filters":[{"phrase":"上海区域","semantic_type":"geographic_region",'
++                    '"expected_column_types":["区域","gxqy","region","area"],'
++                    '"avoid_column_types":["shipName"],"relation":"parent_region_or_scope"}],'
++                    '"grain":"机房"}'
++                )
++
++            return Response()
++
++    async def fake_get_configured_llm(*args, **kwargs):
++        return FakeModel()
++
++    monkeypatch.setattr(
++        "app.services.ai.runners.data_agent_runner.AgentConfigProvider.get_configured_llm",
++        fake_get_configured_llm,
++    )
++    runner = DataAgentRunner(config=data_config, trace_id="trace-derived-keywords", trace_buffer=[])
++
++    keywords = await runner._plan_schema_search_keywords(
++        "查询上海区域所有机房的剩余机柜数",
++        "查询上海区域所有机房的剩余机柜数",
++        [],
++    )
++
++    assert keywords == "剩余机柜数 机房 上海区域 区域 gxqy region area"
++    assert runner._semantic_intent is not None
++    assert runner._semantic_intent.keywords == keywords
++
++
++@pytest.mark.asyncio
++async def test_schema_keyword_planner_includes_recent_context_in_semantic_intent_prompt(data_config, monkeypatch):
++    from app.services.ai.runtime.agentscope.compat import AIMessage, HumanMessage
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner
++
++    captured = {}
++
++    class FakeModel:
++        async def ainvoke(self, messages):
++            captured["prompt"] = getattr(messages[0], "content", "")
++
++            class Response:
++                content = (
++                    '{"keywords":"北京 机房 剩余机柜数",'
++                    '"goal":"查询北京区域所有机房的剩余机柜数",'
++                    '"metrics":["剩余机柜数"],"dimensions":["机房"],'
++                    '"filters":[{"phrase":"北京区域","semantic_type":"geographic_region",'
++                    '"expected_column_types":["区域","gxqy"],'
++                    '"avoid_column_types":["shipName"],"relation":"parent_region_or_scope"}]}'
++                )
++
++            return Response()
++
++    async def fake_get_configured_llm(*args, **kwargs):
++        return FakeModel()
++
++    monkeypatch.setattr(
++        "app.services.ai.runners.data_agent_runner.AgentConfigProvider.get_configured_llm",
++        fake_get_configured_llm,
++    )
++    runner = DataAgentRunner(config=data_config, trace_id="trace-context-intent", trace_buffer=[])
++    runtime_messages = [
++        HumanMessage(content="查询上海区域所有机房的剩余机柜数"),
++        AIMessage(content="已查询上海区域所有机房的剩余机柜数。"),
++        HumanMessage(content="那北京的呢"),
++    ]
++
++    keywords = await runner._plan_schema_search_keywords(
++        "那北京的呢",
++        "查询北京区域所有机房的剩余机柜数",
++        [],
++        runtime_messages=runtime_messages,
++    )
++
++    assert keywords == "北京 机房 剩余机柜数"
++    assert "【最近对话上下文】" in captured["prompt"]
++    assert "用户: 查询上海区域所有机房的剩余机柜数" in captured["prompt"]
++    assert "助手: 已查询上海区域所有机房的剩余机柜数。" in captured["prompt"]
++    assert "【最新提问优先级】" in captured["prompt"]
++
++
++def test_empty_result_repair_includes_structured_semantic_intent(data_config):
++    from app.services.ai.data_query_semantic_intent import (
++        DataQuerySemanticIntent,
++        SemanticIntentFilter,
++    )
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner, _DataRunState
++
++    runner = DataAgentRunner(config=data_config, trace_id="trace-empty-intent", trace_buffer=[])
++    runner._semantic_intent = DataQuerySemanticIntent(
++        goal="查询上海区域所有机房的剩余机柜数",
++        keywords="机房 剩余机柜数 上海 区域",
++        metrics=["剩余机柜数"],
++        dimensions=["机房"],
++        filters=[
++            SemanticIntentFilter(
++                phrase="上海区域",
++                semantic_type="geographic_region",
++                expected_column_types=["区域", "gxqy", "region", "area"],
++                avoid_column_types=["shipName"],
++                relation="parent_region_or_scope",
++            )
++        ],
++    )
++    state = _DataRunState(
++        empty_sql_result=True,
++        empty_sql_reason="SQL 执行成功但返回空结果",
++        empty_sql_text="SELECT shipName, spareCabinet FROM demo WHERE shipName LIKE '%上海%'",
++        empty_filter_diagnostics=[
++            {
++                "column": "shipName",
++                "used_values": ["上海"],
++                "candidates": ["外高桥", "金桥B8", "临港123期", "唐镇"],
++                "alternative_columns": ["cc_username", "ccname", "gxqy"],
++            }
++        ],
++        empty_filter_diagnostic_summary="【平台自动筛选诊断】候选值未直接包含上海。",
++    )
++
++    repair = runner._build_repair_message(state)
++
++    assert "空结果语义复核" in repair
++    assert "上海区域" in repair
++    assert "父级/范围条件" in repair
++    assert "gxqy" in repair
++    assert "不能仅因候选值不包含原词就判定无数据" in repair
++
++
++def test_need_analysis_success_details_includes_structured_semantic_intent(data_config):
++    from app.services.ai.data_query_semantic_intent import (
++        DataQuerySemanticIntent,
++        SemanticIntentFilter,
++    )
++    from app.services.ai.runners.data_agent_runner import DataAgentRunner
++
++    runner = DataAgentRunner(config=data_config, trace_id="trace-need-analysis-intent", trace_buffer=[])
++    runner._semantic_intent = DataQuerySemanticIntent(
++        goal="查询上海区域所有机房的剩余机柜数",
++        keywords="机房 剩余机柜数 上海 区域",
++        metrics=["剩余机柜数"],
++        dimensions=["机房"],
++        filters=[
++            SemanticIntentFilter(
++                phrase="上海区域",
++                semantic_type="geographic_region",
++                expected_column_types=["区域", "gxqy", "region", "area"],
++                avoid_column_types=["shipName"],
++                relation="parent_region_or_scope",
++            )
++        ],
++        grain="机房",
++    )
++
++    details = runner._format_need_analysis_success_details("机房 剩余机柜数 上海 区域")
++
++    assert "问题关键词: 机房 剩余机柜数 上海 区域" in details
++    assert "结构化业务意图" in details
++    assert "上海区域" in details
++    assert "优先绑定字段语义" in details
++    assert "gxqy" in details
++
++
+ @pytest.mark.asyncio
+ async def test_data_agent_runner_system_content_replaces_dataset_menu(data_config, monkeypatch):
+     from app.services.ai.runners.data_agent_runner import DataAgentRunner
+@@ -2236,6 +2487,54 @@ async def fake_execute(**kwargs):
+     assert "SELECT *" in state.sql_static_risk_reason
+ 
+ 
++@pytest.mark.asyncio
++async def test_execute_sql_wrapper_blocks_time_range_mismatch_before_tool_call(data_config):
++    from app.services.ai.time_anchor import build_data_query_time_anchor_block
++    from app.services.ai.runners.data_agent_runner import (
++        DataAgentRunner,
++        RuntimeToolSpec,
++        TIME_RANGE_GATE_PREFIX,
++        _DataRunState,
++    )
++
++    called = False
++
++    async def fake_execute(**kwargs):
++        nonlocal called
++        called = True
++        return {"rows": []}
++
++    runner = DataAgentRunner(config=data_config, trace_id="trace-time-range-gate", trace_buffer=[])
++    runner._standalone_query = "帮我查询上个月所有销售人员的拜访记录"
++    state = _DataRunState(requires_fresh_data=True, schema_completed=True)
++    [wrapped] = runner._wrap_tools_with_schema_gate([
++        RuntimeToolSpec(
++            name="execute_sql_query",
++            description="execute",
++            parameters_schema={},
++            source_type="static",
++            callable=fake_execute,
++            permission_scope="read",
++        )
++    ], state)
++
++    output = await wrapped.callable(
++        sql=(
++            "SELECT follow_up_person, visit_date FROM visit_log "
++            "WHERE visit_date >= TO_DATE('2025-05-01', 'YYYY-MM-DD') "
++            "AND visit_date < TO_DATE('2025-06-01', 'YYYY-MM-DD')"
++        ),
++        data_source="oracle_crm",
+
+===== P028 | repo HiroyukiFuruno/KatanA | PR #298: release: v0.22.22 Windowsヘッドレスプロセス強制とASTリント拡張 | capacidade: font-settings
+--- SPEC VIVA
+## Purpose
+
+This is a legacy capability specification that was automatically migrated to comply with the new OpenSpec schema validation rules. Please update this document manually if more context is required.
+
+## Requirements
+
+### Requirement: フォントサイズ設定
+
+プレビューとエディタのフォントサイズを変更できる。 The system SHALL conform.
+
+#### Scenario: フォントサイズの変更
+
+- **WHEN** ユーザーが設定でフォントサイズを12pxから16pxに変更する
+- **THEN** エディタとプレビューのフォントサイズが即座に16pxに反映される
+
+#### Scenario: フォントサイズの範囲
+
+- **WHEN** ユーザーがフォントサイズを設定する
+- **THEN** 8px～32pxの範囲で設定可能であり、範囲外の値は設定できない
+
+#### Scenario: フォントサイズの永続化
+
+- **WHEN** ユーザーがフォントサイズを変更する
+- **THEN** 設定が保存され、次回起動時に復元される
+
+### Requirement: フォントファミリー設定
+
+プレビューとエディタのフォントファミリーを変更できる。 The system SHALL conform.
+
+#### Scenario: フォントファミリーの変更
+
+- **WHEN** ユーザーが設定でフォントファミリーを変更する
+- **THEN** エディタとプレビューのフォントが即座に切り替わる
+
+#### Scenario: デフォルトフォント
+
+- **WHEN** フォントファミリーが未設定
+- **THEN** システムデフォルトフォントが使用される
+
+#### Scenario: フォントファミリーの永続化
+
+- **WHEN** ユーザーがフォントファミリーを変更する
+- **THEN** 設定が保存され、次回起動時に復元される
+
+--- ARQUIVOS DO PR (21)
+modified  +8     -0     CHANGELOG.ja.md
+modified  +8     -0     CHANGELOG.md
+modified  +4     -4     Cargo.lock
+modified  +1     -1     Cargo.toml
+modified  +115   -14    crates/katana-linter/src/rules/coding/process_command.rs
+modified  +27    -0     crates/katana-linter/src/utils/file_collector.rs
+modified  +71    -2     crates/katana-linter/tests/ast_linter.rs
+modified  +1     -1     crates/katana-ui/Info.plist
+modified  +8     -5     crates/katana-ui/build.rs   <== código ligado à spec
+added     +23    -0     crates/katana-ui/build_support/process.rs
+modified  +8     -1     crates/katana-ui/src/preview_pane/tests.rs
+added     +2     -0     openspec/changes/archive/2026-05-18-enforce-headless-windows-processes/.openspec.yaml
+added     +92    -0     openspec/changes/archive/2026-05-18-enforce-headless-windows-processes/design.md
+added     +36    -0     openspec/changes/archive/2026-05-18-enforce-headless-windows-processes/proposal.md
+added     +72    -0     openspec/changes/archive/2026-05-18-enforce-headless-windows-processes/specs/headless-process-enforcement/spec.md
+added     +136   -0     openspec/changes/archive/2026-05-18-enforce-headless-windows-processes/tasks.md
+modified  +27    -0     openspec/changes/v9_9_9-technical-debt/proposal.md
+added     +78    -0     openspec/specs/headless-process-enforcement/spec.md
+modified  +13    -6     scripts/screenshot/src/capture.rs
+modified  +3     -2     scripts/screenshot/src/executor.rs
+modified  +2     -2     scripts/screenshot/src/executor_harness.rs
+--- DIFF DO CÓDIGO LIGADO
+### crates/katana-ui/build.rs
+@@ -1,16 +1,19 @@
++/* WHY: include! the build-script-only headless process helper so this build.rs can spawn
++ * processes (rustc, git) without flashing a console window on Windows. The helper duplicates
++ * the minimal CREATE_NO_WINDOW logic from `katana_core::system::ProcessService::create_command`
++ * because build scripts cannot depend on `katana-core` (would form a build-time cycle). */
++include!("build_support/process.rs");
++
+ fn main() {
+     println!("cargo::rustc-check-cfg=cfg(coverage)");
+ 
+-    if let Ok(output) = std::process::Command::new("rustc")
+-        .arg("--version")
+-        .output()
+-    {
++    if let Ok(output) = create_build_command("rustc").arg("--version").output() {
+         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+         println!("cargo:rustc-env=KATANA_RUSTC_VERSION={version}");
+     }
+ 
+     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "dev".to_string());
+-    if let Ok(output) = std::process::Command::new("git")
++    if let Ok(output) = create_build_command("git")
+         .args(["rev-parse", "--short", "HEAD"])
+         .output()
+     {
+

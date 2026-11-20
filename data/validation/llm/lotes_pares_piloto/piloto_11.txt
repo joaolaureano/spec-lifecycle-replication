@@ -1,0 +1,2958 @@
+===== P050 | repo deepcausality-rs/deep_causality | PR #680: feat(deep_causality): Preparing formalization | capacidade: dec-ns-validation
+--- SPEC VIVA
+# dec-ns-validation
+
+## Purpose
+
+The validation ladder of `cfd-gap.md` §7 items 4–8: analytic Taylor–Green
+rungs, inviscid invariants, and the double shear layer in CI; the Re-1600
+flagship as an example program.
+
+## Requirements
+
+### Requirement: 2D Taylor–Green decay with convergence table (CI)
+
+The test suite SHALL march the 2D Taylor–Green vortex on `square_torus`
+lattices of size `[8, 16, 32]` and assert (a) per-grid agreement of the
+kinetic-energy envelope with the analytic `E(t) = E(0)·exp(−4νt)` within a
+precision-dependent tolerance, and (b) an observed spatial convergence
+order of at least `1.9` at f64 on the energy-envelope error. f32 SHALL be
+gated at a looser documented tolerance; Float106 at the f64 gate. The test
+SHALL document that the projection splitting bounds temporal order, so the
+gate is on spatial refinement at fixed CFL.
+
+#### Scenario: Energy envelope tracks the analytic decay
+
+- **WHEN** the 32² run completes at f64 with a CFL-safe `dt`
+- **THEN** the relative energy error at the final time is within the
+  documented tolerance and the per-grid errors shrink at order ≥ 1.9
+
+#### Scenario: All three precisions complete the ladder
+
+- **WHEN** the same ladder runs at f32, f64, and Float106
+- **THEN** each passes its documented gate, and no test weakens the f64
+  gate to accommodate f32
+
+### Requirement: 2D-in-3D Taylor–Green exercises every 3D path (CI)
+
+The test suite SHALL march the `w = 0` Taylor–Green field on `cubic_torus`
+lattices and assert the same analytic energy envelope, so the 3D wedge,
+star, interior product, projection, and CFL paths are all exercised while
+a closed-form answer exists. The vertical velocity component SHALL remain
+zero to projection tolerance throughout the march.
+
+#### Scenario: 3D march reproduces the 2D envelope
+
+- **WHEN** the 2D-in-3D case runs on a `16³` torus at f64
+- **THEN** the energy envelope matches `exp(−4νt)` within the documented
+  tolerance and `max|w|` stays at or below the projection tolerance
+
+### Requirement: Inviscid invariants are conserved (CI)
+
+The test suite SHALL march a 3D state with `ν = 0` and no body force and
+assert bounded relative drift of kinetic energy and helicity over the
+documented horizon, with the bound recorded in the test (measured, not
+assumed, per the design). Energy drift SHALL also be asserted in 2D where
+helicity does not exist.
+
+#### Scenario: Energy and helicity drift stay within the recorded bound
+
+- **WHEN** the inviscid 3D Taylor–Green runs for the documented number of
+  steps at f64
+- **THEN** `|E(T) − E(0)| / E(0)` and the corresponding helicity drift are
+  at or below the recorded bounds
+
+### Requirement: Double shear layer rolls up with 2D conservation character (CI)
+
+The test suite SHALL march the 2D double shear layer (thin tanh layers
+with a small sinusoidal cross-stream perturbation, Brown–Minion form) on a
+periodic square lattice at one modest resolution, f64 only, and assert
+three structural gates: (a) the cross-stream kinetic energy grows from its
+perturbation seed by at least one order of magnitude before the horizon
+(the roll-up witness); (b) at `ν > 0`, total kinetic energy and enstrophy
+are monotonically non-increasing within a documented tolerance, and every
+sampled state is divergence-free at projection tolerance; (c) the existing
+Q-criterion kernel from `kernels/fluids`, fed by a test-side
+central-difference gradient of the `sharp`-recovered field, reports
+positive-Q (vortex-core) cells in the rolled-up state that are absent at
+`t = 0`.
+
+#### Scenario: Perturbation energy grows by an order of magnitude
+
+- **WHEN** the shear layer marches to the documented horizon at f64
+- **THEN** the cross-stream kinetic energy at the final time is at least
+  ten times its initial value
+
+#### Scenario: 2D decay character holds through roll-up
+
+- **WHEN** the same run is sampled at the documented cadence
+- **THEN** kinetic energy and enstrophy never increase beyond the
+  documented tolerance between samples, and each sampled state's
+  divergence residual stays at projection tolerance
+
+#### Scenario: Vortex cores appear where none existed
+
+- **WHEN** the Q-criterion kernel evaluates the initial and final sampled
+  states
+- **THEN** the initial state reports no positive-Q cells above the
+  documented threshold and the final state reports at least one
+
+### Requirement: Re-1600 Taylor–Green as an example program (not CI)
+
+An example binary in `deep_causality_cfd/verification/` SHALL run the standard 3D
+Taylor–Green vortex at `Re = 1600` (the `dec_taylor_green_re1600_verification` example, beside the
+`mms_taylor_green_verification` harness it extends) with the grid size as a parameter
+(default small; 64³–128³ documented as the reporting resolutions), printing
+the time series of kinetic energy and dissipation rate `−dE/dt` as CSV on
+stdout for comparison against the published DNS reference curve
+(`references.md`). CI SHALL NOT execute this binary; the library tests gate
+correctness, the example produces the recognizable artifact.
+
+#### Scenario: Example produces the dissipation time series
+
+- **WHEN** the example binary is run at a small resolution during review
+- **THEN** it completes without error and emits monotone time, energy, and
+  dissipation columns covering the configured horizon
+
+### Requirement: Solver-path coverage discipline
+
+Every public function, error path, and alternative branch SHALL be exercised
+by tests, with any genuinely unreachable
+arm (the D3 construction-validated unwraps) documented inline as a coverage
+exemption in the Stage 0 tradition. The cross-validation, march, guard,
+diagnostic, and seeding paths SHALL each have dedicated failure-path tests,
+not only happy-path tests.
+
+#### Scenario: Coverage audit finds no undocumented gap
+
+- **WHEN** `cargo llvm-cov` runs over the new module after the suite
+- **THEN** uncovered lines are exactly the documented exemptions
+
+### Requirement: Poiseuille channel rung (CI)
+The validation ladder SHALL include body-force-driven laminar Poiseuille
+flow (periodic-x, wall-y) marched to steady state, compared against the
+exact parabolic profile over a refinement ladder — the analytic-first
+gate for the wall substrate (corrected star, Neumann projection, no-slip
+rows) before any reference-data comparison.
+
+#### Scenario: Profile is exact over the refinement ladder
+- **WHEN** the steady-state centerplane profile error is measured over the refinement ladder at f64
+- **THEN** the profile reproduces the exact parabola at rounding on every rung — with vertex-collocated walls the Dirichlet rows sit exactly on the boundary and the 3-point viscous stencil is exact on quadratics, while the convective term of an x-uniform shear vanishes under the constrained projection (a stronger result than the originally drafted ≥ 1.9 observed-order gate, which has no resolvable h-dependent error left to fit)
+
+#### Scenario: Steady state is wall-consistent
+- **WHEN** the Poiseuille march reaches its steady-state criterion
+- **THEN** wall-tangential edges are exactly zero and the divergence residual is at the solve's exactness
+
+### Requirement: Lid-driven cavity rung (coarse CI + example)
+The ladder SHALL include the Re-1000 lid-driven cavity, split by cost
+per the tests-are-fast / examples-verify division: a single coarse rung
+in CI compared against the Ghia et al. (1982) centerline tables with a
+pinned RMSE gate at a short spin-up horizon (tests stay fast), and an
+example program carrying the thorough verification — the
+refinement-trend mode (coarse → finer RMSE strictly decreasing at
+time-converged horizons, gated, nonzero exit on violation) and the
+full-resolution run emitting centerline CSVs and the detected
+vortex-center table (primary and corner eddies) against Ghia's values.
+
+#### Scenario: Coarse cavity gates in CI
+- **WHEN** the coarse cavity rung completes in CI
+- **THEN** centerline RMSE against the Ghia tables is within the pinned gate
+
+#### Scenario: Example verifies the refinement trend
+- **WHEN** the cavity example runs in its trend mode
+- **THEN** the finer grid's time-converged centerline RMSE is within its pinned gate and strictly below the coarse grid's, with a nonzero exit on violation
+
+#### Scenario: Example emits centerlines and the vortex table
+- **WHEN** the cavity example runs at full resolution
+- **THEN** it writes centerline CSVs and the detected vortex centers alongside the Ghia reference values
+
+### Requirement: Stencil-path coverage in the existing ladder
+The validation ladder SHALL run every existing CI rung (2D Taylor–Green
+table, 2D-in-3D, inviscid invariants, double shear layer) through the
+compiled stencil pipeline with results matching the generic path at
+tolerance, so the ladder gates both evaluation strategies permanently.
+
+#### Scenario: Ladder is strategy-agnostic
+- **WHEN** the CI ladder runs with the stencil pipeline enabled
+- **THEN** every rung passes with observed orders and conservation gates equal to the generic path's
+
+--- ARQUIVOS DO PR (929)
+modified  +2     -1     .github/workflows/formalization.yml
+modified  +2     -0     .github/workflows/rust_miri.yml
+modified  +35    -18    AGENTS.md
+modified  +98    -42    Cargo.lock
+modified  +3     -0     Cargo.toml
+modified  +3     -0     build/scripts/sbom.sh
+modified  +1     -0     deep_causality/Cargo.toml
+modified  +130   -106   deep_causality/deep_causality_sbom.spdx.json
+modified  +1     -1     deep_causality/deep_causality_sbom.spdx.json.sha
+modified  +195   -100   deep_causality/src/traits/causable_graph/graph_reasoning/mod.rs   <== código ligado à spec
+modified  +149   -66    deep_causality/src/traits/causable_graph/graph_reasoning/stateful.rs   <== código ligado à spec
+modified  +115   -0     deep_causality/tests/BUILD.bazel
+modified  +31    -0     deep_causality/tests/traits/causable_graph/graph_reasoning/stateful_tests.rs   <== código ligado à spec
+added     +70    -0     deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_reconvergence_tests.rs
+modified  +38    -0     deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_sub_tests.rs
+modified  +2     -0     deep_causality/tests/types/causal_types/causaloid_graph/mod.rs
+added     +31    -0     deep_causality_algebra/BUILD.bazel
+added     +27    -0     deep_causality_algebra/Cargo.toml
+added     +23    -0     deep_causality_algebra/LICENSE
+added     +60    -0     deep_causality_algebra/README.md
+renamed   +5     -60    deep_causality_algebra/README_ALGEBRA_TRAITS.md
+renamed   +14    -14    deep_causality_algebra/README_ISOMORPHISM.md
+added     +87    -0     deep_causality_algebra/deep_causality_algebra_sbom.spdx.json
+added     +1     -0     deep_causality_algebra/deep_causality_algebra_sbom.spdx.json.sha
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_assoc.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_assoc_div.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_base.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_div.rs
+renamed   +0     -24    deep_causality_algebra/src/algebra/associative.rs
+added     +15    -0     deep_causality_algebra/src/algebra/bounded_semilattice.rs
+renamed   +0     -24    deep_causality_algebra/src/algebra/commutative.rs
+added     +17    -0     deep_causality_algebra/src/algebra/commutative_monoid.rs
+added     +26    -0     deep_causality_algebra/src/algebra/conjunction.rs
+added     +26    -0     deep_causality_algebra/src/algebra/count.rs
+added     +26    -0     deep_causality_algebra/src/algebra/disjunction.rs
+added     +10    -0     deep_causality_algebra/src/algebra/distributive.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field_complex.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field_real.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group.rs
+renamed   +1     -14    deep_causality_algebra/src/algebra/group_abelian.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_add.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_div.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_mul.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_semi.rs
+added     +17    -0     deep_causality_algebra/src/algebra/idempotent.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/magma.rs
+renamed   +9     -0     deep_causality_algebra/src/algebra/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/module.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/monoid.rs
+added     +31    -0     deep_causality_algebra/src/algebra/monoid_generic.rs
+renamed   +1     -16    deep_causality_algebra/src/algebra/normed.rs
+added     +50    -0     deep_causality_algebra/src/algebra/prob.rs
+renamed   +19    -19    deep_causality_algebra/src/algebra/real.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring_associative.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring_commutative.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/rotation.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/scalar.rs
+renamed   +1     -46    deep_causality_algebra/src/algebra/scalar_conjugate.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/scalar_normed.rs
+added     +54    -0     deep_causality_algebra/src/algebra/verdict.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/division_algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/field_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/group_iso.rs
+renamed   +1     -1     deep_causality_algebra/src/iso/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/ring_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/test_support.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/division_algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/field_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/group_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/iso.rs
+renamed   +2     -2     deep_causality_algebra/src/iso/witness/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/ring_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/standard.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/test_support.rs
+added     +57    -0     deep_causality_algebra/src/lib.rs
+added     +6     -0     deep_causality_algebra/src/utils_tests/mod.rs
+renamed   +21    -11    deep_causality_algebra/src/utils_tests/utils_iso_tests.rs
+added     +125   -0     deep_causality_algebra/src/utils_tests/utils_iso_witness_tests.rs
+added     +62    -0     deep_causality_algebra/tests/BUILD.bazel
+renamed   +2     -6     deep_causality_algebra/tests/algebra/algebra_tests.rs
+added     +60    -0     deep_causality_algebra/tests/algebra/commutative_semilattice_tests.rs
+renamed   +1     -1     deep_causality_algebra/tests/algebra/field_real_f32_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/algebra/field_real_f64_tests.rs
+renamed   +6     -2     deep_causality_algebra/tests/algebra/mod.rs
+added     +59    -0     deep_causality_algebra/tests/algebra/monoid_generic_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/algebra/real_tests.rs
+added     +27    -0     deep_causality_algebra/tests/algebra/scalar_conjugate_tests.rs
+renamed   +5     -5     deep_causality_algebra/tests/algebra/scalar_normed_tests.rs
+added     +51    -0     deep_causality_algebra/tests/algebra/verdict_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/float106/double_algebra_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/float106/double_traits_tests.rs
+added     +11    -0     deep_causality_algebra/tests/float106/mod.rs
+added     +48    -0     deep_causality_algebra/tests/formalization_lean/commutative_monoid_tests.rs
+added     +19    -0     deep_causality_algebra/tests/formalization_lean/division_algebra_tests.rs
+added     +37    -0     deep_causality_algebra/tests/formalization_lean/field_tests.rs
+added     +33    -0     deep_causality_algebra/tests/formalization_lean/group_tests.rs
+added     +36    -0     deep_causality_algebra/tests/formalization_lean/mod.rs
+added     +64    -0     deep_causality_algebra/tests/formalization_lean/module_tests.rs
+added     +29    -0     deep_causality_algebra/tests/formalization_lean/monoid_generic_tests.rs
+added     +25    -0     deep_causality_algebra/tests/formalization_lean/monoid_tests.rs
+added     +39    -0     deep_causality_algebra/tests/formalization_lean/ring_tests.rs
+added     +60    -0     deep_causality_algebra/tests/formalization_lean/scalar_tests.rs
+added     +36    -0     deep_causality_algebra/tests/formalization_lean/verdict_tests.rs
+renamed   +4     -7     deep_causality_algebra/tests/iso/algebra_iso_tests.rs
+renamed   +4     -7     deep_causality_algebra/tests/iso/division_algebra_iso_tests.rs
+renamed   +4     -8     deep_causality_algebra/tests/iso/field_iso_tests.rs
+renamed   +36    -36    deep_causality_algebra/tests/iso/group_iso_tests.rs
+renamed   +0     -1     deep_causality_algebra/tests/iso/mod.rs
+renamed   +52    -51    deep_causality_algebra/tests/iso/ring_iso_tests.rs
+renamed   +2     -2     deep_causality_algebra/tests/iso/test_support_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/algebra_iso_tests.rs
+added     +25    -0     deep_causality_algebra/tests/iso/witness/division_algebra_iso_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/field_iso_tests.rs
+renamed   +4     -4     deep_causality_algebra/tests/iso/witness/group_iso_tests.rs
+renamed   +6     -4     deep_causality_algebra/tests/iso/witness/iso_tests.rs
+renamed   +0     -1     deep_causality_algebra/tests/iso/witness/mod.rs
+renamed   +5     -3     deep_causality_algebra/tests/iso/witness/ring_iso_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/standard_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/test_support_tests.rs
+added     +8     -0     deep_causality_algebra/tests/mod.rs
+modified  +1     -0     deep_causality_algorithms/BUILD.bazel
+modified  +4     -0     deep_causality_algorithms/Cargo.toml
+modified  +304   -187   deep_causality_algorithms/deep_causality_algorithms_sbom.spdx.json
+modified  +1     -1     deep_causality_algorithms/deep_causality_algorithms_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_algo.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_bootstrap.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_gst.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_learn.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_score.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_search.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_config.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_dirichlet.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_gate.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_gaussian.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_linalg.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_mapconfig.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_algo.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_algo_cdl.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_utils/mod.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_utils/surd_utils_cdl.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/combinatorics.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/count.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/memoization.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/mod.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/sample.rs
+modified  +8     -8     deep_causality_ast/deep_causality_ast_sbom.spdx.json
+modified  +1     -1     deep_causality_ast/deep_causality_ast_sbom.spdx.json.sha
+modified  +2     -0     deep_causality_calculus/BUILD.bazel
+modified  +9     -1     deep_causality_calculus/Cargo.toml
+modified  +56    -13    deep_causality_calculus/deep_causality_calculus_sbom.spdx.json
+modified  +1     -1     deep_causality_calculus/deep_causality_calculus_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_calculus/src/extensions/differentiate_ext.rs
+modified  +1     -1     deep_causality_calculus/src/lib.rs
+modified  +1     -1     deep_causality_calculus/src/types/diff_arrow.rs
+modified  +4     -0     deep_causality_calculus/tests/BUILD.bazel
+modified  +2     -1     deep_causality_calculus/tests/extensions/differentiate_ext_tests.rs
+modified  +2     -1     deep_causality_calculus/tests/ops/quadrature_tests.rs
+modified  +1     -1     deep_causality_calculus/tests/types/diff_tests.rs
+modified  +1     -1     deep_causality_calculus/tests/types/rk4_tests.rs
+modified  +3     -0     deep_causality_cfd/BUILD.bazel
+modified  +15    -0     deep_causality_cfd/Cargo.toml
+modified  +1207  -290   deep_causality_cfd/deep_causality_cfd_sbom.spdx.json
+modified  +1     -1     deep_causality_cfd/deep_causality_cfd_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_cfd/src/coordinate/blended.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/body_fitted_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/cartesian.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/cartesian_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/metric_provider.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/metric_provider_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/mod.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/eskf.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/ins_error_state.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/nav_sensors.rs
+modified  +2     -1     deep_causality_cfd/src/navigation/reentry_nav.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/regime_switch.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/dec_ns_solver/no_slip.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/energy_budget.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/mod.rs
+modified  +3     -1     deep_causality_cfd/src/solvers/dec/spectral_diffusion.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/step_output.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/uncertain_inflow/uncertain_boundary_source.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/uncertain_inflow/uncertain_inflow_zone.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/euler_1d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/fitting.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/imex.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_3d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_3d_fitted.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/immersed_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/incompressible_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/mod.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/observe.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/acoustic_inverse.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/codec.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/mask.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/operators.rs
+modified  +3     -1     deep_causality_cfd/src/tensor_bridge/projection.rs
+modified  +1     -1     deep_causality_cfd/src/theories/compressible_ns.rs
+modified  +1     -1     deep_causality_cfd/src/theories/euler.rs
+modified  +1     -1     deep_causality_cfd/src/theories/incompressible_ns.rs
+modified  +1     -1     deep_causality_cfd/src/theories/stokes.rs
+modified  +1     -1     deep_causality_cfd/src/theories/wrappers.rs
+modified  +1     -1     deep_causality_cfd/src/traits/marchable.rs
+modified  +2     -1     deep_causality_cfd/src/types/cfd_scalar.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow/compressible_march_run.rs
+modified  +2     -1     deep_causality_cfd/src/types/flow/coupled_march.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow/qtt_march_run.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/compressible_march_config.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/manufactured.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/qtt_march_config.rs
+modified  +1     -0     deep_causality_cfd/tests/BUILD.bazel
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_rate_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/dec_ns_solver_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/pressure_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/run_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/seed_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/step_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/diagnostics_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/step_output_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/taylor_green_2d_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/wrappers_tests.rs
+modified  +8     -8     deep_causality_core/deep_causality_core_sbom.spdx.json
+modified  +1     -1     deep_causality_core/deep_causality_core_sbom.spdx.json.sha
+modified  +3     -3     deep_causality_data_structures/deep_causality_data_structures_sbom.spdx.json
+modified  +1     -1     deep_causality_data_structures/deep_causality_data_structures_sbom.spdx.json.sha
+modified  +1     -0     deep_causality_discovery/BUILD.bazel
+modified  +4     -0     deep_causality_discovery/Cargo.toml
+modified  +1017  -895   deep_causality_discovery/deep_causality_discovery_sbom.spdx.json
+modified  +1     -1     deep_causality_discovery/deep_causality_discovery_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_discovery/src/traits/precision.rs
+modified  +82    -0     deep_causality_discovery/tests/BUILD.bazel
+modified  +143   -119   deep_causality_ethos/deep_causality_ethos_sbom.spdx.json
+modified  +1     -1     deep_causality_ethos/deep_causality_ethos_sbom.spdx.json.sha
+modified  +17    -0     deep_causality_ethos/tests/BUILD.bazel
+modified  +2     -0     deep_causality_fft/BUILD.bazel
+modified  +15    -1     deep_causality_fft/Cargo.toml
+modified  +1     -1     deep_causality_fft/benches/fft_benchmark.rs
+modified  +122   -79    deep_causality_fft/deep_causality_fft_sbom.spdx.json
+modified  +1     -1     deep_causality_fft/deep_causality_fft_sbom.spdx.json.sha
+modified  +2     -2     deep_causality_fft/src/lib.rs
+modified  +2     -1     deep_causality_fft/src/traits/fft_scalar.rs
+modified  +1     -1     deep_causality_fft/src/types/dct_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/bluestein.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/small.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/stockham.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan_nd/axis.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan_nd/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/rfft_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/rfft_plan_nd/mod.rs
+modified  +1     -1     deep_causality_fft/src/utils/complex_ops.rs
+modified  +1     -1     deep_causality_fft/src/utils/dft.rs
+modified  +1     -1     deep_causality_fft/src/utils/twiddles.rs
+modified  +24    -0     deep_causality_fft/tests/BUILD.bazel
+modified  +3     -2     deep_causality_fft/tests/types/dct_plan/dct_plan_tests.rs
+modified  +4     -3     deep_causality_fft/tests/types/fft_plan/fft_plan_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/fft_plan_nd/fft_plan_nd_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/rfft_plan/rfft_plan_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/rfft_plan_nd/rfft_plan_nd_tests.rs
+modified  +1     -1     deep_causality_fft/tests/utils/dft_tests.rs
+modified  +1     -0     deep_causality_file/BUILD.bazel
+modified  +4     -0     deep_causality_file/Cargo.toml
+modified  +319   -300   deep_causality_file/deep_causality_file_sbom.spdx.json
+modified  +1     -1     deep_causality_file/deep_causality_file_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_file/src/types/clock_types.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_clk.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_gnss.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_sp3.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_trace.rs
+modified  +1     -1     deep_causality_file/src/types/orbit_types.rs
+modified  +3     -3     deep_causality_haft/deep_causality_haft_sbom.spdx.json
+modified  +1     -1     deep_causality_haft/deep_causality_haft_sbom.spdx.json.sha
+modified  +15    -0     deep_causality_haft/tests/BUILD.bazel
+modified  +8     -8     deep_causality_macros/deep_causality_macros_sbom.spdx.json
+modified  +1     -1     deep_causality_macros/deep_causality_macros_sbom.spdx.json.sha
+modified  +3     -3     deep_causality_metric/deep_causality_metric_sbom.spdx.json
+modified  +1     -1     deep_causality_metric/deep_causality_metric_sbom.spdx.json.sha
+modified  +2     -0     deep_causality_multivector/BUILD.bazel
+modified  +8     -0     deep_causality_multivector/Cargo.toml
+modified  +110   -33    deep_causality_multivector/deep_causality_multivector_sbom.spdx.json
+modified  +1     -1     deep_causality_multivector/deep_causality_multivector_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_multivector/src/alias/alias_complex.rs
+modified  +3     -1     deep_causality_multivector/src/alias/alias_hilbert_state.rs
+modified  +3     -1     deep_causality_multivector/src/alias/alias_hopf_state.rs
+modified  +1     -1     deep_causality_multivector/src/alias/mod.rs
+modified  +1     -1     deep_causality_multivector/src/extensions/hkt_multifield/mod.rs
+modified  +2     -2     deep_causality_multivector/src/extensions/scalar_eval/mod.rs
+modified  +1     -1     deep_causality_multivector/src/extensions/scalar_multivector/mod.rs
+modified  +1     -1     deep_causality_multivector/src/traits/l2_norm.rs
+modified  +1     -1     deep_causality_multivector/src/traits/multi_vector.rs
+modified  +1     -1     deep_causality_multivector/src/traits/scalar_eval.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/algebra/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multifield/arithmetic/mod.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/batched_matmul.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/conversions.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/differential.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/gamma.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/grades.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/products.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/algebra/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/api/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/arithmetic/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/mod.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_matrix_rep.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_misc_impl.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_product_impl.rs
+modified  +24    -0     deep_causality_multivector/tests/BUILD.bazel
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_complex_tests.rs
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_hilbert_state_tests.rs
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_hopf_state_tests.rs
+modified  +2     -2     deep_causality_multivector/tests/extensions/iso_multifield/iso_multifield_tests.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_multivector/tests/traits/l2_norm_tests.rs
+modified  +3     -1     deep_causality_multivector/tests/types/multivector/algebra/algebra_tests.rs
+modified  +13    -46    deep_causality_num/README.md
+modified  +17    -17    deep_causality_num/deep_causality_num_sbom.spdx.json
+modified  +1     -1     deep_causality_num/deep_causality_num_sbom.spdx.json.sha
+removed   +0     -34    deep_causality_num/src/algebra/distributive.rs
+modified  +2     -6     deep_causality_num/src/integer/mod.rs
+modified  +0     -47    deep_causality_num/src/lib.rs   <== código ligado à spec
+modified  +23    -22    deep_causality_num/tests/BUILD.bazel
+removed   +0     -36    deep_causality_num/tests/algebra/monoid_tests.rs
+removed   +0     -54    deep_causality_num/tests/algebra/scalar_conjugate_tests.rs
+modified  +1     -24    deep_causality_num/tests/float_double/double_transcendental_tests.rs
+modified  +0     -4     deep_causality_num/tests/float_double/mod.rs
+added     +41    -0     deep_causality_num/tests/formalization_lean/cast_tests.rs
+added     +56    -0     deep_causality_num/tests/formalization_lean/float106_tests.rs
+added     +34    -0     deep_causality_num/tests/formalization_lean/identity_tests.rs
+added     +49    -0     deep_causality_num/tests/formalization_lean/integer_tests.rs
+added     +22    -0     deep_causality_num/tests/formalization_lean/mod.rs
+modified  +1     -0     deep_causality_num/tests/identity/one_tests.rs
+modified  +1     -0     deep_causality_num/tests/identity/zero_tests.rs
+modified  +2     -21    deep_causality_num/tests/integer/integer_tests.rs
+removed   +0     -186   deep_causality_num/tests/iso/witness/common.rs
+removed   +0     -58    deep_causality_num/tests/iso/witness/division_algebra_iso_tests.rs
+modified  +1     -4     deep_causality_num/tests/mod.rs   <== código ligado à spec
+added     +32    -0     deep_causality_num_complex/BUILD.bazel
+added     +31    -0     deep_causality_num_complex/Cargo.toml
+added     +23    -0     deep_causality_num_complex/LICENSE
+added     +50    -0     deep_causality_num_complex/README.md
+added     +106   -0     deep_causality_num_complex/deep_causality_num_complex_sbom.spdx.json
+added     +1     -0     deep_causality_num_complex/deep_causality_num_complex_sbom.spdx.json.sha
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/algebra.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/arithmetic.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/cast.rs
+added     +30    -0     deep_causality_num_complex/src/complex/complex_number/conjugate_scalar.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/display.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/identity.rs
+renamed   +3     -1     deep_causality_num_complex/src/complex/complex_number/mod.rs
+added     +22    -0     deep_causality_num_complex/src/complex/complex_number/normed.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/rotation.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/mod.rs
+renamed   +7     -3     deep_causality_num_complex/src/complex/octonion_number/algebra.rs
+renamed   +14    -14    deep_causality_num_complex/src/complex/octonion_number/arithmetic.rs
+renamed   +60    -30    deep_causality_num_complex/src/complex/octonion_number/cast.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/debug.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/display.rs
+renamed   +7     -8     deep_causality_num_complex/src/complex/octonion_number/identity.rs
+renamed   +3     -3     deep_causality_num_complex/src/complex/octonion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/neg.rs
+renamed   +4     -3     deep_causality_num_complex/src/complex/octonion_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/octonion_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/octonion_number/rotation.rs
+renamed   +6     -3     deep_causality_num_complex/src/complex/quaternion_number/algebra.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/arithmetic.rs
+renamed   +14    -14    deep_causality_num_complex/src/complex/quaternion_number/cast.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/display.rs
+renamed   +8     -4     deep_causality_num_complex/src/complex/quaternion_number/identity.rs
+renamed   +4     -4     deep_causality_num_complex/src/complex/quaternion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/quaternion_number/neg.rs
+renamed   +6     -6     deep_causality_num_complex/src/complex/quaternion_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/rotation.rs
+added     +26    -0     deep_causality_num_complex/src/lib.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/mod.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/utils_complex_tests.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/utils_octonion_tests.rs
+added     +49    -0     deep_causality_num_complex/tests/BUILD.bazel
+added     +29    -0     deep_causality_num_complex/tests/algebra_impls/conjugate_scalar_tests.rs
+added     +78    -0     deep_causality_num_complex/tests/algebra_impls/iso_division_algebra_tests.rs
+added     +13    -0     deep_causality_num_complex/tests/algebra_impls/mod.rs
+added     +34    -0     deep_causality_num_complex/tests/algebra_impls/normed_scalar_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/algebra_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_assign_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_complex_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/as_primitive_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/complex_field_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/complex_number/complex_impl_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/display_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/from_primitives_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/complex_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/neg_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/num_cast_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/ordering_tests.rs
+renamed   +3     -1     deep_causality_num_complex/tests/complex/complex_number/rotation_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/to_primitive_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/mod.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/octonion_number/algebra_tests.rs
+renamed   +2     -2     deep_causality_num_complex/tests/complex/octonion_number/arithmetic_assign_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/octonion_number/arithmetic_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/as_primitive_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/display_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/from_primitives_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/octonion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/multiplication_bug_repro_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/neg_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/num_cast_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/octonion_number/octonion_number_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/part_ord_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/rotation_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/to_primitive_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/quaternion_number/algebra_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/arithmetic_assign_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/arithmetic_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/as_primitive_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/display_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/from_primitives_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/quaternion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/neg_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/num_cast_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/quaternion_number/ops_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/part_ord_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/quaternion_number/quaternion_number_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/quaternion_number/rotation_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/to_primitive_tests.rs
+added     +94    -0     deep_causality_num_complex/tests/formalization_lean/complex_tests.rs
+added     +19    -0     deep_causality_num_complex/tests/formalization_lean/mod.rs
+added     +85    -0     deep_causality_num_complex/tests/formalization_lean/quaternion_tests.rs
+added     +7     -0     deep_causality_num_complex/tests/mod.rs
+added     +32    -0     deep_causality_num_dual/BUILD.bazel
+added     +31    -0     deep_causality_num_dual/Cargo.toml
+added     +23    -0     deep_causality_num_dual/LICENSE
+added     +51    -0     deep_causality_num_dual/README.md
+added     +106   -0     deep_causality_num_dual/deep_causality_num_dual_sbom.spdx.json
+added     +1     -0     deep_causality_num_dual/deep_causality_num_dual_sbom.spdx.json.sha
+added     +0     -0     deep_causality_num_dual/papers/Dual-AD-2501.04159v1.pdf
+added     +0     -0     deep_causality_num_dual/papers/fceng-03-758090.pdf
+added     +0     -0     deep_causality_num_dual/papers/j_EC1.pdf
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/algebra.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/arithmetic.rs
+added     +30    -0     deep_causality_num_dual/src/dual/dual_number/conjugate_scalar.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/convert.rs
+added     +16    -0     deep_causality_num_dual/src/dual/dual_number/default.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/display.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/from_primitive.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/identity.rs
+renamed   +4     -2     deep_causality_num_dual/src/dual/dual_number/mod.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/real.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/mod.rs
+added     +18    -0     deep_causality_num_dual/src/lib.rs
+added     +47    -0     deep_causality_num_dual/tests/BUILD.bazel
+added     +26    -0     deep_causality_num_dual/tests/algebra_impls/conjugate_scalar_tests.rs
+added     +8     -0     deep_causality_num_dual/tests/algebra_impls/mod.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/arithmetic_tests.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/convert_tests.rs
+added     +42    -0     deep_causality_num_dual/tests/dual/dual_number/default_tests.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/display_tests.rs
+renamed   +3     -3     deep_causality_num_dual/tests/dual/dual_number/dual_number_tests.rs
+renamed   +2     -1     deep_causality_num_dual/tests/dual/dual_number/from_primitive_tests.rs
+renamed   +1     -0     deep_causality_num_dual/tests/dual/dual_number/mod.rs
+renamed   +2     -1     deep_causality_num_dual/tests/dual/dual_number/real_tests.rs
+renamed   +0     -0     deep_causality_num_dual/tests/dual/mod.rs
+added     +76    -0     deep_causality_num_dual/tests/formalization_lean/dual_tests.rs
+added     +15    -0     deep_causality_num_dual/tests/formalization_lean/mod.rs
+added     +7     -0     deep_causality_num_dual/tests/mod.rs
+modified  +4     -4     deep_causality_par/deep_causality_par_sbom.spdx.json
+modified  +1     -1     deep_causality_par/deep_causality_par_sbom.spdx.json.sha
+modified  +3     -0     deep_causality_physics/BUILD.bazel
+modified  +15    -0     deep_causality_physics/Cargo.toml
+modified  +352   -220   deep_causality_physics/deep_causality_physics_sbom.spdx.json
+modified  +1     -1     deep_causality_physics/deep_causality_physics_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_physics/src/constants/condensed.rs
+modified  +2     -1     deep_causality_physics/src/constants/hypersonic.rs
+modified  +2     -1     deep_causality_physics/src/constants/mod.rs
+modified  +2     -1     deep_causality_physics/src/constants/universal.rs
+modified  +1     -1     deep_causality_physics/src/kernels/astro/ks_constraint.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/ks_propagator.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/two_body.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/chronometric/forward_clock.rs
+modified  +1     -1     deep_causality_physics/src/kernels/chronometric/solve_gm.rs
+modified  +1     -1     deep_causality_physics/src/kernels/chronometric/wrapper.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/moire.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/phase.rs
+modified  +2     -1     deep_causality_physics/src/kernels/condensed/qgt.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/dynamics/estimation.rs
+modified  +3     -3     deep_causality_physics/src/kernels/dynamics/kinematics.rs
+modified  +1     -1     deep_causality_physics/src/kernels/dynamics/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/fields.rs
+modified  +1     -1     deep_causality_physics/src/kernels/em/forces.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/solver.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/fluids/boundary_layer.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/coherent_structures.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/compressible.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/constitutive.rs
+modified  +1     -1     deep_causality_physics/src/kernels/fluids/dimensionless.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/governing.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/ideal_flow.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/kinematics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/turbulence.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/finite_rate.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/ionization.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/shock.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/thermochemistry.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/wrappers.rs
+modified  +3     -2     deep_causality_physics/src/kernels/materials/mechanics.rs
+modified  +3     -2     deep_causality_physics/src/kernels/materials/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/grmhd.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/ideal.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/plasma.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/resistive.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/flavor.rs
+modified  +3     -2     deep_causality_physics/src/kernels/nuclear/lund/fragmentation.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/kinematics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/string.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/physics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/qcd.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/photonics/beam.rs
+modified  +2     -1     deep_causality_physics/src/kernels/photonics/diffraction.rs
+modified  +3     -1     deep_causality_physics/src/kernels/photonics/polarization.rs
+modified  +1     -1     deep_causality_physics/src/kernels/photonics/ray.rs
+modified  +3     -1     deep_causality_physics/src/kernels/photonics/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/quantum/gates.rs
+modified  +3     -1     deep_causality_physics/src/kernels/quantum/gates_haruna.rs
+modified  +4     -2     deep_causality_physics/src/kernels/quantum/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/quantum/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/gravity.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/spacetime.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/thermodynamics/stats.rs
+modified  +2     -1     deep_causality_physics/src/kernels/thermodynamics/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/waves/general.rs
+modified  +2     -1     deep_causality_physics/src/kernels/waves/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/quantities/chronometric/mod.rs
+modified  +49    -48    deep_causality_physics/src/quantities/condensed/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/dimensionless/mod.rs
+modified  +16    -16    deep_causality_physics/src/quantities/dynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/em/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/body_force_one_form.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/pressure_zero_form.rs
+modified  +2     -1     deep_causality_physics/src/quantities/fluid_dynamics/solenoidal_field.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/velocity_one_form.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/vorticity_two_form.rs
+modified  +65    -65    deep_causality_physics/src/quantities/fluids/mod.rs
+modified  +32    -32    deep_causality_physics/src/quantities/hypersonic/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/materials/mod.rs
+modified  +32    -32    deep_causality_physics/src/quantities/mhd/mod.rs
+modified  +28    -28    deep_causality_physics/src/quantities/nuclear/mod.rs
+modified  +38    -37    deep_causality_physics/src/quantities/photonics/mod.rs
+modified  +5     -5     deep_causality_physics/src/quantities/relativity/mod.rs
+modified  +2     -1     deep_causality_physics/src/quantities/si_primitives/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/thermodynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/theories/electromagnetism/gauge_em_ops.rs
+modified  +2     -1     deep_causality_physics/src/theories/electromagnetism/gauge_em_ops_impl.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_impl.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_ops.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_params.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/radiative.rs
+modified  +1     -1     deep_causality_physics/src/theories/general_relativity/adm_ops.rs
+modified  +1     -1     deep_causality_physics/src/theories/general_relativity/adm_state.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_lie_mapping.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_ops.rs
+modified  +3     -2     deep_causality_physics/src/theories/general_relativity/gr_ops_impl.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_utils.rs
+modified  +2     -1     deep_causality_physics/src/theories/weak_force/weak_field_ops.rs
+modified  +2     -1     deep_causality_physics/src/theories/weak_force/weak_field_ops_impl.rs
+modified  +2     -1     deep_causality_physics/src/utils_tests/mod.rs
+modified  +8     -0     deep_causality_physics/tests/BUILD.bazel
+modified  +1     -1     deep_causality_physics/tests/kernels/chronometric/solve_gm_tests.rs
+modified  +3     -1     deep_causality_physics/tests/kernels/condensed/generic_real_field_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/phase_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/qgt_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/wrappers_tests.rs
+modified  +1     -0     deep_causality_physics/tests/kernels/fluids/mod.rs
+modified  +2     -1     deep_causality_physics/tests/kernels/nuclear/generic_real_field_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/beam_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/polarization_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/wrappers_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/gates_haruna_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/gates_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/mechanics_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/wrappers_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/condensed_quantities/order_parameter_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/photonics_quantities/complex_beam_parameter_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/photonics_quantities/jones_vector_tests.rs
+modified  +2     -1     deep_causality_physics/tests/quantities/solenoidal_field/divergence_free_tests.rs
+modified  +2     -1     deep_causality_physics/tests/quantities/velocity_one_form/velocity_one_form_tests.rs
+modified  +1     -0     deep_causality_rand/BUILD.bazel
+modified  +4     -0     deep_causality_rand/Cargo.toml
+modified  +70    -51    deep_causality_rand/deep_causality_rand_sbom.spdx.json
+modified  +1     -1     deep_causality_rand/deep_causality_rand_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_rand/src/extensions/distribution/dist_float_106.rs
+modified  +1     -1     deep_causality_rand/src/traits/real_rng.rs
+modified  +1     -1     deep_causality_rand/src/types/distr/normal/mod.rs
+modified  +1     -1     deep_causality_rand/src/types/distr/uniform/mod.rs
+modified  +2     -1     deep_causality_rand/src/utils/inverse_cdf.rs
+modified  +33    -0     deep_causality_rand/tests/BUILD.bazel
+modified  +2     -1     deep_causality_rand/tests/types/dist/normal/standard_normal_tests.rs
+modified  +2     -1     deep_causality_rand/tests/types/dist/uniform/uniform_tests.rs
+modified  +1     -0     deep_causality_sparse/BUILD.bazel
+modified  +6     -1     deep_causality_sparse/Cargo.toml
+modified  +92    -20    deep_causality_sparse/deep_causality_sparse_sbom.spdx.json
+modified  +1     -1     deep_causality_sparse/deep_causality_sparse_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_sparse/src/extensions/ext_iso.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_sparse/src/solver/cg.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/group.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/module.rs
+modified  +2     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/ring.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/arithmetic/mod.rs
+modified  +2     -1     deep_causality_sparse/src/types/sparse_matrix/identity/mod.rs
+modified  +1     -0     deep_causality_sparse/tests/BUILD.bazel
+modified  +2     -2     deep_causality_sparse/tests/extensions/ext_iso_tests.rs   <== código ligado à spec
+modified  +3     -0     deep_causality_tensor/BUILD.bazel
+modified  +12    -0     deep_causality_tensor/Cargo.toml
+modified  +84    -17    deep_causality_tensor/deep_causality_tensor_sbom.spdx.json
+modified  +1     -1     deep_causality_tensor/deep_causality_tensor_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_tensor/src/extensions/ext_hkt_strict.rs
+modified  +1     -1     deep_causality_tensor/src/extensions/ext_math.rs
+modified  +2     -1     deep_causality_tensor/src/extensions/ext_stats.rs
+modified  +2     -1     deep_causality_tensor/src/traits/tensor.rs
+modified  +1     -1     deep_causality_tensor/src/traits/tensor_train.rs
+modified  +1     -1     deep_causality_tensor/src/traits/tensor_train_operator.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/group.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/module.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/ring.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/api/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_inverse/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_product/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_qr/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_reduction/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd_decomp/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd_truncated/mod.rs
+modified  +3     -2     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/algebra/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/api/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/construct/cross.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/construct/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/linalg/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/round_rand/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/api/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/arrow/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/getters/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/cross_config/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/rng/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/solve/local.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/solve_config/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/truncation/mod.rs
+modified  +4     -0     deep_causality_tensor/tests/BUILD.bazel
+modified  +2     -1     deep_causality_tensor/tests/extensions/causal_tensor_ext_stats_sweep_tests.rs
+modified  +1     -8     deep_causality_tensor/tests/types/causal_tensor/algebra_tests.rs
+modified  +1     -1     deep_causality_tensor/tests/types/causal_tensor/op_tensor_inverse_tests.rs
+modified  +1     -1     deep_causality_tensor/tests/types/causal_tensor/op_tensor_svd_tests.rs
+modified  +2     -3     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_algebra_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_canonical_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_complex_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_cross_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_cross_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_operator_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_operator_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_ops_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_scalar_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_solve_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_solve_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_tests.rs
+modified  +4     -1     deep_causality_tensor/tests/types/causal_tensor_network/conjugate_scalar_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_qr_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_svd_randomized_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_svd_truncated_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/truncation_tests.rs
+modified  +2     -0     deep_causality_topology/BUILD.bazel
+modified  +10    -0     deep_causality_topology/Cargo.toml
+modified  +269   -162   deep_causality_topology/deep_causality_topology_sbom.spdx.json
+modified  +1     -1     deep_causality_topology/deep_causality_topology_sbom.spdx.json.sha
+modified  +2     -3     deep_causality_topology/src/errors/light_cone_violation.rs
+modified  +2     -1     deep_causality_topology/src/extensions/hkt_gauge/hkt_curvature.rs
+modified  +3     -3     deep_causality_topology/src/extensions/hkt_gauge/hkt_gauge_witness.rs
+modified  +2     -3     deep_causality_topology/src/extensions/hkt_gauge/hkt_lattice_gauge.rs
+modified  +1     -1     deep_causality_topology/src/extensions/hkt_lattice_complex/mod.rs
+modified  +11    -7     deep_causality_topology/src/extensions/hkt_manifold/mod.rs   <== código ligado à spec
+modified  +4     -3     deep_causality_topology/src/extensions/iso_de_rham/mod.rs
+modified  +1     -1     deep_causality_topology/src/traits/has_hodge_star.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_topology/src/types/chain/algebra/group.rs
+modified  +1     -1     deep_causality_topology/src/types/chain/algebra/module.rs
+modified  +1     -1     deep_causality_topology/src/types/chain/arithmetic/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/curvature.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/graded.rs
+modified  +3     -1     deep_causality_topology/src/types/cubical_regge_geometry/gradient.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/has_hodge_star.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/metric_tensor.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/metropolis.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/signature.rs
+modified  +1     -1     deep_causality_topology/src/types/cubical_regge_geometry/star_cache.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/volumes.rs
+modified  +2     -1     deep_causality_topology/src/types/curvature_tensor/mod.rs   <== código ligado à spec
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/carrier.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/cut_face_constraint.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/cut_face_fragment.rs
+modified  +2     -1     deep_causality_topology/src/types/cut_cell/geometry.rs
+modified  +2     -1     deep_causality_topology/src/types/cut_cell/intersection.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/primitive.rs
+modified  +1     -1     deep_causality_topology/src/types/cut_cell/registry.rs
+modified  +3     -1     deep_causality_topology/src/types/gauge/gauge_field/display.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field/getters.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field/mod.rs
+modified  +7     -2     deep_causality_topology/src/types/gauge/gauge_field_lattice/display.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field_lattice/getters.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/mod.rs
+modified  +4     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_actions.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_continuum.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gauge.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gauge_transform.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gradient_flow.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_metropolis.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_monte_carlo.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_plague.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_smearing.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_wilson.rs
+modified  +3     -2     deep_causality_topology/src/types/gauge/gauge_field_lattice/utils.rs
+modified  +3     -4     deep_causality_topology/src/types/gauge/link_variable/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/gauge/link_variable/ops.rs
+modified  +2     -2     deep_causality_topology/src/types/gauge/link_variable/random.rs
+modified  +0     -1     deep_causality_topology/src/types/graph/api/graph_ops.rs
+modified  +0     -1     deep_causality_topology/src/types/graph/graph_ops/graph_ops_impl.rs
+modified  +1     -2     deep_causality_topology/src/types/hodge_decomposition/display.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_topology/src/types/hodge_decomposition/getters.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_topology/src/types/hodge_decomposition/mod.rs   <== código ligado à spec
+modified  +1     -2     deep_causality_topology/src/types/hodge_decomposition/part_eq.rs   <== código ligado à spec
+modified  +2     -2     deep_causality_topology/src/types/lattice_complex/dual_lattice_complex.rs
+modified  +1     -1     deep_causality_topology/src/types/lattice_complex/mod.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/constructors.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/covariance.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/geometry.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/constructors/constructors_impl.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/covariance/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/codifferential.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/de_rham.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/exterior.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/hodge.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/hodge_decomposition_impl.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/interior_product.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/laplacian.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/leray.rs   <== código ligado à spec
+modified  +3     -1     deep_causality_topology/src/types/manifold/differential/neumann_poisson.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/differential/spectral_poisson.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/stencil/bilinear_op.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/stencil/build.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/stencil/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/stencil/stencil_op.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/utils_differential.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/wedge.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/display/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/geometry/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/topology/topology_base.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/topology/topology_manifold.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/topology/topology_simplicial.rs
+modified  +4     -4     deep_causality_topology/src/types/manifold/utils/utils_manifold.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/k_ring.rs
+modified  +4     -4     deep_causality_topology/src/types/neighborhood/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/moore.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/von_neumann.rs
+modified  +2     -1     deep_causality_topology/src/types/regge_geometry/curvature.rs
+modified  +2     -1     deep_causality_topology/src/types/regge_geometry/has_hodge_star.rs
+modified  +3     -3     deep_causality_topology/src/types/regge_geometry/mod.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_topology/src/types/simplicial_complex/getters/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/simplicial_complex/lazy_hodge_star.rs   <== código ligado à spec
+modified  +1     -1     deep_causality_topology/src/types/simplicial_complex/topology/chain_complex_impl.rs   <== código ligado à spec
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/display.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/from_hodge_decomposition.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/getters.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/part_eq.rs
+modified  +2     -1     deep_causality_topology/src/types/topology/ops/cup_product.rs
+modified  +2     -1     deep_causality_topology/src/utils/cg_solver.rs
+modified  +76    -0     deep_causality_topology/tests/BUILD.bazel
+modified  +1     -1     deep_causality_topology/tests/extensions/hkt_lattice_gauge_tests.rs
+modified  +1     -1     deep_causality_topology/tests/extensions/iso_de_rham_tests.rs
+modified  +2     -2     deep_causality_topology/tests/traits/has_hodge_star_tests.rs
+modified  +2     -2     deep_causality_topology/tests/types/cubical_regge_geometry/curvature_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/cubical_regge_geometry/has_hodge_star_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/cut_cell/cut_face_constraint_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/cut_cell/intersection_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field/gauge_field_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/continuum_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/gradient_flow_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/lattice_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/lattice_gauge_field_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/metropolis_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/metropolis_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/verification_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/wilson_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/link_variable/link_variable_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/link_variable/link_variable_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/de_rham_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/hodge_decomposition_property_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/interior_product_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/leray_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/spectral_poisson_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/stencil_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/wedge_tests.rs
+modified  +1     -0     deep_causality_uncertain/BUILD.bazel
+modified  +4     -0     deep_causality_uncertain/Cargo.toml
+modified  +85    -61    deep_causality_uncertain/deep_causality_uncertain_sbom.spdx.json
+modified  +1     -1     deep_causality_uncertain/deep_causality_uncertain_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_uncertain/src/types/computation/operator/arithmetic_operator.rs
+modified  +1     -1     deep_causality_uncertain/src/types/computation/operator/comparison_operator.rs
+modified  +1     -1     deep_causality_uncertain/src/types/uncertain/uncertain_op_arithmetic.rs   <== código ligado à spec
+modified  +2     -1     deep_causality_uncertain/src/types/uncertain/uncertain_statistics.rs
+modified  +38    -0     deep_causality_uncertain/tests/BUILD.bazel
+modified  +1     -0     examples/avionics_examples/Cargo.toml
+modified  +1     -1     examples/avionics_examples/cfd/flight_envelope_placard/model.rs
+modified  +2     -2     examples/avionics_examples/cfd/plasma_blackout_weather/model.rs
+modified  +2     -1     examples/avionics_examples/cfd/turbulence_flow/model.rs
+modified  +1     -1     examples/avionics_examples/src/shared/stages.rs
+modified  +2     -1     examples/avionics_examples/src/shared/utils.rs
+modified  +1     -1     examples/avionics_examples/src/shared/world.rs
+modified  +1     -0     examples/chronometric_examples/Cargo.toml
+modified  +1     -1     examples/chronometric_examples/gm_recovery/display.rs
+modified  +2     -1     examples/chronometric_examples/gm_recovery/pipeline.rs
+modified  +2     -1     examples/chronometric_examples/src/proces_utils/lagrange.rs
+modified  +1     -1     examples/chronometric_examples/src/proces_utils/mad_filter.rs
+modified  +1     -1     examples/chronometric_examples/src/types/gravity_types.rs
+modified  +3     -0     examples/mathematics_examples/Cargo.toml
+modified  +1     -1     examples/mathematics_examples/algebra/dixon_multivector.rs
+modified  +2     -1     examples/mathematics_examples/calculus/leibniz_dual_integration.rs
+modified  +2     -1     examples/mathematics_examples/composable_multi_math/capstone_spinor_minkowski/main.rs
+modified  +1     -1     examples/mathematics_examples/composable_multi_math/effect_kalman_predict_correct/main.rs
+modified  +2     -1     examples/mathematics_examples/composable_multi_math/effect_tensor_algebra_roundtrip/main.rs
+modified  +1     -1     examples/mathematics_examples/composable_multi_math/tensor_x_algebra_rotation_field/main.rs
+modified  +1     -1     examples/mathematics_examples/topology/lattice_gauge_simulation.rs
+modified  +3     -0     examples/physics_examples/Cargo.toml
+modified  +2     -1     examples/physics_examples/gauge_gr/main.rs
+modified  +2     -1     examples/physics_examples/gauge_lattice_u1_2d/main.rs
+modified  +2     -1     examples/physics_examples/laser_resonator_stability/main.rs
+modified  +1     -1     examples/physics_examples/multi_physics_pipeline/main.rs
+modified  +2     -0     examples/quantum_examples/Cargo.toml
+modified  +2     -1     examples/quantum_examples/gauge_electroweak/main.rs
+modified  +1     -1     examples/quantum_examples/hopf_fibration_multivector/main.rs
+modified  +2     -1     examples/quantum_examples/ikkt_matrix_model/main.rs
+modified  +2     -1     examples/quantum_examples/quantum_counterfactual/main.rs
+modified  +1     -1     examples/quantum_examples/quantum_geometric_tensor/main.rs
+modified  +2     -1     examples/quantum_examples/topological_insulator/model.rs
+modified  +36    -3     lean/DeepCausalityFormal.lean
+added     +47    -0     lean/DeepCausalityFormal/Algebra/CommutativeMonoid.lean
+added     +27    -0     lean/DeepCausalityFormal/Algebra/DivisionAlgebra.lean
+added     +45    -0     lean/DeepCausalityFormal/Algebra/Field.lean
+added     +41    -0     lean/DeepCausalityFormal/Algebra/Group.lean
+added     +70    -0     lean/DeepCausalityFormal/Algebra/Module.lean
+renamed   +5     -5     lean/DeepCausalityFormal/Algebra/Monoid.lean
+added     +38    -0     lean/DeepCausalityFormal/Algebra/MonoidGeneric.lean
+added     +52    -0     lean/DeepCausalityFormal/Algebra/Ring.lean
+added     +62    -0     lean/DeepCausalityFormal/Algebra/Scalar.lean
+added     +46    -0     lean/DeepCausalityFormal/Algebra/Verdict.lean
+added     +58    -0     lean/DeepCausalityFormal/Complex/Complex.lean
+added     +59    -0     lean/DeepCausalityFormal/Complex/Quaternion.lean
+added     +91    -0     lean/DeepCausalityFormal/Dual/Dual.lean
+added     +32    -0     lean/DeepCausalityFormal/Num/Cast.lean
+added     +42    -0     lean/DeepCausalityFormal/Num/Float106.lean
+added     +35    -0     lean/DeepCausalityFormal/Num/Identity.lean
+added     +38    -0     lean/DeepCausalityFormal/Num/Integer.lean
+modified  +20    -7     lean/README.md
+modified  +64    -2     lean/THEOREM_MAP.md
+added     +2     -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/design.md
+added     +36    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/proposal.md
+added     +52    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/specs/comonoid-graph-join/spec.md
+added     +34    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/design.md
+added     +34    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/proposal.md
+added     +24    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-commutative-semilattice/spec.md
+added     +24    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-generic-monoid/spec.md
+added     +29    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-verdict-algebra/spec.md
+added     +36    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/tasks.md
+added     +2     -0     openspec/changes/formalize-main-crate/.openspec.yaml
+added     +58    -0     openspec/changes/formalize-main-crate/design.md
+added     +37    -0     openspec/changes/formalize-main-crate/proposal.md
+added     +38    -0     openspec/changes/formalize-main-crate/specs/causaloid-formalization/spec.md
+added     +24    -0     openspec/changes/formalize-main-crate/specs/context-hypergraph-formalization/spec.md
+added     +34    -0     openspec/changes/formalize-main-crate/specs/graph-reasoning-formalization/spec.md
+added     +38    -0     openspec/changes/formalize-main-crate/specs/intervention-do-operator/spec.md
+added     +70    -0     openspec/changes/formalize-main-crate/specs/quantum-causal-model-support/spec.md
+added     +54    -0     openspec/changes/formalize-main-crate/tasks.md
+added     +2     -0     openspec/changes/haft-categorical-machinery/.openspec.yaml
+added     +48    -0     openspec/changes/haft-categorical-machinery/design.md
+added     +40    -0     openspec/changes/haft-categorical-machinery/proposal.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-arrow-interpreter/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-category-kleisli/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-foldable-foldmap/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-free-arrow/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-symmetric-monoidal-prop/spec.md
+added     +40    -0     openspec/changes/haft-categorical-machinery/tasks.md
+added     +67    -0     openspec/notes/causal-algebra/Causaloid-structure.md
+modified  +43    -14    openspec/notes/causal-algebra/algebraic-causaloid-assumptions.md
+added     +0     -0     openspec/notes/quantum/Causal and compositional structure of unitary transformations-2001.07774v2.pdf
+added     +0     -0     openspec/notes/quantum/Cyclic Quantum Causal Models-2002.12157v3.pdf
+added     +0     -0     openspec/notes/quantum/Quantum causal models-lorenz2022.pdf
+added     +56    -0     openspec/specs/comonoid-graph-join/spec.md
+added     +28    -0     openspec/specs/num-commutative-semilattice/spec.md
+added     +28    -0     openspec/specs/num-generic-monoid/spec.md
+added     +33    -0     openspec/specs/num-verdict-algebra/spec.md
+modified  +3     -3     ultragraph/ultragraph_sbom.spdx.json
+modified  +1     -1     ultragraph/ultragraph_sbom.spdx.json.sha
+--- DIFF DO CÓDIGO LIGADO
+### deep_causality/src/traits/causable_graph/graph_reasoning/mod.rs
+@@ -6,9 +6,9 @@
+ pub mod stateful;
+ 
+ use crate::*;
+-use std::collections::VecDeque;
++use std::collections::{BTreeMap, BTreeSet};
+ use std::fmt::Debug;
+-use ultragraph::GraphTraversal;
++use ultragraph::{GraphTraversal, TopologicalGraphAlgorithms};
+ 
+ /// Provides default implementations for monadic reasoning over `CausableGraph` items.
+ ///
+@@ -61,29 +61,43 @@ where
+         causaloid.evaluate(effect)
+     }
+ 
+-    /// Reasons over a subgraph by traversing all nodes reachable from a given start index,
+-    /// using a monadic approach.
++    /// Reasons over the acyclic sub-DAG reachable from a start index using a monadic approach.
+     ///
+-    /// This method performs a Breadth-First Search (BFS) traversal of all descendants
+-    /// of the `start_index`. The `PropagatingEffect` is passed sequentially:
+-    /// the output effect of a parent node becomes the input effect for its child node.
+-    /// The traversal continues as long as no `CausalityError` is returned within the `PropagatingEffect`.
++    /// The frozen graph must be acyclic. Evaluation runs a Kahn-style topological schedule rather
++    /// than a breadth-first walk. A ready-set (a `BTreeSet` ordered by ascending node index) holds
++    /// the nodes whose reachable parents have all resolved. The scheduler pops the lowest-index
++    /// ready node, evaluates it once, and publishes its output effect to the wire slot of every
++    /// reachable child. A child becomes ready when its last pending wire resolves.
+     ///
+-    /// ## Adaptive Reasoning
++    /// A reachability pre-pass first marks the start node and its descendants. A wire from a
++    /// non-descendant is therefore resolved `Inactive` up front and never counted as pending, which
++    /// keeps mid-graph starts and abandoned relay cones free of deadlock. A node reached by a single
++    /// fired parent passes that parent's effect through, because the join of one input is the
++    /// identity. A node reached by two or more fired parents is a reconvergence; the merge (∇) of
++    /// converging effects is not yet defined, so the evaluator fails loudly instead of silently
++    /// picking one parent.
+     ///
+-    /// If a `Causaloid` returns a `RelayTo` command effect, the BFS traversal dynamically jumps to
+-    /// its `target` index, and the command's sub-program becomes the new input for the relayed path.
+-    /// This enables *adaptive reasoning* conditional to the deciding causaloid.
++    /// ## Acyclicity requirement
++    ///
++    /// A directed cycle is rejected with an error before any node runs. A Kahn-style ready-set would
++    /// otherwise silently skip the nodes trapped inside the cycle, so the frozen graph must be a DAG.
++    ///
++    /// ## Adaptive reasoning
++    ///
++    /// A `RelayTo(target, sub)` result ends the current round and starts a fresh round at `target`,
++    /// seeded with the command's sub-program. Rounds compose sequentially. The abandoned cone of the
++    /// relaying round simply stops and resolves `Inactive` implicitly. The relay is single-level.
+     ///
+     /// # Arguments
+     ///
+-    /// * `start_index` - The index of the node to start the traversal from.
+-    /// * `initial_effect` - The initial runtime effect to be passed to the starting node's evaluation function.
++    /// * `start_index` - The index of the node to start evaluation from.
++    /// * `initial_effect` - The initial runtime effect passed to the starting node's evaluation function.
+     ///
+     /// # Returns
+     ///
+-    /// A `PropagatingEffect` representing the final aggregated monadic effect of the traversal.
+-    /// If an error occurs during evaluation, the returned `PropagatingEffect` will contain the error.
++    /// A `PropagatingEffect` carrying the effect of the last node processed under the ascending-index
++    /// schedule. The first node error short-circuits the whole traversal and is returned with its
++    /// logs intact.
+     fn evaluate_subgraph_from_cause(
+         &self,
+         start_index: usize,
+@@ -101,114 +115,195 @@ where
+             )));
+         }
+ 
+-        // Queue stores (node_index, incoming_effect_for_this_node)
+-        let mut queue =
+-            VecDeque::<(usize, PropagatingEffect<V>)>::with_capacity(self.number_nodes());
+-        let mut visited = vec![false; self.number_nodes()];
++        // The classical fan-in evaluator requires a topological order, so the frozen graph must be
++        // acyclic. A Kahn-style ready-set would otherwise silently skip nodes inside a cycle.
++        if self.get_graph().has_cycle().unwrap_or(true) {
++            return PropagatingEffect::from_error(CausalityError(CausalityErrorEnum::Custom(
++                "Graph contains a directed cycle; the reconvergence-join evaluator requires an \
++                 acyclic (frozen DAG) graph"
++                    .into(),
++            )));
++        }
+ 
+-        // Initialize the queue with the starting node and the initial effect
+-        queue.push_back((start_index, initial_effect.clone()));
+-        visited[start_index] = true;
++        let n_nodes = self.number_nodes();
+ 
+-        // This will hold the effect of the last successfully processed node.
+-        let mut last_propagated_effect = initial_effect.clone();
++        // Evaluation composes rounds sequentially: a round folds the reachable acyclic sub-DAG with
++        // labeled fan-in; a `RelayTo` ends the round and starts a fresh one at the relay target with
++        // the command's sub-program as the new seed (sequential composition of rounds).
++        let mut round_start = start_index;
++        let mut round_input = initial_effect.clone();
+ 
+-        while let Some((current_index, incoming_effect)) = queue.pop_front() {
+-            let causaloid = match self.get_causaloid(current_index) {
+-                Some(c) => c,
+-                None => {
+-                    return PropagatingEffect::from_error(CausalityError(
+-                        CausalityErrorEnum::Custom(format!(
+-                            "Failed to get causaloid at index {current_index}"
+-                        )),
+-                    ));
++        'rounds: loop {
++            // Reachability pre-pass: only `round_start` and its descendants can fire. Every in-wire
++            // from a non-descendant is thereby resolved `Inactive` up front (it is never counted in
++            // `pending`), which is what keeps mid-graph starts and abandoned relay cones deadlock-free.
++            let mut reachable = vec![false; n_nodes];
++            reachable[round_start] = true;
++            let mut stack = vec![round_start];
++            while let Some(node) = stack.pop() {
++                if let Ok(children) = self.get_graph().outbound_edges(node) {
++                    for c in children {
++                        if !reachable[c] {
++                            reachable[c] = true;
++                            stack.push(c);
++                        }
++                    }
+                 }
+-            };
+-
+-            // Evaluate the current cause using the incoming_effect.
+-            let result_effect = causaloid.evaluate(&incoming_effect);
++            }
+ 
+-            // Update the last_propagated_effect with the result of the current node's evaluation.
+-            last_propagated_effect = result_effect.clone();
++            // Wire-slot bookkeeping. `pending[n]` counts the *reachable* parents of `n` not yet
++            // resolved; a wire from an unreachable parent is pre-resolved `Inactive` (not counted).
++            // `fired[n]` accumulates the effects of parents that fired, keyed by parent node index.
++            let mut pending = vec![0usize; n_nodes];
++            let mut fired: Vec<BTreeMap<usize, PropagatingEffect<V>>> =
++                (0..n_nodes).map(|_| BTreeMap::new()).collect();
++            let mut processed = vec![false; n_nodes];
+ 
+-            // If an error occurred, propagate it and stop further processing for this path.
+-            if result_effect.is_err() {
+-                return result_effect;
++            for node in 0..n_nodes {
++                // The start node is seeded, so its parents are ignored (pending stays 0).
++                if !reachable[node] || node == round_start {
++                    continue;
++                }
++                if let Ok(parents) = self.get_graph().inbound_edges(node) {
++                    pending[node] = parents.filter(|p| reachable[*p]).count();
++                }
+             }
+ 
+-            // Interpret the causaloid's output effect (the `Free::fold` handler, inlined for the
+-            // single `RelayTo` command): a command jumps; a value/none follows the graph edges.
+-            match result_effect.command_target() {
+-                // Adaptive reasoning: `RelayTo(target, sub)`.
+-                Some(target_idx) => {
+-                    // Reset traversal state to follow the relayed path exclusively.
+-                    visited.fill(false);
+-                    queue.clear();
++            // Ready set ordered by ascending node index — the canonical schedule.
++            let mut ready: BTreeSet<usize> = BTreeSet::new();
++            ready.insert(round_start);
++
++            let mut last_effect = round_input.clone();
++
++            while let Some(node) = ready.pop_first() {
++                if processed[node] {
++                    continue;
++                }
++                processed[node] = true;
++
++                // Resolve this node's incoming effect from its wire slots.
++                let incoming = if node == round_start {
++                    round_input.clone()
++                } else {
++                    let parents = std::mem::take(&mut fired[node]);
++                    match parents.len() {
++                        0 => {
++                            // Unreachable invariant guard. The reachability pre-pass prunes dead paths
++                            // at the wire level: an in-wire from a non-descendant of the start is never
++                            // counted in `pending`, and every *reachable* ancestor of a node fires
++                            // (induction from the seeded start over the acyclic reachable sub-DAG). So a
++                            // non-start node that becomes ready always has at least one fired parent;
++                            // it never resolves to a zero-parent join.
++                            return PropagatingEffect::from_error(CausalityError(
++                                CausalityErrorEnum::Custom(format!(
++                                    "internal invariant: node {node} became ready with no fired parents"
++                                )),
++                            ));
++                        }
++                        1 => {
++                            // Join of one fired parent is the identity: pass its effect through.
++                            parents.into_values().next().expect("len == 1")
++                        }
++                        _ => {
++                            // Reconvergence: two or more parents fire into one node. The merge (∇) of
++                            // converging effects is a symmetric-monoidal generator over the effect
++                            // monad (copy/discard comonoid + merge), an extension of the single-input
++                            // causaloid that is not yet defined (see
++                            // `openspec/notes/causal-algebra/algebraic-causaloid-assumptions.md` #2).
++                            // Fail loudly rather than silently pick one parent (the previous
++                            // first-parent-wins bug) or guess a combine in the wrong layer.
++                            let keys: Vec<usize> = parents.keys().copied().collect();
++                            return PropagatingEffect::from_error(CausalityError(
++                                CausalityErrorEnum::Custom(format!(
++                                    "Node {node} is a reconvergence reached by {} fired parents \
++                                     (graph indices {keys:?}); the reconvergence merge (∇) is not \
++                                     yet defined and multi-parent fan-in is unsupported. Restructure \
++                                     to a single-parent path, or await the symmetric-monoidal merge \
++                                     extension.",
++                                    keys.len()
++                                )),
++                            ));
++                        }
++                    }
++                };
+ 
+-                    if !self.contains_causaloid(target_idx) {
+-                        // Raising discards the value channel: value and error are one channel.
+-                        let (_, state, context, logs) = last_propagated_effect.into_parts();
+-                        return PropagatingEffect::new(
+-                            Err(CausalityError(CausalityErrorEnum::Custom(format!(
+-                                "RelayTo target causaloid with index {target_idx} not found in graph."
+-                            )))),
+-                            state,
+-                            context,
+-                            logs,
+-                        );
++                let causaloid = match self.get_causaloid(node) {
++                    Some(c) => c,
++                    None => {
++                        return PropagatingEffect::from_error(CausalityError(
++                            CausalityErrorEnum::Custom(format!(
++                                "Failed to get causaloid at index {node}"
++                            )),
++                        ));
+                     }
++                };
+ 
+-                    visited[target_idx] = true;
++                let result_effect = causaloid.evaluate(&incoming);
++                last_effect = result_effect.clone();
+ 
+-                    // The relayed input is the command's sub-program, fed to the target as its
+-                    // incoming effect. A value/`None` is evaluated by the target as-is. This inlines a
+-                    // SINGLE-level `RelayTo` jump: a nested command is passed through to the target as
+-                    // input, where a singleton rejects it with a clear error (see `Causable::evaluate`)
+-                    // — the engine does not re-dispatch nested commands across nodes. Multi-level
+-                    // command folding is the algebra of `CausalEffect::fold`, not this BFS loop.
+-                    let relayed_effect = result_effect
+-                        .into_parts()
+-                        .0
+-                        .ok()
+-                        .and_then(CausalEffect::into_command)
+-                        .map(|(_, sub)| sub)
+-                        .unwrap_or_else(CausalEffect::none);
+-                    // The stateless engine's carrier has unit state and no context.
+-                    let relayed = PropagatingEffect::new(
+-                        Ok(relayed_effect),
+-                        (),
+-                        None,
+-                        last_propagated_effect.logs().clone(),
+-                    );
+-                    queue.push_back((target_idx, relayed));
++                // A node error short-circuits the whole traversal (left-zero), preserving logs.
++                if result_effect.is_err() {
++                    return result_effect;
+                 }
+-                None => {
+-                    let children = match self.get_graph().outbound_edges(current_index) {
+-                        Ok(c) => c,
+-                        Err(e) => {
+-                            // Raising discards the value channel: value and error are one channel.
+-                            let (_, state, context, logs) = last_propagated_effect.into_parts();
++
++                match result_effect.command_target() {
++                    // Adaptive reasoning: `RelayTo(target, sub)` ends this round and starts a fresh
++                    // one at the target with the command's sub-program (single-level relay). The
++                    // abandoned cone resolves `Inactive` implicitly — the round simply stops here.
++                    Some(target_idx) => {
++                        if !self.contains_causaloid(target_idx) {
++                            let (_, state, context, logs) = last_effect.into_parts();
+                             return PropagatingEffect::new(
+-                                Err(CausalityError(CausalityErrorEnum::Custom(format!("{e}")))),
++                                Err(CausalityError(CausalityErrorEnum::Custom(format!(
++                                    "RelayTo target causaloid with index {target_idx} not found in graph."
++                                )))),
+                                 state,
+                                 context,
+                                 logs,
+                             );
+                         }
+-                    };
+-                    for child_index in children {
+-                        if !visited[child_index] {
+-                            visited[child_index] = true;
+
+### deep_causality/src/traits/causable_graph/graph_reasoning/stateful.rs
+@@ -18,9 +18,9 @@
+ //! [`crate::Causaloid::from_causal_graph_with_context`].
+ 
+ use crate::*;
+-use std::collections::VecDeque;
++use std::collections::{BTreeMap, BTreeSet};
+ use std::fmt::Debug;
+-use ultragraph::GraphTraversal;
++use ultragraph::{GraphTraversal, TopologicalGraphAlgorithms};
+ 
+ /// Builds an errored process from borrowed channels (clone-and-raise helper).
+ fn raise_from<V, S, C>(
+@@ -114,95 +114,178 @@ where
+             );
+         }
+ 
+-        let mut queue =
+-            VecDeque::<(usize, PropagatingProcess<V, S, C>)>::with_capacity(self.number_nodes());
+-        let mut visited = vec![false; self.number_nodes()];
+-
+-        queue.push_back((start_index, initial_effect.clone()));
+-        visited[start_index] = true;
++        // The stateful evaluator mirrors the stateless wire-slot engine (reachability pre-pass,
++        // ascending-index canonical schedule, `RelayTo` as sequential round composition), so it too
++        // requires a frozen acyclic graph.
++        if self.get_graph().has_cycle().unwrap_or(true) {
++            return raise_from(
++                CausalityError(CausalityErrorEnum::Custom(
++                    "Graph contains a directed cycle; the reconvergence-join evaluator requires an \
++                     acyclic (frozen DAG) graph"
++                        .into(),
++                )),
++                initial_effect,
++            );
++        }
+ 
+-        let mut last_propagated = initial_effect.clone();
++        let n_nodes = self.number_nodes();
++        let mut round_start = start_index;
++        let mut round_input = initial_effect.clone();
+ 
+-        while let Some((current_index, incoming)) = queue.pop_front() {
+-            let causaloid = match self.get_causaloid(current_index) {
+-                Some(c) => c,
+-                None => {
+-                    return raise_from(
+-                        CausalityError(CausalityErrorEnum::Custom(format!(
+-                            "Failed to get causaloid at index {current_index}"
+-                        ))),
+-                        &last_propagated,
+-                    );
++        'rounds: loop {
++            // Reachability pre-pass: only `round_start` and its descendants can fire.
++            let mut reachable = vec![false; n_nodes];
++            reachable[round_start] = true;
++            let mut stack = vec![round_start];
++            while let Some(node) = stack.pop() {
++                if let Ok(children) = self.get_graph().outbound_edges(node) {
++                    for c in children {
++                        if !reachable[c] {
++                            reachable[c] = true;
++                            stack.push(c);
++                        }
++                    }
+                 }
+-            };
++            }
+ 
+-            let result = causaloid.evaluate_stateful(&incoming);
+-            last_propagated = result.clone();
++            let mut pending = vec![0usize; n_nodes];
++            let mut fired: Vec<BTreeMap<usize, PropagatingProcess<V, S, C>>> =
++                (0..n_nodes).map(|_| BTreeMap::new()).collect();
++            let mut processed = vec![false; n_nodes];
+ 
+-            if result.is_err() {
+-                return result;
++            for node in 0..n_nodes {
++                if !reachable[node] || node == round_start {
++                    continue;
++                }
++                if let Ok(parents) = self.get_graph().inbound_edges(node) {
++                    pending[node] = parents.filter(|p| reachable[*p]).count();
++                }
+             }
+ 
+-            // Interpret the output effect (the `Free::fold` handler, inlined for `RelayTo`).
+-            match result.command_target() {
+-                Some(target_idx) => {
+-                    visited.fill(false);
+-                    queue.clear();
++            let mut ready: BTreeSet<usize> = BTreeSet::new();
++            ready.insert(round_start);
+ 
+-                    if !self.contains_causaloid(target_idx) {
++            let mut last_propagated = round_input.clone();
++
++            while let Some(node) = ready.pop_first() {
++                if processed[node] {
++                    continue;
++                }
++                processed[node] = true;
++
++                let incoming = if node == round_start {
++                    round_input.clone()
++                } else {
++                    let parents = std::mem::take(&mut fired[node]);
++                    match parents.len() {
++                        0 => {
++                            // Unreachable invariant guard (see the stateless engine): the reachability
++                            // pre-pass prunes dead paths at the wire level, so a non-start node that
++                            // becomes ready always has at least one fired parent.
++                            return raise_from(
++                                CausalityError(CausalityErrorEnum::Custom(format!(
++                                    "internal invariant: node {node} became ready with no fired parents"
++                                ))),
++                                &last_propagated,
++                            );
++                        }
++                        1 => {
++                            // Join of one fired parent is the identity: thread its process through.
++                            parents.into_values().next().expect("len == 1")
++                        }
++                        _ => {
++                            // Reconvergence: the merge (∇) of converging effects is a symmetric-
++                            // monoidal generator over the effect monad, an extension of the single-
++                            // input causaloid that is not yet defined (see
++                            // `openspec/notes/causal-algebra/algebraic-causaloid-assumptions.md` #2).
++                            // Fail loudly rather than silently pick one parent or guess a combine.
++                            let keys: Vec<usize> = parents.keys().copied().collect();
++                            return raise_from(
++                                CausalityError(CausalityErrorEnum::Custom(format!(
++                                    "Node {node} is a reconvergence reached by {} fired parents \
++                                     (graph indices {keys:?}); the reconvergence merge (∇) is not \
++                                     yet defined and multi-parent fan-in is unsupported. Restructure \
++                                     to a single-parent path, or await the symmetric-monoidal merge \
++                                     extension.",
++                                    keys.len()
++                                ))),
++                                &last_propagated,
++                            );
++                        }
++                    }
++                };
++
++                let causaloid = match self.get_causaloid(node) {
++                    Some(c) => c,
++                    None => {
+                         return raise_from(
+                             CausalityError(CausalityErrorEnum::Custom(format!(
+-                                "RelayTo target causaloid with index {target_idx} not found in graph."
++                                "Failed to get causaloid at index {node}"
+                             ))),
+                             &last_propagated,
+                         );
+                     }
++                };
+ 
+-                    visited[target_idx] = true;
+-
+-                    // The relayed input is the command's sub-program, fed to the target as its
+-                    // incoming effect, carrying the relaying node's state, context, and logs forward.
+-                    // A value/`None` is evaluated by the target as-is. This inlines a SINGLE-level
+-                    // `RelayTo` jump: a nested command is passed through to the target as input, where
+-                    // a singleton rejects it with a clear error (see `evaluate_stateful`) — the engine
+-                    // does not re-dispatch nested commands across nodes. Multi-level command folding is
+-                    // the algebra of `CausalEffect::fold`, not this BFS loop.
+-                    let relayed_effect = result
+-                        .into_parts()
+-                        .0
+-                        .ok()
+-                        .and_then(CausalEffect::into_command)
+-                        .map(|(_, sub)| sub)
+-                        .unwrap_or_else(CausalEffect::none);
+-                    let relayed: PropagatingProcess<V, S, C> = PropagatingProcess::new(
+-                        Ok(relayed_effect),
+-                        last_propagated.state().clone(),
+-                        last_propagated.context().clone(),
+-                        last_propagated.logs().clone(),
+-                    );
+-                    queue.push_back((target_idx, relayed));
++                let result = causaloid.evaluate_stateful(&incoming);
++                last_propagated = result.clone();
++
++                if result.is_err() {
++                    return result;
+                 }
+-                None => {
+-                    let children = match self.get_graph().outbound_edges(current_index) {
+-                        Ok(c) => c,
+-                        Err(e) => {
++
++                match result.command_target() {
++                    Some(target_idx) => {
++                        if !self.contains_causaloid(target_idx) {
+                             return raise_from(
+-                                CausalityError(CausalityErrorEnum::Custom(format!("{e}"))),
++                                CausalityError(CausalityErrorEnum::Custom(format!(
++                                    "RelayTo target causaloid with index {target_idx} not found in graph."
++                                ))),
+                                 &last_propagated,
+                             );
+                         }
+-                    };
+-                    for child_index in children {
+-                        if !visited[child_index] {
+-                            visited[child_index] = true;
+-                            queue.push_back((child_index, result.clone()));
++                        // Carry the relaying node's state, context, and logs forward into the new round.
++                        let relayed: PropagatingProcess<V, S, C> = PropagatingProcess::new(
++                            Ok(result
++                                .into_parts()
++                                .0
++                                .ok()
++                                .and_then(CausalEffect::into_command)
++                                .map(|(_, sub)| sub)
++                                .unwrap_or_else(CausalEffect::none)),
++                            last_propagated.state().clone(),
++                            last_propagated.context().clone(),
++                            last_propagated.logs().clone(),
++                        );
++                        round_start = target_idx;
++                        round_input = relayed;
++                        continue 'rounds;
++                    }
++                    None => {
++                        let children = match self.get_graph().outbound_edges(node) {
++                            Ok(c) => c,
++                            Err(e) => {
++                                return raise_from(
++                                    CausalityError(CausalityErrorEnum::Custom(format!("{e}"))),
++                                    &last_propagated,
++                                );
++                            }
++                        };
++                        for c in children {
++                            if reachable[c] && !processed[c] {
++                                fired[c].insert(node, result.clone());
++                                pending[c] = pending[c].saturating_sub(1);
++                                if pending[c] == 0 {
++                                    ready.insert(c);
++                                }
++                            }
+                         }
+                     }
+                 }
+             }
+-        }
+ 
+-        last_propagated
++            return last_propagated;
++        }
+     }
+ 
+     /// Stateful counterpart to
+
+### deep_causality/tests/traits/causable_graph/graph_reasoning/stateful_tests.rs
+@@ -378,3 +378,34 @@ fn evaluate_shortest_path_stateful_returns_on_a_relay() {
+         "the walk returns the relaying node's process"
+     );
+ }
++
++#[test]
++fn evaluate_subgraph_stateful_multi_fired_reconvergence_errors_loudly() {
++    // Stateful diamond: root(0) -> A(1), B(2); A,B -> C(3). Starting at the root fires both
++    // A and B into C, a multi-fired reconvergence. The merge (∇) is undefined (assumption #2),
++    // so this must fail loudly rather than silently pick one parent.
++    let mut g: CausaloidGraph<Causaloid<u64, u64, CounterState, ConfigCtx>> =
++        CausaloidGraph::new(0u64);
++    let n0 = Causaloid::new_with_context(0, node_increment, ConfigCtx {}, "root");
++    let n1 = Causaloid::new_with_context(1, node_increment, ConfigCtx {}, "A");
++    let n2 = Causaloid::new_with_context(2, node_increment, ConfigCtx {}, "B");
++    let n3 = Causaloid::new_with_context(3, node_increment, ConfigCtx {}, "C");
++    let i0 = g.add_root_causaloid(n0).expect("root");
++    let i1 = g.add_causaloid(n1).expect("A");
++    let i2 = g.add_causaloid(n2).expect("B");
++    let i3 = g.add_causaloid(n3).expect("C");
++    g.add_edge(i0, i1).expect("edge 0->1");
++    g.add_edge(i0, i2).expect("edge 0->2");
++    g.add_edge(i1, i3).expect("edge 1->3");
++    g.add_edge(i2, i3).expect("edge 2->3");
++    g.freeze();
++
++    let out = g.evaluate_subgraph_from_cause_stateful(0, &build_initial());
++    assert!(out.is_err());
++    assert!(
++        out.error()
++            .unwrap()
++            .to_string()
++            .contains("reconvergence merge (∇) is not")
++    );
++}
+
+### deep_causality_multivector/tests/extensions/iso_multifield/iso_multifield_tests.rs
+@@ -7,10 +7,10 @@
+ //! [`CausalMultiField<T>`] and its carrier tuple
+ //! `(CausalTensor<T>, Metric, [T; 3], [usize; 3])`.
+ 
++use deep_causality_algebra::iso::witness::StandardIso;
++use deep_causality_algebra::iso::witness::test_support::assert_witness_iso_round_trip;
+ use deep_causality_metric::Metric;
+ use deep_causality_multivector::{CausalMultiField, MultiFieldCarrier};
+-use deep_causality_num::iso::witness::StandardIso;
+-use deep_causality_num::iso::witness::test_support::assert_witness_iso_round_trip;
+ use deep_causality_tensor::CausalTensor;
+ 
+ fn make_field() -> CausalMultiField<f32> {
+
+### deep_causality_num/src/lib.rs
+@@ -6,49 +6,14 @@
+ #![cfg_attr(not(feature = "std"), no_std)]
+ extern crate core;
+ 
+-mod algebra;
+ mod alias;
+ mod cast;
+-mod complex;
+-mod dual;
+ mod float;
+ mod float_106;
+ mod float_option;
+ mod identity;
+ mod integer;
+-pub mod iso;
+ mod num;
+-pub mod utils_tests;
+-
+-// Algebra types
+-pub use crate::algebra::algebra_assoc::AssociativeAlgebra;
+-pub use crate::algebra::algebra_assoc_div::AssociativeDivisionAlgebra;
+-pub use crate::algebra::algebra_base::Algebra;
+-pub use crate::algebra::algebra_div::DivisionAlgebra;
+-pub use crate::algebra::associative::Associative;
+-pub use crate::algebra::commutative::Commutative;
+-pub use crate::algebra::distributive::Distributive;
+-pub use crate::algebra::field::Field;
+-pub use crate::algebra::field_complex::ComplexField;
+-pub use crate::algebra::field_real::RealField;
+-pub use crate::algebra::group::Group;
+-pub use crate::algebra::group_abelian::AbelianGroup;
+-pub use crate::algebra::group_add::AddGroup;
+-pub use crate::algebra::group_div::DivGroup;
+-pub use crate::algebra::group_mul::MulGroup;
+-pub use crate::algebra::group_semi::{AddSemigroup, MulSemigroup};
+-pub use crate::algebra::magma::{AddMagma, MulMagma};
+-pub use crate::algebra::module::Module;
+-pub use crate::algebra::monoid::{AddMonoid, InvMonoid, MulMonoid};
+-pub use crate::algebra::normed::Normed;
+-pub use crate::algebra::real::Real;
+-pub use crate::algebra::ring::Ring;
+-pub use crate::algebra::ring_associative::AssociativeRing;
+-pub use crate::algebra::ring_commutative::CommutativeRing;
+-pub use crate::algebra::rotation::Rotation;
+-pub use crate::algebra::scalar::Scalar;
+-pub use crate::algebra::scalar_conjugate::ConjugateScalar;
+-pub use crate::algebra::scalar_normed::NormedScalar;
+ 
+ // Alias types
+ pub use crate::alias::{Matrix3, Vector3};
+@@ -62,15 +27,6 @@ pub use crate::cast::num_cast::NumCast;
+ pub use crate::cast::to_float::{FloatFromInt, IntoFloat};
+ pub use crate::cast::to_primitive::ToPrimitive;
+ 
+-//  Complex number types
+-pub use crate::complex::complex_number::{Complex, Complex32, Complex64};
+-pub use crate::complex::octonion_number::{Octonion, Octonion32, Octonion64};
+-pub use crate::complex::quaternion_number::{Quaternion, Quaternion32, Quaternion64};
+-
+-// Dual number type (forward-mode automatic differentiation; the differentiating *number*).
+-// The differentiation/integration *operators* live in `deep_causality_calculus`.
+-pub use crate::dual::dual_number::Dual;
+-
+ // Float number types
+ pub use crate::float::Float;
+ pub use crate::float_106::Float106;
+@@ -85,9 +41,6 @@ pub use crate::identity::zero::{ConstZero, Zero};
+ // Integer types
+ pub use crate::integer::{Integer, SignedInt, UnsignedInt};
+ 
+-// Isomorphism traits
+-pub use crate::iso::{AlgebraIso, DivisionAlgebraIso, FieldIso, GroupIso, RingIso};
+-
+ // General numeric traits
+ pub use crate::num::Num;
+ pub use crate::num::num_ops::*;
+
+### deep_causality_num/tests/mod.rs
+@@ -2,15 +2,12 @@
+  * SPDX-License-Identifier: MIT
+  * Copyright (c) 2023 - 2026. The DeepCausality Authors and Contributors. All Rights Reserved.
+  */
+-mod algebra;
+ mod casts;
+-mod complex;
+-mod dual;
+ mod float;
+ mod float_double;
+ mod float_option;
++mod formalization_lean;
+ mod identity;
+ mod integer;
+-mod iso;
+ mod num;
+ mod ops;
+
+### deep_causality_physics/src/kernels/fluids/governing.rs
+@@ -21,7 +21,8 @@ use crate::{
+     AccelerationVector, Density, KinematicViscosity, Pressure, Velocity3, VelocityGradient,
+     ViscousStress, VorticityVector,
+ };
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_algebra::RealField;
++use deep_causality_num::FromPrimitive;
+ 
+ // =============================================================================
+ // Momentum equation building blocks
+
+### deep_causality_sparse/src/extensions/ext_iso.rs
+@@ -41,8 +41,8 @@
+ 
+ use crate::CsrMatrix;
+ use core::fmt;
++use deep_causality_algebra::iso::witness::Iso;
+ use deep_causality_num::Zero;
+-use deep_causality_num::iso::witness::Iso;
+ use deep_causality_tensor::CausalTensor;
+ 
+ /// Error returned by [`CsrMatrix::try_from`] when the input
+
+### deep_causality_sparse/tests/extensions/ext_iso_tests.rs
+@@ -5,8 +5,8 @@
+ 
+ //! Tests for the mixed-tier `CausalTensor<F>` <-> `CsrMatrix<F>` iso.
+ 
+-use deep_causality_num::iso::witness::Iso;
+-use deep_causality_num::iso::witness::test_support::assert_witness_iso_round_trip;
++use deep_causality_algebra::iso::witness::Iso;
++use deep_causality_algebra::iso::witness::test_support::assert_witness_iso_round_trip;
+ use deep_causality_sparse::{CsrFromTensorError, CsrMatrix};
+ use deep_causality_tensor::CausalTensor;
+ 
+
+### deep_causality_topology/src/extensions/hkt_manifold/mod.rs
+@@ -36,7 +36,9 @@ pub type SimplicialManifoldWitness<C> = ManifoldWitness<C>;
+ impl<C> HKT for ManifoldWitness<C>
+ where
+     SimplicialComplex<C>: ChainComplex,
+-    C: Satisfies<NoConstraint> + deep_causality_num::RealField + deep_causality_num::FromPrimitive,
++    C: Satisfies<NoConstraint>
++        + deep_causality_algebra::RealField
++        + deep_causality_num::FromPrimitive,
+ {
+     type Constraint = NoConstraint;
+     type Type<T>
+@@ -51,7 +53,7 @@ where
+     <SimplicialComplex<C> as ChainComplex>::Metric: Clone,
+     C: Satisfies<NoConstraint>
+         + Clone
+-        + deep_causality_num::RealField
++        + deep_causality_algebra::RealField
+         + deep_causality_num::FromPrimitive,
+ {
+     fn fmap<A, B, Func>(
+@@ -78,7 +80,9 @@ where
+ impl<C> Foldable<ManifoldWitness<C>> for ManifoldWitness<C>
+ where
+     SimplicialComplex<C>: ChainComplex,
+-    C: Satisfies<NoConstraint> + deep_causality_num::RealField + deep_causality_num::FromPrimitive,
++    C: Satisfies<NoConstraint>
++        + deep_causality_algebra::RealField
++        + deep_causality_num::FromPrimitive,
+ {
+     fn fold<A, B, Func>(fa: Manifold<SimplicialComplex<C>, A>, init: B, f: Func) -> B
+     where
+@@ -94,7 +98,7 @@ where
+     SimplicialComplex<C>: ChainComplex + Default,
+     C: Satisfies<NoConstraint>
+         + Default
+-        + deep_causality_num::RealField
++        + deep_causality_algebra::RealField
+         + deep_causality_num::FromPrimitive,
+ {
+     fn pure<T>(value: T) -> Manifold<SimplicialComplex<C>, T>
+@@ -118,7 +122,7 @@ where
+     C: Satisfies<NoConstraint>
+         + Clone
+         + Default
+-        + deep_causality_num::RealField
++        + deep_causality_algebra::RealField
+         + deep_causality_num::FromPrimitive,
+ {
+     fn bind<A, B, Func>(
+@@ -153,7 +157,7 @@ where
+     C: Satisfies<NoConstraint>
+         + Clone
+         + Default
+-        + deep_causality_num::RealField
++        + deep_causality_algebra::RealField
+         + deep_causality_num::FromPrimitive,
+ {
+     fn apply<A, B, Func>(
+@@ -192,7 +196,7 @@ where
+     <SimplicialComplex<C> as ChainComplex>::Metric: Clone,
+     C: Satisfies<NoConstraint>
+         + Clone
+-        + deep_causality_num::RealField
++        + deep_causality_algebra::RealField
+         + deep_causality_num::FromPrimitive,
+ {
+     fn extract<A>(fa: &Manifold<SimplicialComplex<C>, A>) -> A
+
+### deep_causality_topology/src/traits/has_hodge_star.rs
+@@ -5,7 +5,7 @@
+ 
+ use crate::TopologyError;
+ use crate::traits::chain_complex::ChainComplex;
+-use deep_causality_num::RealField;
++use deep_causality_algebra::RealField;
+ use deep_causality_sparse::CsrMatrix;
+ use std::borrow::Cow;
+ 
+
+### deep_causality_topology/src/types/curvature_tensor/mod.rs
+@@ -9,8 +9,9 @@
+ //! around infinitesimal loops in a manifold.
+ 
+ use crate::TensorVector;
++use deep_causality_algebra::Field;
+ use deep_causality_metric::Metric;
+-use deep_causality_num::{Field, Float};
++use deep_causality_num::Float;
+ use deep_causality_tensor::CausalTensor;
+ use std::marker::PhantomData;
+ 
+
+### deep_causality_topology/src/types/hodge_decomposition/display.rs
+@@ -5,9 +5,8 @@
+ 
+ use core::fmt;
+ 
+-use deep_causality_num::RealField;
+-
+ use crate::types::hodge_decomposition::HodgeDecomposition;
++use deep_causality_algebra::RealField;
+ 
+ impl<R: RealField> fmt::Display for HodgeDecomposition<R> {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+### deep_causality_topology/src/types/hodge_decomposition/getters.rs
+@@ -3,7 +3,7 @@
+  * Copyright (c) 2023 - 2026. The DeepCausality Authors and Contributors. All Rights Reserved.
+  */
+ 
+-use deep_causality_num::RealField;
++use deep_causality_algebra::RealField;
+ use deep_causality_tensor::CausalTensor;
+ 
+ use crate::types::hodge_decomposition::HodgeDecomposition;
+
+### deep_causality_topology/src/types/hodge_decomposition/mod.rs
+@@ -32,7 +32,7 @@
+ 
+ use core::marker::PhantomData;
+ 
+-use deep_causality_num::RealField;
++use deep_causality_algebra::RealField;
+ use deep_causality_tensor::CausalTensor;
+ 
+ mod display;
+
+### deep_causality_topology/src/types/hodge_decomposition/part_eq.rs
+@@ -3,9 +3,8 @@
+  * Copyright (c) 2023 - 2026. The DeepCausality Authors and Contributors. All Rights Reserved.
+  */
+ 
+-use deep_causality_num::RealField;
+-
+ use crate::types::hodge_decomposition::HodgeDecomposition;
++use deep_causality_algebra::RealField;
+ 
+ impl<R: RealField> PartialEq for HodgeDecomposition<R> {
+     fn eq(&self, other: &Self) -> bool {
+
+### deep_causality_topology/src/types/lattice_complex/mod.rs
+@@ -12,7 +12,7 @@ pub use lattice_cell::LatticeCell;
+ use crate::traits::cell::Cell;
+ use crate::traits::chain_complex::ChainComplex;
+ use crate::traits::neighborhood::CellId;
+-use deep_causality_num::RealField;
++use deep_causality_algebra::RealField;
+ use deep_causality_sparse::CsrMatrix;
+ use std::borrow::Cow;
+ use std::collections::HashMap;
+
+### deep_causality_topology/src/types/manifold/api/constructors.rs
+@@ -6,7 +6,8 @@
+ //! Constructors for Manifold type.
+ 
+ use crate::{ReggeGeometry, SimplicialComplex, TopologyError};
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_algebra::RealField;
++use deep_causality_num::FromPrimitive;
+ use deep_causality_tensor::CausalTensor;
+ 
+ use super::super::Manifold;
+
+### deep_causality_topology/src/types/manifold/differential/leray.rs
+@@ -20,7 +20,8 @@
+ 
+ use core::fmt::{Debug, Display};
+ 
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_algebra::RealField;
++use deep_causality_num::FromPrimitive;
+ use deep_causality_tensor::CausalTensor;
+ 
+ use crate::errors::topology_error::TopologyError;
+
+### deep_causality_topology/src/types/regge_geometry/mod.rs
+@@ -3,8 +3,9 @@
+  * Copyright (c) 2023 - 2026. The DeepCausality Authors and Contributors. All Rights Reserved.
+  */
+ 
++use deep_causality_algebra::RealField;
+ use deep_causality_metric::Metric;
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_num::FromPrimitive;
+ use deep_causality_tensor::CausalTensor;
+ 
+ use crate::{Simplex, SimplicialComplex};
+@@ -284,8 +285,7 @@ where
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use deep_causality_num::Real;
+-
++    use deep_causality_algebra::Real;
+     #[test]
+     fn test_compute_signature_equilateral_triangle() {
+         // Equilateral triangle with side length 1: should be Euclidean (2, 0, 0)
+
+### deep_causality_topology/src/types/simplicial_complex/lazy_hodge_star.rs
+@@ -19,7 +19,8 @@
+ //! tolerance"` error at the point of access.
+ 
+ use crate::{Simplex, Skeleton, TopologyError};
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_algebra::RealField;
++use deep_causality_num::FromPrimitive;
+ use deep_causality_sparse::CsrMatrix;
+ 
+ fn euclidean_distance<T>(p1: &[T], p2: &[T]) -> T
+
+### deep_causality_topology/src/types/simplicial_complex/topology/chain_complex_impl.rs
+@@ -33,7 +33,7 @@ impl<'a> Iterator for SimplicialCellIter<'a> {
+     }
+ }
+ 
+-impl<T: deep_causality_num::RealField> ChainComplex for SimplicialComplex<T> {
++impl<T: deep_causality_algebra::RealField> ChainComplex for SimplicialComplex<T> {
+     type CellType = Simplex;
+     type CellIter<'a>
+         = SimplicialCellIter<'a>
+
+### deep_causality_uncertain/src/types/uncertain/uncertain_op_arithmetic.rs
+@@ -4,7 +4,7 @@
+  */
+ 
+ use crate::{ArithmeticOperator, ProbabilisticType, Uncertain, UncertainNodeContent};
+-use deep_causality_num::RealField;
++use deep_causality_algebra::RealField;
+ use std::ops::{Add, Div, Mul, Neg, Sub};
+ 
+ // Arithmetic operator overloading for the real-scalar instantiations (`f64`, `Float106`).
+
+===== P051 | repo HazelnutParadise/insyra | PR #149: Enhance/stats | capacidade: repl-engine
+--- SPEC VIVA
+# repl-engine Specification
+
+## Purpose
+TBD - created by archiving change cli-repl. Update Purpose after archive.
+## Requirements
+### Requirement: REPL interactive loop
+系統 SHALL 提供互動式 REPL 迴圈，使用 readline 行編輯庫，支援行編輯、歷史瀏覽和信號處理。
+
+#### Scenario: REPL prompt display
+- **WHEN** REPL 啟動
+- **THEN** 顯示 prompt 格式為 `insyra [env-name] > `（如 `insyra [default] > `）
+
+#### Scenario: Command execution in REPL
+- **WHEN** 使用者在 REPL 中輸入一條命令（如 `show t1`）並按 Enter
+- **THEN** 系統執行該命令並顯示結果，然後繼續等待下一條輸入
+
+#### Scenario: Empty line and comments
+- **WHEN** 使用者輸入空行或以 `#` 開頭的行
+- **THEN** 系統跳過該行，不執行任何操作
+
+#### Scenario: Exit REPL
+- **WHEN** 使用者輸入 `exit` 或 `quit` 或按 Ctrl+D
+- **THEN** 系統自動儲存當前環境狀態，然後退出 REPL
+
+#### Scenario: Ctrl+C handling
+- **WHEN** 使用者在 REPL 中按 Ctrl+C
+- **THEN** 系統取消當前輸入行，顯示新的 prompt（不退出 REPL）
+
+#### Scenario: State persistence on exit
+- **WHEN** REPL 退出（exit/quit/Ctrl+D）
+- **THEN** 系統將當前所有變數自動序列化存入環境的 `state.json`，命令歷史存入 `history.txt`
+
+#### Scenario: State restore on start
+- **WHEN** REPL 啟動並載入一個環境
+- **THEN** 系統自動從 `state.json` 反序列化還原變數，並從 `history.txt` 載入命令歷史
+
+### Requirement: Tab completion
+系統 SHALL 支援 Tab 鍵自動補全。
+
+#### Scenario: Command name completion
+- **WHEN** 使用者輸入部分命令名（如 `lo`）並按 Tab
+- **THEN** 系統補全為 `load`（或顯示匹配列表）
+
+#### Scenario: Variable name completion
+- **WHEN** 使用者在需要變數名的位置按 Tab
+- **THEN** 系統列出當前環境中所有變數名
+
+#### Scenario: File path completion
+- **WHEN** 使用者在 `load` 命令後按 Tab
+- **THEN** 系統補全檔案路徑
+
+### Requirement: Command history
+系統 SHALL 支援上下方向鍵瀏覽命令歷史。
+
+#### Scenario: History navigation
+- **WHEN** 使用者按上方向鍵
+- **THEN** 顯示上一條命令
+
+#### Scenario: History persistence
+- **WHEN** REPL 退出後重新進入同一環境
+- **THEN** 之前的命令歷史仍可用
+
+### Requirement: Clear screen
+系統 SHALL 提供 `clear` 命令清除螢幕。
+
+#### Scenario: Clear screen
+- **WHEN** 使用者輸入 `clear`
+- **THEN** 終端螢幕清除，顯示新的 prompt
+
+
+--- ARQUIVOS DO PR (73)
+added     +38    -0     .github/workflows/clustering-parity.yml
+added     +38    -0     .github/workflows/knn-parity.yml
+modified  +1     -1     Docs/README.md
+modified  +9     -1     Docs/cli-dsl.md
+modified  +570   -250   Docs/stats.md
+modified  +12    -12    Docs/tutorials/ab-test-decision-with-statistics.md
+modified  +6     -6     Docs/tutorials/market-trend-forecasting-with-yfinance.md
+added     +198   -0     cli/commands/clustering.go
+added     +89    -0     cli/commands/clustering_test.go
+modified  +39    -39    cli/commands/hypothesis.go   <== código ligado à spec
+added     +178   -0     cli/commands/knn.go
+added     +64    -0     cli/commands/knn_test.go
+modified  +3     -3     cli/commands/pca.go   <== código ligado à spec
+modified  +12    -12    cli/commands/regression.go   <== código ligado à spec
+modified  +21    -9     cli/commands/stats_adv.go   <== código ligado à spec
+modified  +21    -1     openspec/specs/dsl-commands/spec.md
+added     +1     -0     stats/AGENTS.md
+added     +182   -0     stats/CLAUDE.md
+added     +1232  -0     stats/REFACTOR_PLAN.md
+modified  +81    -93    stats/anova.go
+added     +72    -0     stats/anova_core.go
+added     +94    -0     stats/anova_core_test.go
+modified  +9     -9     stats/anova_test.go
+modified  +18    -24    stats/chi_square.go
+modified  +3     -3     stats/chi_square_test.go
+added     +281   -0     stats/clustering.go
+added     +288   -0     stats/clustering_corpus_test.go
+added     +170   -0     stats/clustering_test.go
+modified  +103   -180   stats/correlation.go
+added     +60    -0     stats/correlation_ci_test.go
+modified  +8     -8     stats/correlation_test.go
+added     +99    -0     stats/crosslang_clustering_generated_test.go
+added     +192   -0     stats/crosslang_clustering_test.go
+added     +474   -0     stats/crosslang_helpers_test.go
+added     +91    -0     stats/crosslang_knn_generated_test.go
+added     +158   -0     stats/crosslang_knn_test.go
+added     +1339  -0     stats/crosslang_public_methods_test.go
+modified  +11    -32    stats/diag.go
+modified  +20    -5     stats/diag_test.go
+added     +141   -0     stats/dist_math_util_test.go
+added     +59    -0     stats/distutil.go
+modified  +62    -92    stats/ftest.go
+modified  +15    -15    stats/ftest_test.go
+added     +1092  -0     stats/internal/clustering/cluster.go
+added     +176   -0     stats/internal/clustering/cluster_theory_helpers_test.go
+added     +46    -0     stats/internal/clustering/cluster_theory_test.go
+added     +120   -0     stats/internal/knn/generated_corpus_test.go
+added     +691   -0     stats/internal/knn/knn.go
+added     +67    -0     stats/internal/knn/knn_test.go
+added     +148   -0     stats/internal/linalg/linalg.go
+added     +137   -0     stats/internal/linalg/linalg_r_test.go
+added     +244   -0     stats/knn.go
+added     +263   -0     stats/knn_corpus_test.go
+added     +223   -0     stats/knn_test.go
+modified  +36    -37    stats/kurtosis.go
+modified  +30    -7     stats/kurtosis_test.go
+added     +78    -0     stats/mathutil.go
+modified  +18    -4     stats/moment_test.go
+modified  +25    -47    stats/moments.go
+added     +148   -0     stats/olsutil.go
+modified  +28    -36    stats/pca.go
+added     +314   -0     stats/primitives_r_test.go
+modified  +169   -585   stats/regression.go
+modified  +24    -29    stats/regression_test.go
+added     +28    -0     stats/sampleutil.go
+modified  +18    -24    stats/skewness.go
+modified  +18    -5     stats/skewness_test.go
+added     +1098  -0     stats/testdata/crosslang_baseline.R
+added     +1439  -0     stats/testdata/crosslang_baseline.py
+modified  +51    -111   stats/ttest.go
+modified  +12    -3     stats/ttest_test.go
+modified  +33    -85    stats/ztest.go
+modified  +8     -2     stats/ztest_test.go
+--- DIFF DO CÓDIGO LIGADO
+### cli/commands/hypothesis.go
+@@ -34,9 +34,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -56,9 +56,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 4 {
+ 			equalVariance = strings.EqualFold(args[3], "equal")
+ 		}
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -74,9 +74,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -110,9 +110,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 5 {
+ 			alternative = parseAlternativeHypothesis(args[4])
+ 		}
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -140,9 +140,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 6 {
+ 			alternative = parseAlternativeHypothesis(args[5])
+ 		}
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -164,9 +164,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -189,9 +189,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if len(cells) != aLevels*bLevels {
+ 			return fmt.Errorf("twoway requires exactly %d cells", aLevels*bLevels)
+ 		}
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "FA=%v pA=%v FB=%v pB=%v\n", result.FactorA.F, result.FactorA.P, result.FactorB.F, result.FactorB.P)
+ 		return nil
+@@ -203,9 +203,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.RepeatedMeasuresANOVA(subjects...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.RepeatedMeasuresANOVA(subjects...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -231,9 +231,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.FTestForVarianceEquality(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ftest failed")
++		result, err := stats.FTestForVarianceEquality(a, b)
++		if err != nil {
++			return fmt.Errorf("ftest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -245,9 +245,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LeveneTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("levene test failed")
++		result, err := stats.LeveneTest(groups)
++		if err != nil {
++			return fmt.Errorf("levene test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -259,9 +259,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.BartlettTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("bartlett test failed")
++		result, err := stats.BartlettTest(groups)
++		if err != nil {
++			return fmt.Errorf("bartlett test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -291,9 +291,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			probabilities = append(probabilities, value)
+ 		}
+-		result := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
+-		if result == nil {
+-			return fmt.Errorf("chi-square gof failed")
++		result, err := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
++		if err != nil {
++			return fmt.Errorf("chi-square gof failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -309,9 +309,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ChiSquareIndependenceTest(row, col)
+-		if result == nil {
+-			return fmt.Errorf("chi-square independence test failed")
++		result, err := stats.ChiSquareIndependenceTest(row, col)
++		if err != nil {
++			return fmt.Errorf("chi-square independence test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+
+### cli/commands/pca.go
+@@ -24,9 +24,9 @@ func runPCACommand(ctx *ExecContext, args []string) error {
+ 	if err != nil || n < 1 {
+ 		return fmt.Errorf("invalid number of components: %s", coreArgs[1])
+ 	}
+-	result := stats.PCA(dt, n)
+-	if result == nil {
+-		return fmt.Errorf("pca failed")
++	result, err := stats.PCA(dt, n)
++	if err != nil {
++		return fmt.Errorf("pca failed: %w", err)
+ 	}
+ 	ctx.Vars[alias] = result.Components
+ 	ctx.Vars[alias+"_eigenvalues"] = result.Eigenvalues
+
+### cli/commands/regression.go
+@@ -35,9 +35,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			xs = append(xs, x)
+ 		}
+-		regressionResult := stats.LinearRegression(y, xs...)
+-		if regressionResult == nil {
+-			return fmt.Errorf("failed to run linear regression")
++		regressionResult, err := stats.LinearRegression(y, xs...)
++		if err != nil {
++			return fmt.Errorf("failed to run linear regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = regressionResult
+ 		_, _ = fmt.Fprintf(ctx.Output, "linear regression stored in %s (R2=%v)\n", alias, regressionResult.RSquared)
+@@ -54,9 +54,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil || degree < 1 {
+ 			return fmt.Errorf("invalid polynomial degree: %s", coreArgs[3])
+ 		}
+-		result := stats.PolynomialRegression(y, x, degree)
+-		if result == nil {
+-			return fmt.Errorf("failed to run polynomial regression")
++		result, err := stats.PolynomialRegression(y, x, degree)
++		if err != nil {
++			return fmt.Errorf("failed to run polynomial regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "polynomial regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -66,9 +66,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ExponentialRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run exponential regression")
++		result, err := stats.ExponentialRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run exponential regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "exponential regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -78,9 +78,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LogarithmicRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run logarithmic regression")
++		result, err := stats.LogarithmicRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run logarithmic regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "logarithmic regression stored in %s (R2=%v)\n", alias, result.RSquared)
+
+### cli/commands/stats_adv.go
+@@ -38,9 +38,9 @@ func runCorrCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	result := stats.Correlation(x, y, method)
+-	if result == nil {
+-		return fmt.Errorf("failed to calculate correlation")
++	result, err := stats.Correlation(x, y, method)
++	if err != nil {
++		return fmt.Errorf("failed to calculate correlation: %w", err)
+ 	}
+ 	_, _ = fmt.Fprintf(ctx.Output, "correlation=%v p=%v\n", result.Statistic, result.PValue)
+ 	return nil
+@@ -63,9 +63,9 @@ func runCorrMatrixCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	corr, p := stats.CorrelationMatrix(dt, method)
+-	if corr == nil {
+-		return fmt.Errorf("failed to compute correlation matrix")
++	corr, p, err := stats.CorrelationMatrix(dt, method)
++	if err != nil {
++		return fmt.Errorf("failed to compute correlation matrix: %w", err)
+ 	}
+ 	ctx.Vars[alias] = corr
+ 	if p != nil {
+@@ -87,7 +87,11 @@ func runCovCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Covariance(x, y))
++	value, err := stats.Covariance(x, y)
++	if err != nil {
++		return fmt.Errorf("failed to compute covariance: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -99,7 +103,11 @@ func runSkewnessCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Skewness(dl))
++	value, err := stats.Skewness(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute skewness: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -111,7 +119,11 @@ func runKurtosisCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Kurtosis(dl))
++	value, err := stats.Kurtosis(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute kurtosis: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+
+===== P052 | repo yazelin/ching-tech-os | PR #2: feat: 手機版 UI/UX 全面優化 | capacidade: code-editor
+--- SPEC VIVA
+# code-editor Specification
+
+## Purpose
+TBD - created by archiving change add-code-editor. Update Purpose after archive.
+## Requirements
+### Requirement: Code Editor Window
+系統 SHALL 提供程式編輯器視窗，使用 code-server 提供完整的 VS Code 體驗。
+
+#### Scenario: 開啟程式編輯器
+- **WHEN** 使用者點擊 Taskbar 上的程式編輯器圖示
+- **THEN** 系統開啟程式編輯器視窗
+- **AND** 視窗內嵌入 code-server 介面
+
+#### Scenario: 編輯器視窗尺寸
+- **WHEN** 程式編輯器視窗開啟
+- **THEN** 視窗以較大的預設尺寸顯示（1200x800）
+- **AND** 使用者可以調整視窗大小或最大化
+
+#### Scenario: 編輯器載入狀態
+- **WHEN** code-server 尚未載入完成
+- **THEN** 視窗顯示載入中的提示
+
+#### Scenario: 編輯器連線失敗
+- **WHEN** code-server 服務未啟動或無法連線
+- **THEN** 視窗顯示錯誤訊息
+- **AND** 提示使用者檢查服務狀態
+
+---
+
+### Requirement: Code Server Service
+系統 SHALL 透過 Docker 運行 code-server 服務。
+
+#### Scenario: 服務啟動
+- **WHEN** 執行 start.sh dev 命令
+- **THEN** code-server 容器隨 docker compose 啟動
+- **AND** 服務在 port 8443 提供存取
+
+#### Scenario: 工作目錄掛載
+- **WHEN** code-server 啟動
+- **THEN** 專案根目錄掛載為工作目錄
+- **AND** 使用者可以在編輯器中瀏覽和編輯專案檔案
+
+#### Scenario: Git 整合
+- **WHEN** 使用者在 code-server 中執行 Git 操作
+- **THEN** 使用主機的 SSH key 和 gitconfig
+- **AND** commit 顯示正確的作者資訊
+
+#### Scenario: 設定持久化
+- **WHEN** 使用者安裝擴充功能或修改設定
+- **THEN** 設定保存在 Docker volume 中
+- **AND** 重啟後設定保留
+
+
+--- ARQUIVOS DO PR (43)
+modified  +14    -0     CLAUDE.md
+modified  +159   -0     frontend/css/agent-settings.css
+modified  +202   -0     frontend/css/ai-assistant.css
+modified  +338   -0     frontend/css/ai-log.css
+modified  +50    -7     frontend/css/desktop.css
+modified  +5     -0     frontend/css/file-common.css
+modified  +277   -0     frontend/css/file-manager.css
+modified  +61    -0     frontend/css/header.css
+modified  +236   -0     frontend/css/knowledge-base.css
+modified  +210   -2     frontend/css/linebot.css
+modified  +318   -2     frontend/css/main.css
+modified  +151   -18    frontend/css/message-center.css
+modified  +349   -0     frontend/css/project-management.css
+modified  +141   -0     frontend/css/prompt-editor.css
+modified  +131   -0     frontend/css/settings.css
+modified  +92    -0     frontend/css/share-manager.css
+removed   +0     -169   frontend/css/taskbar.css
+modified  +60    -0     frontend/css/user-profile.css
+modified  +62    -1     frontend/css/window.css
+modified  +0     -7     frontend/index.html
+modified  +51    -0     frontend/js/agent-settings.js
+modified  +41    -5     frontend/js/ai-assistant.js
+modified  +224   -45    frontend/js/ai-log.js
+modified  +2     -38    frontend/js/desktop.js   <== código ligado à spec
+modified  +157   -1     frontend/js/file-manager.js
+modified  +34    -0     frontend/js/header.js
+modified  +26    -0     frontend/js/icons.js
+modified  +43    -1     frontend/js/knowledge-base.js
+modified  +36    -2     frontend/js/linebot.js
+modified  +5     -19    frontend/js/message-center.js
+modified  +42    -0     frontend/js/project-management.js
+modified  +51    -0     frontend/js/prompt-editor.js
+modified  +32    -3     frontend/js/settings.js
+removed   +0     -253   frontend/js/taskbar.js
+modified  +64    -0     frontend/js/window.js
+added     +98    -0     openspec/changes/archive/2026-01-08-improve-mobile-ux/design.md
+added     +40    -0     openspec/changes/archive/2026-01-08-improve-mobile-ux/proposal.md
+added     +162   -0     openspec/changes/archive/2026-01-08-improve-mobile-ux/specs/web-desktop/spec.md
+added     +49    -0     openspec/changes/archive/2026-01-08-improve-mobile-ux/tasks.md
+added     +362   -0     openspec/changes/update-mobile-app-layouts/proposal.md
+added     +331   -0     openspec/changes/update-mobile-app-layouts/specs/mobile-app-layout/spec.md
+added     +155   -0     openspec/changes/update-mobile-app-layouts/tasks.md
+modified  +90    -88    openspec/specs/web-desktop/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### frontend/js/desktop.js
+@@ -22,8 +22,6 @@ const DesktopModule = (function() {
+     { id: 'settings', name: '系統設定', icon: 'mdi-cog' }
+   ];
+ 
+-  let selectedIcon = null;
+-
+   /**
+    * Create a desktop icon element
+    * @param {Object} app - Application definition
+@@ -70,21 +68,13 @@ const DesktopModule = (function() {
+   }
+ 
+   /**
+-   * Handle icon click
++   * Handle icon click - directly open the app
+    * @param {Event} event
+    */
+   function handleIconClick(event) {
+     const iconElement = event.currentTarget;
+     const appId = iconElement.dataset.appId;
+-
+-    // Deselect previous icon
+-    if (selectedIcon) {
+-      selectedIcon.classList.remove('selected');
+-    }
+-
+-    // Select current icon
+-    iconElement.classList.add('selected');
+-    selectedIcon = iconElement;
++    openApp(appId);
+   }
+ 
+   /**
+@@ -185,28 +175,6 @@ const DesktopModule = (function() {
+     });
+   }
+ 
+-  /**
+-   * Handle icon double-click (open app)
+-   * @param {Event} event
+-   */
+-  function handleIconDoubleClick(event) {
+-    const iconElement = event.currentTarget;
+-    const appId = iconElement.dataset.appId;
+-    openApp(appId);
+-  }
+-
+-  /**
+-   * Handle click on desktop area (deselect icons)
+-   * @param {Event} event
+-   */
+-  function handleDesktopClick(event) {
+-    if (event.target.classList.contains('desktop-area')) {
+-      if (selectedIcon) {
+-        selectedIcon.classList.remove('selected');
+-        selectedIcon = null;
+-      }
+-    }
+-  }
+ 
+   /**
+    * Render all desktop icons
+@@ -223,12 +191,8 @@ const DesktopModule = (function() {
+     visibleApps.forEach(app => {
+       const iconElement = createIconElement(app);
+       iconElement.addEventListener('click', handleIconClick);
+-      iconElement.addEventListener('dblclick', handleIconDoubleClick);
+       desktopArea.appendChild(iconElement);
+     });
+-
+-    // Handle desktop area click
+-    desktopArea.addEventListener('click', handleDesktopClick);
+   }
+ 
+   /**
+
+===== P054 | repo terwer/siyuan-plugin-picgo | PR #677: feat(shell): improve PicGo plugin shell UX and reload notification  | capacidade: picgo-headless-config-contract
+--- SPEC VIVA
+# picgo-headless-config-contract Specification
+
+## Purpose
+TBD - created by archiving change picgo-headless-publisher-contract. Update Purpose after archive.
+## Requirements
+### Requirement: 无界面消费者可以在不依赖已安装插件产品的情况下创建 PicGo 管理器
+
+`zhi-siyuan-picgo` SHALL 暴露面向 SiYuan 消费者的公共无界面管理器或等价门面。创建和使用该门面 MUST NOT 要求 `siyuan-plugin-picgo` 已经作为 SiYuan 插件安装，也不得要求 `/data/plugins/siyuan-plugin-picgo` 存在。
+
+#### Scenario: Publisher 在未安装 PicGo 插件产品时创建管理器
+
+- **WHEN** 外部消费者在 `/data/plugins/siyuan-plugin-picgo/plugin.json` 不存在的 SiYuan 工作空间中创建无界面管理器
+- **THEN** 只要 npm 包和运行时环境可用，管理器创建 SHALL 成功
+- **AND** PicGo 库契约 SHALL 不要求调用方执行插件安装检测
+
+#### Scenario: 独立 PicGo 插件继续使用同一底层契约
+
+- **WHEN** `siyuan-plugin-picgo` 内部使用 PicGo 配置和上传行为
+- **THEN** 它 SHALL 继续作为产品外壳基于同一底层库契约正常工作
+- **AND** 该产品外壳 SHALL NOT 成为外部消费者的必需运行依赖
+
+### Requirement: 无界面消费者可以读取和保存 PicGo 配置
+
+无界面管理器 SHALL 提供公共方法读取当前 PicGo 配置，并保存有边界的配置更新；调用方不需要直接实例化内部数据库类。
+
+#### Scenario: 读取当前配置
+
+- **WHEN** 外部消费者请求当前 PicGo 配置
+- **THEN** 管理器 SHALL 返回已经初始化默认 section 的持久化配置
+- **AND** 管理器 SHALL 保留未知字段，确保后续版本兼容
+
+#### Scenario: 保存单个上传器配置且不覆盖未知字段
+
+- **WHEN** 外部消费者保存某一个上传器的配置
+- **THEN** 管理器 SHALL 只更新目标上传器配置和必要的当前上传器元数据
+- **AND** 无关上传器配置、插件配置和未知字段 SHALL 保持不变
+
+### Requirement: 无界面消费者可以管理当前上传器
+
+无界面管理器 SHALL 暴露公共方法读取和设置上传操作使用的当前上传器。
+
+#### Scenario: 设置当前上传器
+
+- **WHEN** 外部消费者把当前上传器设置为受支持的上传器 id
+- **THEN** 后续基于同一持久化配置的上传 SHALL 使用该上传器
+- **AND** 配置 SHALL 使用 PicGo 标准配置结构记录所选上传器
+
+#### Scenario: 拒绝未知上传器 id
+
+- **WHEN** 外部消费者尝试把当前上传器设置为未知上传器 id
+- **THEN** 管理器 SHALL 返回或抛出结构化校验错误
+- **AND** 持久化的当前上传器 SHALL NOT 被修改
+
+### Requirement: 无界面消费者可以列出受支持的内置上传器
+
+无界面管理器 SHALL 提供当前运行时可用的内置上传器列表，其中包含可用于保存配置和执行上传的稳定上传器 id。
+
+#### Scenario: 列出内置上传器
+
+- **WHEN** 外部消费者请求上传器列表
+- **THEN** 管理器 SHALL 包含 `universal-picgo` 注册的内置上传器
+- **AND** 每个条目 SHALL 至少包含 id、展示名称、是否内置、配置模式是否可用
+
+### Requirement: 无界面消费者可以获得上传器配置模式
+
+无界面管理器 SHALL 为受支持的内置上传器暴露配置模式。该配置模式 SHALL 提供足够元数据，让消费者可以在不导入 `picgo-plugin-app` 界面代码的情况下渲染轻量配置表单。
+
+#### Scenario: 获取内置上传器的配置模式
+
+- **WHEN** 外部消费者请求受支持内置上传器的配置模式
+- **THEN** 管理器 SHALL 返回字段元数据，包括字段名、字段类型、label 或 message key、是否必填、已知默认值、是否敏感字段、list 字段可选值
+
+#### Scenario: 配置模式不绑定 Vue 或 Element Plus
+
+- **WHEN** 消费者读取上传器配置模式
+- **THEN** 配置模式 SHALL 是普通可序列化数据
+- **AND** 配置模式 SHALL NOT 依赖 Vue 组件、Element Plus 组件或 `picgo-plugin-app` imports
+
+### Requirement: 无界面消费者可以校验上传器配置
+
+无界面管理器 SHALL 在保存和测试上传前暴露上传器配置校验能力。
+
+#### Scenario: 校验有效上传器配置
+
+- **WHEN** 外部消费者校验某个受支持上传器的完整配置
+- **THEN** 管理器 SHALL 返回成功校验结果
+- **AND** 结果 SHALL 标识被校验的上传器 id
+
+#### Scenario: 校验缺失必填字段
+
+- **WHEN** 外部消费者校验缺少必填字段的配置
+- **THEN** 管理器 SHALL 返回结构化校验失败，包含字段名和提示信息
+- **AND** 除非调用方显式使用被文档标为 unsafe 的原始逃逸口，否则管理器 SHALL NOT 持久化无效配置
+
+### Requirement: 无界面消费者可以通过托管配置上传
+
+无界面管理器 SHALL 提供使用同一托管配置和当前上传器状态的上传入口。
+
+#### Scenario: 上传单张图片
+
+- **WHEN** 外部消费者通过无界面管理器上传受支持的图片输入
+- **THEN** 管理器 SHALL 使用托管配置中的当前上传器
+- **AND** 管理器 SHALL 返回 PicGo 图片输出，或返回与现有上传行为一致的结构化错误
+
+#### Scenario: 上传 Markdown 图片
+
+- **WHEN** 外部消费者通过 SiYuan 门面上传 Markdown 中引用的图片
+- **THEN** 门面 SHALL 保留 `SiyuanPicGo` 已有的 Markdown 替换行为
+- **AND** 门面 SHALL 使用与无界面管理器相同的配置来源
+
+### Requirement: 无界面契约使用标准路径解析
+
+无界面管理器 SHALL 使用与 `picgo-v2-config-path-split` 一致的路径解析规则，SHALL NOT 要求消费者手动构造 config/runtime/plugin 路径。
+
+#### Scenario: 在 SiYuan 工作空间中解析路径
+
+- **WHEN** SiYuan 消费者使用 SiYuan config 创建管理器
+- **THEN** `zhi-siyuan-picgo` SHALL 在内部解析工作空间配置和本地运行时路径
+- **AND** 消费者 SHALL 不需要知道物理路径布局
+
+#### Scenario: 保持设备本地运行时分离
+
+- **WHEN** 管理器初始化插件运行时、日志、缓存、外部 PicGo 配置或依赖目录
+- **THEN** 这些设备本地 artifact SHALL 遵循 v2 路径拆分规则
+- **AND** 除非路径拆分契约明确指定，否则它们 SHALL NOT 被保存到工作空间同步的 `picgo.cfg.json` 位置
+
+
+--- ARQUIVOS DO PR (27)
+modified  +25    -16    README.md
+modified  +27    -18    README_zh_CN.md
+added     +50    -0     libs/Universal-PicGo-Core/src/db/config/index.spec.ts
+modified  +12    -0     libs/Universal-PicGo-Core/src/db/config/index.ts
+modified  +5     -0     libs/zhi-siyuan-picgo/src/index.ts
+modified  +29    -28    libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts   <== código ligado à spec
+added     +189   -0     libs/zhi-siyuan-picgo/src/lib/siyuanPicgoMigrationState.ts
+modified  +111   -12    libs/zhi-siyuan-picgo/src/lib/siyuanPicgoPostApi.ts
+added     +2     -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/.openspec.yaml
+added     +95    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/design.md
+added     +59    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/implementation-notes.md
+added     +39    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/proposal.md
+added     +93    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/specs/picgo-plugin-shell-ux/spec.md
+added     +39    -0     openspec/changes/archive/2026-05-26-picgo-plugin-shell-ux-improvements/tasks.md
+added     +97    -0     openspec/specs/picgo-plugin-shell-ux/spec.md
+modified  +89    -2     packages/picgo-plugin-app/src/components/setting/PicgoSetting.vue
+added     +108   -0     packages/picgo-plugin-app/src/components/setting/RuntimeReloadNotice.vue
+modified  +16    -2     packages/picgo-plugin-app/src/components/setting/picgo/bundled/PicgoPluginSetting.vue
+added     +72    -0     packages/picgo-plugin-app/src/composables/useRuntimeReloadNotice.ts
+modified  +8     -0     packages/picgo-plugin-app/src/i18n/en_US.ts
+modified  +7     -0     packages/picgo-plugin-app/src/i18n/zh_CN.ts
+modified  +16    -1     packages/picgo-plugin-bootstrap/README.md
+modified  +15    -3     packages/picgo-plugin-bootstrap/src/dialog.ts
+modified  +13    -1     packages/picgo-plugin-bootstrap/src/index.ts
+added     +395   -0     packages/picgo-plugin-bootstrap/src/shell.ts
+modified  +2     -2     packages/picgo-plugin-bootstrap/src/topbar.ts
+modified  +11    -0     scripts/picgo-internal-refactor-audit.cjs
+--- DIFF DO CÓDIGO LIGADO
+### libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts
+@@ -9,7 +9,7 @@
+ 
+ import { SiyuanPicgoPostApi } from "./siyuanPicgoPostApi"
+ import { ILogger, simpleLogger } from "zhi-lib-base"
+-import { migrateV2WorkspacePicGoConfig, resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
++import { resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
+ import type { SiyuanConfigLike } from "./siyuanConfigLike"
+ import { SiyuanKernelApi } from "zhi-siyuan-api"
+ 
+@@ -57,7 +57,6 @@ class SiyuanPicGo {
+     if (!this.picgoInstance) {
+       this.logger.debug("初始化 SiyuanPicgoPostApi 实例")
+       this.logger.info("resolved PicGo paths =>", paths)
+-      migrateV2WorkspacePicGoConfig(paths, this.logger)
+       this.picgoInstance = new SiyuanPicgoPostApi(siyuanConfig, isDev, paths)
+       this.instanceKey = instanceKey
+ 
+@@ -73,34 +72,36 @@ class SiyuanPicGo {
+    * 检查 PicGo 配置迁移的状态
+    */
+   private static async checkConfigMigration(siyuanApi: SiyuanKernelApi, picgo: SiyuanPicgoPostApi): Promise<void> {
+-    const that = this
+-    return new Promise<void>((resolve) => {
+-      let needUpdate = false
++    const initialState = picgo.getConfigMigrationState()
++    if (initialState.status === "running") {
++      siyuanApi.pushMsg({
++        msg: "检测到 PicGo 配置初始化或迁移任务，正在等待完成，请勿进行任何操作...",
++        timeout: 1000,
++      })
++      this.logger?.warn("检测到 PicGo 配置初始化或迁移任务，正在等待完成...")
++      await picgo.waitForConfigMigration()
++    }
+ 
+-      const checkConfig = () => {
+-        if (picgo.cfgUpdating) {
+-          needUpdate = true
+-          siyuanApi.pushMsg({
+-            msg: "检测到旧配置，正在迁移配置，请勿进行任何操作...",
+-            timeout: 1000,
+-          })
+-          that.logger?.warn("检测到旧配置，正在迁移配置，请勿进行任何操作...")
+-          setTimeout(checkConfig, 1000) // 递归检查
+-        } else {
+-          if (needUpdate) {
+-            siyuanApi.pushMsg({
+-              msg: "PicGO 图床历史配置迁移完成",
+-              timeout: 7000,
+-            })
+-            that.logger?.info("PicGO 图床历史配置迁移完成🎉")
+-          }
+-          that.logger?.info("PicGO instance is ready😄")
+-          resolve()
+-        }
+-      }
++    const finalState = picgo.getConfigMigrationState()
++    if (finalState.status === "failed") {
++      const errorText = finalState.error ? `，错误信息：${finalState.error}` : ""
++      siyuanApi.pushErrMsg({
++        msg: `PicGo 配置初始化或迁移失败${errorText}。请在 PicGo 设置页点击“重试初始化”。`,
++        timeout: 7000,
++      })
++      this.logger?.error(`PicGo config migration failed${errorText}`)
++      return
++    }
+ 
+-      checkConfig()
+-    })
++    if (initialState.status === "running" && finalState.status === "done") {
++      siyuanApi.pushMsg({
++        msg: "PicGO 配置初始化或迁移完成",
++        timeout: 7000,
++      })
++      this.logger?.info("PicGO 配置初始化或迁移完成🎉")
++    }
++
++    this.logger?.info("PicGO instance is ready😄")
+   }
+ }
+ 
+

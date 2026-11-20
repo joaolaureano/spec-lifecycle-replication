@@ -1,0 +1,3040 @@
+===== P193 | repo Creatiwity/siren | PR #644: feat: add doublons data and endpoints | capacidade: search-unites-legales
+--- SPEC VIVA
+# search-unites-legales Specification
+
+## Purpose
+TBD - created by archiving change 2026-02-06-add-search-endpoints. Update Purpose after archive.
+## Requirements
+### Requirement: Search unites legales with text query
+
+The system SHALL allow searching legal units by text query on denomination via the `q` query parameter on `GET /v3/unites_legales`.
+
+#### Scenario: Text search on denomination
+
+- **WHEN** a GET request is made to `/v3/unites_legales?q=creati`
+- **THEN** the system returns legal units whose `search_denomination` matches the query using BM25 ngram search
+- **AND** each result includes a `score` field with the text relevance score
+
+#### Scenario: No text query provided
+
+- **WHEN** a GET request is made to `/v3/unites_legales` without a `q` parameter
+- **THEN** the system returns legal units without text filtering
+- **AND** the `score` field is absent from results
+
+### Requirement: Filter unites legales by field values
+
+The system SHALL allow filtering legal units by exact field values via query parameters.
+
+#### Scenario: Filter by etat_administratif
+
+- **WHEN** a GET request is made to `/v3/unites_legales?etat_administratif=A`
+- **THEN** only legal units with `etat_administratif = 'A'` are returned
+
+#### Scenario: Filter by activite_principale
+
+- **WHEN** a GET request is made to `/v3/unites_legales?activite_principale=62.01Z`
+- **THEN** only legal units with `activite_principale = '62.01Z'` are returned
+
+#### Scenario: Filter by categorie_juridique
+
+- **WHEN** a GET request is made to `/v3/unites_legales?categorie_juridique=5710`
+- **THEN** only legal units with `categorie_juridique = '5710'` are returned
+
+#### Scenario: Filter by categorie_entreprise
+
+- **WHEN** a GET request is made to `/v3/unites_legales?categorie_entreprise=PME`
+- **THEN** only legal units with `categorie_entreprise = 'PME'` are returned
+
+#### Scenario: Filter by date_creation
+
+- **WHEN** a GET request is made to `/v3/unites_legales?date_creation=2024-01-15`
+- **THEN** only legal units with `date_creation = '2024-01-15'` are returned
+
+#### Scenario: Filter by date_debut
+
+- **WHEN** a GET request is made to `/v3/unites_legales?date_debut=2024-01-15`
+- **THEN** only legal units with `date_debut = '2024-01-15'` are returned
+
+#### Scenario: Combine multiple filters
+
+- **WHEN** a GET request is made to `/v3/unites_legales?etat_administratif=A&activite_principale=62.01Z&q=creati`
+- **THEN** the system applies all filters together (AND logic)
+- **AND** only legal units matching all criteria are returned
+
+### Requirement: Sort unite legale search results
+
+The system SHALL allow sorting search results via `sort` and `direction` query parameters. The `sort` parameter specifies the field to sort by, and the `direction` parameter specifies the sort direction (`asc` or `desc`). When direction is omitted, sensible defaults apply per field.
+
+#### Scenario: Sort by relevance
+
+- **WHEN** a GET request is made to `/v3/unites_legales?q=creati&sort=relevance`
+- **THEN** results are sorted by BM25 text relevance score descending (most relevant first)
+
+#### Scenario: Sort by relevance ascending
+
+- **WHEN** a GET request is made to `/v3/unites_legales?q=creati&sort=relevance&direction=asc`
+- **THEN** results are sorted by BM25 text relevance score ascending (least relevant first)
+
+#### Scenario: Sort by date_creation
+
+- **WHEN** a GET request is made to `/v3/unites_legales?sort=date_creation`
+- **THEN** results are sorted by `date_creation` descending (newest first)
+
+#### Scenario: Sort by date_creation ascending
+
+- **WHEN** a GET request is made to `/v3/unites_legales?sort=date_creation&direction=asc`
+- **THEN** results are sorted by `date_creation` ascending (oldest first)
+
+#### Scenario: Sort by date_debut
+
+- **WHEN** a GET request is made to `/v3/unites_legales?sort=date_debut`
+- **THEN** results are sorted by `date_debut` descending (newest first)
+
+#### Scenario: Sort by date_debut ascending
+
+- **WHEN** a GET request is made to `/v3/unites_legales?sort=date_debut&direction=asc`
+- **THEN** results are sorted by `date_debut` ascending (oldest first)
+
+#### Scenario: Default sort with text search
+
+- **WHEN** a GET request is made to `/v3/unites_legales?q=creati` without a `sort` parameter
+- **THEN** results are sorted by relevance descending
+
+#### Scenario: Default sort without text search
+
+- **WHEN** a GET request is made to `/v3/unites_legales` without a `sort` or `q` parameter
+- **THEN** results are sorted by `date_creation` descending
+
+#### Scenario: Invalid sort with relevance
+
+- **WHEN** a GET request is made to `/v3/unites_legales?sort=relevance` without a `q` parameter
+- **THEN** the system responds with a 400 error
+
+### Requirement: Paginate unite legale search results
+
+The system SHALL support pagination via `limit` and `offset` query parameters.
+
+#### Scenario: Default pagination
+
+- **WHEN** a GET request is made to `/v3/unites_legales` without `limit` or `offset`
+- **THEN** the system returns at most 20 results starting from offset 0
+
+#### Scenario: Custom limit and offset
+
+- **WHEN** a GET request is made to `/v3/unites_legales?limit=50&offset=100`
+- **THEN** the system returns at most 50 results starting from offset 100
+
+#### Scenario: Maximum limit
+
+- **WHEN** a GET request is made to `/v3/unites_legales?limit=200`
+- **THEN** the system caps the limit to 100 and returns at most 100 results
+
+#### Scenario: Maximum offset
+
+- **WHEN** a GET request is made to `/v3/unites_legales?offset=20000`
+- **THEN** the system caps the offset to 10000
+
+### Requirement: Search response format for unites legales
+
+The system SHALL return search results in a structured response with metadata.
+
+#### Scenario: Successful search response
+
+- **WHEN** a search query returns results
+- **THEN** the response body contains an `unites_legales` array with each item containing at minimum: `siren`, `etat_administratif`, `date_creation`, `denomination`, `denomination_usuelle_1`, `denomination_usuelle_2`, `denomination_usuelle_3`, `activite_principale`, `categorie_juridique`, `categorie_entreprise`
+- **AND** the response includes `total` with the total count of matching results
+- **AND** the response includes `limit` and `offset` reflecting the applied pagination
+- **AND** the response includes `sort` and `direction` reflecting the resolved sort field and direction
+
+#### Scenario: Empty search results
+
+- **WHEN** a search query matches no legal units
+- **THEN** the response body contains an empty `unites_legales` array
+- **AND** `total` is 0
+--- ARQUIVOS DO PR (20)
+added     +5     -0     migrations/2026-05-21-000000_add_siren_doublons/down.sql
+added     +16    -0     migrations/2026-05-21-000000_add_siren_doublons/up.sql
+added     +2     -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/.openspec.yaml
+added     +70    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/design.md
+added     +28    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/proposal.md
+added     +83    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/specs/http-server-axum/spec.md
+added     +42    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/specs/siren-doublons/spec.md
+added     +35    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/tasks.md
+modified  +27    -0     openspec/specs/http-server-axum/spec.md
+added     +45    -0     openspec/specs/siren-doublons/spec.md
+modified  +2     -0     src/commands/common.rs
+modified  +10    -2     src/commands/serve/runner/error.rs
+modified  +25    -1     src/commands/serve/runner/etablissements.rs   <== código ligado à spec
+modified  +20    -1     src/commands/serve/runner/unites_legales.rs   <== código ligado à spec
+modified  +6     -0     src/models/group_metadata/common.rs
+modified  +1     -0     src/models/mod.rs
+modified  +30    -0     src/models/schema.rs
+added     +6     -0     src/models/siren_doublon/error.rs
+added     +130   -0     src/models/siren_doublon/mod.rs
+modified  +6     -0     src/models/update_metadata/common.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/commands/serve/runner/etablissements.rs
+@@ -4,6 +4,7 @@ use super::common::{
+ };
+ use super::error::Error;
+ use crate::models;
++use crate::models::etablissement::error::Error as EtablissementModelError;
+ use crate::models::etablissement::common::{
+     EtablissementSearchParams, EtablissementSearchResponse, EtablissementSearchResultResponse,
+     EtablissementSortField,
+@@ -26,6 +27,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
+     responses(
+         (status = 200, description = "Etablissement response", body = EtablissementResponse),
+         (status = 400, description = "Invalid SIRET"),
++        (status = 301, description = "Redirect to siege of canonical SIREN"),
+         (status = 404, description = "Etablissement not found")
+     ),
+     tag = super::common::PUBLIC_TAG
+@@ -48,7 +50,29 @@ async fn get_etablissement_by_siret(
+         .get()
+         .map_err(|e| Error::LocalConnectionFailed { source: e })?;
+ 
+-    let etablissement = models::etablissement::get(&mut connection, &siret)?;
++    let etablissement = match models::etablissement::get(&mut connection, &siret) {
++        Ok(e) => e,
++        Err(EtablissementModelError::EtablissementNotFound) => {
++            let siren = &siret[..9];
++            match models::siren_doublon::find_canonical_siren(&mut connection, siren) {
++                Ok(Some(canonical_siren)) => {
++                    let siege = models::etablissement::get_siege_with_siren(
++                        &mut connection,
++                        &canonical_siren,
++                    )?;
++                    return Err(Error::SirenDoublonRedirect {
++                        location: format!("/v3/etablissements/{}", siege.siret),
++                    });
++                }
++                Ok(None) => {}
++                Err(e) => return Err(Error::SirenDoublonLookup { source: e }),
++            }
++            return Err(Error::Etablissement {
++                source: EtablissementModelError::EtablissementNotFound,
++            });
++        }
++        Err(e) => return Err(Error::Etablissement { source: e }),
++    };
+     let unite_legale = models::unite_legale::get(&mut connection, &etablissement.siren)?;
+     let etablissement_siege =
+         models::etablissement::get_siege_with_siren(&mut connection, &etablissement.siren)?;
+
+### src/commands/serve/runner/unites_legales.rs
+@@ -1,6 +1,7 @@
+ use super::common::{Context, UniteLegaleInnerResponse, UniteLegaleResponse};
+ use super::error::Error;
+ use crate::models;
++use crate::models::unite_legale::error::Error as UniteLegaleModelError;
+ use crate::models::unite_legale::common::{
+     UniteLegaleSearchParams, UniteLegaleSearchResponse, UniteLegaleSearchResultResponse,
+     UniteLegaleSortField,
+@@ -23,6 +24,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
+     responses(
+         (status = 200, description = "UniteLegale response", body = UniteLegaleResponse),
+         (status = 400, description = "Invalid SIREN"),
++        (status = 301, description = "Redirect to canonical SIREN"),
+         (status = 404, description = "UniteLegale not found")
+     ),
+     tag = super::common::PUBLIC_TAG
+@@ -45,7 +47,24 @@ async fn get_unite_legale_by_siren(
+         .get()
+         .map_err(|e| Error::LocalConnectionFailed { source: e })?;
+ 
+-    let unite_legale = models::unite_legale::get(&mut connection, &siren)?;
++    let unite_legale = match models::unite_legale::get(&mut connection, &siren) {
++        Ok(u) => u,
++        Err(UniteLegaleModelError::UniteLegaleNotFound) => {
++            match models::siren_doublon::find_canonical_siren(&mut connection, &siren) {
++                Ok(Some(canonical_siren)) => {
++                    return Err(Error::SirenDoublonRedirect {
++                        location: format!("/v3/unites_legales/{}", canonical_siren),
++                    })
++                }
++                Ok(None) => {}
++                Err(e) => return Err(Error::SirenDoublonLookup { source: e }),
++            }
++            return Err(Error::UniteLegale {
++                source: UniteLegaleModelError::UniteLegaleNotFound,
++            });
++        }
++        Err(e) => return Err(Error::UniteLegale { source: e }),
++    };
+     let etablissements = models::etablissement::get_with_siren(&mut connection, &siren)?;
+     let etablissement_siege =
+         models::etablissement::get_siege_with_siren(&mut connection, &unite_legale.siren)?;
+
+===== P194 | repo skzv/ccmux | PR #104: Add Cursor agent support | capacidade: adaptive-screen-layout
+--- SPEC VIVA
+# adaptive-screen-layout Specification
+
+## Purpose
+TBD - created by archiving change responsive-screen-widths. Update Purpose after archive.
+## Requirements
+### Requirement: Screen width contract
+Every TUI screen SHALL render without any visible line exceeding the terminal width. A "visible line" is a newline-delimited segment measured in display columns (ANSI escape codes excluded). This contract holds for any terminal width in the range [40, ∞).
+
+#### Scenario: No overflow at 50 columns
+- **WHEN** the terminal width is 50 columns
+- **THEN** every line of every screen's rendered output is ≤ 50 display columns wide
+
+#### Scenario: No overflow at 80 columns
+- **WHEN** the terminal width is 80 columns
+- **THEN** every line of every screen's rendered output is ≤ 80 display columns wide
+
+#### Scenario: No overflow at 120 columns
+- **WHEN** the terminal width is 120 columns
+- **THEN** every line of every screen's rendered output is ≤ 120 display columns wide
+
+#### Scenario: No overflow at 200 columns
+- **WHEN** the terminal width is 200 columns
+- **THEN** every line of every screen's rendered output is ≤ 200 display columns wide
+
+### Requirement: Primary content always visible
+Every screen SHALL always display its primary content identifier (session name for Sessions, project name for Projects, note title for Notes, etc.) regardless of terminal width, as long as width ≥ 40.
+
+#### Scenario: Session name visible at 80 columns
+- **WHEN** the Sessions screen renders at 80 columns with at least one session in the list
+- **THEN** the session name is present in the rendered output (possibly truncated with "…" but not absent)
+
+#### Scenario: Project name visible at 80 columns
+- **WHEN** the Projects screen renders at 80 columns with at least one project in the list
+- **THEN** the project name is present in the rendered output
+
+### Requirement: Narrow layout breakpoint
+There SHALL be exactly one layout breakpoint. A screen is "narrow" when `width < 120` and "wide" otherwise. Every screen that adapts to width MUST use this single breakpoint (`isNarrow`); no screen may define its own threshold.
+
+#### Scenario: Single shared breakpoint
+- **WHEN** any screen decides whether to render its narrow or wide layout
+- **THEN** the decision is made by `isNarrow(width)` (`width < 120`)
+- **THEN** no screen uses a different width threshold (e.g. a derived detail-pane width) to make the same decision
+
+#### Scenario: Side-by-side panes collapse below the breakpoint
+- **WHEN** a screen with a list + detail side-by-side layout renders at width < 120
+- **THEN** the panes are stacked or the detail pane is omitted, never rendered side-by-side
+- **THEN** no rendered line exceeds the terminal width
+
+### Requirement: Secondary content omitted below the narrow breakpoint
+Below the narrow breakpoint, each screen SHALL render a curated subset of its content. Elements classified T2 (reference) in the change's design document MUST be omitted entirely; elements classified T1 (useful) MAY be condensed; elements classified T0 (glanceable) MUST remain. Omission means the content is absent — there is no reveal affordance in the TUI.
+
+#### Scenario: Usage panel collapses to one line
+- **WHEN** the Home screen renders at width < 120
+- **THEN** the Claude usage panel renders as a single summary line carrying the prompt count
+- **THEN** the cache breakdown, top-projects list, and Codex/Antigravity blocks are absent
+
+#### Scenario: Inline hint lines are hidden
+- **WHEN** any screen renders at width < 120
+- **THEN** inline hint / cheatsheet lines (e.g. "enter: attach   x: kill") are absent
+
+#### Scenario: Detach instructions survive narrow mode
+- **WHEN** the Sessions detail for a selected session renders at width < 120
+- **THEN** the detach instruction (how to return after attaching) is present, condensed to a short form
+- **THEN** the session path, window count, and full key cheatsheet are absent
+
+#### Scenario: Secondary content returns when wide
+- **WHEN** a screen renders at width ≥ 120
+- **THEN** all T2 elements for that screen are present
+
+### Requirement: Home screen layout adapts to width
+Below the narrow breakpoint the Home screen SHALL render as a single full-width column with the hero omitted entirely, stacked top to bottom: sessions (list + condensed detail) → session summary → devices → usage. At or above the breakpoint the Home screen SHALL render the hero as a full-width banner across the top; beneath the banner it SHALL render two columns — the sessions list on the left, and on the right the session detail pane followed by the session summary, devices, and usage tiles stacked beneath it.
+
+#### Scenario: Hero omitted below the breakpoint
+- **WHEN** the Home screen renders at width < 120
+- **THEN** the "Hello." hero is absent from the output
+- **THEN** the sessions block, session summary, devices, and usage render in one full-width column
+
+#### Scenario: Hero is a full-width banner at or above the breakpoint
+- **WHEN** the Home screen renders at width ≥ 120
+- **THEN** the "Hello." hero spans the top of the screen above both columns
+- **THEN** no rendered line exceeds the terminal width
+
+#### Scenario: Sessions list on the left, detail and tiles on the right
+- **WHEN** the Home screen renders at width ≥ 120
+- **THEN** the sessions list occupies the left column
+- **THEN** the right column stacks the session detail pane on top, then the session summary, devices, and usage tiles
+- **THEN** the session detail pane shows the full key cheatsheet (it is not collapsed to the phone form)
+
+### Requirement: Tab bar always readable
+The tab bar header SHALL always show either the full screen label or the screen number for every screen, regardless of terminal width.
+
+#### Scenario: Wide tab bar shows labels
+- **WHEN** the terminal width is ≥ 120
+- **THEN** each screen's full label is present in the rendered header
+
+#### Scenario: Narrow tab bar shows numbers
+- **WHEN** the terminal width is < 120
+- **THEN** each screen's number is present in the rendered header
+- **THEN** the active screen's initial letter is present in the rendered header
+
+### Requirement: Chrome rows curate then clamp
+The persistent chrome rows — header, status bar, footer — SHALL each render a width-appropriate curated subset of their content using the same T0/T1/T2 model as screen bodies. Single-line truncation (`forceSingleLine`) is a final overflow safety net, not the collapse mechanism: each chrome row MUST compose its curated string for the current width tier before any truncation, and MUST order its content so that if truncation still occurs it removes T2 content before T0 or T1 content.
+
+#### Scenario: Status bar keeps safety and daemon status on narrow
+- **WHEN** the status bar renders at width < 120
+- **THEN** the battery-danger banner (when active) and the daemon online/offline status are present
+
+#### Scenario: Status bar drops reference detail on narrow
+- **WHEN** the status bar renders at width < 120
+- **THEN** the refreshed-at clock and the version chip are absent
+
+#### Scenario: Footer keeps the help gateway on narrow
+- **WHEN** the footer renders at width < 120 with no toast active
+- **THEN** the `? help` hint is present
+- **THEN** the per-screen action hints (`n new`, `x kill`, `r refresh`) are absent
+
+#### Scenario: Truncation removes the least important content first
+- **WHEN** a chrome row's curated string still exceeds the terminal width
+- **THEN** truncation removes T2 content before T0/T1 content, because the row orders its content T0-first
+
+#### Scenario: Error toast takes the footer at every width
+- **WHEN** an error toast is active
+- **THEN** the footer renders the toast in place of the hint line, at every width
+
+### Requirement: Width-sweep test coverage
+The test suite SHALL include a width-sweep test for every screen that renders each screen at widths 50, 80, 100, 120, and 200 and asserts the screen width contract and primary content visibility requirements.
+
+#### Scenario: Test runner covers all screens
+- **WHEN** the width-sweep tests run
+- **THEN** every screen defined in the `Screen` enum is exercised at each canonical width (50, 80, 100, 120, 200)
+- **THEN** any screen that overflows its allocated width causes the test to fail
+
+#### Scenario: Narrow widths assert omission
+- **WHEN** the width-sweep tests run at a narrow width (50, 80, or 100)
+- **THEN** each screen's T2 elements are asserted absent
+- **THEN** each screen's T0 elements are asserted present
+
+
+--- ARQUIVOS DO PR (43)
+modified  +9     -9     README.md
+modified  +4     -3     cmd/ccmux/cmd/resume.go
+modified  +2     -2     cmd/ccmux/cmd/shell.go
+modified  +7     -3     cmd/ccmux/cmd/subcommands.go
+modified  +4     -0     cmd/ccmuxd/launch_cmd_test.go
+modified  +4     -4     docs/01_Specs/02_Multi_Agent.md
+modified  +1     -1     docs/02_Architecture/00_System_Design.md
+modified  +6     -5     docs/02_Architecture/04_Agents.md
+modified  +1     -1     docs/vhs/README.md
+modified  +1     -1     docs/vhs/cuj05_pick_agent.tape
+modified  +19    -4     internal/agent/agent.go
+modified  +38    -7     internal/agent/agent_test.go
+added     +53    -0     internal/agent/cursor.go
+modified  +5     -4     internal/agent/fuzz_test.go
+modified  +3     -1     internal/config/config.go
+modified  +5     -0     internal/config/config_test.go
+modified  +3     -1     internal/conversations/conversations.go
+modified  +3     -0     internal/conversations/conversations_test.go
+modified  +1     -1     internal/daemon/daemon_test.go
+modified  +1     -1     internal/daemonservice/service.go
+modified  +2     -1     internal/daemonservice/service_test.go
+modified  +5     -4     internal/project/fuzz_test.go
+modified  +1     -1     internal/project/project_test.go
+modified  +2     -0     internal/scaffold/scaffold_launch_test.go
+modified  +59    -0     internal/setupwizard/agents_test.go
+modified  +84    -24    internal/setupwizard/wizard.go
+modified  +17    -8     internal/tui/agents.go
+modified  +4     -2     internal/tui/default_agent_test.go
+modified  +2     -2     internal/tui/newproject.go
+modified  +15    -8     internal/tui/newproject_test.go
+modified  +1     -1     internal/tui/newsession.go
+modified  +5     -2     internal/tui/newsession_agent_test.go
+modified  +11    -3     internal/tui/project_launch_test.go
+modified  +1     -1     internal/tui/projects.go
+modified  +3     -3     internal/tui/settings.go
+modified  +2     -2     internal/tui/settings_test.go
+modified  +1     -1     internal/tui/width_test.go   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-05-25-integrate-cursor/.openspec.yaml
+added     +73    -0     openspec/changes/archive/2026-05-25-integrate-cursor/design.md
+added     +58    -0     openspec/changes/archive/2026-05-25-integrate-cursor/proposal.md
+added     +85    -0     openspec/changes/archive/2026-05-25-integrate-cursor/specs/cursor-agent-support/spec.md
+added     +18    -0     openspec/changes/archive/2026-05-25-integrate-cursor/tasks.md
+added     +89    -0     openspec/specs/cursor-agent-support/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/tui/width_test.go
+@@ -88,7 +88,7 @@ func TestWidthSweep_AllScreens(t *testing.T) {
+ 		{ScreenConversations, []string{"Conversations"}, nil},
+ 		{ScreenProjects, []string{"Projects"}, nil},
+ 		{ScreenNotes, []string{"Notes"}, nil},
+-		{ScreenAgents, []string{"Claude", "Codex", "Antigravity"}, []string{"switch agent"}},
++		{ScreenAgents, []string{"Claude", "Codex", "Antigravity", "Cursor"}, []string{"switch agent"}},
+ 		{ScreenSettings, []string{"Settings"}, []string{"config file"}},
+ 		{ScreenNetwork, []string{"Network"}, []string{"every machine"}},
+ 	}
+
+===== P195 | repo b0x42/prizm | PR #30: feat: v1 release preparation | capacidade: detail-card-view
+--- SPEC VIVA
+## MODIFIED Requirements
+
+### Requirement: CardBackground ViewModifier (MODIFIED)
+The system SHALL provide a `CardBackground` `ViewModifier` that applies a `#FAFAFA` (light) / `#2C2C2C` (dark) background via the `CardBackground` color asset, rounded corners (radius 10), and a subtle 0.5pt border at 8% opacity. The modifier SHALL NOT apply a drop shadow. A `.cardBackground()` `View` extension SHALL expose it ergonomically.
+
+#### Scenario: Card is visually distinct in light mode
+- **WHEN** the detail pane is displayed in light mode
+- **THEN** each card SHALL render with a `#FAFAFA` background, rounded corners (radius 10), a subtle border, and no drop shadow
+
+#### Scenario: Card is visually distinct in dark mode
+- **WHEN** the detail pane is displayed in dark mode
+- **THEN** each card SHALL render with a `#2C2C2C` background, rounded corners (radius 10), a subtle border, and no drop shadow
+
+---
+
+### Requirement: DetailSectionCard header style (MODIFIED)
+Section headers ("Credentials", "Websites", etc.) SHALL use `.headline` font (13pt semibold) with default text color. Spacing between the header and the card content SHALL be 12pt.
+
+#### Scenario: Section header renders with headline style
+- **WHEN** a `DetailSectionCard` is displayed with a non-empty title
+- **THEN** the title SHALL render in `.headline` font with default (primary) text color
+
+---
+
+### Requirement: FieldRowView uses horizontal layout for all field types (MODIFIED)
+The system SHALL display field rows with the label on the left and the value on the right. Multi-line fields (notes) SHALL use a stacked layout. Masked fields SHALL display the label on the left with the masked value and eye toggle on the right. All field values SHALL use monospaced font. All field labels SHALL use default (primary) text color.
+
+#### Scenario: Single-line field renders horizontally
+- **WHEN** a `FieldRowView` is displayed with `isMultiLine` false (default) and `isMasked` false
+- **THEN** the label SHALL appear on the left and the value on the right, on the same line
+
+#### Scenario: Multi-line field renders stacked
+- **WHEN** a `FieldRowView` is displayed with `isMultiLine` true
+- **THEN** the label SHALL appear above the value in a vertical stack
+
+#### Scenario: Masked field renders horizontally
+- **WHEN** a `FieldRowView` is displayed with `isMasked` true
+- **THEN** the label SHALL appear on the left, and the masked value with eye toggle SHALL appear on the right
+
+---
+
+### Requirement: Copy on hover with feedback (MODIFIED)
+The system SHALL show a "COPY" label (displayed uppercase via `.textCase(.uppercase)`) when the user hovers over a field row. Clicking anywhere on a hovered row SHALL copy the field value. After copying, the label SHALL change to "COPIED" for 0.8 seconds. The COPY label SHALL use `.headline` font and the system accent color. The COPY label SHALL appear to the left of the field value.
+
+#### Scenario: COPY appears on hover
+- **WHEN** the user hovers over a field row with a non-empty value
+- **THEN** a "COPY" label SHALL appear to the left of the value
+
+#### Scenario: COPY hidden when not hovered
+- **WHEN** the user is not hovering over a field row
+- **THEN** no COPY label SHALL be visible
+
+#### Scenario: Click row copies value
+- **WHEN** the user clicks anywhere on a hovered field row
+- **THEN** the field value SHALL be copied to the clipboard
+
+#### Scenario: COPIED feedback after copy
+- **GIVEN** the user has clicked a field row to copy
+- **THEN** the label SHALL change to "COPIED" for 0.8 seconds, then revert to "COPY"
+
+---
+
+### Requirement: Open-in-browser icon always visible (MODIFIED)
+For field rows with a URL, the system SHALL always display an open-in-browser icon (`arrow.up.right.square`) at the trailing edge of the row. The icon SHALL use the system accent color, `.medium` image scale, and `.semibold` font weight.
+
+#### Scenario: Browser icon visible on URL fields
+- **WHEN** a `FieldRowView` has a non-nil `url`
+- **THEN** the open-in-browser icon SHALL be visible at all times (not only on hover)
+
+---
+
+### Requirement: Eye toggle icon style (MODIFIED)
+The reveal/hide eye icon on masked fields SHALL use the system accent color and `.medium` image scale.
+
+#### Scenario: Eye icon uses accent color
+- **WHEN** a masked field is displayed
+- **THEN** the eye toggle icon SHALL use the system accent color and medium size
+
+---
+
+### Requirement: Duplicate labels removed from card sections (MODIFIED)
+When a `DetailSectionCard` provides a section header (e.g. "Notes", "Custom Fields"), the field rows inside SHALL NOT render a redundant label matching the section header.
+
+#### Scenario: Notes card has no inner label
+- **WHEN** a Notes section is displayed inside a `DetailSectionCard("Notes")`
+- **THEN** only the note text SHALL appear inside the card, with no "Notes" label
+
+#### Scenario: Custom Fields card has no inner header
+- **WHEN** a Custom Fields section is displayed inside a `DetailSectionCard("Custom Fields")`
+- **THEN** no duplicate "Custom Fields" header SHALL appear inside the card
+
+---
+
+### Requirement: Metadata footer displays created and updated dates (MODIFIED)
+The system SHALL display "Updated" and "Created" dates below the last card section, left-aligned, stacked vertically, using default field text style with secondary (gray) color. Dates SHALL use `dd.MM.yyyy` format. Labels and dates SHALL be column-aligned.
+
+#### Scenario: Dates render below cards
+- **WHEN** an item detail is displayed
+- **THEN** "Updated: dd.MM.yyyy" and "Created: dd.MM.yyyy" SHALL appear below the last card, left-aligned, in gray text
+
+--- ARQUIVOS DO PR (230)
+added     +27    -0     .github/ISSUE_TEMPLATE/bug_report.md
+added     +17    -0     .github/ISSUE_TEMPLATE/feature_request.md
+added     +15    -0     .github/pull_request_template.md
+added     +37    -0     .github/workflows/ci.yml
+added     +135   -0     .github/workflows/release.yml
+modified  +1     -1     .gitignore
+modified  +12    -12    CLAUDE.md
+added     +85    -0     CODE_OF_CONDUCT.md
+modified  +2     -2     CONSTITUTION.md
+modified  +7     -7     CONTRIBUTING.md
+added     +131   -0     DEVELOPMENT.md
+added     +32    -0     ExportOptions.plist
+modified  +1     -1     LICENSE
+removed   +0     -76    Macwarden/Presentation/Vault/Sidebar/SidebarView.swift
+renamed   +4     -4     Prizm/App/AppContainer.swift
+renamed   +2     -2     Prizm/App/Config.swift
+renamed   +25    -4     Prizm/App/PrizmApp.swift
+renamed   +0     -0     Prizm/Data/Crypto/CryptoKeys.swift
+renamed   +0     -0     Prizm/Data/Crypto/CryptographicRandomnessProvider.swift
+renamed   +0     -0     Prizm/Data/Crypto/EncString.swift
+renamed   +22    -22    Prizm/Data/Crypto/PrizmCryptoService.swift
+renamed   +6     -6     Prizm/Data/Keychain/KeychainService.swift
+renamed   +1     -1     Prizm/Data/Mappers/CipherMapper.swift
+renamed   +1     -1     Prizm/Data/Network/FaviconLoader.swift
+renamed   +0     -0     Prizm/Data/Network/Models/RawCipher.swift
+renamed   +0     -0     Prizm/Data/Network/Models/SyncResponse.swift
+renamed   +7     -7     Prizm/Data/Network/PrizmAPIClient.swift
+renamed   +6     -6     Prizm/Data/Repositories/AuthRepositoryImpl.swift
+renamed   +7     -7     Prizm/Data/Repositories/SyncRepositoryImpl.swift
+renamed   +3     -3     Prizm/Data/Repositories/SyncTimestampRepositoryImpl.swift
+renamed   +11    -11    Prizm/Data/Repositories/VaultRepositoryImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/CreateVaultItemUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/DeleteVaultItemUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/EditVaultItemUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/GetLastSyncDateUseCaseImpl.swift
+renamed   +1     -1     Prizm/Data/UseCases/LoginUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/PermanentDeleteVaultItemUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/RestoreVaultItemUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/SearchVaultUseCaseImpl.swift
+renamed   +0     -0     Prizm/Data/UseCases/SyncUseCaseImpl.swift
+renamed   +1     -1     Prizm/Data/UseCases/UnlockUseCaseImpl.swift
+renamed   +0     -0     Prizm/Domain/Entities/Account.swift
+renamed   +0     -0     Prizm/Domain/Entities/CustomField.swift
+renamed   +0     -0     Prizm/Domain/Entities/DraftVaultItem.swift
+renamed   +0     -0     Prizm/Domain/Entities/KdfParams.swift
+renamed   +0     -0     Prizm/Domain/Entities/SidebarSelection.swift
+renamed   +0     -0     Prizm/Domain/Entities/VaultItem.swift
+renamed   +1     -1     Prizm/Domain/Repositories/AuthRepository.swift
+renamed   +1     -1     Prizm/Domain/Repositories/SyncRepository.swift
+renamed   +0     -0     Prizm/Domain/Repositories/SyncTimestampRepository.swift
+renamed   +0     -0     Prizm/Domain/Repositories/VaultRepository.swift
+renamed   +0     -0     Prizm/Domain/UseCases/CreateVaultItemUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/DeleteVaultItemUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/EditVaultItemUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/GetLastSyncDateUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/LoginUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/PermanentDeleteVaultItemUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/RestoreVaultItemUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/SearchVaultUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/SyncUseCase.swift
+renamed   +0     -0     Prizm/Domain/UseCases/UnlockUseCase.swift
+renamed   +0     -0     Prizm/Domain/Utilities/PasswordGenerator.swift
+renamed   +0     -0     Prizm/Domain/Utilities/PasswordGeneratorConfig.swift
+renamed   +0     -0     Prizm/Domain/Utilities/RandomnessProvider.swift
+renamed   +0     -0     Prizm/LocalConfig.xcconfig.template
+added     +109   -0     Prizm/Presentation/About/AboutView.swift
+added     +44    -0     Prizm/Presentation/About/AboutViewModel.swift
+renamed   +0     -0     Prizm/Presentation/AccessibilityIdentifiers.swift
+renamed   +0     -0     Prizm/Presentation/Components/CardBackground.swift   <== código ligado à spec
+renamed   +0     -0     Prizm/Presentation/Components/FaviconView.swift
+renamed   +0     -0     Prizm/Presentation/Components/FieldRowView.swift
+renamed   +0     -0     Prizm/Presentation/Components/MaskedFieldView.swift
+renamed   +0     -0     Prizm/Presentation/Components/OptionKeyMonitor.swift
+renamed   +0     -0     Prizm/Presentation/Components/VerticalLabeledContentStyle.swift
+renamed   +3     -3     Prizm/Presentation/DesignSystem.swift
+renamed   +1     -1     Prizm/Presentation/Login/LoginView.swift
+renamed   +1     -1     Prizm/Presentation/Login/LoginViewModel.swift
+renamed   +0     -0     Prizm/Presentation/Login/TOTPPromptView.swift
+renamed   +0     -0     Prizm/Presentation/Sync/SyncProgressView.swift
+renamed   +0     -0     Prizm/Presentation/Unlock/UnlockView.swift
+renamed   +1     -1     Prizm/Presentation/Unlock/UnlockViewModel.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/CardDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/CustomFieldsSection.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/IdentityDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/ItemDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/LoginDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/SSHKeyDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Detail/SecureNoteDetailView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/CardEditForm.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/CustomFieldsEditSection.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/EditFieldRow.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/IdentityEditForm.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/ItemEditView.swift
+renamed   +1     -1     Prizm/Presentation/Vault/Edit/ItemEditViewModel.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/LoginEditForm.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/PasswordGeneratorView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/PasswordGeneratorViewModel.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/SSHKeyEditForm.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Edit/SecureNoteEditForm.swift
+renamed   +0     -0     Prizm/Presentation/Vault/ItemList/ItemListView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/ItemList/ItemRowView.swift
+added     +64    -0     Prizm/Presentation/Vault/Sidebar/SidebarView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Sidebar/SyncStatusView.swift
+renamed   +0     -0     Prizm/Presentation/Vault/SyncLabelFormatter.swift
+renamed   +0     -0     Prizm/Presentation/Vault/Trash/TrashView.swift
+renamed   +1     -1     Prizm/Presentation/Vault/VaultBrowserView.swift
+renamed   +1     -1     Prizm/Presentation/Vault/VaultBrowserViewModel.swift
+renamed   +71    -62    Prizm/Prizm.xcodeproj/project.pbxproj
+renamed   +0     -0     Prizm/Prizm.xcodeproj/project.xcworkspace/contents.xcworkspacedata
+renamed   +12    -12    Prizm/Prizm.xcodeproj/xcshareddata/xcschemes/Prizm.xcscheme
+renamed   +0     -0     Prizm/Prizm/Assets.xcassets/AccentColor.colorset/Contents.json
+renamed   +0     -0     Prizm/Prizm/Assets.xcassets/AppIcon.appiconset/Contents.json
+renamed   +0     -0     Prizm/Prizm/Assets.xcassets/CardBackground.colorset/Contents.json
+renamed   +0     -0     Prizm/Prizm/Assets.xcassets/Contents.json
+renamed   +0     -0     Prizm/Prizm/Info.plist
+renamed   +1     -1     Prizm/Prizm/Prizm.entitlements
+added     +73    -0     Prizm/PrizmTests/AboutViewModelTests.swift
+renamed   +6     -6     Prizm/PrizmTests/AuthRepositoryImplTests.swift
+renamed   +1     -1     Prizm/PrizmTests/CardBackgroundTests.swift
+renamed   +1     -1     Prizm/PrizmTests/CipherMapperReverseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/CipherMapperTests.swift
+renamed   +1     -1     Prizm/PrizmTests/DeleteRestoreVaultItemUseCaseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/DraftVaultItemTests.swift
+renamed   +1     -1     Prizm/PrizmTests/EditVaultItemUseCaseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/EncStringTests.swift
+renamed   +2     -2     Prizm/PrizmTests/EntityValidationTests.swift
+renamed   +1     -1     Prizm/PrizmTests/GetLastSyncDateUseCaseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/HighlightedTextTests.swift
+renamed   +1     -1     Prizm/PrizmTests/KeychainServiceTests.swift
+renamed   +1     -1     Prizm/PrizmTests/LoginUseCaseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/LoginViewModelTests.swift
+renamed   +1     -1     Prizm/PrizmTests/MaskedFieldViewTests.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockAuthRepository.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockKeychainService.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockLoginUseCase.swift
+renamed   +3     -3     Prizm/PrizmTests/Mocks/MockPrizmAPIClient.swift
+renamed   +5     -5     Prizm/PrizmTests/Mocks/MockPrizmCryptoService.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockRandomnessProvider.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockSyncRepository.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockSyncTimestampRepository.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockSyncUseCase.swift
+renamed   +1     -1     Prizm/PrizmTests/Mocks/MockVaultRepository.swift
+renamed   +1     -1     Prizm/PrizmTests/OptionKeyMonitorTests.swift
+renamed   +1     -1     Prizm/PrizmTests/PasswordGeneratorTests.swift
+renamed   +1     -1     Prizm/PrizmTests/PasswordGeneratorViewModelTests.swift
+renamed   +6     -6     Prizm/PrizmTests/PrizmCryptoServiceTests.swift
+renamed   +3     -3     Prizm/PrizmTests/PrizmTests.swift
+renamed   +1     -1     Prizm/PrizmTests/RootViewModelLockTests.swift
+renamed   +2     -2     Prizm/PrizmTests/SearchVaultTests.swift
+renamed   +1     -1     Prizm/PrizmTests/SyncLabelFormatterTests.swift
+renamed   +6     -6     Prizm/PrizmTests/SyncRepositoryImplTests.swift
+renamed   +1     -1     Prizm/PrizmTests/SyncTimestampRepositoryImplTests.swift
+renamed   +1     -1     Prizm/PrizmTests/ToggleFavoriteTests.swift
+renamed   +1     -1     Prizm/PrizmTests/UnlockUseCaseTests.swift
+renamed   +1     -1     Prizm/PrizmTests/UnlockViewModelTests.swift
+renamed   +1     -1     Prizm/PrizmTests/VaultBrowserViewModelGlobalSearchTests.swift
+renamed   +1     -1     Prizm/PrizmTests/VaultBrowserViewModelSyncStatusTests.swift
+renamed   +5     -5     Prizm/PrizmTests/VaultRepositoryImplDeleteRestoreTests.swift
+renamed   +5     -5     Prizm/PrizmTests/VaultRepositoryImplTests.swift
+renamed   +0     -0     Prizm/Prizm_V1.icon/Assets/layer-1-outer-light.png
+renamed   +0     -0     Prizm/Prizm_V1.icon/Assets/layer-2-middle-light.png
+renamed   +0     -0     Prizm/Prizm_V1.icon/Assets/layer-3-inner-light.png
+renamed   +0     -0     Prizm/Prizm_V1.icon/icon.json
+renamed   +0     -0     Prizm/Resources/eff-large-wordlist.txt
+renamed   +0     -0     Prizm/Tests/UITests/CreateItemJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/EditItemJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/KeyboardNavigationTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/LoginJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/PasswordGeneratorJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/SearchJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/TrashJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/UnlockJourneyTests.swift
+renamed   +0     -0     Prizm/Tests/UITests/VaultBrowserJourneyTests.swift
+added     +0     -0     Prizm_V1.icon/Assets/layer-1-outer-light.png
+added     +0     -0     Prizm_V1.icon/Assets/layer-2-middle-light.png
+added     +0     -0     Prizm_V1.icon/Assets/layer-3-inner-light.png
+added     +43    -0     Prizm_V1.icon/icon.json
+modified  +111   -69    README.md
+modified  +2     -2     SECURITY.md
+added     +0     -0     assets/icon.png
+added     +0     -0     assets/screenshot.png
+added     +0     -0     assets/social-preview.png
+modified  +1     -1     openspec/changes/archive/2026-03-15-vault-browser-ui/design.md
+modified  +2     -2     openspec/changes/archive/2026-03-15-vault-browser-ui/proposal.md
+modified  +4     -4     openspec/changes/archive/2026-03-15-vault-browser-ui/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-22-item-detail-grouped/design.md
+modified  +1     -1     openspec/changes/archive/2026-03-22-item-detail-grouped/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-23-delete-restore-items/design.md
+modified  +1     -1     openspec/changes/archive/2026-03-23-delete-restore-items/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-23-delete-restore-items/specs/vault-item-delete/spec.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-edit-vault-items/design.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-edit-vault-items/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-23-edit-vault-items/tasks.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-fix-keychain-prompts-on-rebuild/design.md
+modified  +4     -4     openspec/changes/archive/2026-03-23-fix-keychain-prompts-on-rebuild/proposal.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-fix-keychain-prompts-on-rebuild/specs/keychain-signing-config/spec.md
+modified  +3     -3     openspec/changes/archive/2026-03-23-fix-keychain-prompts-on-rebuild/tasks.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-password-generator/proposal.md
+modified  +2     -2     openspec/changes/archive/2026-03-23-password-generator/tasks.md
+modified  +2     -2     openspec/changes/archive/2026-03-24-add-remove-reorder-uris/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-24-add-vault-items/design.md
+modified  +3     -3     openspec/changes/archive/2026-03-24-add-vault-items/proposal.md
+modified  +3     -3     openspec/changes/archive/2026-03-24-add-vault-items/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-25-no-toolbar-ui/design.md
+modified  +1     -1     openspec/changes/archive/2026-03-25-no-toolbar-ui/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-25-no-toolbar-ui/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-26-add-vault-items/design.md
+modified  +3     -3     openspec/changes/archive/2026-03-26-add-vault-items/proposal.md
+modified  +3     -3     openspec/changes/archive/2026-03-26-add-vault-items/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-26-fix-password-generator-whitespace/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-26-red-delete-button/design.md
+modified  +2     -2     openspec/changes/archive/2026-03-26-vault-lock/design.md
+modified  +1     -1     openspec/changes/archive/2026-03-26-vault-lock/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-26-vault-lock/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-03-27-copy-menu-commands/design.md
+modified  +2     -2     openspec/changes/archive/2026-03-27-copy-menu-commands/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-27-detail-view-polish/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-27-remap-new-window-shortcut/design.md
+modified  +3     -3     openspec/changes/archive/2026-03-27-remap-new-window-shortcut/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-03-27-remap-new-window-shortcut/tasks.md
+added     +97    -0     openspec/changes/v1-release-prep/design.md
+modified  +27    -11    openspec/changes/v1-release-prep/proposal.md
+added     +185   -0     openspec/changes/v1-release-prep/specs/project-documentation/spec.md
+added     +68    -0     openspec/changes/v1-release-prep/specs/release-infrastructure/spec.md
+added     +125   -0     openspec/changes/v1-release-prep/tasks.md
+modified  +1     -1     openspec/changes/vault-sync-status/design.md
+modified  +1     -1     openspec/changes/vault-sync-status/specs/vault-sync-status/spec.md
+modified  +1     -1     openspec/changes/vault-sync-status/tasks.md
+modified  +2     -2     openspec/specs/keychain-signing-config/spec.md
+modified  +1     -1     openspec/specs/vault-item-delete/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### Prizm/Presentation/Components/CardBackground.swift
+(sem diff: binário ou grande demais)
+
+===== P196 | repo eduardohr-muniz/go_router_modular | PR #20: Organize | capacidade: events-testing
+--- SPEC VIVA
+# Testes de Eventos
+
+## Purpose
+
+Define as utilidades de teste do sistema de eventos: reinício do estado global entre testes e a gravação de eventos disparados (EventRecorder).
+
+## Requirements
+
+### Requirement: clearEventModuleState reinicia o estado global entre testes
+
+O sistema SHALL expor `clearEventModuleState()` (anotado com `@visibleForTesting`) que delega para `EventState.instance.clearAll()`, cancelando todas as assinaturas e limpando todos os mapas de estado. Chamar a função entre testes MUST garantir que ouvintes registrados em um teste não vazem para o seguinte.
+
+Arquivos de referência: `lib/src/events/modular_event.dart` (`clearEventModuleState`), `lib/src/events/event_state.dart` (`clearAll`).
+
+#### Scenario: Estado limpo evita vazamento entre testes
+
+- **WHEN** um teste registra ouvintes e o `setUp` do próximo teste chama `clearEventModuleState()`
+- **THEN** nenhum ouvinte do teste anterior é acionado no teste seguinte
+
+#### Scenario: Limpeza sem ouvintes não falha
+
+- **WHEN** `clearEventModuleState()` é chamado sem nenhum ouvinte registrado
+- **THEN** a chamada completa sem lançar exceção
+
+### Requirement: EventRecorder grava eventos disparados durante testes
+
+O sistema SHALL expor `EventRecorder` (criado por `EventRecorder.fresh()`) que grava eventos por tipo. `listenFor<E>({EventBus? eventBus})` MUST iniciar a gravação do tipo `E` no barramento informado (ou `defaultModularEventBus`), reiniciando o canal se chamado novamente para o mesmo tipo. `eventsOf<E>()` MUST retornar a lista gravada do tipo `E`, ou lista vazia se `listenFor` nunca foi chamado para `E`. `clear()` MUST apagar os eventos gravados sem cancelar os listeners; `dispose()` MUST cancelar todos os listeners e limpar o estado interno.
+
+Arquivos de referência: `lib/src/testing/event_recorder.dart`, `lib/src/testing/recorded_event_list.dart`.
+
+#### Scenario: Grava eventos do tipo escutado
+
+- **WHEN** `listenFor<MeuEvento>()` é chamado e dois `MeuEvento` são disparados
+- **THEN** `eventsOf<MeuEvento>()` retorna os dois eventos gravados
+
+#### Scenario: Tipo não escutado retorna lista vazia
+
+- **WHEN** `eventsOf<OutroEvento>()` é chamado sem `listenFor<OutroEvento>()` prévio
+- **THEN** o retorno é uma lista vazia
+
+#### Scenario: dispose cancela a gravação
+
+- **WHEN** `dispose()` é chamado e em seguida um evento do tipo escutado é disparado
+- **THEN** o evento não é gravado
+
+### Requirement: ModularEventBus.fire é a fachada de disparo para testes
+
+O sistema SHALL expor `ModularEventBus` como classe `abstract final` com o método estático `fire<T>(T event, {EventBus? eventBus})` que delega para `ModularEvent.fire<T>`. A fachada MUST permitir disparar eventos em testes sem importar o barrel principal do pacote.
+
+Arquivos de referência: `lib/src/testing/modular_event_bus.dart`.
+
+#### Scenario: fire da fachada aciona ouvintes do barramento padrão
+
+- **WHEN** `ModularEventBus.fire(MeuEvento())` é chamado e há um ouvinte de `MeuEvento` no barramento padrão
+- **THEN** o ouvinte recebe o evento
+
+#### Scenario: fire da fachada respeita barramento customizado
+
+- **WHEN** `ModularEventBus.fire(MeuEvento(), eventBus: customEventBus)` é chamado
+- **THEN** apenas ouvintes registrados em `customEventBus` recebem o evento
+
+### Requirement: debugLogEventBus emite logs de disparo e recebimento
+
+O sistema SHALL registrar logs do sistema de eventos somente quando `SetupModular.instance.debugLogEventBus` está habilitado. Ao disparar, MUST emitir log `🔥 Event fired: <tipo>`; ao receber, MUST emitir log `📨 Event received: <tipo>`; ambos sob o nome `EVENT GO_ROUTER_MODULAR`. Com a flag desabilitada, nenhum log MUST ser emitido.
+
+Arquivos de referência: `lib/src/events/modular_event.dart`, `lib/src/events/modular_event_mixin.dart`, `lib/src/internal/setup.dart`.
+
+#### Scenario: Logs aparecem quando o debug está habilitado
+
+- **WHEN** `debugLogEventBus` é verdadeiro e um evento é disparado e recebido
+- **THEN** são emitidos os logs de disparo e de recebimento
+
+#### Scenario: Sem logs quando o debug está desabilitado
+
+- **WHEN** `debugLogEventBus` é falso e um evento é disparado e recebido
+- **THEN** nenhum log do sistema de eventos é emitido
+
+--- ARQUIVOS DO PR (318)
+removed   +0     -159   .claude/skills/openspec-apply-change/SKILL.md
+removed   +0     -117   .claude/skills/openspec-archive-change/SKILL.md
+removed   +0     -287   .claude/skills/openspec-explore/SKILL.md
+removed   +0     -111   .claude/skills/openspec-propose/SKILL.md
+removed   +0     -147   .claude/skills/openspec-sync-specs/SKILL.md
+modified  +5     -1     .github/workflows/deploy.yml
+modified  +8     -0     .gitignore
+modified  +49    -3     CHANGELOG.md
+modified  +23    -3     README.md
+removed   +0     -332   REFACTOR_DECISION.md
+removed   +0     -380   REFACTOR_DI_PACKAGE.md
+added     +1777  -0     coverage/lcov.info
+modified  +35    -28    doc/event_module.mdx
+modified  +26    -10    doc/event_module_kids.mdx
+modified  +24    -17    doc/index.mdx
+modified  +56    -39    doc/microfrontends.mdx
+modified  +24    -13    doc/microfrontends_kids.mdx
+modified  +5     -5     example/pubspec.lock
+modified  +14    -12    lib/go_router_modular.dart
+renamed   +120   -173   lib/src/bootstrap/modular_configure.dart
+removed   +0     -80    lib/src/core/dependency_analyzer/dependency_analyzer.dart
+renamed   +5     -5     lib/src/di/bind.dart
+renamed   +14    -1     lib/src/di/bind_context_tracker.dart
+renamed   +3     -3     lib/src/di/bind_disposer.dart
+renamed   +8     -8     lib/src/di/bind_locator.dart
+renamed   +4     -4     lib/src/di/bind_registry.dart
+renamed   +0     -0     lib/src/di/bind_search_protection.dart
+renamed   +1     -1     lib/src/di/bind_storage.dart
+renamed   +57    -6     lib/src/di/injection_manager.dart
+modified  +24    -3     lib/src/di/injector.dart
+renamed   +2     -2     lib/src/di/operation_queue.dart
+modified  +191   -9     lib/src/events/event_module.dart   <== código ligado à spec
+modified  +1     -1     lib/src/events/event_state.dart   <== código ligado à spec
+modified  +3     -152   lib/src/events/modular_event.dart   <== código ligado à spec
+removed   +0     -23    lib/src/events/modular_event_listener.dart   <== código ligado à spec
+modified  +1     -1     lib/src/events/modular_event_mixin.dart   <== código ligado à spec
+removed   +0     -11    lib/src/exceptions/exception.dart
+removed   +0     -12    lib/src/internal/internal_logs.dart
+renamed   +2     -11    lib/src/module/module.dart
+added     +64    -0     lib/src/routing/builders/child_route_builder.dart
+added     +189   -0     lib/src/routing/builders/module_route_builder.dart
+added     +220   -0     lib/src/routing/builders/shell_route_builder.dart
+modified  +9     -0     lib/src/routing/child_route.dart
+added     +28    -0     lib/src/routing/guards/guard_fn.dart
+added     +43    -0     lib/src/routing/guards/guard_resolver.dart
+added     +50    -0     lib/src/routing/guards/route_guard.dart
+added     +112   -0     lib/src/routing/modular_router_params.dart
+added     +16    -0     lib/src/routing/modular_router_runtime.dart
+modified  +8     -1     lib/src/routing/module_route.dart
+added     +30    -0     lib/src/routing/path/route_path_normalizer.dart
+added     +63    -0     lib/src/routing/redirect/module_route_lifecycle.dart
+modified  +34    -554   lib/src/routing/route_builder.dart
+removed   +0     -59    lib/src/routing/route_model.dart
+added     +36    -0     lib/src/routing/route_with_completer_service.dart
+modified  +10    -1     lib/src/routing/shell_modular_route.dart
+modified  +14    -9     lib/src/routing/stateful_shell_modular_route.dart
+added     +79    -0     lib/src/routing/transitions/route_transition_factory.dart
+renamed   +6     -6     lib/src/shared/asserts/modular_configure_assert.dart
+renamed   +0     -0     lib/src/shared/asserts/module_assert.dart
+added     +11    -0     lib/src/shared/exception.dart
+renamed   +0     -0     lib/src/shared/setup.dart
+modified  +1     -1     lib/src/testing/bind_template.dart
+modified  +2     -5     lib/src/testing/modular_test_scope.dart
+added     +29    -0     lib/src/ui/async_navigation_helper.dart
+renamed   +1     -2     lib/src/ui/context_extension.dart
+renamed   +2     -1     lib/src/ui/material_app_router.dart
+renamed   +0     -0     lib/src/ui/modular_loader.dart
+renamed   +0     -0     lib/src/ui/once_builder.dart
+renamed   +1     -1     lib/src/ui/parent_widget_observer.dart
+renamed   +72    -76    lib/src/ui/route_extension.dart
+modified  +30    -119   nextra_docs/DEPLOYMENT.md
+modified  +37    -45    nextra_docs/README.md
+added     +64    -0     nextra_docs/app/[lang]/[[...mdxPath]]/page.tsx
+added     +80    -0     nextra_docs/app/[lang]/layout.tsx
+added     +19    -0     nextra_docs/content/en/_meta.ts
+added     +57    -0     nextra_docs/content/en/changelog.mdx
+added     +155   -0     nextra_docs/content/en/dependency-injection.mdx
+added     +4     -0     nextra_docs/content/en/event-module/_meta.ts
+added     +152   -0     nextra_docs/content/en/event-module/index.mdx
+added     +79    -0     nextra_docs/content/en/event-module/widget-mixin.mdx
+added     +4     -0     nextra_docs/content/en/getting-started/_meta.ts
+added     +122   -0     nextra_docs/content/en/getting-started/migration-guide.mdx
+added     +140   -0     nextra_docs/content/en/getting-started/quick-start.mdx
+added     +87    -0     nextra_docs/content/en/index.mdx
+added     +106   -0     nextra_docs/content/en/microfrontends.mdx
+added     +9     -0     nextra_docs/content/en/routes/_meta.ts
+added     +242   -0     nextra_docs/content/en/routes/best-practices.mdx
+added     +153   -0     nextra_docs/content/en/routes/guards.mdx
+added     +104   -0     nextra_docs/content/en/routes/loader-system.mdx
+added     +135   -0     nextra_docs/content/en/routes/navigation.mdx
+added     +124   -0     nextra_docs/content/en/routes/routes-system.mdx
+added     +170   -0     nextra_docs/content/en/routes/shell-route.mdx
+added     +4     -0     nextra_docs/content/en/routes/transitions/_meta.ts
+added     +118   -0     nextra_docs/content/en/routes/transitions/examples.mdx
+added     +97    -0     nextra_docs/content/en/routes/transitions/index.mdx
+added     +5     -0     nextra_docs/content/en/testing/_meta.ts
+added     +156   -0     nextra_docs/content/en/testing/event-testing.mdx
+added     +83    -0     nextra_docs/content/en/testing/fake-injector.mdx
+added     +100   -0     nextra_docs/content/en/testing/index.mdx
+added     +19    -0     nextra_docs/content/pt/_meta.ts
+added     +59    -0     nextra_docs/content/pt/changelog.mdx
+added     +158   -0     nextra_docs/content/pt/dependency-injection.mdx
+added     +4     -0     nextra_docs/content/pt/event-module/_meta.ts
+added     +156   -0     nextra_docs/content/pt/event-module/index.mdx
+added     +79    -0     nextra_docs/content/pt/event-module/widget-mixin.mdx
+added     +4     -0     nextra_docs/content/pt/getting-started/_meta.ts
+added     +124   -0     nextra_docs/content/pt/getting-started/migration-guide.mdx
+added     +139   -0     nextra_docs/content/pt/getting-started/quick-start.mdx
+added     +87    -0     nextra_docs/content/pt/index.mdx
+added     +113   -0     nextra_docs/content/pt/microfrontends.mdx
+added     +9     -0     nextra_docs/content/pt/routes/_meta.ts
+added     +242   -0     nextra_docs/content/pt/routes/best-practices.mdx
+added     +154   -0     nextra_docs/content/pt/routes/guards.mdx
+added     +105   -0     nextra_docs/content/pt/routes/loader-system.mdx
+added     +137   -0     nextra_docs/content/pt/routes/navigation.mdx
+added     +124   -0     nextra_docs/content/pt/routes/routes-system.mdx
+added     +170   -0     nextra_docs/content/pt/routes/shell-route.mdx
+added     +4     -0     nextra_docs/content/pt/routes/transitions/_meta.ts
+added     +117   -0     nextra_docs/content/pt/routes/transitions/examples.mdx
+added     +97    -0     nextra_docs/content/pt/routes/transitions/index.mdx
+added     +5     -0     nextra_docs/content/pt/testing/_meta.ts
+added     +156   -0     nextra_docs/content/pt/testing/event-testing.mdx
+added     +83    -0     nextra_docs/content/pt/testing/fake-injector.mdx
+added     +101   -0     nextra_docs/content/pt/testing/index.mdx
+added     +8     -0     nextra_docs/mdx-components.js
+removed   +0     -22    nextra_docs/next.config.complex.js
+removed   +0     -26    nextra_docs/next.config.github.js
+removed   +0     -33    nextra_docs/next.config.js
+added     +33    -0     nextra_docs/next.config.mjs
+modified  +3422  -2975  nextra_docs/package-lock.json
+modified  +19    -17    nextra_docs/package.json
+removed   +0     -23    nextra_docs/pages/_meta.json
+removed   +0     -64    nextra_docs/pages/changelog.mdx
+removed   +0     -136   nextra_docs/pages/dependency-injection.mdx
+removed   +0     -4     nextra_docs/pages/docs/_meta.json
+removed   +0     -105   nextra_docs/pages/docs/migration-guide.mdx
+removed   +0     -124   nextra_docs/pages/docs/quick-start.mdx
+removed   +0     -4     nextra_docs/pages/event-module/_meta.json
+removed   +0     -175   nextra_docs/pages/event-module/index.mdx
+removed   +0     -218   nextra_docs/pages/event-module/widget-mixin.mdx
+removed   +0     -95    nextra_docs/pages/index.mdx
+removed   +0     -3     nextra_docs/pages/microfrontends/_meta.json
+removed   +0     -129   nextra_docs/pages/microfrontends/index.mdx
+removed   +0     -8     nextra_docs/pages/routes/_meta.json
+removed   +0     -86    nextra_docs/pages/routes/loader-system.mdx
+removed   +0     -92    nextra_docs/pages/routes/navigation.mdx
+removed   +0     -64    nextra_docs/pages/routes/redirects.mdx
+removed   +0     -178   nextra_docs/pages/routes/routes-system.mdx
+removed   +0     -284   nextra_docs/pages/routes/shell-route.mdx
+removed   +0     -4     nextra_docs/pages/routes/transitions/_meta.json
+removed   +0     -113   nextra_docs/pages/routes/transitions/examples.mdx
+removed   +0     -127   nextra_docs/pages/routes/transitions/index.mdx
+removed   +0     -5     nextra_docs/pages/testing/_meta.json
+removed   +0     -281   nextra_docs/pages/testing/event-testing.mdx
+removed   +0     -204   nextra_docs/pages/testing/fake-injector.mdx
+removed   +0     -157   nextra_docs/pages/testing/index.mdx
+removed   +0     -27    nextra_docs/public/404.html
+added     +0     -0     nextra_docs/public/favicon.png
+added     +17    -0     nextra_docs/public/index.html
+added     +0     -0     nextra_docs/public/logo-small.png
+removed   +0     -120   nextra_docs/theme.config.tsx
+modified  +43    -42    nextra_docs/tsconfig.json
+added     +2     -0     openspec/changes/archive/2026-06-26-desacoplar-imports-internos/.openspec.yaml
+added     +104   -0     openspec/changes/archive/2026-06-26-desacoplar-imports-internos/design.md
+added     +40    -0     openspec/changes/archive/2026-06-26-desacoplar-imports-internos/proposal.md
+added     +51    -0     openspec/changes/archive/2026-06-26-desacoplar-imports-internos/specs/internal-import-discipline/spec.md
+added     +41    -0     openspec/changes/archive/2026-06-26-desacoplar-imports-internos/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-26-desacoplar-modulo-e-fatiar-config/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-06-26-desacoplar-modulo-e-fatiar-config/design.md
+added     +51    -0     openspec/changes/archive/2026-06-26-desacoplar-modulo-e-fatiar-config/proposal.md
+added     +93    -0     openspec/changes/archive/2026-06-26-desacoplar-modulo-e-fatiar-config/specs/package-layering/spec.md
+added     +48    -0     openspec/changes/archive/2026-06-26-desacoplar-modulo-e-fatiar-config/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-06-26-documentar-api-publica-e-diagnosticos/design.md
+modified  +4     -2     openspec/changes/archive/2026-06-26-documentar-api-publica-e-diagnosticos/proposal.md
+modified  +3     -3     openspec/changes/archive/2026-06-26-documentar-api-publica-e-diagnosticos/specs/internal-diagnostics/spec.md
+modified  +1     -1     openspec/changes/archive/2026-06-26-documentar-api-publica-e-diagnosticos/specs/public-api-surface/spec.md
+modified  +4     -4     openspec/changes/archive/2026-06-26-documentar-sistema-di/specs/dependency-injection-protection/spec.md
+modified  +2     -2     openspec/changes/archive/2026-06-26-documentar-sistema-di/specs/dependency-injection/spec.md
+modified  +1     -1     openspec/changes/archive/2026-06-26-documentar-sistema-di/specs/module-lifecycle/spec.md
+modified  +2     -2     openspec/changes/archive/2026-06-26-documentar-sistema-di/tasks.md
+modified  +1     -1     openspec/changes/archive/2026-06-26-documentar-sistema-roteamento/design.md
+modified  +1     -1     openspec/changes/archive/2026-06-26-documentar-sistema-roteamento/specs/routing-configuration/spec.md
+added     +2     -0     openspec/changes/archive/2026-06-27-create-go-router-modular-skill/.openspec.yaml
+added     +71    -0     openspec/changes/archive/2026-06-27-create-go-router-modular-skill/design.md
+added     +42    -0     openspec/changes/archive/2026-06-27-create-go-router-modular-skill/proposal.md
+added     +103   -0     openspec/changes/archive/2026-06-27-create-go-router-modular-skill/specs/agent-skill-go-router-modular/spec.md
+added     +29    -0     openspec/changes/archive/2026-06-27-create-go-router-modular-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-docs-routing-best-practices/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-06-27-docs-routing-best-practices/design.md
+added     +38    -0     openspec/changes/archive/2026-06-27-docs-routing-best-practices/proposal.md
+added     +51    -0     openspec/changes/archive/2026-06-27-docs-routing-best-practices/specs/documentation-site/spec.md
+added     +17    -0     openspec/changes/archive/2026-06-27-docs-routing-best-practices/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-escopo-estrito-de-binds-por-modulo/.openspec.yaml
+added     +86    -0     openspec/changes/archive/2026-06-27-escopo-estrito-de-binds-por-modulo/design.md
+added     +38    -0     openspec/changes/archive/2026-06-27-escopo-estrito-de-binds-por-modulo/proposal.md
+added     +47    -0     openspec/changes/archive/2026-06-27-escopo-estrito-de-binds-por-modulo/specs/module-bind-scope/spec.md
+added     +28    -0     openspec/changes/archive/2026-06-27-escopo-estrito-de-binds-por-modulo/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/.openspec.yaml
+added     +95    -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/design.md
+added     +50    -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/proposal.md
+added     +47    -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/specs/code-maintainability/spec.md
+added     +12    -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/specs/public-api-surface/spec.md
+added     +51    -0     openspec/changes/archive/2026-06-27-limpar-codigo-morto-e-dividir-route-builder/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/.openspec.yaml
+added     +73    -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/design.md
+added     +51    -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/proposal.md
+added     +17    -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/specs/public-api-surface/spec.md
+added     +48    -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/specs/routing-navigation/spec.md
+added     +35    -0     openspec/changes/archive/2026-06-27-move-route-utils-to-modular/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-rebuild-docs-nextra-i18n/.openspec.yaml
+added     +88    -0     openspec/changes/archive/2026-06-27-rebuild-docs-nextra-i18n/design.md
+added     +39    -0     openspec/changes/archive/2026-06-27-rebuild-docs-nextra-i18n/proposal.md
+added     +112   -0     openspec/changes/archive/2026-06-27-rebuild-docs-nextra-i18n/specs/documentation-site/spec.md
+added     +50    -0     openspec/changes/archive/2026-06-27-rebuild-docs-nextra-i18n/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-refcount-instancia-modulo-na-pilha/.openspec.yaml
+added     +89    -0     openspec/changes/archive/2026-06-27-refcount-instancia-modulo-na-pilha/design.md
+added     +41    -0     openspec/changes/archive/2026-06-27-refcount-instancia-modulo-na-pilha/proposal.md
+added     +42    -0     openspec/changes/archive/2026-06-27-refcount-instancia-modulo-na-pilha/specs/module-lifecycle/spec.md
+added     +35    -0     openspec/changes/archive/2026-06-27-refcount-instancia-modulo-na-pilha/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-reorganizar-pastas-por-subsistema/.openspec.yaml
+added     +113   -0     openspec/changes/archive/2026-06-27-reorganizar-pastas-por-subsistema/design.md
+added     +44    -0     openspec/changes/archive/2026-06-27-reorganizar-pastas-por-subsistema/proposal.md
+added     +48    -0     openspec/changes/archive/2026-06-27-reorganizar-pastas-por-subsistema/specs/package-layering/spec.md
+added     +61    -0     openspec/changes/archive/2026-06-27-reorganizar-pastas-por-subsistema/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/.openspec.yaml
+added     +74    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/design.md
+added     +50    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/proposal.md
+added     +97    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/specs/events-event-module/spec.md
+added     +91    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/specs/events-listening/spec.md
+added     +29    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/specs/public-api-surface/spec.md
+added     +30    -0     openspec/changes/archive/2026-06-27-simplify-event-module-composition/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/.openspec.yaml
+added     +59    -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/design.md
+added     +42    -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/proposal.md
+added     +54    -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/specs/agent-skill-go-router-modular-events/spec.md
+added     +34    -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/specs/agent-skill-go-router-modular/spec.md
+added     +32    -0     openspec/changes/archive/2026-06-27-skill-events-and-shell/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-28-add-modular-guards/.openspec.yaml
+added     +168   -0     openspec/changes/archive/2026-06-28-add-modular-guards/design.md
+added     +47    -0     openspec/changes/archive/2026-06-28-add-modular-guards/proposal.md
+added     +17    -0     openspec/changes/archive/2026-06-28-add-modular-guards/specs/public-api-surface/spec.md
+added     +29    -0     openspec/changes/archive/2026-06-28-add-modular-guards/specs/routing-configuration/spec.md
+added     +98    -0     openspec/changes/archive/2026-06-28-add-modular-guards/specs/routing-guards/spec.md
+added     +29    -0     openspec/changes/archive/2026-06-28-add-modular-guards/specs/routing-lifecycle/spec.md
+added     +96    -0     openspec/changes/archive/2026-06-28-add-modular-guards/specs/routing-routes/spec.md
+added     +38    -0     openspec/changes/archive/2026-06-28-add-modular-guards/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/design.md
+added     +38    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/proposal.md
+added     +19    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/specs/public-api-surface/spec.md
+added     +31    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/specs/routing-configuration/spec.md
+added     +75    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/specs/routing-guards/spec.md
+added     +98    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/specs/routing-routes/spec.md
+added     +34    -0     openspec/changes/archive/2026-06-28-rename-modular-guard-to-route-guard/tasks.md
+added     +60    -0     openspec/specs/agent-skill-go-router-modular-events/spec.md
+added     +142   -0     openspec/specs/agent-skill-go-router-modular/spec.md
+added     +53    -0     openspec/specs/code-maintainability/spec.md
+modified  +4     -4     openspec/specs/dependency-injection-protection/spec.md
+modified  +2     -2     openspec/specs/dependency-injection/spec.md
+added     +145   -0     openspec/specs/documentation-site/spec.md
+modified  +47    -31    openspec/specs/events-event-module/spec.md
+modified  +6     -6     openspec/specs/events-listening/spec.md
+modified  +3     -3     openspec/specs/internal-diagnostics/spec.md
+added     +57    -0     openspec/specs/internal-import-discipline/spec.md
+added     +53    -0     openspec/specs/module-bind-scope/spec.md
+modified  +42    -1     openspec/specs/module-lifecycle/spec.md
+added     +146   -0     openspec/specs/package-layering/spec.md
+modified  +51    -3     openspec/specs/public-api-surface/spec.md
+modified  +13    -2     openspec/specs/routing-configuration/spec.md
+added     +104   -0     openspec/specs/routing-guards/spec.md
+modified  +28    -0     openspec/specs/routing-lifecycle/spec.md
+modified  +38    -4     openspec/specs/routing-navigation/spec.md
+modified  +38    -8     openspec/specs/routing-routes/spec.md
+modified  +1     -1     pubspec.yaml
+added     +109   -0     skills/go-router-modular-events/SKILL.md
+added     +12    -0     skills/go-router-modular-events/evals/evals.json
+added     +419   -0     skills/go-router-modular/SKILL.md
+added     +33    -0     skills/go-router-modular/evals/evals.json
+added     +21    -0     skills/go-router-modular/evals/trigger-eval.json
+modified  +1     -1     test/appmodule_bind_regression_test.dart
+modified  +1     -1     test/bind_interface_test.dart
+modified  +5     -5     test/bind_key_isolation_test.dart
+modified  +1     -1     test/bind_memory_test.dart
+modified  +15    -18    test/bind_multiple_missing_dependencies_test.dart
+modified  +1     -1     test/bind_static_methods_test.dart
+modified  +1     -1     test/child_route_factory_single_instantiation_test.dart
+modified  +4     -4     test/circular_dependency_test.dart
+modified  +1     -1     test/commit_batch_retry_test.dart
+modified  +1     -1     test/concurrent_modification_regression_test.dart
+removed   +0     -127   test/dependency_analyzer_test.dart
+modified  +1     -1     test/duplicate_bind_import_test.dart
+added     +211   -0     test/event_module_composition_test.dart
+modified  +7     -8     test/event_module_test.dart   <== código ligado à spec
+modified  +5     -8     test/factory_probe_side_effects_test.dart
+added     +251   -0     test/guards_builders_integration_test.dart
+added     +183   -0     test/guards_core_test.dart
+added     +58    -0     test/guards_global_coexist_test.dart
+added     +80    -0     test/guards_global_configure_test.dart
+added     +29    -0     test/guards_public_api_test.dart
+added     +93    -0     test/guards_route_fields_test.dart
+added     +161   -0     test/guards_shell_integration_test.dart
+modified  +5     -8     test/infinite_loop_prevention_test.dart
+modified  +1     -1     test/interface_resolution_regression_test.dart
+added     +70    -0     test/internal_import_discipline_test.dart
+modified  +1     -1     test/keyed_and_unkeyed_same_type_test.dart
+added     +151   -0     test/module_bind_scope_test.dart
+added     +139   -0     test/module_stack_refcount_test.dart
+modified  +7     -10    test/no_breaking_change_factory_interface_test.dart
+added     +123   -0     test/package_layering_test.dart
+modified  +1     -1     test/parent_widget_observer_child_builder_test.dart
+modified  +28    -49    test/performance_benchmark_test.dart
+modified  +9     -16    test/probe_side_effect_reproduction_test.dart
+added     +141   -0     test/route_state_utils_test.dart
+modified  +2     -5     test/simple_loop_test.dart
+modified  +4     -7     test/singleton_import_injection_manager_integration_test.dart
+modified  +1     -1     test/type_inference_performance_test.dart
+modified  +5     -8     test/typed_factory_interface_lookup_test.dart
+modified  +10    -15    test/validate_module_binds_regression_test.dart
+--- DIFF DO CÓDIGO LIGADO
+### lib/src/events/event_module.dart
+@@ -1,22 +1,204 @@
+-import 'package:go_router_modular/go_router_modular.dart';
++import 'dart:developer';
+ 
+-/// Abstract module that adds event support via [EventListenerMixin].
++import 'package:event_bus/event_bus.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router_modular/src/di/injector.dart';
++import 'package:go_router_modular/src/events/event_state.dart';
++import 'package:go_router_modular/src/events/modular_event.dart';
++import 'package:go_router_modular/src/module/module.dart';
++import 'package:go_router_modular/src/routing/modular_router_runtime.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
++
++bool get _debugLog => SetupModular.instance.debugLogEventBus;
++bool get _autoDisposeEvents => SetupModular.instance.autoDisposeEvents;
++BuildContext? get _navigatorContext => modularNavigatorKey.currentContext;
++
++final EventState _state = EventState.instance;
++
++/// Escopo de registro de ouvintes: identifica em qual `eventBusId` e em qual
++/// barramento as assinaturas devem ser gravadas. Permite que módulos compostos
++/// (registrados via `OutroEventModule().listen()`) herdem o escopo do host.
++class _EventRegistrationScope {
++  const _EventRegistrationScope(this.eventBusId, this.eventBus);
++
++  final int eventBusId;
++  final EventBus eventBus;
++}
++
++/// Módulo abstrato com suporte a eventos.
+ ///
+-/// Override [listen] to register handlers with [on].
+-/// Override [eventImports] to add [ModularEventListener] instances.
+-abstract class EventModule extends Module with EventListenerMixin {
++/// Estende [Module] e incorpora diretamente a lógica de escuta: sobrescreva
++/// [listen] para registrar handlers com [on]. Para compor os ouvintes de outro
++/// módulo, chame `OutroEventModule().listen()` de forma síncrona dentro do
++/// próprio [listen] — os ouvintes do filho herdam o ciclo de vida deste host.
++abstract class EventModule extends Module {
+   EventModule({EventBus? eventBus}) {
+     internalEventBus = eventBus ?? defaultModularEventBus;
+   }
+ 
+-  /// Listeners to register when the module initializes.
+-  List<ModularEventListener> eventImports() => [];
++  late final EventBus internalEventBus;
++
++  int get eventBusId => internalEventBus.hashCode + hashCode;
++
++  /// Escopo de host ativo durante a execução síncrona de [listen]. Quando um
++  /// módulo composto chama [on], as assinaturas são gravadas neste escopo.
++  static _EventRegistrationScope? _activeHostScope;
++
++  _EventRegistrationScope get _ownScope => _EventRegistrationScope(eventBusId, internalEventBus);
++
++  _EventRegistrationScope get _registrationScope => _activeHostScope ?? _ownScope;
++
++  /// Hook de escuta do módulo. Implementação padrão vazia.
++  void listen() {}
++
++  /// Hook executado logo após [listen] durante a inicialização.
++  void onAfterListen() {}
++
++  /// Registra um ouvinte tipado para o evento [T].
++  void on<T>(
++    void Function(T event, BuildContext? context) callback, {
++    bool? autoDispose,
++    @Deprecated('Use exclusive parameter instead.') bool? broadcast,
++    bool exclusive = false,
++  }) {
++    exclusive = broadcast ?? exclusive;
++
++    final scope = _registrationScope;
++    final scopeEventBusId = scope.eventBusId;
++    final eventBus = scope.eventBus;
++    final eventBusHashCode = eventBus.hashCode;
++
++    _state.subscriptions[scopeEventBusId] ??= {};
++    _state.disposeSubscriptions[scopeEventBusId] ??= {};
++
++    _state.subscriptions[scopeEventBusId]?[T]?.cancel();
++
++    _state.exclusiveStreams[eventBusHashCode] ??= {};
++    _state.exclusiveQueue[eventBusHashCode] ??= {};
++    _state.activeExclusiveListener[eventBusHashCode] ??= {};
++
++    if (exclusive) {
++      _registerExclusiveListener<T>(callback, eventBusHashCode, scopeEventBusId, eventBus);
++    } else {
++      _registerRegularListener<T>(callback, eventBusHashCode, scopeEventBusId, eventBus);
++    }
++
++    _state.disposeSubscriptions[scopeEventBusId]![T] = autoDispose ?? _autoDisposeEvents;
++  }
++
++  void _registerExclusiveListener<T>(
++    void Function(T event, BuildContext? context) callback,
++    int eventBusHashCode,
++    int scopeEventBusId,
++    EventBus eventBus,
++  ) {
++    if (_state.exclusiveStreams[eventBusHashCode]![T] == null) {
++      _state.exclusiveStreams[eventBusHashCode]![T] = eventBus.on<T>().asBroadcastStream();
++    }
++
++    _state.exclusiveQueue[eventBusHashCode]![T] ??= [];
++
++    final exclusiveListener = ExclusiveListener(
++      moduleId: scopeEventBusId,
++      callback: callback,
++      getContext: () => _navigatorContext,
++    );
++
++    _state.exclusiveQueue[eventBusHashCode]![T]!.removeWhere((listener) => listener.moduleId == scopeEventBusId);
++    _state.exclusiveQueue[eventBusHashCode]![T]!.add(exclusiveListener);
++
++    final currentActive = _state.activeExclusiveListener[eventBusHashCode]![T];
++    if (currentActive?.moduleId == scopeEventBusId) {
++      currentActive?.subscription?.cancel();
++      _state.activeExclusiveListener[eventBusHashCode]![T] = null;
++    }
++
++    if (_state.activeExclusiveListener[eventBusHashCode]![T] == null) {
++      _activateNextExclusiveListener<T>(T, eventBusHashCode);
++    }
++  }
++
++  void _registerRegularListener<T>(
++    void Function(T event, BuildContext? context) callback,
++    int eventBusHashCode,
++    int scopeEventBusId,
++    EventBus eventBus,
++  ) {
++    if (_state.exclusiveStreams[eventBusHashCode]?[T] != null) return;
++
++    _state.subscriptions[scopeEventBusId]![T] = eventBus.on<T>().listen((event) {
++      if (_debugLog) log('📨 Event received: ${event.runtimeType}', name: 'EVENT GO_ROUTER_MODULAR');
++      return callback(event, _navigatorContext);
++    });
++  }
++
++  void _activateNextExclusiveListener<T>(Type eventType, int eventBusHashCode) {
++    final queue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
++    if (queue == null || queue.isEmpty) {
++      _state.activeExclusiveListener[eventBusHashCode]![eventType] = null;
++      return;
++    }
++
++    final nextListener = queue.first;
++
++    nextListener.subscription = _state.exclusiveStreams[eventBusHashCode]![eventType]!.listen((event) {
++      if (_debugLog) log('📨 Event received: ${event.runtimeType}', name: 'EVENT GO_ROUTER_MODULAR');
++      return nextListener.callback(event, nextListener.getContext());
++    });
++
++    _state.activeExclusiveListener[eventBusHashCode]![eventType] = nextListener;
++
++    _state.subscriptions[nextListener.moduleId] ??= {};
++    _state.subscriptions[nextListener.moduleId]![eventType] = nextListener.subscription!;
++  }
+ 
+   @override
+   void initState(InjectorReader i) {
+-    for (final listener in eventImports()) {
+-      listener.listen();
++    final previousScope = _activeHostScope;
++    _activeHostScope ??= _ownScope;
++    try {
++      listen();
++      onAfterListen();
++    } finally {
++      _activeHostScope = previousScope;
+     }
+     super.initState(i);
+   }
++
++  @override
++  void dispose() {
++    final eventBusHashCode = internalEventBus.hashCode;
++
++    _state.disposeSubscriptions[eventBusId]?.forEach((key, value) {
++      if (value) {
++        _state.subscriptions[eventBusId]?[key]?.cancel();
++        _state.subscriptions[eventBusId]?.remove(key);
++        _handleExclusiveListenerDisposal(key, eventBusHashCode);
++      }
++    });
++
++    _state.disposeSubscriptions.remove(eventBusId);
++    super.dispose();
++  }
++
++  void _handleExclusiveListenerDisposal(Type eventType, int eventBusHashCode) {
++    final queue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
++    if (queue != null) {
++      queue.removeWhere((listener) => listener.moduleId == eventBusId);
++
++      final activeListener = _state.activeExclusiveListener[eventBusHashCode]?[eventType];
++      if (activeListener?.moduleId == eventBusId) {
++        activeListener?.subscription?.cancel();
++        _state.activeExclusiveListener[eventBusHashCode]![eventType] = null;
++        _activateNextExclusiveListener(eventType, eventBusHashCode);
++      }
++    }
++
++    final remainingQueue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
++    if (remainingQueue == null || remainingQueue.isEmpty) {
++      _state.exclusiveStreams[eventBusHashCode]?.remove(eventType);
++      _state.exclusiveQueue[eventBusHashCode]?.remove(eventType);
++      _state.activeExclusiveListener[eventBusHashCode]?.remove(eventType);
++    }
++  }
+ }
+
+### lib/src/events/event_state.dart
+@@ -19,7 +19,7 @@ class EventState {
+   /// Currently active exclusive listener per event type
+   final Map<int, Map<Type, ExclusiveListener?>> activeExclusiveListener = {};
+ 
+-  /// Auto-dispose tracking for EventListenerMixin
++  /// Auto-dispose tracking for EventModule listeners
+   final Map<int, Map<Type, bool>> disposeSubscriptions = {};
+ 
+   void clearAll() {
+
+### lib/src/events/modular_event.dart
+@@ -1,8 +1,9 @@
+ import 'dart:developer';
++import 'package:event_bus/event_bus.dart';
+ import 'package:flutter/material.dart';
+-import 'package:go_router_modular/go_router_modular.dart';
++import 'package:go_router_modular/src/routing/modular_router_runtime.dart';
+ import 'package:go_router_modular/src/events/event_state.dart';
+-import 'package:go_router_modular/src/internal/setup.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
+ 
+ /// Default global EventBus used by the modular event system.
+ final EventBus _eventBus = EventBus();
+@@ -14,7 +15,6 @@ EventBus get defaultModularEventBus => _eventBus;
+ BuildContext? get _navigatorContext => modularNavigatorKey.currentContext;
+ 
+ bool get _debugLog => SetupModular.instance.debugLogEventBus;
+-bool get _autoDisposeEvents => SetupModular.instance.autoDisposeEvents;
+ 
+ final EventState _state = EventState.instance;
+ 
+@@ -73,152 +73,3 @@ class ModularEvent {
+     eventBus.fire(event);
+   }
+ }
+-
+-// ==================== EventListenerMixin ====================
+-
+-/// Mixin for Module that provides event listener auto-lifecycle management.
+-mixin EventListenerMixin on Module {
+-  late final EventBus internalEventBus;
+-
+-  int get eventBusId => internalEventBus.hashCode + hashCode;
+-
+-  void listen() {}
+-
+-  void on<T>(
+-    void Function(T event, BuildContext? context) callback, {
+-    bool? autoDispose,
+-    @Deprecated('Use exclusive parameter instead.') bool? broadcast,
+-    bool exclusive = false,
+-  }) {
+-    exclusive = broadcast ?? exclusive;
+-
+-    _state.subscriptions[eventBusId] ??= {};
+-    _state.disposeSubscriptions[eventBusId] ??= {};
+-
+-    _state.subscriptions[eventBusId]?[T]?.cancel();
+-
+-    final eventBusHashCode = internalEventBus.hashCode;
+-    _state.exclusiveStreams[eventBusHashCode] ??= {};
+-    _state.exclusiveQueue[eventBusHashCode] ??= {};
+-    _state.activeExclusiveListener[eventBusHashCode] ??= {};
+-
+-    if (exclusive) {
+-      _registerExclusiveListener<T>(callback, eventBusHashCode);
+-    } else {
+-      _registerRegularListener<T>(callback, eventBusHashCode);
+-    }
+-
+-    _state.disposeSubscriptions[eventBusId]![T] = autoDispose ?? _autoDisposeEvents;
+-  }
+-
+-  void _registerExclusiveListener<T>(
+-    void Function(T event, BuildContext? context) callback,
+-    int eventBusHashCode,
+-  ) {
+-    if (_state.exclusiveStreams[eventBusHashCode]![T] == null) {
+-      _state.exclusiveStreams[eventBusHashCode]![T] = internalEventBus.on<T>().asBroadcastStream();
+-    }
+-
+-    _state.exclusiveQueue[eventBusHashCode]![T] ??= [];
+-
+-    final exclusiveListener = ExclusiveListener(
+-      moduleId: eventBusId,
+-      callback: callback,
+-      getContext: () => _navigatorContext,
+-    );
+-
+-    _state.exclusiveQueue[eventBusHashCode]![T]!.removeWhere((listener) => listener.moduleId == eventBusId);
+-    _state.exclusiveQueue[eventBusHashCode]![T]!.add(exclusiveListener);
+-
+-    final currentActive = _state.activeExclusiveListener[eventBusHashCode]![T];
+-    if (currentActive?.moduleId == eventBusId) {
+-      currentActive?.subscription?.cancel();
+-      _state.activeExclusiveListener[eventBusHashCode]![T] = null;
+-    }
+-
+-    if (_state.activeExclusiveListener[eventBusHashCode]![T] == null) {
+-      _activateNextExclusiveListener<T>(T, eventBusHashCode);
+-    }
+-  }
+-
+-  void _registerRegularListener<T>(
+-    void Function(T event, BuildContext? context) callback,
+-    int eventBusHashCode,
+-  ) {
+-    if (_state.exclusiveStreams[eventBusHashCode]?[T] != null) return;
+-
+-    _state.subscriptions[eventBusId]![T] = internalEventBus.on<T>().listen((event) {
+-      if (_debugLog) log('📨 Event received: ${event.runtimeType}', name: 'EVENT GO_ROUTER_MODULAR');
+-      return callback(event, _navigatorContext);
+-    });
+-  }
+-
+-  void _activateNextExclusiveListener<T>(Type eventType, int eventBusHashCode) {
+-    final queue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
+-    if (queue == null || queue.isEmpty) {
+-      _state.activeExclusiveListener[eventBusHashCode]![eventType] = null;
+-      return;
+-    }
+-
+-    final nextListener = queue.first;
+-
+-    final currentActive = _state.activeExclusiveListener[eventBusHashCode]![eventType];
+-    currentActive?.subscription?.cancel();
+-
+-    nextListener.subscription = _state.exclusiveStreams[eventBusHashCode]![eventType]!.listen((event) {
+-      if (_debugLog) log('📨 Event received: ${event.runtimeType}', name: 'EVENT GO_ROUTER_MODULAR');
+-      return nextListener.callback(event, nextListener.getContext());
+-    });
+-
+-    _state.activeExclusiveListener[eventBusHashCode]![eventType] = nextListener;
+-
+-    _state.subscriptions[nextListener.moduleId] ??= {};
+-    _state.subscriptions[nextListener.moduleId]![eventType] = nextListener.subscription!;
+-  }
+-
+-  void onAfterListen() {}
+-
+-  @override
+-  void initState(InjectorReader i) {
+-    listen();
+-    onAfterListen();
+-    super.initState(i);
+-  }
+-
+-  @override
+-  void dispose() {
+-    final eventBusHashCode = internalEventBus.hashCode;
+-
+-    _state.disposeSubscriptions[eventBusId]?.forEach((key, value) {
+-      if (value) {
+-        _state.subscriptions[eventBusId]?[key]?.cancel();
+-        _state.subscriptions[eventBusId]?.remove(key);
+-        _handleExclusiveListenerDisposal(key, eventBusHashCode);
+-      }
+-    });
+-
+-    _state.disposeSubscriptions.remove(eventBusId);
+-    super.dispose();
+-  }
+-
+-  void _handleExclusiveListenerDisposal(Type eventType, int eventBusHashCode) {
+-    final queue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
+-    if (queue != null) {
+-      queue.removeWhere((listener) => listener.moduleId == eventBusId);
+-
+-      final activeListener = _state.activeExclusiveListener[eventBusHashCode]?[eventType];
+-      if (activeListener?.moduleId == eventBusId) {
+-        activeListener?.subscription?.cancel();
+-        _state.activeExclusiveListener[eventBusHashCode]![eventType] = null;
+-        _activateNextExclusiveListener(eventType, eventBusHashCode);
+-      }
+-    }
+-
+-    final remainingQueue = _state.exclusiveQueue[eventBusHashCode]?[eventType];
+-    if (remainingQueue == null || remainingQueue.isEmpty) {
+-      _state.exclusiveStreams[eventBusHashCode]?.remove(eventType);
+-      _state.exclusiveQueue[eventBusHashCode]?.remove(eventType);
+-      _state.activeExclusiveListener[eventBusHashCode]?.remove(eventType);
+-    }
+-  }
+-}
+
+### lib/src/events/modular_event_listener.dart
+@@ -1,23 +0,0 @@
+-import 'package:flutter/material.dart';
+-import 'package:go_router_modular/src/events/event_module.dart';
+-
+-/// Abstract listener for events attached to an [EventModule].
+-///
+-/// Extend and override [listen] to register handlers with [on].
+-/// Add instances in [EventModule.eventImports].
+-abstract class ModularEventListener {
+-  ModularEventListener(this._module);
+-
+-  final EventModule _module;
+-
+-  void listen();
+-
+-  void on<T>(
+-    void Function(T event, BuildContext? context) callback, {
+-    bool? autoDispose,
+-    @Deprecated('Use exclusive parameter instead.') bool? broadcast,
+-    bool exclusive = false,
+-  }) {
+-    _module.on<T>(callback, autoDispose: autoDispose, broadcast: broadcast, exclusive: exclusive);
+-  }
+-}
+
+### lib/src/events/modular_event_mixin.dart
+@@ -3,7 +3,7 @@ import 'dart:developer';
+ 
+ import 'package:flutter/material.dart';
+ import 'package:go_router_modular/src/events/modular_event.dart';
+-import 'package:go_router_modular/src/internal/setup.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
+ import 'package:event_bus/event_bus.dart';
+ 
+ bool get _debugLog => SetupModular.instance.debugLogEventBus;
+
+### test/event_module_test.dart
+@@ -2,8 +2,7 @@ import 'dart:async';
+ import 'package:flutter_test/flutter_test.dart';
+ import 'package:flutter/material.dart';
+ import 'package:go_router_modular/go_router_modular.dart';
+-import 'package:go_router_modular/src/events/modular_event.dart' as EventListenerMixin;
+-import 'package:go_router_modular/src/internal/setup.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
+ 
+ // Eventos de teste
+ class TestEvent {
+@@ -119,7 +118,7 @@ void main() {
+ 
+     setUp(() {
+       // Clear event module state between tests to avoid interference
+-      EventListenerMixin.clearEventModuleState();
++      clearEventModuleState();
+ 
+       testModule = TestEventModule();
+ 
+@@ -136,8 +135,8 @@ void main() {
+       SetupModular.instance.setDebugModel(SetupModel(
+         debugLogEventBus: false,
+         debugLogGoRouter: false,
+-        debugLogGoRouterModular: false,
+         autoDisposeEvents: true,
++        debugLogGoRouterModular: false,
+       ));
+     });
+ 
+@@ -633,8 +632,8 @@ void main() {
+         SetupModular.instance.setDebugModel(SetupModel(
+           debugLogEventBus: false,
+           debugLogGoRouter: false,
+-          debugLogGoRouterModular: false,
+           autoDisposeEvents: false,
++          debugLogGoRouterModular: false,
+         ));
+ 
+         final module = TestEventModule();
+@@ -885,8 +884,8 @@ void main() {
+         SetupModular.instance.setDebugModel(SetupModel(
+           debugLogEventBus: false,
+           debugLogGoRouter: false,
+-          debugLogGoRouterModular: false,
+           autoDisposeEvents: false,
++          debugLogGoRouterModular: false,
+         ));
+ 
+         final module = TestEventModule();
+@@ -918,8 +917,8 @@ void main() {
+         SetupModular.instance.setDebugModel(SetupModel(
+           debugLogEventBus: false,
+           debugLogGoRouter: false,
+-          debugLogGoRouterModular: false,
+           autoDisposeEvents: true,
++          debugLogGoRouterModular: false,
+         ));
+ 
+         final module = TestEventModule();
+@@ -969,8 +968,8 @@ void main() {
+         SetupModular.instance.setDebugModel(SetupModel(
+           debugLogEventBus: true,
+           debugLogGoRouter: false,
+-          debugLogGoRouterModular: false,
+           autoDisposeEvents: true,
++          debugLogGoRouterModular: false,
+         ));
+ 
+         final module = TestEventModule();
+
+===== P197 | repo lehuygiang28/vkara | PR #2: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates | capacidade: curated-playlist-catalog
+--- SPEC VIVA
+## Requirements
+
+### Requirement: Catalog file defines nested playlists
+
+The system MUST load starter playlists from a versioned JSON file in `packages/curated-playlists/` containing a `catalogs` array. Each catalog row MUST have an `id` (e.g. `karaoke`, `music`), a `suggestLocales` string array, and a `playlists` array of YouTube playlist URLs. Multiple rows MAY share the same `id` with different `suggestLocales` ordering and playlist sets. The order of URLs within a row MUST define playlist display order within that section.
+
+#### Scenario: Valid catalog loads
+
+- **WHEN** the application loads the catalog file at build or runtime
+- **THEN** all catalogs and playlist URLs are parsed without error
+- **AND** each playlist URL yields a parseable YouTube list id
+
+#### Scenario: Invalid entry fails validation
+
+- **WHEN** a playlist URL cannot be parsed to a list id
+- **THEN** catalog loading MUST fail fast in development/tests or skip the entry with a logged error per project convention
+
+### Requirement: Locale filtering for catalogs
+
+The system MUST include every catalog row whose `suggestLocales` includes the active UI locale (`vi` or `en`). Rows tagged with only `vi` MUST be excluded when UI locale is `en`, and rows tagged with only `en` MUST be excluded when UI locale is `vi`. When multiple rows share the same `id` and match the locale, the system MUST merge them into a single UI section: sort rows by how early the active locale appears in `suggestLocales` (tie-break: earlier JSON row), then concatenate `playlists` in that order. Section order follows the first merged row’s position in that sorted list.
+
+#### Scenario: UI locale Vietnamese
+
+- **WHEN** UI locale is `vi`
+- **THEN** catalogs with `suggestLocales` containing `vi` are included
+- **AND** catalogs without `vi` are excluded
+
+#### Scenario: UI locale English
+
+- **WHEN** UI locale is `en`
+- **THEN** catalogs with `suggestLocales` containing `en` are included
+- **AND** catalogs without `en` are excluded
+
+### Requirement: Empty catalogs are omitted from UI
+
+The system MUST NOT render a catalog section when that catalog has zero playlist URLs after loading.
+
+#### Scenario: Music catalog has no playlists
+
+- **WHEN** the `music` catalog exists but `playlists` is empty
+- **THEN** no music section is shown in curated suggestion UI
+
+### Requirement: Initial operator playlists
+
+The shipped catalog MUST include three operator-provided playlists under `karaoke` (list ids `PLRH1bes7ddmVMYRkmPNJY4lFZsGlAAXbC`, `PLRH1bes7ddmVp0Cpe2OWJxK6zqA2h8CrD`, `PLRH1bes7ddmWyHL0CVqETM7p3mVwdFXFx`) and one under `music` (`PLRH1bes7ddmWZCJsf02s3WLhtMV2dXbWO`), each with `suggestLocales` `["vi", "en"]`.
+
+#### Scenario: Curated starters present
+
+- **WHEN** a cold-start user views curated suggestions
+- **THEN** karaoke and music starter playlists are available in display order defined in JSON
+
+--- ARQUIVOS DO PR (247)
+added     +40    -0     .env.example
+modified  +4     -3     .github/pull_request_template.md
+modified  +3     -8     .github/workflows/build-push-docker.yml
+modified  +3     -21    .github/workflows/ci.yml
+modified  +10    -4     README.md
+modified  +3     -2     apps/api/.env.example
+modified  +21    -7     apps/api/Dockerfile
+modified  +13    -5     apps/api/package.json
+removed   +0     -21    apps/api/src/config/embed-playability-env.ts
+removed   +0     -34    apps/api/src/config/env.ts
+added     +16    -0     apps/api/src/env.ts
+modified  +2     -1     apps/api/src/modules/room/apply-tv-restore.ts
+modified  +1     -1     apps/api/src/modules/room/merge-queue-after-advance.ts
+modified  +1     -1     apps/api/src/modules/room/room-broadcast.ts
+modified  +4     -7     apps/api/src/modules/room/room-service.ts
+modified  +29    -17    apps/api/src/modules/youtube/channel-cache.ts
+modified  +20    -32    apps/api/src/modules/youtube/embed-playability-cache.ts
+modified  +6     -8     apps/api/src/modules/youtube/embeddable.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details-cached.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details.ts
+modified  +3     -3     apps/api/src/modules/youtube/fetch-playlist-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/fetch-search-suggestions.ts
+modified  +1     -1     apps/api/src/modules/youtube/live-viewers.ts
+modified  +164   -18    apps/api/src/modules/youtube/playlist-details-cache.ts
+modified  +1     -1     apps/api/src/modules/youtube/prepare-youtube-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/renderer-metadata.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-compact-channels.ts
+modified  +6     -3     apps/api/src/modules/youtube/resolve-embed-playability.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-embeddable-queue.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-item-views.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-mapper.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-validation.ts
+modified  +3     -3     apps/api/src/plugins/room-ws.plugin.ts
+modified  +10    -10    apps/api/src/queues/cleanup.ts
+modified  +10    -9     apps/api/src/queues/hourly-report.ts
+modified  +10    -2     apps/api/src/redis.ts
+removed   +0     -118   apps/api/src/schemas/client-message.ts
+modified  +13    -4     apps/api/src/server.ts
+modified  +10    -4     apps/api/src/utils/common.ts
+modified  +8     -7     apps/api/src/utils/logger.ts
+modified  +2     -2     apps/api/src/utils/room-store.ts
+modified  +33    -34    apps/api/src/youtubei.ts   <== código ligado à spec
+removed   +0     -49    apps/api/tests/config/embed-playability-env.test.ts
+removed   +0     -54    apps/api/tests/config/env.test.ts
+modified  +1     -1     apps/api/tests/fixtures/sing-king-search.ts
+modified  +1     -1     apps/api/tests/modules/room/advance-queue.test.ts
+modified  +2     -1     apps/api/tests/modules/room/apply-tv-restore.test.ts
+added     +37    -0     apps/api/tests/modules/youtube/channel-cache.test.ts
+modified  +17    -23    apps/api/tests/modules/youtube/embed-playability-cache.test.ts
+added     +67    -0     apps/api/tests/modules/youtube/playlist-details-cache.test.ts
+modified  +7     -20    apps/api/tests/modules/youtube/sing-king-embed-prefilter.test.ts
+modified  +24    -25    apps/api/tests/schemas/client-message.test.ts
+modified  +2     -1     apps/api/tests/utils/common.test.ts
+modified  +2     -1     apps/api/tests/utils/room-store.test.ts
+modified  +14    -2     apps/api/tsconfig.json
+modified  +10    -11    apps/web/.env.example
+modified  +27    -6     apps/web/Dockerfile
+modified  +26    -24    apps/web/eslint.config.mjs
+modified  +8     -1     apps/web/next.config.ts
+modified  +9     -3     apps/web/package.json
+modified  +12    -9     apps/web/src/app/[locale]/layout.tsx
+modified  +3     -1     apps/web/src/app/api/speech/status/route.ts
+modified  +4     -2     apps/web/src/app/api/speech/transcribe/route.ts
+modified  +4     -3     apps/web/src/app/robots.ts
+modified  +3     -1     apps/web/src/components/analytics/cloudflare-web-analytics.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/curated-catalog-section.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/import-playlist-panel.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/BrowseSuggestionsList.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/ControlsNowPlayingMeta.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/NowPlayingBar.tsx
+modified  +3     -2     apps/web/src/components/pages/youtube/PlayerColumn.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControls.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControlsTabs.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/RemoteJoinLobby.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/TvPlayerQrZone.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoHistory.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoList.tsx
+modified  +2     -2     apps/web/src/components/pages/youtube/VideoListItem.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoQueue.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/captions-menu.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/use-video-search-list-actions.tsx
+modified  +1     -1     apps/web/src/components/settings/room-settings-section.tsx
+modified  +1     -1     apps/web/src/components/video-channels.tsx
+added     +24    -0     apps/web/src/env.ts
+modified  +8     -4     apps/web/src/hooks/use-browse-feed.ts
+modified  +1     -1     apps/web/src/hooks/use-connection-status-ui.ts
+modified  +1     -1     apps/web/src/hooks/use-curated-starter-visibility.ts
+modified  +1     -1     apps/web/src/hooks/use-join-room.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-display-time.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-position-sync.ts
+modified  +1     -1     apps/web/src/hooks/use-player-action.ts
+modified  +1     -1     apps/web/src/hooks/use-playlist-details-cache.ts
+modified  +1     -1     apps/web/src/hooks/use-strip-room-query.ts
+modified  +2     -2     apps/web/src/lib/curated-playlist-thumbnail.ts
+modified  +1     -1     apps/web/src/lib/format-uploaded-at.ts
+modified  +3     -2     apps/web/src/lib/persisted-storage.ts
+modified  +1     -1     apps/web/src/lib/room-payload.ts
+modified  +1     -1     apps/web/src/lib/room-queue.ts
+modified  +1     -1     apps/web/src/lib/room-share.ts
+modified  +3     -2     apps/web/src/lib/seo/metadata.ts
+modified  +4     -2     apps/web/src/lib/site-url.ts
+modified  +2     -7     apps/web/src/lib/tv-room-recovery.ts
+modified  +1     -1     apps/web/src/lib/youtube-captions.ts
+modified  +2     -2     apps/web/src/lib/youtube-video.ts
+modified  +2     -1     apps/web/src/middleware.ts
+modified  +8     -6     apps/web/src/providers/websocket-provider.tsx
+modified  +4     -2     apps/web/src/services/client/api-client.ts
+modified  +1     -1     apps/web/src/services/youtube-api.ts   <== código ligado à spec
+modified  +2     -2     apps/web/src/store/personalizationStore.ts
+modified  +2     -2     apps/web/src/store/searchStore.ts
+modified  +2     -6     apps/web/src/store/websocketStore.ts
+modified  +2     -2     apps/web/src/store/youtubeStore.ts
+modified  +2     -6     apps/web/src/types/websocket.type.ts
+modified  +1     -1     apps/web/tests/lib/curated-playlist-thumbnail.test.ts
+modified  +2     -1     apps/web/tests/lib/persisted-storage.test.ts
+modified  +1     -1     apps/web/tests/lib/playback-sync.test.ts
+modified  +1     -1     apps/web/tests/lib/room-queue.test.ts
+modified  +1     -1     apps/web/tests/lib/tv-room-recovery.test.ts
+modified  +1     -1     apps/web/tests/lib/youtube-captions.test.ts
+modified  +12    -1     apps/web/tsconfig.json
+modified  +189   -44    bun.lock
+modified  +1     -1     containers/README.md
+modified  +25    -11    containers/aio/Dockerfile
+modified  +21    -7     containers/api-redis/Dockerfile
+modified  +1     -0     containers/api-redis/supervisord.conf
+modified  +4     -0     docker-compose.yml
+modified  +23    -6     docs/monorepo-architecture.md
+modified  +4     -2     docs/monorepo-duplication-inventory.md
+modified  +5     -3     docs/vi/README.md
+added     +119   -0     eslint.config.mjs
+added     +2     -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/.openspec.yaml
+added     +186   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/design.md
+added     +60    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/proposal.md
+added     +41    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/elysia-zod-schemas/spec.md
+added     +58    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-package-boundaries/spec.md
+added     +48    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-quality/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-env/spec.md
+added     +43    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-feature-flags/spec.md
+added     +46    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis-cache/spec.md
+added     +35    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis/spec.md
+added     +108   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/tasks.md
+added     +45    -0     openspec/specs/elysia-zod-schemas/spec.md
+added     +62    -0     openspec/specs/monorepo-package-boundaries/spec.md
+added     +52    -0     openspec/specs/monorepo-quality/spec.md
+added     +80    -0     openspec/specs/platform-env/spec.md
+added     +47    -0     openspec/specs/platform-feature-flags/spec.md
+added     +50    -0     openspec/specs/platform-redis-cache/spec.md
+added     +39    -0     openspec/specs/platform-redis/spec.md
+modified  +13    -2     package.json
+added     +19    -0     packages/cache-redis/package.json
+added     +62    -0     packages/cache-redis/src/bool-cache.ts
+added     +2     -0     packages/cache-redis/src/index.ts
+added     +32    -0     packages/cache-redis/src/json-cache.ts
+added     +71    -0     packages/cache-redis/tests/bool-cache.test.ts
+added     +58    -0     packages/cache-redis/tests/json-cache.test.ts
+added     +4     -0     packages/cache-redis/tsconfig.json
+modified  +3     -1     packages/curated-playlists/package.json
+modified  +1     -1     packages/curated-playlists/src/index.ts
+added     +34    -0     packages/env/.gitignore
+added     +26    -0     packages/env/package.json
+added     +44    -0     packages/env/src/base.ts
+added     +52    -0     packages/env/src/embed.ts
+added     +45    -0     packages/env/src/flags.ts
+added     +8     -0     packages/env/src/index.ts
+added     +23    -0     packages/env/src/logger.ts
+added     +21    -0     packages/env/src/redis.ts
+added     +23    -0     packages/env/src/server.ts
+added     +35    -0     packages/env/src/web-public.ts
+added     +32    -0     packages/env/src/web-server.ts
+added     +36    -0     packages/env/tests/base.test.ts
+added     +30    -0     packages/env/tests/embed.test.ts
+added     +4     -0     packages/env/tsconfig.json
+added     +17    -0     packages/personalization/package.json
+renamed   +13    -3     packages/personalization/src/browse-feed.ts
+renamed   +0     -0     packages/personalization/src/index.ts
+renamed   +0     -0     packages/personalization/src/profile.ts
+renamed   +0     -0     packages/personalization/src/rank-videos.ts
+renamed   +0     -0     packages/personalization/src/suggestions.ts
+renamed   +0     -0     packages/personalization/src/types.ts
+renamed   +3     -3     packages/personalization/tests/browse-feed.test.ts
+renamed   +1     -1     packages/personalization/tests/profile-engagement.test.ts
+renamed   +2     -2     packages/personalization/tests/profile.test.ts
+renamed   +3     -3     packages/personalization/tests/rank-videos.test.ts
+renamed   +1     -1     packages/personalization/tests/suggestions.test.ts
+added     +4     -0     packages/personalization/tsconfig.json
+renamed   +5     -1     packages/redis/package.json
+renamed   +0     -0     packages/redis/src/index.ts
+renamed   +0     -0     packages/redis/src/redis.ts
+added     +20    -0     packages/room/package.json
+renamed   +0     -0     packages/room/src/errors.ts
+added     +6     -0     packages/room/src/index.ts
+renamed   +1     -1     packages/room/src/persisted-room.ts
+renamed   +0     -0     packages/room/src/playback-sync.ts
+renamed   +0     -0     packages/room/src/room.ts
+renamed   +9     -0     packages/room/src/url.ts
+added     +62    -0     packages/room/src/websocket.ts
+renamed   +0     -0     packages/room/tests/errors.test.ts
+renamed   +0     -0     packages/room/tests/persisted-room-invalid.test.ts
+renamed   +1     -1     packages/room/tests/persisted-room.test.ts
+renamed   +0     -0     packages/room/tests/playback-sync.test.ts
+renamed   +1     -1     packages/room/tests/room.test.ts
+added     +29    -0     packages/room/tests/url.test.ts
+added     +29    -0     packages/room/tests/validators-invalid.test.ts
+added     +4     -0     packages/room/tsconfig.json
+removed   +0     -18    packages/shared-types/package.json
+removed   +0     -7     packages/shared-types/src/index.ts
+removed   +0     -115   packages/shared-types/src/websocket.ts
+removed   +0     -18    packages/shared-utils/package.json
+removed   +0     -14    packages/shared-utils/tests/url.test.ts
+removed   +0     -14    packages/shared-utils/tsconfig.json
+added     +19    -0     packages/validators/package.json
+added     +3     -0     packages/validators/src/index.ts
+added     +86    -0     packages/validators/src/ws/client-message.ts
+added     +25    -0     packages/validators/src/youtube/http.ts
+added     +30    -0     packages/validators/src/youtube/video.ts
+added     +48    -0     packages/validators/tests/http.schema.test.ts
+added     +4     -0     packages/validators/tsconfig.json
+added     +17    -0     packages/youtube/package.json
+renamed   +0     -0     packages/youtube/src/captions.ts
+renamed   +0     -0     packages/youtube/src/format.ts
+renamed   +3     -3     packages/youtube/src/index.ts
+renamed   +0     -0     packages/youtube/src/parse-relative-upload.ts
+renamed   +0     -0     packages/youtube/src/parse-view-count.ts
+renamed   +0     -0     packages/youtube/src/youtube-id.ts
+renamed   +0     -0     packages/youtube/src/youtube-live.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-details.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-url.ts
+renamed   +1     -1     packages/youtube/src/youtube-thumbnail.ts
+renamed   +1     -3     packages/youtube/src/youtube.ts
+renamed   +0     -0     packages/youtube/tests/captions.test.ts
+renamed   +1     -1     packages/youtube/tests/format.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-relative-upload.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-view-count.test.ts
+renamed   +2     -32    packages/youtube/tests/validators-invalid.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-id.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-live.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-playlist-url.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-thumbnail.test.ts
+renamed   +0     -0     packages/youtube/tests/youtube.test.ts
+added     +4     -0     packages/youtube/tsconfig.json
+added     +15    -0     tooling/typescript/base.json
+added     +7     -0     tooling/typescript/bun.json
+added     +7     -0     tooling/typescript/library.json
+added     +10    -0     tooling/typescript/nextjs.json
+added     +11    -0     tooling/typescript/package.json
+modified  +14    -1     turbo.json
+modified  +47    -5     vitest.config.mts
+--- DIFF DO CÓDIGO LIGADO
+### apps/api/src/youtubei.ts
+@@ -1,13 +1,21 @@
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+ import Redis from 'ioredis';
+ import { Queue, Worker } from 'bullmq';
+ import { type VideoCompact, type SearchResult } from 'youtubei';
+ import { fetchSearchSuggestions } from './modules/youtube/fetch-search-suggestions';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++
++import { env } from './env';
+ 
+ import { recordRelatedRequest, recordSearchRequest } from '@/modules/stats/service-stats';
+ import { createContextLogger } from '@/utils/logger';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+ import {
+     cleanupOldInstances,
+     getRedisKey,
+@@ -36,7 +44,11 @@ const youtubeiLogger = createContextLogger('Queue/Youtubei');
+ 
+ const youtubei = getYoutubeiClient();
+ 
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+ const redis = new Redis(redisConnectionOptions);
+ 
+ const cleanupQueue = new Queue('search-instance-cleanup', { connection: redisConnectionOptions });
+@@ -103,10 +115,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 searchInstances: stateSearchInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -166,23 +175,25 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to search YouTube', { error, query, continuation });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+         },
+     )
+     .post(
+         '/suggestions',
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-            }),
++            body: youtubeSearchSuggestionsBodySchema,
+         },
+     )
+     .post(
+@@ -196,11 +207,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 fetchAll,
+             }),
+         {
+-            body: t.Object({
+-                playlistUrlOrId: t.String(),
+-                videoLimit: t.Optional(t.Number()),
+-                fetchAll: t.Optional(t.Boolean()),
+-            }),
++            body: youtubePlaylistDetailsBodySchema,
+         },
+     )
+     .post(
+@@ -213,10 +220,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 relatedInstances: stateRelatedInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -295,14 +299,11 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to get related videos', { error });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                videoId: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeRelatedBodySchema,
+         },
+     )
+     .post(
+@@ -313,8 +314,6 @@ export const searchYoutubeiElysia = new Elysia({})
+         }): Promise<{ videoId: string; canEmbed: boolean }[]> =>
+             checkEmbeddableMany(redisClient, videoIds),
+         {
+-            body: t.Object({
+-                videoIds: t.Array(t.String()),
+-            }),
++            body: youtubeCheckEmbeddableBodySchema,
+         },
+     );
+
+### apps/web/src/services/youtube-api.ts
+@@ -1,4 +1,4 @@
+-import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/shared-types';
++import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/youtube';
+ import { apiPost } from './client/api-client';
+ 
+ export async function fetchPlaylistDetails(
+
+===== P198 | repo Larusso/unity-version-manager | PR #456: Add installation progress reporting | capacidade: payload-format-detection
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Detect gzipped tar payload format
+
+The macOS PKG installer SHALL detect when a payload is a gzipped tar archive and extract it using tar.
+
+#### Scenario: Payload is gzipped tar
+
+- **WHEN** the payload file starts with gzip magic bytes (1f 8b) AND the decompressed content does NOT start with cpio magic (070707, 070701, 070702)
+- **THEN** the installer SHALL extract the payload using `tar -zmxf`
+
+### Requirement: Detect gzipped cpio payload format
+
+The macOS PKG installer SHALL detect when a payload is a gzipped cpio archive and extract it using cpio.
+
+#### Scenario: Payload is gzipped cpio ODC format
+
+- **WHEN** the payload file starts with gzip magic bytes (1f 8b) AND the decompressed content starts with `070707` (cpio ODC magic)
+- **THEN** the installer SHALL extract the payload using `gzip -dc <payload> | cpio -iu`
+
+#### Scenario: Payload is gzipped cpio newc format
+
+- **WHEN** the payload file starts with gzip magic bytes (1f 8b) AND the decompressed content starts with `070701` or `070702` (cpio newc magic)
+- **THEN** the installer SHALL extract the payload using `gzip -dc <payload> | cpio -iu`
+
+### Requirement: Extract to correct destination directory
+
+The macOS PKG installer SHALL extract payload contents to the specified destination directory regardless of payload format.
+
+#### Scenario: cpio extraction respects destination
+
+- **WHEN** extracting a cpio payload to destination directory D
+- **THEN** the cpio command SHALL run with `-D` or `--directory` set to D, OR the process SHALL change to directory D before extraction
+
+#### Scenario: tar extraction respects destination
+
+- **WHEN** extracting a tar payload to destination directory D
+- **THEN** the tar command SHALL use `-C D` to extract to the destination
+
+### Requirement: Backwards compatibility with tar payloads
+
+The installer SHALL continue to successfully install Unity versions that use tar-format payloads.
+
+#### Scenario: Install older Unity version with tar payload
+
+- **WHEN** installing a Unity version that ships with a tar-format PKG payload
+- **THEN** the installation SHALL complete successfully using tar extraction
+
+--- ARQUIVOS DO PR (25)
+modified  +11    -0     Cargo.lock
+added     +2     -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/.openspec.yaml
+added     +144   -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/design.md
+added     +29    -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/proposal.md
+added     +122   -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/specs/installation-progress/spec.md
+added     +83    -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/tasks.md
+added     +128   -0     openspec/specs/installation-progress/spec.md
+added     +43    -0     probe_access.sh
+added     +18    -0     tmux_workspace.yml
+modified  +1     -0     uvm/Cargo.toml
+modified  +67    -11    uvm/src/commands/install.rs
+modified  +10    -9     uvm/src/commands/mod.rs
+added     +550   -0     uvm/src/commands/progress.rs
+modified  +44    -13    uvm/src/main.rs
+modified  +12    -0     uvm_install/src/install/installer/mod.rs
+modified  +21    -1     uvm_install/src/install/installer/zip.rs
+modified  +131   -4     uvm_install/src/install/loader.rs
+modified  +1     -1     uvm_install/src/install/mod.rs
+modified  +321   -61    uvm_install/src/lib.rs
+modified  +18    -6     uvm_install/src/sys/linux/mod.rs
+modified  +8     -0     uvm_install/src/sys/linux/pkg.rs
+modified  +4     -0     uvm_install/src/sys/linux/xz.rs
+modified  +25    -12    uvm_install/src/sys/mac/mod.rs
+modified  +24    -0     uvm_install/src/sys/mac/pkg.rs   <== código ligado à spec
+modified  +2     -0     uvm_install/src/sys/win/mod.rs
+--- DIFF DO CÓDIGO LIGADO
+### uvm_install/src/sys/mac/pkg.rs
+@@ -283,8 +283,20 @@ impl InstallHandler for EditorPkgInstaller {
+ 
+         let tmp_destination = destination.join("tmp");
+         DirBuilder::new().recursive(true).create(&tmp_destination)?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
+         self.xar(installer, &tmp_destination)?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
+         self.untar(&tmp_destination, destination)?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
+         self.cleanup_editor(destination)?;
+         self.cleanup(&tmp_destination)?;
+ 
+@@ -326,8 +338,20 @@ impl InstallHandler for ModulePkgInstaller {
+ 
+         let tmp_destination = destination.join("tmp");
+         DirBuilder::new().recursive(true).create(&tmp_destination).context("failed to create temp install directory")?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
+         self.xar(installer, &tmp_destination)?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
+         self.untar(&tmp_destination, destination).context("failed to unpack the payload")?;
++
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
+         self.cleanup_ios_support(destination).context("failed to cleanup ios support destination")?;
+         self.cleanup(&tmp_destination).context("failed to cleanup temp files")?;
+         Ok(())
+
+===== P199 | repo pmcfadin/cqlite | PR #2150: feat(#1706): one event facade — migrate cqlite-core log→tracing, drop log dep | capacidade: tombstone-reconciliation
+--- SPEC VIVA
+# tombstone-reconciliation Specification
+
+## Purpose
+TBD - created by archiving change tombstone-merger-confine. Update Purpose after archive.
+## Requirements
+### Requirement: The O(entries × tombstones) range-tombstone path is removed
+
+The `TombstoneMerger` module SHALL NOT contain the quadratic range-tombstone path the
+July 2026 read-path audit named (§Epic G / G4): `TombstoneMerger::apply_range_tombstones`
+and its helper `TombstoneMerger::range_tombstone_applies` SHALL be removed, together with
+their unit test. Both have zero production call sites (deadness `rg`-proven and pasted in
+the PR). After the removal, every retained public method of `TombstoneMerger` SHALL have
+worst-case complexity no greater than O(n log n) in the number of generations merged for a
+single key, and the crate SHALL build and lint clean under `RUSTFLAGS="-D warnings"` both
+with and without the `tombstones` feature.
+
+#### Scenario: The quadratic methods are gone and nothing references them
+- **WHEN** the source tree is searched for `apply_range_tombstones` or `range_tombstone_applies`
+- **THEN** neither symbol is defined or referenced anywhere in the tree, and the workspace builds and lints clean under `RUSTFLAGS="-D warnings"` with `--features tombstones` and without it
+
+#### Scenario: Retained public methods carry a documented sub-quadratic bound
+- **WHEN** the `TombstoneMerger` module source is inspected after the removal
+- **THEN** each retained public method (`merge_generations`, `fast_tombstone_check`, `batch_merge_with_tombstones`) has a documented complexity of at most O(n log n) in the per-key generation count, and no retained method performs an entries × tombstones nested iteration
+
+### Requirement: The retained merger is confined behind `tombstones` with doc scoping
+
+The `TombstoneMerger` module SHALL remain `#[cfg(feature = "tombstones")]`-gated and SHALL
+carry a module-level doc block that scopes it as legacy: it SHALL state that the module is
+built only under the `tombstones` feature, is OFF the default C1/C4 point-read fast path,
+records the complexity of each retained live method, states why the retained cost is
+acceptable there (parity-pinned semantics; low-cardinality per-key generation sets; not on
+the hot default path), and names the future consolidation direction (folding the `get()`
+use into a single-key multi-candidate KWay point path once one exists — reuse, not
+rewrite). No default (`not(tombstones)`) build SHALL compile the module.
+
+#### Scenario: The module is not compiled into the default build
+- **WHEN** the crate is built with default features (no `tombstones`)
+- **THEN** `tombstone_merger.rs` is `#[cfg]`-excluded and no `TombstoneMerger` symbol is present in the default build, and the default build compiles and lints clean under `RUSTFLAGS="-D warnings"`
+
+#### Scenario: The module documents its legacy confinement and complexity
+- **WHEN** the `tombstone_merger.rs` module header is read
+- **THEN** it states the `tombstones`-feature-only gating, the off-default-fast-path status, the per-method complexity of the retained live surface, the rationale for accepting that cost, and the future KWay-point-path consolidation direction
+
+### Requirement: The `tombstones`-build reconciliation semantics are unchanged (parity-pinned)
+
+Confining the merger SHALL NOT change any `tombstones`-build reconciliation result. The
+retained live methods SHALL keep byte-identical behavior: `merge_generations` SHALL apply
+last-write-wins with tombstone shadowing and TTL expiry across a per-key generation set;
+`fast_tombstone_check` SHALL report an active tombstone as deleted and a live value as
+visible; and a full-table `SELECT *` over a clustered table in a `tombstones`-enabled build
+SHALL return the same rows as the committed `sstabledump` JSONL golden.
+
+#### Scenario: merge_generations picks the newest live value and honors tombstone shadowing
+- **WHEN** `merge_generations` is given a per-key set containing an older live value, a newer live value, and a tombstone, exercised through the production `TombstoneMerger::new()` constructor
+- **THEN** it returns the newest live value when no active tombstone shadows it, and returns `None` (deleted) when the newest active tombstone shadows all older writes — identical to the pre-change behavior
+
+#### Scenario: A tombstones-build clustered full scan matches the sstabledump golden
+- **WHEN** a `--features tombstones` (or `--all-features`) full-table `SELECT *` runs over the real clustered fixture used by the existing full-scan parity test
+- **THEN** the returned row count and row contents equal the committed JSONL golden exactly, unchanged from before this change (the test SKIPs cleanly when the fixture binaries are absent, and FAILs loudly on a zero-row or mismatched result when present)
+
+### Requirement: `TombstoneMerger::new()` constructs without an `unwrap()`
+
+`TombstoneMerger::new()` SHALL NOT use `unwrap()`/`expect()` (CQLite library-code hard
+rule). It SHALL derive its current time from the system clock with a graceful fallback: if
+`SystemTime::now().duration_since(UNIX_EPOCH)` fails (a clock predating 1970), it SHALL
+fall back to a zero epoch time rather than panic, under which no tombstone or TTL is
+treated as expired. Constructing via `new()` and merging SHALL succeed on a normal clock.
+
+#### Scenario: Production constructor works and never panics on the clock
+- **WHEN** a `TombstoneMerger` is built via the production `TombstoneMerger::new()` (not the test-only `with_time`) and `merge_generations` is invoked on a representative per-key generation set
+- **THEN** construction succeeds without panicking and returns the expected reconciliation result, and the module source contains no `unwrap()`/`expect()` in `new()`
+
+### Requirement: The legacy duplicate-work parallel table scan stays retired
+
+The legacy duplicate-work parallel table scan SHALL remain retired (issue #1691): the path
+where N workers each scanned the full table and kept 1/Nth of the rows SHALL NOT return. A
+parallelizable `TableScan` plan SHALL issue exactly ONE whole-table scan pass, and the
+work-counter proof SHALL remain in place.
+
+#### Scenario: A parallelizable TableScan issues exactly one whole-table pass
+- **WHEN** a `TableScan` plan whose step requests parallelization (`suggested_threads = 4`) is executed
+- **THEN** the storage-layer whole-table scan-initiation counter reports exactly `1` (not one per worker), proving no duplicate-work fan-out
+
+
+--- ARQUIVOS DO PR (89)
+modified  +0     -1     cqlite-core/Cargo.toml
+modified  +1     -1     cqlite-core/src/lib.rs
+modified  +5     -5     cqlite-core/src/parser/enhanced_statistics_parser/encoding_stats.rs
+modified  +7     -7     cqlite-core/src/parser/enhanced_statistics_parser/header.rs
+modified  +2     -2     cqlite-core/src/parser/enhanced_statistics_parser/marshal_type.rs
+modified  +5     -5     cqlite-core/src/parser/enhanced_statistics_parser/mod.rs
+modified  +31    -31    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/mod.rs
+modified  +27    -27    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/schema.rs
+modified  +38    -38    cqlite-core/src/parser/enhanced_statistics_parser/serialization_header/sequential.rs
+modified  +7     -7     cqlite-core/src/parser/header.rs
+modified  +1     -1     cqlite-core/src/query/engine.rs
+modified  +1     -1     cqlite-core/src/query/executor.rs   <== código ligado à spec
+modified  +9     -9     cqlite-core/src/query/select_executor/execute.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/limit_pushdown/mod.rs
+modified  +3     -3     cqlite-core/src/query/select_executor/mod.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/row_build.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/streaming.rs
+modified  +1     -1     cqlite-core/src/query/select_executor/value_ops.rs
+modified  +2     -2     cqlite-core/src/schema/discovery/analysis.rs
+modified  +1     -1     cqlite-core/src/storage/mod.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/bulletproof_reader.rs
+modified  +7     -7     cqlite-core/src/storage/sstable/chunk_decompressor.rs
+modified  +4     -4     cqlite-core/src/storage/sstable/directory/scan.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/directory/toc.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/directory/validation.rs
+modified  +5     -5     cqlite-core/src/storage/sstable/header_fix_functions.rs
+modified  +5     -5     cqlite-core/src/storage/sstable/index_reader.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/key_digest.rs
+modified  +28    -28    cqlite-core/src/storage/sstable/mod.rs
+modified  +27    -25    cqlite-core/src/storage/sstable/reader/block_io.rs
+modified  +29    -29    cqlite-core/src/storage/sstable/reader/component_loading.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/compression.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/data_access/big_point.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/data_access/big_promoted.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/data_access/bti.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/data_access/compaction.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/data_access/mod.rs
+modified  +45    -45    cqlite-core/src/storage/sstable/reader/data_access/sequential.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/delta_scan/scan.rs
+modified  +22    -22    cqlite-core/src/storage/sstable/reader/header.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/header_helpers.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/reader/integrity.rs
+modified  +6     -4     cqlite-core/src/storage/sstable/reader/key_digest.rs
+modified  +21    -21    cqlite-core/src/storage/sstable/reader/mod.rs
+modified  +36    -36    cqlite-core/src/storage/sstable/reader/parsing/block_entries.rs
+modified  +8     -8     cqlite-core/src/storage/sstable/reader/parsing/key_parsing.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/mod.rs
+modified  +3     -3     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/block_emit.rs
+modified  +22    -22    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/block_emit_windowed.rs
+modified  +13    -13    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/cell_value.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/compaction.rs
+modified  +18    -18    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/complex_column.rs
+modified  +7     -7     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/frozen.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/mod.rs
+modified  +12    -12    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/raw_type_value.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/raw_value.rs
+modified  +17    -17    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/row_data.rs
+modified  +15    -15    cqlite-core/src/storage/sstable/reader/parsing/row_decoder/row_framing.rs
+modified  +9     -9     cqlite-core/src/storage/sstable/reader/parsing/row_decoder/udt.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/parsing/value_parsing.rs
+modified  +2     -2     cqlite-core/src/storage/sstable/reader/partition_lookup.rs
+modified  +3     -3     cqlite-core/src/storage/sstable/reader/registry_schema.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/scan_stream_windowed.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/reader/source.rs
+modified  +6     -6     cqlite-core/src/storage/sstable/row_cell_state_machine.rs
+modified  +1     -1     cqlite-core/src/storage/sstable/statistics_reader.rs
+modified  +1     -1     cqlite-core/src/storage/sstable_data_manager.rs
+modified  +8     -8     cqlite-core/src/storage/write_engine/compaction.rs
+modified  +1     -1     cqlite-core/src/storage/write_engine/durability.rs
+modified  +12    -12    cqlite-core/src/storage/write_engine/export.rs
+modified  +3     -3     cqlite-core/src/storage/write_engine/maintenance.rs
+modified  +2     -2     cqlite-core/src/storage/write_engine/merge/fully_expired.rs
+modified  +11    -11    cqlite-core/src/storage/write_engine/merge/mod.rs
+modified  +55    -55    cqlite-core/src/storage/write_engine/mod.rs
+modified  +6     -6     cqlite-core/src/storage/write_engine/sweep.rs
+modified  +7     -7     cqlite-core/src/storage/write_engine/wal.rs
+modified  +1     -1     cqlite-core/tests/common/mod.rs
+modified  +1     -1     cqlite-core/tests/debug_schema_extraction.rs
+modified  +62    -35    cqlite-core/tests/issue_1694_data_safe_logging.rs
+modified  +1     -1     cqlite-core/tests/issue_237_row_size_offset_regression_test.rs
+added     +222   -0     cqlite-core/tests/logging_facade_tracing.rs
+modified  +1     -1     cqlite-core/tests/statistics_db_real_file_test.rs
+modified  +1     -1     cqlite-core/tests/stats_writer_roundtrip.rs
+modified  +1     -1     cqlite-core/tests/v5_compressed_legacy_integration_test.rs
+added     +66    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/design.md
+added     +52    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/proposal.md
+added     +64    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/specs/core-event-logging/spec.md
+added     +26    -0     openspec/changes/archive/2026-07-07-logging-facade-tracing/tasks.md
+added     +66    -0     openspec/specs/core-event-logging/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### cqlite-core/src/query/executor.rs
+@@ -392,7 +392,7 @@ impl QueryExecutor {
+         let table = self.require_table(plan)?;
+ 
+         #[cfg(debug_assertions)]
+-        log::debug!("executor: Scanning for table: {:?}", table.name());
++        tracing::debug!("executor: Scanning for table: {:?}", table.name());
+ 
+         // Issue #1691: a plan that requested parallelization is served by the
+         // SAME bounded streaming scan the SelectExecutor uses (one whole-table
+
+===== P200 | repo tsenoner/protspace_web | PR #279: feat: surface support inbox across the interface | capacidade: prep-failure-routing
+--- SPEC VIVA
+# prep-failure-routing Specification
+
+## Purpose
+
+How FASTA-preparation failures are classified on the backend and surfaced to the user, including routing a Biocentral-unavailable failure to the Google Colab notebook.
+
+## Requirements
+
+### Requirement: Biocentral-unavailable failures are classified
+
+The prep pipeline SHALL classify an embedding failure as
+`BIOCENTRAL_UNAVAILABLE` when the subprocess output indicates the Biocentral
+embedding service is unreachable, including the case where no healthy Biocentral
+service becomes available before the embedder times out.
+
+#### Scenario: Embedder times out waiting for a healthy service
+
+- **WHEN** the `embed` step exits non-zero with stderr containing
+  `No healthy biocentral service became available in time`
+- **THEN** the pipeline raises a failure tagged `BIOCENTRAL_UNAVAILABLE`
+- **AND** the user-facing message states the embedding service is unavailable and
+  references Google Colab
+
+#### Scenario: Connection-level outage still classified
+
+- **WHEN** the `embed` step fails with a connection-refused, DNS, or 503 error
+- **THEN** the pipeline raises a failure tagged `BIOCENTRAL_UNAVAILABLE`
+
+#### Scenario: Unrelated embed failure passes through
+
+- **WHEN** the `embed` step fails with an error unrelated to Biocentral
+  availability
+- **THEN** the failure is NOT tagged `BIOCENTRAL_UNAVAILABLE`
+- **AND** the raw error detail is preserved for server-side logging while the
+  user sees the generic retry-with-reference message
+
+### Requirement: Biocentral-unavailable failures route the user to Colab
+
+The frontend SHALL, when a FASTA preparation fails with code
+`BIOCENTRAL_UNAVAILABLE`, show copy directing the user to the Google Colab
+notebook and present a single clickable action that opens that notebook.
+
+#### Scenario: Failure toast offers the Colab action
+
+- **WHEN** the prep backend reports a failure with code `BIOCENTRAL_UNAVAILABLE`
+- **THEN** the failure notification description names the embedding-service outage
+  and points to Google Colab
+- **AND** the notification carries an action labelled "Open in Colab ↗" whose
+  target is the shared Colab notebook URL
+
+#### Scenario: Colab takes the single action slot
+
+- **WHEN** a `BIOCENTRAL_UNAVAILABLE` failure notification is shown
+- **THEN** the Colab action occupies the toast's single action slot
+- **AND** no bug-report action is attached for this code
+
+#### Scenario: Activating the action opens the notebook
+
+- **WHEN** the user activates the "Open in Colab ↗" action
+- **THEN** the Colab notebook URL is opened in a new browser tab
+
+### Requirement: Notifications support an optional action
+
+The notification primitive SHALL accept an optional action consisting of a label
+and an href, and SHALL render it as the toast's action control.
+
+#### Scenario: Action forwarded to the toast
+
+- **WHEN** a notification is emitted with an `action` of `{ label, href }`
+- **THEN** the toast is created with an action control bearing that label
+- **AND** activating it navigates to the href — `mailto:` links via the current
+  window, `http(s)` links in a new tab with `noopener`
+
+#### Scenario: No action when omitted
+
+- **WHEN** a notification is emitted without an `action`
+- **THEN** the toast is created without an action control
+
+--- ARQUIVOS DO PR (20)
+added     +36    -0     app/src/components/ErrorBoundary.test.ts
+added     +84    -0     app/src/components/ErrorBoundary.tsx
+modified  +7     -0     app/src/components/Footer.tsx
+modified  +21    -1     app/src/components/Header.tsx
+modified  +16    -0     app/src/explore/notifications.test.ts   <== código ligado à spec
+modified  +17    -0     app/src/explore/notifications.ts   <== código ligado à spec
+modified  +20    -0     app/src/lib/notify.test.ts   <== código ligado à spec
+modified  +26    -0     app/src/lib/notify.ts   <== código ligado à spec
+added     +79    -0     app/src/lib/support.test.ts
+added     +130   -0     app/src/lib/support.ts
+modified  +6     -1     app/src/main.tsx
+modified  +14    -0     app/src/pages/NotFound.tsx
+modified  +11    -3     app/src/pages/Privacy.tsx
+modified  +6     -0     app/vitest.config.ts
+added     +2     -0     openspec/changes/archive/2026-06-13-support-mailto-integration/.openspec.yaml
+added     +39    -0     openspec/changes/archive/2026-06-13-support-mailto-integration/design.md
+added     +29    -0     openspec/changes/archive/2026-06-13-support-mailto-integration/proposal.md
+added     +95    -0     openspec/changes/archive/2026-06-13-support-mailto-integration/specs/support-contact/spec.md
+added     +37    -0     openspec/changes/archive/2026-06-13-support-mailto-integration/tasks.md
+added     +110   -0     openspec/specs/support-contact/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### app/src/explore/notifications.test.ts
+@@ -155,4 +155,20 @@ describe('explore notifications', () => {
+       description: 'Disk full',
+     });
+   });
++
++  it('attaches a "Report this" mailto action to the import failure notification', () => {
++    const action = getDataLoadFailureNotification(dataError('Invalid parquet bundle')).action;
++
++    expect(action?.label).toBe('Report this');
++    expect(action?.href).toMatch(/^mailto:hello@protspace\.app\?/);
++    expect(action?.href).toContain('subject=%5BBug%5D%20Dataset%20import%20failed');
++  });
++
++  it('attaches a "Report this" mailto action to the export failure notification', () => {
++    const action = getExportFailureNotification(new Error('Disk full')).action;
++
++    expect(action?.label).toBe('Report this');
++    expect(action?.href).toMatch(/^mailto:hello@protspace\.app\?/);
++    expect(action?.href).toContain('subject=%5BBug%5D%20Export%20failed');
++  });
+ });
+
+### app/src/explore/notifications.ts
+@@ -4,9 +4,24 @@ import type {
+   SelectionDisabledNotificationDetail,
+ } from '@protspace/core';
+ import type { NotifyOptions } from '../lib/notify';
++import { buildBugContext, buildMailto, clientContext } from '../lib/support';
+ import { FastaPrepError } from './fasta-prep-client';
+ import { MAX_UPLOAD_LABEL, MAX_SEQUENCES } from './fasta-prep-limits';
+ 
++/**
++ * Build a "Report this" toast action that opens a prefilled support email
++ * describing the failing operation and its error.
++ */
++function buildReportAction(operation: string, error: unknown): NotifyOptions['action'] {
++  return {
++    label: 'Report this',
++    href: buildMailto({
++      subject: `[Bug] ${operation} failed`,
++      body: buildBugContext({ operation, error, ...clientContext() }),
++    }),
++  };
++}
++
+ /**
+  * Friendly, actionable copy for the prep backend's known error codes. When a
+  * code is absent or unknown we fall back to the raw server message.
+@@ -106,6 +121,7 @@ export function getDataLoadFailureNotification(detail: DataErrorEventDetail): No
+     description,
+     durationMs: 10_000,
+     dedupeKey,
++    action: buildReportAction('Dataset import', prepError ?? detail.message),
+   };
+ }
+ 
+@@ -123,6 +139,7 @@ export function getExportFailureNotification(error: unknown): NotifyOptions {
+     description: getErrorMessage(error),
+     durationMs: 10_000,
+     dedupeKey: `export-error:${getErrorMessage(error)}`,
++    action: buildReportAction('Export', error),
+   };
+ }
+ 
+
+### app/src/lib/notify.test.ts
+@@ -47,4 +47,24 @@ describe('notify', () => {
+ 
+     expect(mockedToast.error).toHaveBeenCalledTimes(2);
+   });
++
++  it('forwards an action to sonner as a label and onClick handler', () => {
++    notify.error({
++      title: 'Export failed.',
++      action: { label: 'Report this', href: 'mailto:hello@protspace.app?subject=x' },
++    });
++
++    const [, payload] = mockedToast.error.mock.calls[0];
++    expect(payload.action).toEqual({
++      label: 'Report this',
++      onClick: expect.any(Function),
++    });
++  });
++
++  it('omits the action key when no action is provided', () => {
++    notify.success({ title: 'Export ready.' });
++
++    const [, payload] = mockedToast.success.mock.calls[0];
++    expect(payload).not.toHaveProperty('action');
++  });
+ });
+
+### app/src/lib/notify.ts
+@@ -1,10 +1,19 @@
+ import { toast } from '../components/ui/sonner';
+ 
++export interface NotifyAction {
++  /** Button label shown on the toast. */
++  label: string;
++  /** Link the action opens — a `mailto:` or an `http(s)` URL. */
++  href: string;
++}
++
+ export interface NotifyOptions {
+   title: string;
+   description?: string;
+   durationMs?: number;
+   dedupeKey?: string;
++  /** Optional action button (e.g. a "Report this" bug-report link). */
++  action?: NotifyAction;
+ }
+ 
+ type NotifyLevel = 'success' | 'info' | 'warning' | 'error';
+@@ -44,17 +53,34 @@ function shouldSkipNotification(dedupeKey?: string): boolean {
+   return false;
+ }
+ 
++function openHref(href: string): void {
++  // A `mailto:` should hand off to the mail client in place; web links open
++  // in a new tab so the user keeps their ProtSpace session.
++  if (href.startsWith('mailto:')) {
++    window.location.href = href;
++  } else {
++    window.open(href, '_blank', 'noopener,noreferrer');
++  }
++}
++
+ function emitNotification(level: NotifyLevel, options: NotifyOptions): void {
+   if (shouldSkipNotification(options.dedupeKey)) {
+     return;
+   }
+ 
+   const description = options.description?.trim();
+   const duration = options.durationMs ?? DEFAULT_DURATIONS_MS[level];
++  const action = options.action;
+ 
+   toast[level](options.title, {
+     description,
+     duration,
++    ...(action && {
++      action: {
++        label: action.label,
++        onClick: () => openHref(action.href),
++      },
++    }),
+   });
+ }
+ 
+
+===== P201 | repo aehrc/pathling | PR #2551: v9.4.0 | capacidade: fhirpath-to-column-r
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: R library exposes pathling_fhirpath_to_column function
+
+The R library SHALL provide an exported function `pathling_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_invoke` and returns a `spark_jobj` representing a Spark Column.
+
+#### Scenario: Boolean expression returns a Column for filtering
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "gender = 'male'")` is called
+- **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to filter Patient rows
+
+#### Scenario: Expression result can be used in select
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "name.given.first()")` is called
+- **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to extract values
+
+#### Scenario: Invalid expression raises an error
+
+- **WHEN** `pc %>% pathling_fhirpath_to_column("Patient", "!!invalid!!")` is called
+- **THEN** an R error SHALL be raised
+
+### Requirement: pathling_fhirpath_to_column has roxygen2 documentation
+
+The function SHALL include roxygen2 documentation with a title, description, parameter documentation, return value, and export tag. The `@examples` block SHALL demonstrate filtering using `pathling_filter` instead of raw `j_invoke` calls.
+
+#### Scenario: Documentation is present
+
+- **WHEN** the function is defined
+- **THEN** it SHALL have roxygen2 comments documenting its purpose, parameters (`pc`, `resource_type`, `fhirpath_expression`), and return value
+
+#### Scenario: Examples use pathling_filter for filtering
+
+- **WHEN** the roxygen `@examples` block demonstrates filtering a DataFrame
+- **THEN** it SHALL use `pathling_filter` and SHALL NOT contain `j_invoke`
+
+--- ARQUIVOS DO PR (81)
+added     +57    -0     .github/workflows/fhirpath-lab-api-release.yml
+added     +20    -0     deployment/fhirpath-lab-api/chart/Chart.yaml
+added     +64    -0     deployment/fhirpath-lab-api/chart/README.md
+added     +60    -0     deployment/fhirpath-lab-api/chart/templates/deployment.yaml
+added     +20    -0     deployment/fhirpath-lab-api/chart/templates/service.yaml
+added     +103   -0     deployment/fhirpath-lab-api/chart/values.schema.json
+added     +27    -0     deployment/fhirpath-lab-api/chart/values.yaml
+modified  +1     -1     encoders/pom.xml
+added     +45    -0     encoders/src/main/java/au/csiro/pathling/sql/SyntheticFieldUtils.java
+modified  +1     -2     encoders/src/main/scala/au/csiro/pathling/sql/PruneSyntheticFields.scala
+added     +72    -0     encoders/src/test/java/au/csiro/pathling/sql/SyntheticFieldUtilsTest.java
+added     +6     -0     fhirpath-lab-api/.dockerignore
+added     +24    -0     fhirpath-lab-api/Dockerfile
+added     +128   -0     fhirpath-lab-api/README.md
+added     +38    -0     fhirpath-lab-api/pyproject.toml
+added     +16    -0     fhirpath-lab-api/src/fhirpath_lab_api/__init__.py
+added     +30    -0     fhirpath-lab-api/src/fhirpath_lab_api/__main__.py
+added     +174   -0     fhirpath-lab-api/src/fhirpath_lab_api/app.py
+added     +271   -0     fhirpath-lab-api/src/fhirpath_lab_api/parameters.py
+added     +0     -0     fhirpath-lab-api/tests/__init__.py
+added     +271   -0     fhirpath-lab-api/tests/test_app.py
+added     +273   -0     fhirpath-lab-api/tests/test_parameters.py
+added     +557   -0     fhirpath-lab-api/uv.lock
+modified  +1     -1     fhirpath/pom.xml
+added     +109   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluationResult.java
+added     +344   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluator.java
+modified  +3     -1     fhirpath/src/main/java/au/csiro/pathling/fhirpath/operator/BinaryOperatorType.java
+added     +404   -0     fhirpath/src/test/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluatorTest.java
+modified  +83    -0     lib/R/R/context.R   <== código ligado à spec
+modified  +1     -1     lib/R/pom.xml
+modified  +105   -0     lib/R/tests/testthat/test-context.R   <== código ligado à spec
+modified  +61    -0     lib/python/pathling/context.py
+modified  +1     -1     lib/python/pom.xml
+modified  +1     -3     lib/python/tests/conftest.py
+modified  +1     -1     library-api/pom.xml
+modified  +89    -0     library-api/src/main/java/au/csiro/pathling/library/PathlingContext.java
+added     +409   -0     library-api/src/test/java/au/csiro/pathling/library/EvaluateFhirPathTest.java
+modified  +1     -1     library-runtime/pom.xml
+added     +2     -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/.openspec.yaml
+added     +140   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/design.md
+added     +58    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/proposal.md
+added     +103   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-deployment/spec.md
+added     +193   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-server/spec.md
+added     +73    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/.openspec.yaml
+added     +72    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/design.md
+added     +34    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/proposal.md
+added     +91    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/specs/r-evaluate-fhirpath/spec.md
+added     +9     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/.openspec.yaml
+added     +39    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/design.md
+added     +29    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/proposal.md
+added     +73    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/specs/fhirpath-lab-server/spec.md
+added     +13    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/.openspec.yaml
+added     +48    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/design.md
+added     +38    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/proposal.md
+added     +79    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/specs/fhirpath-lab-server/spec.md
+added     +14    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/design.md
+added     +31    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/proposal.md
+added     +0     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/.gitkeep
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/no-spec-changes.md
+added     +8     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/.openspec.yaml
+added     +119   -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/design.md
+added     +56    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/proposal.md
+added     +97    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/specs/fhirpath-lab-server/spec.md
+added     +45    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/tasks.md
+added     +103   -0     openspec/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/specs/fhirpath-lab-deployment/spec.md
+added     +280   -0     openspec/specs/fhirpath-lab-server/spec.md
+added     +91    -0     openspec/specs/r-evaluate-fhirpath/spec.md
+modified  +1     -1     pom.xml
+modified  +7     -13    site/docs/fhirpath/index.md
+modified  +98    -0     site/docs/libraries/fhirpath.md
+modified  +1     -1     site/pom.xml
+modified  +1     -1     terminology/pom.xml
+modified  +1     -1     utilities/pom.xml
+--- DIFF DO CÓDIGO LIGADO
+### lib/R/R/context.R
+@@ -440,3 +440,86 @@ pathling_with_column <- function(df, pc, resource_type, expression, column) {
+     j_invoke("withColumn", as.character(column), col) %>%
+     sparklyr::sdf_register()
+ }
++
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
++                                       fhirpath_expression,
++                                       context_expression = NULL,
++                                       variables = NULL) {
++  # Convert R named list to a Java HashMap if variables are provided.
++  java_variables <- NULL
++  if (!is.null(variables)) {
++    sc <- spark_connection(pc)
++    java_variables <- j_invoke_new(sc, "java.util.HashMap")
++    for (name in names(variables)) {
++      invoke(java_variables, "put", name, variables[[name]])
++    }
++  }
++
++  jresult <- invoke(
++    pc, "evaluateFhirPath",
++    as.character(resource_type),
++    as.character(resource_json),
++    as.character(fhirpath_expression),
++    context_expression,
++    java_variables
++  )
++
++  # Convert Java SingleInstanceEvaluationResult to an R list.
++  jtyped_values <- invoke(jresult, "getResults")
++  size <- jtyped_values %>% invoke("size")
++  results <- if (size > 0L) {
++    lapply(seq_len(size), function(i) {
++      jtv <- jtyped_values %>% invoke("get", as.integer(i - 1))
++      list(
++        type = jtv %>% invoke("getType"),
++        value = jtv %>% invoke("getValue")
++      )
++    })
++  } else {
++    list()
++  }
++
++  list(
++    results = results,
++    expectedReturnType = invoke(jresult, "getExpectedReturnType")
++  )
++}
+
+### lib/R/tests/testthat/test-context.R
+@@ -211,3 +211,108 @@ test_that("pathling_filter and pathling_with_column work together in a pipe", {
+   # Should have only male patients.
+   expect_true(result %>% sparklyr::sdf_nrow() > 0)
+ })
++
++# ========== pathling_evaluate_fhirpath tests ==========
++
++# Sample Patient JSON used across evaluate_fhirpath tests.
++PATIENT_JSON <- '{
++  "resourceType": "Patient",
++  "id": "example",
++  "active": true,
++  "gender": "male",
++  "birthDate": "1990-01-01",
++  "name": [
++    {
++      "use": "official",
++      "family": "Smith",
++      "given": ["John", "James"]
++    },
++    {
++      "use": "nickname",
++      "family": "Smith",
++      "given": ["Johnny"]
++    }
++  ]
++}'
++
++# Helper to create a PathlingContext for evaluate_fhirpath tests.
++evaluate_test_setup <- function() {
++  spark <- def_spark()
++  pc <- pathling_connect(spark)
++  list(pc = pc)
++}
++
++test_that("evaluate_fhirpath returns a string result for name.family", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.family should return family names as strings.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.family")
++  expect_type(result, "list")
++  expect_true("results" %in% names(result))
++  expect_true("expectedReturnType" %in% names(result))
++  expect_equal(result$expectedReturnType, "string")
++  expect_equal(length(result$results), 2)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "Smith")
++})
++
++test_that("evaluate_fhirpath returns multiple values for name.given", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.given should return all given names.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.given")
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath returns empty results for missing element", {
++  setup <- evaluate_test_setup()
++  # Evaluating a path that matches nothing should return an empty list.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "multipleBirthBoolean")
++  expect_equal(length(result$results), 0)
++})
++
++test_that("evaluate_fhirpath returns boolean result for active", {
++  setup <- evaluate_test_setup()
++  # Evaluating active should return a boolean.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "active")
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "boolean")
++  expect_equal(result$results[[1]]$value, TRUE)
++  expect_equal(result$expectedReturnType, "boolean")
++})
++
++test_that("evaluate_fhirpath raises error for invalid expression", {
++  setup <- evaluate_test_setup()
++  # An invalid FHIRPath expression should raise an error.
++  expect_error(
++    pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "!!invalid!!")
++  )
++})
++
++test_that("evaluate_fhirpath with context expression", {
++  setup <- evaluate_test_setup()
++  # Using a context expression to compose the evaluation.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "given",
++    context_expression = "name"
++  )
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath with variable substitution", {
++  setup <- evaluate_test_setup()
++  # A string variable should be resolvable via %variable syntax.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "%myVar",
++    variables = list(myVar = "test")
++  )
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "test")
++})
+

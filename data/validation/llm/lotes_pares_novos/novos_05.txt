@@ -1,0 +1,3123 @@
+===== P088 | repo atilladeniz/Kubeli | PR #163: feat: structured error handling across Rust and frontend | capacidade: cluster-management
+--- SPEC VIVA
+# Cluster Management Specification
+
+## Purpose
+Manage connections to multiple Kubernetes clusters through kubeconfig files, context switching, and namespace selection.
+## Requirements
+### Requirement: Multi-Cluster Connection
+The system SHALL support connecting to multiple Kubernetes clusters simultaneously.
+
+#### Scenario: Import kubeconfig file
+- GIVEN a user has a valid kubeconfig file
+- WHEN the user imports the kubeconfig
+- THEN the application parses and stores the cluster configurations
+- AND the clusters appear in the cluster list
+
+#### Scenario: Add cluster manually
+- GIVEN a user has cluster credentials
+- WHEN the user provides server URL and credentials
+- THEN a new cluster connection is created
+
+### Requirement: Context Switching
+The system SHALL allow users to switch between cluster contexts with one click.
+
+#### Scenario: Switch active context
+- GIVEN multiple clusters are configured
+- WHEN the user selects a different context
+- THEN the active context changes immediately
+- AND all resource views update to show the new cluster
+
+### Requirement: Namespace Selection
+
+The system SHALL provide namespace filtering for all resource views, with automatic discovery as default and manual configuration as fallback for RBAC-restricted clusters.
+
+#### Scenario: List namespaces via auto-discovery
+
+- **GIVEN** a cluster connection is active
+- **AND** no namespaces are configured for this context in the cluster settings store
+- **AND** the user has `namespaces:list` cluster-level permission
+- **WHEN** the system populates the namespace selector
+- **THEN** all namespaces are discovered via `GET /api/v1/namespaces`
+- **AND** a namespace watch is started for live updates
+- **AND** the namespace source is set to "auto"
+
+#### Scenario: List namespaces from configuration (skip API)
+
+- **GIVEN** a cluster connection is active
+- **AND** the user has configured accessible namespaces for this context
+- **WHEN** the system populates the namespace selector
+- **THEN** the configured namespaces are used directly
+- **AND** the namespace API call is skipped entirely
+- **AND** the namespace watch is not started (static list)
+- **AND** the namespace source is set to "configured"
+
+#### Scenario: Fallback to configured namespaces on 403
+
+- **GIVEN** a cluster connection is active
+- **AND** no namespaces are pre-configured for this context
+- **AND** namespace API discovery returns 403 Forbidden
+- **AND** the user subsequently configures accessible namespaces
+- **WHEN** the system re-populates the namespace selector
+- **THEN** the configured namespaces are used
+- **AND** the namespace source is set to "configured"
+
+#### Scenario: Switch namespace
+
+- **GIVEN** namespaces are listed (auto-discovered or configured)
+- **WHEN** the user selects a namespace
+- **THEN** resource lists filter to show only that namespace
+
+#### Scenario: All namespaces view (auto-discovered)
+
+- **GIVEN** the namespace source is "auto" (API discovery succeeded)
+- **WHEN** the user selects "All Namespaces"
+- **THEN** resources are fetched cluster-wide as before (existing behavior)
+
+#### Scenario: All namespaces view (configured mode)
+
+- **GIVEN** the namespace source is "configured" (manually set namespaces)
+- **WHEN** the user selects "All Namespaces"
+- **THEN** resources are fetched as a union of all configured namespaces (per-namespace queries)
+- **AND** no cluster-scoped list is attempted (would trigger 403)
+- **AND** per-namespace error isolation applies (one failing NS does not break others)
+
+### Requirement: Connection Status
+The system SHALL display connection health for each cluster.
+
+#### Scenario: Healthy connection
+- GIVEN a cluster is properly connected
+- WHEN viewing the cluster list
+- THEN a green status indicator is shown
+
+#### Scenario: Connection failure
+- GIVEN a cluster connection fails
+- WHEN the user views the cluster
+- THEN a clear error message explains the issue
+- AND a retry option is available
+
+### Requirement: Secure Credential Storage
+The system MUST store kubeconfig credentials securely using OS keychain.
+
+#### Scenario: Store credentials
+- GIVEN the user imports a kubeconfig with credentials
+- WHEN the credentials are saved
+- THEN they are stored in the OS keychain (macOS Keychain / Linux Secret Service / Windows Credential Manager)
+- AND credentials are never written to plain text files
+
+### Requirement: Accessible Namespace Configuration
+
+The system SHALL allow users to manually configure a list of accessible namespaces per cluster context, persisted across app restarts via Tauri plugin store (`cluster-settings.json`).
+
+#### Scenario: Configure accessible namespaces before connecting
+
+- **GIVEN** a user is on the cluster overview (home page)
+- **AND** the user has a cluster that requires RBAC-restricted namespace access
+- **WHEN** the user opens the context menu on a cluster card and selects "Configure Namespaces"
+- **THEN** a dialog opens with a textarea for entering namespace names (one per line)
+- **AND** the kubeconfig default namespace for that context is pre-filled if available
+- **AND** saving persists the namespace list to `cluster-settings.json` keyed by context name
+
+#### Scenario: Validate namespace input
+
+- **GIVEN** the namespace configuration dialog is open
+- **WHEN** the user enters namespace names
+- **THEN** names are trimmed of whitespace, empty lines are filtered out, and duplicates are removed
+- **AND** names violating Kubernetes DNS-1123 label rules (lowercase alphanumeric, hyphens, max 63 chars) show inline warnings
+- **AND** the user can still save (warnings, not blocking errors) since namespace naming is ultimately server-enforced
+
+#### Scenario: Configure accessible namespaces after connecting
+
+- **GIVEN** a user is connected to a cluster where namespace auto-discovery failed (403 Forbidden)
+- **AND** the namespace section shows a "Configure accessible namespaces" prompt
+- **WHEN** the user clicks the configure button
+- **THEN** the same namespace configuration dialog opens
+- **AND** after saving, the namespace selector immediately displays the configured namespaces
+
+#### Scenario: Clear configured namespaces to restore auto-discovery
+
+- **GIVEN** a cluster context has manually configured namespaces
+- **WHEN** the user opens the namespace configuration dialog and clicks "Clear"
+- **THEN** the configured namespaces are removed from the store for that context
+- **AND** the system reverts to auto-discovery mode on next connection or refresh
+- **AND** a namespace API call is attempted to re-populate the list
+
+#### Scenario: Configured namespaces persist across restarts
+
+- **GIVEN** a user has configured accessible namespaces for a context
+- **WHEN** the application is restarted and the user connects to that cluster
+- **THEN** the configured namespaces are loaded from the persisted store
+- **AND** the namespace API call is skipped (avoids triggering a 403)
+
+### Requirement: RBAC-Safe Connection Test
+
+The system SHALL successfully connect to clusters where the user lacks `namespaces:list` permission by using the Kubernetes API server version endpoint (`GET /version`) for connection verification.
+
+#### Scenario: Connect to RBAC-restricted cluster
+
+- **GIVEN** a cluster where the user cannot list namespaces (403 Forbidden on `GET /api/v1/namespaces`)
+- **WHEN** the user initiates a connection
+- **THEN** the system tests connectivity via `GET /version` (accessible to all users via default `system:public-info-viewer` ClusterRole)
+- **AND** the connection succeeds if the API server responds
+- **AND** namespace discovery proceeds to fallback logic (configured namespaces or UI prompt)
+
+#### Scenario: Distinguish RBAC denial from connection failure
+
+- **GIVEN** a connection test is performed
+- **WHEN** `GET /version` succeeds but namespace listing returns 403
+- **THEN** the system logs it as an info-level RBAC restriction, not as a connection error
+- **AND** the connection is marked as successful
+- **AND** the user is informed that namespace auto-discovery is not available
+
+#### Scenario: Actual connection failure
+
+- **GIVEN** a cluster API server is unreachable (network error, DNS failure, TLS error)
+- **WHEN** the user initiates a connection
+- **THEN** `GET /version` fails with a network-level error
+- **AND** the connection is marked as failed with a descriptive error message
+- **AND** this is clearly distinguished from RBAC denial
+
+### Requirement: Namespace Source Indicator
+
+The system SHALL visually indicate whether the namespace list was auto-discovered from the API or manually configured.
+
+#### Scenario: Auto-discovered namespaces
+
+- **GIVEN** a cluster connection is active and namespace API listing succeeded
+- **WHEN** the namespace section is displayed in the sidebar
+- **THEN** the namespace selector shows the discovered namespaces without any special indicator
+
+#### Scenario: Manually configured namespaces
+
+- **GIVEN** a cluster is using manually configured namespaces (source is "configured")
+- **WHEN** the namespace section is displayed in the sidebar
+- **THEN** a "(configured)" badge or label is shown next to the namespace section header
+- **AND** the user can distinguish this from auto-discovered namespaces
+
+#### Scenario: Configured namespaces indicator on home page
+
+- **GIVEN** a cluster context has manually configured accessible namespaces
+- **WHEN** the cluster card is displayed on the home page (grid or list view)
+- **THEN** a subtle indicator (e.g., small badge or icon) shows that namespaces are configured for this cluster
+- **AND** the user can see at a glance which clusters have custom namespace settings
+
+#### Scenario: No namespaces available
+
+- **GIVEN** a user is connected but namespace discovery failed and no namespaces are configured
+- **WHEN** the namespace section would normally be hidden
+- **THEN** the section shows an informational message: "Namespace listing not permitted"
+- **AND** a "Configure accessible namespaces" button is displayed
+- **AND** clicking the button opens the namespace configuration dialog
+
+### Requirement: Per-Namespace Error Isolation
+
+The system SHALL handle errors for individual configured namespaces independently, without failing the entire resource view.
+
+#### Scenario: One configured namespace is inaccessible
+
+- **GIVEN** a user has configured namespaces ["team-a", "team-b", "team-c"]
+- **AND** the user's RBAC permissions were revoked for "team-c"
+- **WHEN** the system fetches resources across all configured namespaces
+- **THEN** resources from "team-a" and "team-b" are displayed normally
+- **AND** an inline error is shown for "team-c" (e.g., "Cannot access namespace 'team-c'")
+- **AND** the overall resource view is not broken
+
+#### Scenario: All configured namespaces are accessible
+
+- **GIVEN** a user has configured namespaces and has valid permissions for all of them
+- **WHEN** the system fetches resources
+- **THEN** resources from all configured namespaces are displayed
+- **AND** no error indicators are shown
+
+## IPC Commands
+
+```typescript
+invoke('list_clusters'): Promise<Cluster[]>
+invoke('add_cluster', { kubeconfigContent: string }): Promise<void>
+invoke('remove_cluster', { context: string }): Promise<void>
+invoke('switch_context', { context: string }): Promise<ConnectionStatus>
+invoke('connect_cluster', { context: string }): Promise<ConnectionStatus>
+invoke('disconnect_cluster'): Promise<void>
+invoke('get_connection_status'): Promise<ConnectionStatus>
+invoke('check_connection_health'): Promise<HealthCheckResult>
+invoke('get_namespaces'): Promise<NamespaceResult>
+```
+
+## Data Model
+
+```typescript
+interface Cluster {
+  id: string;
+  name: string;
+  context: string;
+  server: string;
+  current: boolean;
+  namespaces: string[];
+}
+```
+
+--- ARQUIVOS DO PR (55)
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/design.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/specs/error-handling/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/specs/resource-management/spec.md
+renamed   +34    -34    openspec/changes/archive/2026-02-28-improve-error-handling/tasks.md
+added     +86    -0     openspec/specs/error-handling/spec.md
+modified  +22    -1     openspec/specs/resource-management/spec.md
+modified  +17    -14    src-tauri/src/commands/clusters.rs
+modified  +151   -135   src-tauri/src/commands/graph.rs
+modified  +26    -31    src-tauri/src/commands/helm.rs
+modified  +31    -35    src-tauri/src/commands/logs.rs
+modified  +153   -293   src-tauri/src/commands/resources.rs
+modified  +9     -8     src-tauri/src/commands/watch.rs
+added     +271   -0     src-tauri/src/error.rs
+modified  +15    -6     src-tauri/src/k8s/client.rs
+modified  +1     -0     src-tauri/src/main.rs
+modified  +3     -1     src/components/features/dashboard/Dashboard.tsx
+modified  +1     -1     src/components/features/dashboard/views/PodLogsView.tsx
+modified  +6     -2     src/components/features/dashboard/views/_createResourceView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/EventsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/LeasesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/NodesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/gitops/FluxKustomizationsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/gitops/HelmReleasesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/networking/ServicesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/workloads/DeploymentsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/workloads/PodsView.tsx
+modified  +5     -5     src/components/features/home/components/ConnectionErrorAlert.tsx
+modified  +2     -2     src/components/features/logs/LogViewer.tsx
+modified  +2     -2     src/components/features/resources/CreateResourcePanel.tsx
+modified  +4     -6     src/components/features/resources/ResourceDetail.tsx
+added     +128   -0     src/components/features/resources/ResourceError.tsx
+modified  +7     -9     src/components/features/resources/ResourceList.tsx
+modified  +3     -14    src/components/features/visualization/ResourceDiagram.tsx
+modified  +4     -3     src/components/layout/sidebar/sections/NamespaceSection.tsx
+modified  +1     -1     src/components/layout/tabbar/hooks/useTabCloseConfirmation.ts
+modified  +1     -1     src/i18n/messages/de.json
+modified  +1     -1     src/i18n/messages/en.json
+modified  +5     -3     src/lib/hooks/k8s/types.ts
+modified  +9     -2     src/lib/hooks/k8s/useClusterScoped.ts
+modified  +54    -18    src/lib/hooks/k8s/useK8sResource.ts
+modified  +11    -4     src/lib/hooks/k8s/useOptionalNamespace.ts
+modified  +2     -2     src/lib/hooks/useLogs.ts
+modified  +11    -10    src/lib/stores/__tests__/cluster-store.test.ts
+modified  +2     -1     src/lib/stores/__tests__/diagram-store.test.ts
+modified  +11    -10    src/lib/stores/__tests__/resource-store.test.ts
+modified  +15    -14    src/lib/stores/cluster-store.ts
+modified  +15    -3     src/lib/stores/diagram-store.ts
+modified  +8     -9     src/lib/stores/log-store.ts
+modified  +12    -11    src/lib/stores/resource-store.ts
+modified  +7     -1     src/lib/tauri/commands/core.ts
+added     +79    -0     src/lib/types/errors.ts
+modified  +1     -0     src/lib/types/index.ts
+modified  +4     -1     src/lib/types/kubernetes.ts   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src/lib/types/kubernetes.ts
+@@ -1,3 +1,5 @@
++import type { KubeliError } from "./errors";
++
+ export interface Cluster {
+   id: string;
+   name: string;
+@@ -137,7 +139,7 @@ export type LogEventType = "Line" | "Error" | "Started" | "Stopped";
+ 
+ export type LogEvent =
+   | { type: "Line"; data: LogEntry }
+-  | { type: "Error"; data: string }
++  | { type: "Error"; data: KubeliError }
+   | { type: "Started"; data: { stream_id: string } }
+   | { type: "Stopped"; data: { stream_id: string } };
+ 
+@@ -461,6 +463,7 @@ export interface GraphEdge {
+ export interface GraphData {
+   nodes: GraphNode[];
+   edges: GraphEdge[];
++  errors: string[];
+ }
+ 
+ // Namespace info
+
+===== P089 | repo lehuygiang28/vkara | PR #2: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates | capacidade: youtube-playlist-details
+--- SPEC VIVA
+## Requirements
+
+### Requirement: Playlist endpoint returns metadata and videos
+
+The API `POST /playlist` endpoint MUST return both playlist metadata and a video list. Metadata MUST include at minimum `id`, `title`, and `videoCount`. Metadata MAY include `thumbnails` and channel name. The video list MUST use the existing `YouTubeVideo` shape used elsewhere in the app. When `VKARA_EMBED_PREFILTER_AT_LIST` is enabled, the `videos` array in the response MUST only include videos that pass the shared embed playability resolver (non-embeddable entries MUST be omitted). When the flag is disabled, the video list MUST NOT be filtered by embed playability. Cached playlist detail blobs MUST store the unfiltered YouTube video list; embed filtering MUST be applied on serve after reading the cache, not when writing the cache entry.
+
+#### Scenario: Client requests playlist by list id
+
+- **WHEN** the client sends a valid YouTube playlist id or resolvable playlist URL
+- **THEN** the response includes `playlist` metadata from YouTube
+- **AND** the response includes `videos` array for that playlist
+
+#### Scenario: Invalid playlist id
+
+- **WHEN** the playlist id is missing or not found on YouTube
+- **THEN** the API returns an appropriate error response
+- **AND** the client can show a user-visible error state
+
+#### Scenario: Prefilter enabled omits non-embeddable preview videos
+
+- **WHEN** `VKARA_EMBED_PREFILTER_AT_LIST` is enabled
+- **AND** the client requests playlist details for preview
+- **THEN** each video in `videos` MUST be embeddable per the shared resolver
+- **AND** non-embeddable videos MUST NOT appear in the response
+
+#### Scenario: Prefilter disabled keeps full preview list
+
+- **WHEN** `VKARA_EMBED_PREFILTER_AT_LIST` is not enabled
+- **AND** the client requests playlist details
+- **THEN** the `videos` array MUST include all videos returned from the YouTube fetch path (subject only to existing video limit parameters)
+
+### Requirement: Optional video limit for preview
+
+The endpoint MUST support limiting the number of videos returned for preview use cases via request parameters (e.g. `videoLimit` or existing `fetchAll` semantics documented in design).
+
+#### Scenario: Preview requests limited videos
+
+- **WHEN** the client requests a playlist with a video limit for preview
+- **THEN** the response videos array length MUST NOT exceed that limit
+- **AND** playlist metadata still reflects full playlist where YouTube provides total count
+
+### Requirement: Full import unchanged on server
+
+Full playlist import for the room queue MUST continue to use the WebSocket `importPlaylist` handler with existing append, embed filtering, deduplication, and auto-play-first-when-idle behavior. This requirement MUST NOT change server import semantics.
+
+#### Scenario: Import entire playlist from preview
+
+- **WHEN** the user confirms import entire playlist
+- **THEN** the client sends `importPlaylist` over the existing WebSocket
+- **AND** server queue mutation behavior matches pre-change import behavior
+
+--- ARQUIVOS DO PR (247)
+added     +40    -0     .env.example
+modified  +4     -3     .github/pull_request_template.md
+modified  +3     -8     .github/workflows/build-push-docker.yml
+modified  +3     -21    .github/workflows/ci.yml
+modified  +10    -4     README.md
+modified  +3     -2     apps/api/.env.example
+modified  +21    -7     apps/api/Dockerfile
+modified  +13    -5     apps/api/package.json
+removed   +0     -21    apps/api/src/config/embed-playability-env.ts
+removed   +0     -34    apps/api/src/config/env.ts
+added     +16    -0     apps/api/src/env.ts
+modified  +2     -1     apps/api/src/modules/room/apply-tv-restore.ts
+modified  +1     -1     apps/api/src/modules/room/merge-queue-after-advance.ts
+modified  +1     -1     apps/api/src/modules/room/room-broadcast.ts
+modified  +4     -7     apps/api/src/modules/room/room-service.ts
+modified  +29    -17    apps/api/src/modules/youtube/channel-cache.ts
+modified  +20    -32    apps/api/src/modules/youtube/embed-playability-cache.ts
+modified  +6     -8     apps/api/src/modules/youtube/embeddable.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details-cached.ts
+modified  +2     -2     apps/api/src/modules/youtube/fetch-playlist-details.ts
+modified  +3     -3     apps/api/src/modules/youtube/fetch-playlist-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/fetch-search-suggestions.ts
+modified  +1     -1     apps/api/src/modules/youtube/live-viewers.ts
+modified  +164   -18    apps/api/src/modules/youtube/playlist-details-cache.ts
+modified  +1     -1     apps/api/src/modules/youtube/prepare-youtube-videos.ts
+modified  +1     -1     apps/api/src/modules/youtube/renderer-metadata.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-compact-channels.ts
+modified  +6     -3     apps/api/src/modules/youtube/resolve-embed-playability.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-embeddable-queue.ts
+modified  +1     -1     apps/api/src/modules/youtube/resolve-item-views.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-mapper.ts
+modified  +2     -2     apps/api/src/modules/youtube/video-validation.ts
+modified  +3     -3     apps/api/src/plugins/room-ws.plugin.ts
+modified  +10    -10    apps/api/src/queues/cleanup.ts
+modified  +10    -9     apps/api/src/queues/hourly-report.ts
+modified  +10    -2     apps/api/src/redis.ts
+removed   +0     -118   apps/api/src/schemas/client-message.ts
+modified  +13    -4     apps/api/src/server.ts
+modified  +10    -4     apps/api/src/utils/common.ts
+modified  +8     -7     apps/api/src/utils/logger.ts
+modified  +2     -2     apps/api/src/utils/room-store.ts
+modified  +33    -34    apps/api/src/youtubei.ts   <== código ligado à spec
+removed   +0     -49    apps/api/tests/config/embed-playability-env.test.ts
+removed   +0     -54    apps/api/tests/config/env.test.ts
+modified  +1     -1     apps/api/tests/fixtures/sing-king-search.ts
+modified  +1     -1     apps/api/tests/modules/room/advance-queue.test.ts
+modified  +2     -1     apps/api/tests/modules/room/apply-tv-restore.test.ts
+added     +37    -0     apps/api/tests/modules/youtube/channel-cache.test.ts
+modified  +17    -23    apps/api/tests/modules/youtube/embed-playability-cache.test.ts
+added     +67    -0     apps/api/tests/modules/youtube/playlist-details-cache.test.ts
+modified  +7     -20    apps/api/tests/modules/youtube/sing-king-embed-prefilter.test.ts
+modified  +24    -25    apps/api/tests/schemas/client-message.test.ts
+modified  +2     -1     apps/api/tests/utils/common.test.ts
+modified  +2     -1     apps/api/tests/utils/room-store.test.ts
+modified  +14    -2     apps/api/tsconfig.json
+modified  +10    -11    apps/web/.env.example
+modified  +27    -6     apps/web/Dockerfile
+modified  +26    -24    apps/web/eslint.config.mjs
+modified  +8     -1     apps/web/next.config.ts
+modified  +9     -3     apps/web/package.json
+modified  +12    -9     apps/web/src/app/[locale]/layout.tsx
+modified  +3     -1     apps/web/src/app/api/speech/status/route.ts
+modified  +4     -2     apps/web/src/app/api/speech/transcribe/route.ts
+modified  +4     -3     apps/web/src/app/robots.ts
+modified  +3     -1     apps/web/src/components/analytics/cloudflare-web-analytics.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/curated-catalog-section.tsx
+modified  +1     -1     apps/web/src/components/curated-playlists/import-playlist-panel.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/BrowseSuggestionsList.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/ControlsNowPlayingMeta.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/NowPlayingBar.tsx
+modified  +3     -2     apps/web/src/components/pages/youtube/PlayerColumn.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControls.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/PlayerControlsTabs.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/RemoteJoinLobby.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/TvPlayerQrZone.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoHistory.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoList.tsx
+modified  +2     -2     apps/web/src/components/pages/youtube/VideoListItem.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/VideoQueue.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/captions-menu.tsx
+modified  +1     -1     apps/web/src/components/pages/youtube/use-video-search-list-actions.tsx
+modified  +1     -1     apps/web/src/components/settings/room-settings-section.tsx
+modified  +1     -1     apps/web/src/components/video-channels.tsx
+added     +24    -0     apps/web/src/env.ts
+modified  +8     -4     apps/web/src/hooks/use-browse-feed.ts
+modified  +1     -1     apps/web/src/hooks/use-connection-status-ui.ts
+modified  +1     -1     apps/web/src/hooks/use-curated-starter-visibility.ts
+modified  +1     -1     apps/web/src/hooks/use-join-room.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-display-time.ts
+modified  +1     -1     apps/web/src/hooks/use-playback-position-sync.ts
+modified  +1     -1     apps/web/src/hooks/use-player-action.ts
+modified  +1     -1     apps/web/src/hooks/use-playlist-details-cache.ts
+modified  +1     -1     apps/web/src/hooks/use-strip-room-query.ts
+modified  +2     -2     apps/web/src/lib/curated-playlist-thumbnail.ts
+modified  +1     -1     apps/web/src/lib/format-uploaded-at.ts
+modified  +3     -2     apps/web/src/lib/persisted-storage.ts
+modified  +1     -1     apps/web/src/lib/room-payload.ts
+modified  +1     -1     apps/web/src/lib/room-queue.ts
+modified  +1     -1     apps/web/src/lib/room-share.ts
+modified  +3     -2     apps/web/src/lib/seo/metadata.ts
+modified  +4     -2     apps/web/src/lib/site-url.ts
+modified  +2     -7     apps/web/src/lib/tv-room-recovery.ts
+modified  +1     -1     apps/web/src/lib/youtube-captions.ts
+modified  +2     -2     apps/web/src/lib/youtube-video.ts
+modified  +2     -1     apps/web/src/middleware.ts
+modified  +8     -6     apps/web/src/providers/websocket-provider.tsx
+modified  +4     -2     apps/web/src/services/client/api-client.ts
+modified  +1     -1     apps/web/src/services/youtube-api.ts   <== código ligado à spec
+modified  +2     -2     apps/web/src/store/personalizationStore.ts
+modified  +2     -2     apps/web/src/store/searchStore.ts
+modified  +2     -6     apps/web/src/store/websocketStore.ts
+modified  +2     -2     apps/web/src/store/youtubeStore.ts
+modified  +2     -6     apps/web/src/types/websocket.type.ts
+modified  +1     -1     apps/web/tests/lib/curated-playlist-thumbnail.test.ts
+modified  +2     -1     apps/web/tests/lib/persisted-storage.test.ts
+modified  +1     -1     apps/web/tests/lib/playback-sync.test.ts
+modified  +1     -1     apps/web/tests/lib/room-queue.test.ts
+modified  +1     -1     apps/web/tests/lib/tv-room-recovery.test.ts
+modified  +1     -1     apps/web/tests/lib/youtube-captions.test.ts
+modified  +12    -1     apps/web/tsconfig.json
+modified  +189   -44    bun.lock
+modified  +1     -1     containers/README.md
+modified  +25    -11    containers/aio/Dockerfile
+modified  +21    -7     containers/api-redis/Dockerfile
+modified  +1     -0     containers/api-redis/supervisord.conf
+modified  +4     -0     docker-compose.yml
+modified  +23    -6     docs/monorepo-architecture.md
+modified  +4     -2     docs/monorepo-duplication-inventory.md
+modified  +5     -3     docs/vi/README.md
+added     +119   -0     eslint.config.mjs
+added     +2     -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/.openspec.yaml
+added     +186   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/design.md
+added     +60    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/proposal.md
+added     +41    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/elysia-zod-schemas/spec.md
+added     +58    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-package-boundaries/spec.md
+added     +48    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/monorepo-quality/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-env/spec.md
+added     +43    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-feature-flags/spec.md
+added     +46    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis-cache/spec.md
+added     +35    -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/specs/platform-redis/spec.md
+added     +108   -0     openspec/changes/archive/2026-06-04-platform-env-t3-monorepo/tasks.md
+added     +45    -0     openspec/specs/elysia-zod-schemas/spec.md
+added     +62    -0     openspec/specs/monorepo-package-boundaries/spec.md
+added     +52    -0     openspec/specs/monorepo-quality/spec.md
+added     +80    -0     openspec/specs/platform-env/spec.md
+added     +47    -0     openspec/specs/platform-feature-flags/spec.md
+added     +50    -0     openspec/specs/platform-redis-cache/spec.md
+added     +39    -0     openspec/specs/platform-redis/spec.md
+modified  +13    -2     package.json
+added     +19    -0     packages/cache-redis/package.json
+added     +62    -0     packages/cache-redis/src/bool-cache.ts
+added     +2     -0     packages/cache-redis/src/index.ts
+added     +32    -0     packages/cache-redis/src/json-cache.ts
+added     +71    -0     packages/cache-redis/tests/bool-cache.test.ts
+added     +58    -0     packages/cache-redis/tests/json-cache.test.ts
+added     +4     -0     packages/cache-redis/tsconfig.json
+modified  +3     -1     packages/curated-playlists/package.json
+modified  +1     -1     packages/curated-playlists/src/index.ts
+added     +34    -0     packages/env/.gitignore
+added     +26    -0     packages/env/package.json
+added     +44    -0     packages/env/src/base.ts
+added     +52    -0     packages/env/src/embed.ts
+added     +45    -0     packages/env/src/flags.ts
+added     +8     -0     packages/env/src/index.ts
+added     +23    -0     packages/env/src/logger.ts
+added     +21    -0     packages/env/src/redis.ts
+added     +23    -0     packages/env/src/server.ts
+added     +35    -0     packages/env/src/web-public.ts
+added     +32    -0     packages/env/src/web-server.ts
+added     +36    -0     packages/env/tests/base.test.ts
+added     +30    -0     packages/env/tests/embed.test.ts
+added     +4     -0     packages/env/tsconfig.json
+added     +17    -0     packages/personalization/package.json
+renamed   +13    -3     packages/personalization/src/browse-feed.ts
+renamed   +0     -0     packages/personalization/src/index.ts
+renamed   +0     -0     packages/personalization/src/profile.ts
+renamed   +0     -0     packages/personalization/src/rank-videos.ts
+renamed   +0     -0     packages/personalization/src/suggestions.ts
+renamed   +0     -0     packages/personalization/src/types.ts
+renamed   +3     -3     packages/personalization/tests/browse-feed.test.ts
+renamed   +1     -1     packages/personalization/tests/profile-engagement.test.ts
+renamed   +2     -2     packages/personalization/tests/profile.test.ts
+renamed   +3     -3     packages/personalization/tests/rank-videos.test.ts
+renamed   +1     -1     packages/personalization/tests/suggestions.test.ts
+added     +4     -0     packages/personalization/tsconfig.json
+renamed   +5     -1     packages/redis/package.json
+renamed   +0     -0     packages/redis/src/index.ts
+renamed   +0     -0     packages/redis/src/redis.ts
+added     +20    -0     packages/room/package.json
+renamed   +0     -0     packages/room/src/errors.ts
+added     +6     -0     packages/room/src/index.ts
+renamed   +1     -1     packages/room/src/persisted-room.ts
+renamed   +0     -0     packages/room/src/playback-sync.ts
+renamed   +0     -0     packages/room/src/room.ts
+renamed   +9     -0     packages/room/src/url.ts
+added     +62    -0     packages/room/src/websocket.ts
+renamed   +0     -0     packages/room/tests/errors.test.ts
+renamed   +0     -0     packages/room/tests/persisted-room-invalid.test.ts
+renamed   +1     -1     packages/room/tests/persisted-room.test.ts
+renamed   +0     -0     packages/room/tests/playback-sync.test.ts
+renamed   +1     -1     packages/room/tests/room.test.ts
+added     +29    -0     packages/room/tests/url.test.ts
+added     +29    -0     packages/room/tests/validators-invalid.test.ts
+added     +4     -0     packages/room/tsconfig.json
+removed   +0     -18    packages/shared-types/package.json
+removed   +0     -7     packages/shared-types/src/index.ts
+removed   +0     -115   packages/shared-types/src/websocket.ts
+removed   +0     -18    packages/shared-utils/package.json
+removed   +0     -14    packages/shared-utils/tests/url.test.ts
+removed   +0     -14    packages/shared-utils/tsconfig.json
+added     +19    -0     packages/validators/package.json
+added     +3     -0     packages/validators/src/index.ts
+added     +86    -0     packages/validators/src/ws/client-message.ts
+added     +25    -0     packages/validators/src/youtube/http.ts
+added     +30    -0     packages/validators/src/youtube/video.ts
+added     +48    -0     packages/validators/tests/http.schema.test.ts
+added     +4     -0     packages/validators/tsconfig.json
+added     +17    -0     packages/youtube/package.json
+renamed   +0     -0     packages/youtube/src/captions.ts
+renamed   +0     -0     packages/youtube/src/format.ts
+renamed   +3     -3     packages/youtube/src/index.ts
+renamed   +0     -0     packages/youtube/src/parse-relative-upload.ts
+renamed   +0     -0     packages/youtube/src/parse-view-count.ts
+renamed   +0     -0     packages/youtube/src/youtube-id.ts
+renamed   +0     -0     packages/youtube/src/youtube-live.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-details.ts
+renamed   +0     -0     packages/youtube/src/youtube-playlist-url.ts
+renamed   +1     -1     packages/youtube/src/youtube-thumbnail.ts
+renamed   +1     -3     packages/youtube/src/youtube.ts
+renamed   +0     -0     packages/youtube/tests/captions.test.ts
+renamed   +1     -1     packages/youtube/tests/format.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-relative-upload.test.ts
+renamed   +1     -1     packages/youtube/tests/parse-view-count.test.ts
+renamed   +2     -32    packages/youtube/tests/validators-invalid.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-id.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-live.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-playlist-url.test.ts
+renamed   +1     -1     packages/youtube/tests/youtube-thumbnail.test.ts
+renamed   +0     -0     packages/youtube/tests/youtube.test.ts
+added     +4     -0     packages/youtube/tsconfig.json
+added     +15    -0     tooling/typescript/base.json
+added     +7     -0     tooling/typescript/bun.json
+added     +7     -0     tooling/typescript/library.json
+added     +10    -0     tooling/typescript/nextjs.json
+added     +11    -0     tooling/typescript/package.json
+modified  +14    -1     turbo.json
+modified  +47    -5     vitest.config.mts
+--- DIFF DO CÓDIGO LIGADO
+### apps/api/src/youtubei.ts
+@@ -1,13 +1,21 @@
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+ import Redis from 'ioredis';
+ import { Queue, Worker } from 'bullmq';
+ import { type VideoCompact, type SearchResult } from 'youtubei';
+ import { fetchSearchSuggestions } from './modules/youtube/fetch-search-suggestions';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++
++import { env } from './env';
+ 
+ import { recordRelatedRequest, recordSearchRequest } from '@/modules/stats/service-stats';
+ import { createContextLogger } from '@/utils/logger';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+ import {
+     cleanupOldInstances,
+     getRedisKey,
+@@ -36,7 +44,11 @@ const youtubeiLogger = createContextLogger('Queue/Youtubei');
+ 
+ const youtubei = getYoutubeiClient();
+ 
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+ const redis = new Redis(redisConnectionOptions);
+ 
+ const cleanupQueue = new Queue('search-instance-cleanup', { connection: redisConnectionOptions });
+@@ -103,10 +115,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 searchInstances: stateSearchInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -166,23 +175,25 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to search YouTube', { error, query, continuation });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+         },
+     )
+     .post(
+         '/suggestions',
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+         {
+-            body: t.Object({
+-                query: t.String(),
+-            }),
++            body: youtubeSearchSuggestionsBodySchema,
+         },
+     )
+     .post(
+@@ -196,11 +207,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 fetchAll,
+             }),
+         {
+-            body: t.Object({
+-                playlistUrlOrId: t.String(),
+-                videoLimit: t.Optional(t.Number()),
+-                fetchAll: t.Optional(t.Boolean()),
+-            }),
++            body: youtubePlaylistDetailsBodySchema,
+         },
+     )
+     .post(
+@@ -213,10 +220,7 @@ export const searchYoutubeiElysia = new Elysia({})
+                 relatedInstances: stateRelatedInstances,
+                 redisKeyPrefixes,
+             },
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+             try {
+                 let results: SearchResult<'video'> | undefined;
+                 let newItems: VideoCompact[] = [];
+@@ -295,14 +299,11 @@ export const searchYoutubeiElysia = new Elysia({})
+                 };
+             } catch (error) {
+                 logger.error('Failed to get related videos', { error });
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+             }
+         },
+         {
+-            body: t.Object({
+-                videoId: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeRelatedBodySchema,
+         },
+     )
+     .post(
+@@ -313,8 +314,6 @@ export const searchYoutubeiElysia = new Elysia({})
+         }): Promise<{ videoId: string; canEmbed: boolean }[]> =>
+             checkEmbeddableMany(redisClient, videoIds),
+         {
+-            body: t.Object({
+-                videoIds: t.Array(t.String()),
+-            }),
++            body: youtubeCheckEmbeddableBodySchema,
+         },
+     );
+
+### apps/web/src/services/youtube-api.ts
+@@ -1,4 +1,4 @@
+-import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/shared-types';
++import type { PlaylistDetailsResponse, YouTubeVideo } from '@vkara/youtube';
+ import { apiPost } from './client/api-client';
+ 
+ export async function fetchPlaylistDetails(
+
+===== P090 | repo Hedgehogues/awesome-claude | PR #3: v0.6.2 — Reliable Archiving | capacidade: sdd-propose-merge-dialog
+--- SPEC VIVA
+# sdd-propose-merge-dialog Specification
+
+## Purpose
+TBD - created by archiving change merge-verify-into-apply-archive. Update Purpose after archive.
+## Requirements
+### Requirement: Detection пересечений creates с index.yaml
+
+`/sdd:propose` SHALL после генерации `.sdd.yaml` сравнивать поле `creates:` с `capability:` записями в `openspec/specs/index.yaml`. Для каждого пересечения MUST зафиксировать конфликт и предложить пользователю выбор.
+
+#### Scenario: Все capabilities новые
+
+- **WHEN** `creates: [foo-cap, bar-cap]` в `.sdd.yaml`, и в `index.yaml` нет ни `foo-cap`, ни `bar-cap`
+- **THEN** скилл продолжает без диалога
+
+#### Scenario: Одна capability существует
+
+- **WHEN** `creates: [existing-cap, new-cap]` в `.sdd.yaml`, и `index.yaml` содержит `capability: existing-cap`
+- **THEN** скилл вызывает merge-dialog для `existing-cap`; `new-cap` остаётся в `creates:` без диалога
+
+### Requirement: Merge-dialog interactive
+
+При обнаружении пересечения `/sdd:propose` SHALL вызвать AskUserQuestion с двумя опциями для каждого конфликтующего имени:
+
+- **«Оставить в creates»** — capability будет создаваться как новая (предупредить, что это конфликт с существующей spec'ой и приведёт к проблемам при архивации).
+- **«Переключить в merges-into»** — расширение существующей capability; имя уезжает из `creates:` в `merges-into:` в `.sdd.yaml`.
+
+Скилл MUST NOT принимать решение молча.
+
+#### Scenario: Пользователь выбирает merges-into
+
+- **WHEN** detected конфликт по `existing-cap`, пользователь выбирает «Переключить в merges-into»
+- **THEN** скилл обновляет `.sdd.yaml`: `creates:` → без `existing-cap`, `merges-into:` → с добавлением `existing-cap`
+
+#### Scenario: Пользователь оставляет в creates
+
+- **WHEN** detected конфликт по `existing-cap`, пользователь выбирает «Оставить в creates»
+- **THEN** скилл выводит warning «namespace clash может вызвать проблемы при `/sdd:archive`», но не меняет `.sdd.yaml`; продолжает workflow
+
+### Requirement: Multiple intersections в одном change
+
+Если `creates:` содержит несколько capability'ей, существующих в `index.yaml`, `/sdd:propose` SHALL вызвать AskUserQuestion **для каждой** последовательно. Не объединять в один вопрос.
+
+#### Scenario: Два пересечения
+
+- **WHEN** `creates: [cap-a, cap-b, cap-c]`, и `index.yaml` содержит и `cap-a`, и `cap-b`
+- **THEN** скилл задаёт два отдельных вопроса (для `cap-a` и для `cap-b`), результаты применяются независимо
+
+### Requirement: Update .sdd.yaml через скрипт
+
+При изменении `creates:` или `merges-into:` в результате merge-dialog `/sdd:propose` SHALL использовать скрипт для обновления YAML, а не Edit-tool. Скрипт может быть тем же `state.py` или отдельным `sdd_yaml.py` — главное, что нативная правка YAML запрещена по claude-way.
+
+#### Scenario: Перенос cap из creates в merges-into
+
+- **WHEN** пользователь выбрал «Переключить в merges-into» для `existing-cap`
+- **THEN** скилл вызывает Python-скрипт с командой типа `move-capability <path> existing-cap creates merges-into`, не правит YAML напрямую
+
+### Requirement: Index.yaml read-only в propose
+
+`/sdd:propose` MUST NOT изменять `openspec/specs/index.yaml` ни при каких сценариях merge-dialog. Изменения index.yaml — ответственность `/sdd:apply` (для новых capabilities) и `/sdd:archive` (для merges-into).
+
+#### Scenario: Read-only доступ
+
+- **WHEN** скилл проверяет пересечения с `index.yaml`
+- **THEN** только читает файл; запись запрещена; нет shell-команд `>` или `>>` на этот файл из propose
+
+
+--- ARQUIVOS DO PR (241)
+modified  +1     -0     .gitignore
+modified  +40    -21    README.md
+removed   +0     -4     openspec/changes/archive-merges-into-impl/.sdd.yaml
+renamed   +0     -0     openspec/changes/archive-pre-contradiction/.openspec.yaml
+added     +4     -0     openspec/changes/archive-pre-contradiction/.sdd.yaml
+added     +41    -0     openspec/changes/archive-pre-contradiction/design.md
+added     +27    -0     openspec/changes/archive-pre-contradiction/proposal.md
+renamed   +0     -0     openspec/changes/archive-pre-contradiction/test-plan.md
+removed   +0     -95    openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.log/contradiction-2026-05-03T03-57.md
+removed   +0     -91    openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.log/contradiction-2026-05-03T04-03.md
+removed   +0     -36    openspec/changes/archive/2026-05-02-skill-run-logs/.log/apply-20260503T041724.md
+removed   +0     -29    openspec/changes/archive/2026-05-02-skill-run-logs/.log/archive-20260503T042124.md
+removed   +0     -70    openspec/changes/archive/2026-05-02-skill-run-logs/.log/contradiction-20260503T142301.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-archive-merges-into-impl/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-archive-merges-into-impl/.sdd.yaml
+renamed   +16    -5     openspec/changes/archive/2026-05-03-archive-merges-into-impl/design.md
+renamed   +1     -1     openspec/changes/archive/2026-05-03-archive-merges-into-impl/proposal.md
+renamed   +20    -1     openspec/changes/archive/2026-05-03-archive-merges-into-impl/specs/archive-merges-into-support/spec.md
+renamed   +12    -12    openspec/changes/archive/2026-05-03-archive-merges-into-impl/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-archive-merges-into-impl/test-plan.md
+removed   +0     -59    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/apply-20260503T164020.md
+removed   +0     -29    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/archive-20260503T220415.md
+removed   +0     -74    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T154442.md
+removed   +0     -69    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T160130.md
+removed   +0     -68    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T160756.md
+removed   +0     -58    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T161427.md
+removed   +0     -58    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T162752.md
+removed   +0     -29    openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/propose-20260503T124146.md
+removed   +0     -36    openspec/changes/archive/2026-05-03-install-modes/.log/archive-20260503T174729.md
+removed   +0     -26    openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/apply-20260503T220918.md
+removed   +0     -29    openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/archive-20260503T221748.md
+removed   +0     -49    openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/contradiction-20260503T220056.md
+removed   +0     -47    openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/contradiction-20260503T220450.md
+removed   +0     -26    openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/propose-20260503T181345.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/.sdd.yaml
+added     +26    -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/design.md
+added     +20    -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/proposal.md
+added     +10    -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/tasks.md
+added     +12    -0     openspec/changes/archive/2026-05-03-remove-mirror-ref-archive-support/test-plan.md
+added     +2     -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/.openspec.yaml
+added     +10    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/.sdd.yaml
+added     +34    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/design.md
+added     +39    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/proposal.md
+added     +72    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/specs/no-mirror-convention/spec.md
+added     +92    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/tasks.md
+added     +13    -0     openspec/changes/archive/2026-05-03-remove-skills-mirror/test-plan.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-rules-index/.log/archive-20260503T165739.md
+removed   +0     -52    openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T162858.md
+removed   +0     -41    openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T163103.md
+removed   +0     -40    openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T163504.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-rules-index/.log/propose-20260503T162610.md
+removed   +0     -19    openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T232930-output.md
+removed   +0     -63    openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T232930.md
+removed   +0     -17    openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T233515-output.md
+removed   +0     -46    openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T233515.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/propose-20260503T231825.md
+removed   +0     -19    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/apply-20260503T165619.md
+removed   +0     -31    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/archive-20260503T221751.md
+removed   +0     -67    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T161104.md
+removed   +0     -52    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T161855.md
+removed   +0     -46    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T162701.md
+removed   +0     -43    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T163528.md
+removed   +0     -22    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T164254.md
+removed   +0     -24    openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/propose-20260503T160314.md
+removed   +0     -39    openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/.log/apply-2026-05-03T03-43.md
+removed   +0     -20    openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232034-output.md
+removed   +0     -65    openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232034.md
+removed   +0     -14    openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232742-output.md
+removed   +0     -63    openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232742.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/propose-20260503T124740.md
+removed   +0     -24    openspec/changes/archive/2026-05-03-sdd-state-manager/.log/archive-20260503T164221.md
+removed   +0     -96    openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T125649.md
+removed   +0     -74    openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T154059.md
+removed   +0     -61    openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T155421.md
+removed   +0     -28    openspec/changes/archive/2026-05-03-sdd-state-manager/.log/propose-20260503T124654.md
+removed   +0     -37    openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/apply-20260503T223359.md
+removed   +0     -27    openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/archive-20260503T224757.md
+removed   +0     -69    openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/contradiction-20260503T123032.md
+removed   +0     -49    openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/contradiction-20260503T222847.md
+removed   +0     -27    openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/propose-20260503T042337.md
+removed   +0     -36    openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.log/apply-2026-05-03T05-30.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.log/archive-20260503T174840.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/.sdd.yaml
+renamed   +3     -0     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/design.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/proposal.md
+renamed   +1     -1     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/specs/sdd-ownership/spec.md
+renamed   +4     -4     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-yaml-indented-dump/test-plan.md
+removed   +0     -18    openspec/changes/archive/2026-05-03-skill-output-replay/.log/apply-20260503T225137-output.md
+removed   +0     -34    openspec/changes/archive/2026-05-03-skill-output-replay/.log/apply-20260503T225137.md
+removed   +0     -19    openspec/changes/archive/2026-05-03-skill-output-replay/.log/archive-20260503T225333-output.md
+removed   +0     -22    openspec/changes/archive/2026-05-03-skill-output-replay/.log/archive-20260503T225333.md
+removed   +0     -75    openspec/changes/archive/2026-05-03-skill-output-replay/.log/contradiction-20260503T223808.md
+removed   +0     -47    openspec/changes/archive/2026-05-03-skill-output-replay/.log/contradiction-20260503T224548.md
+removed   +0     -36    openspec/changes/archive/2026-05-03-skill-output-replay/.log/propose-20260503T123700.md
+removed   +0     -46    openspec/changes/archive/2026-05-03-structured-apply-output/.log/apply-20260503T175602.md
+removed   +0     -25    openspec/changes/archive/2026-05-03-structured-apply-output/.log/archive-20260503T180308.md
+added     +2     -0     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/.sdd.yaml
+renamed   +2     -3     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/design.md
+renamed   +2     -2     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/proposal.md
+added     +28    -0     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/specs/mcp-absent-ask-user/spec.md
+added     +6     -0     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-04-mcp-absent-ask-user/test-plan.md
+removed   +0     -25    openspec/changes/change-type-in-sdd-yaml/.log/propose-20260503T160145.md
+modified  +0     -1     openspec/changes/change-type-in-sdd-yaml/proposal.md
+added     +2     -0     openspec/changes/contradiction-converge-physical-probe/.openspec.yaml
+added     +4     -0     openspec/changes/contradiction-converge-physical-probe/.sdd.yaml
+added     +64    -0     openspec/changes/contradiction-converge-physical-probe/design.md
+added     +37    -0     openspec/changes/contradiction-converge-physical-probe/proposal.md
+added     +60    -0     openspec/changes/contradiction-converge-physical-probe/specs/contradiction-converge-no-simulate/spec.md
+added     +16    -0     openspec/changes/contradiction-converge-physical-probe/tasks.md
+added     +28    -0     openspec/changes/contradiction-converge-physical-probe/test-plan.md
+added     +2     -0     openspec/changes/contradiction-cross-cut-precompute/.openspec.yaml
+added     +5     -0     openspec/changes/contradiction-cross-cut-precompute/.sdd.yaml
+added     +61    -0     openspec/changes/contradiction-cross-cut-precompute/design.md
+added     +41    -0     openspec/changes/contradiction-cross-cut-precompute/proposal.md
+added     +93    -0     openspec/changes/contradiction-cross-cut-precompute/specs/contradiction-cross-cut-precompute/spec.md
+added     +29    -0     openspec/changes/contradiction-cross-cut-precompute/tasks.md
+added     +10    -0     openspec/changes/contradiction-cross-cut-precompute/test-plan.md
+added     +2     -0     openspec/changes/contradiction-expand-drop-volume-threshold/.openspec.yaml
+added     +4     -0     openspec/changes/contradiction-expand-drop-volume-threshold/.sdd.yaml
+added     +46    -0     openspec/changes/contradiction-expand-drop-volume-threshold/design.md
+added     +27    -0     openspec/changes/contradiction-expand-drop-volume-threshold/proposal.md
+added     +7     -0     openspec/changes/contradiction-expand-drop-volume-threshold/tasks.md
+added     +10    -0     openspec/changes/contradiction-expand-drop-volume-threshold/test-plan.md
+added     +2     -0     openspec/changes/contradiction-stub-test-plan/.openspec.yaml
+added     +4     -0     openspec/changes/contradiction-stub-test-plan/.sdd.yaml
+added     +40    -0     openspec/changes/contradiction-stub-test-plan/design.md
+added     +26    -0     openspec/changes/contradiction-stub-test-plan/proposal.md
+added     +10    -0     openspec/changes/contradiction-stub-test-plan/test-plan.md
+added     +2     -0     openspec/changes/drop-drift-score-composite/.openspec.yaml
+added     +4     -0     openspec/changes/drop-drift-score-composite/.sdd.yaml
+added     +40    -0     openspec/changes/drop-drift-score-composite/design.md
+added     +31    -0     openspec/changes/drop-drift-score-composite/proposal.md
+added     +13    -0     openspec/changes/drop-drift-score-composite/tasks.md
+added     +10    -0     openspec/changes/drop-drift-score-composite/test-plan.md
+added     +2     -0     openspec/changes/explore-log-output/.openspec.yaml
+added     +4     -0     openspec/changes/explore-log-output/.sdd.yaml
+added     +33    -0     openspec/changes/explore-log-output/design.md
+added     +20    -0     openspec/changes/explore-log-output/proposal.md
+added     +20    -0     openspec/changes/explore-log-output/specs/explore-log-output/spec.md
+added     +3     -0     openspec/changes/explore-log-output/tasks.md
+added     +10    -0     openspec/changes/explore-log-output/test-plan.md
+modified  +0     -1     openspec/changes/install-claude-native/design.md
+modified  +1     -1     openspec/changes/install-claude-native/proposal.md
+modified  +0     -2     openspec/changes/install-namespace-split/proposal.md
+modified  +0     -3     openspec/changes/install-namespace-split/tasks.md
+removed   +0     -24    openspec/changes/mcp-absent-ask-user/.log/propose-20260503T162608.md
+modified  +1     -1     openspec/changes/placement-semantic-check/proposal.md
+removed   +0     -68    openspec/changes/post-release-version-bump/.log/contradiction-20260503T181522.md
+removed   +0     -55    openspec/changes/post-release-version-bump/.log/contradiction-20260503T220317.md
+removed   +0     -24    openspec/changes/post-release-version-bump/.log/propose-20260503T154310.md
+removed   +0     -24    openspec/changes/proposal-human-context/.log/propose-20260503T163445.md
+modified  +0     -1     openspec/changes/proposal-human-context/proposal.md
+added     +2     -0     openspec/changes/residual-risk-replace/.openspec.yaml
+added     +7     -0     openspec/changes/residual-risk-replace/.sdd.yaml
+added     +52    -0     openspec/changes/residual-risk-replace/design.md
+added     +28    -0     openspec/changes/residual-risk-replace/proposal.md
+added     +25    -0     openspec/changes/residual-risk-replace/tasks.md
+added     +10    -0     openspec/changes/residual-risk-replace/test-plan.md
+removed   +0     -23    openspec/changes/scripts-access-via-mcp/.log/apply-20260503T160949.md
+removed   +0     -85    openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T152829.md
+removed   +0     -81    openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T154055.md
+removed   +0     -77    openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T155103.md
+removed   +0     -73    openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T155600.md
+removed   +0     -61    openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T160114.md
+removed   +0     -25    openspec/changes/scripts-access-via-mcp/.log/propose-20260503T130053.md
+removed   +0     -29    openspec/changes/sdd-command-self-invoke-loop/.log/apply-20260503T220916.md
+removed   +0     -47    openspec/changes/sdd-command-self-invoke-loop/.log/contradiction-20260503T181324.md
+removed   +0     -46    openspec/changes/sdd-command-self-invoke-loop/.log/contradiction-20260503T220019.md
+removed   +0     -21    openspec/changes/sdd-command-self-invoke-loop/.log/propose-20260503T180129.md
+added     +2     -0     openspec/changes/sdd-metrics/.openspec.yaml
+renamed   +1     -1     openspec/changes/sdd-metrics/.sdd.yaml
+added     +35    -0     openspec/changes/sdd-metrics/design.md
+added     +23    -0     openspec/changes/sdd-metrics/proposal.md
+added     +10    -0     openspec/changes/sdd-metrics/test-plan.md
+added     +2     -0     openspec/changes/sdd-revise/.openspec.yaml
+added     +4     -0     openspec/changes/sdd-revise/.sdd.yaml
+added     +40    -0     openspec/changes/sdd-revise/design.md
+added     +30    -0     openspec/changes/sdd-revise/proposal.md
+added     +10    -0     openspec/changes/sdd-revise/test-plan.md
+removed   +0     -28    openspec/changes/sdd-yaml-indented-dump/.log/propose-20260503T222153.md
+modified  +0     -1     openspec/changes/skill-invoke-protocol/proposal.md
+added     +2     -0     openspec/changes/skill-missing-from-install/.openspec.yaml
+added     +4     -0     openspec/changes/skill-missing-from-install/.sdd.yaml
+added     +28    -0     openspec/changes/skill-missing-from-install/design.md
+added     +26    -0     openspec/changes/skill-missing-from-install/proposal.md
+added     +26    -0     openspec/changes/skill-missing-from-install/specs/skill-install-completeness/spec.md
+added     +13    -0     openspec/changes/skill-missing-from-install/tasks.md
+added     +14    -0     openspec/changes/skill-missing-from-install/test-plan.md
+removed   +0     -23    openspec/changes/skill-post-release/.log/propose-20260503T175523.md
+removed   +0     -26    openspec/changes/skill-rich-description-and-call-order/.log/propose-20260503T125714.md
+modified  +1     -1     openspec/changes/skill-rich-description-and-call-order/design.md
+modified  +0     -1     openspec/changes/skill-rich-description-and-call-order/proposal.md
+removed   +0     -65    openspec/changes/skill-script-path-resolution/.log/contradiction-20260503T154924.md
+removed   +0     -27    openspec/changes/skill-script-path-resolution/.log/propose-20260503T152950.md
+modified  +3     -4     openspec/changes/skill-script-path-resolution/design.md
+modified  +0     -1     openspec/changes/skill-script-path-resolution/proposal.md
+modified  +0     -2     openspec/changes/skill-test-runner-script/proposal.md
+added     +2     -0     openspec/changes/skills-compaction/.openspec.yaml
+added     +4     -0     openspec/changes/skills-compaction/.sdd.yaml
+added     +95    -0     openspec/changes/skills-compaction/design.md
+added     +73    -0     openspec/changes/skills-compaction/proposal.md
+added     +60    -0     openspec/changes/skills-compaction/specs/skill-md-compaction/spec.md
+added     +216   -0     openspec/changes/skills-compaction/tasks.md
+added     +64    -0     openspec/changes/skills-compaction/test-plan.md
+added     +2     -0     openspec/changes/soft-warnings-consolidate/.openspec.yaml
+added     +4     -0     openspec/changes/soft-warnings-consolidate/.sdd.yaml
+added     +52    -0     openspec/changes/soft-warnings-consolidate/design.md
+added     +26    -0     openspec/changes/soft-warnings-consolidate/proposal.md
+added     +10    -0     openspec/changes/soft-warnings-consolidate/test-plan.md
+removed   +0     -33    openspec/changes/sre-gitlab-incident-pr/.log/propose-20260503T152610.md
+added     +2     -0     openspec/changes/wiring-check-l3-ssot/.openspec.yaml
+added     +5     -0     openspec/changes/wiring-check-l3-ssot/.sdd.yaml
+added     +30    -0     openspec/changes/wiring-check-l3-ssot/design.md
+added     +26    -0     openspec/changes/wiring-check-l3-ssot/proposal.md
+added     +10    -0     openspec/changes/wiring-check-l3-ssot/test-plan.md
+modified  +36    -6     openspec/specs/archive-merges-into-support/spec.md
+modified  +0     -4     openspec/specs/bump-version-cases/spec.md
+modified  +24    -22    openspec/specs/index.yaml
+added     +29    -0     openspec/specs/mcp-absent-ask-user/spec.md
+added     +72    -0     openspec/specs/no-mirror-convention/spec.md
+modified  +0     -7     openspec/specs/orphan-stubs-wired/spec.md
+modified  +1     -1     openspec/specs/sdd-apply/spec.md
+modified  +23    -0     openspec/specs/sdd-ownership/spec.md
+modified  +0     -2     openspec/specs/skill-tdd-coverage-policy/spec.md
+modified  +0     -8     openspec/specs/write-then-replay-output/spec.md
+modified  +9     -2     skills/sdd/archive/skill.md
+added     +19    -0     skills/sdd/metrics/cases/metrics.md
+added     +19    -0     skills/sdd/revise/cases/revise.md
+modified  +26    -1     skills/sdd/scripts/_sdd_yaml.py   <== código ligado à spec
+added     +39    -0     skills/sdd/scripts/cases/_sdd_yaml.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-01-grep-merges-into-skills-sdd-archive-skill-md-7.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-02-grep-update-index-description-skills-sdd-archive-s.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-03-python3-skills-sdd-scripts-sdd-yaml-py-update-inde.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-04-python3-skills-sdd-scripts-sdd-yaml-py-update-inde.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-05-claude-skills.md
+added     +6     -0     skills/skill/cases/sdd/mcp-absent-ask-user/ac-01-todo-criterion-one.md
+--- DIFF DO CÓDIGO LIGADO
+### skills/sdd/scripts/_sdd_yaml.py
+@@ -28,6 +28,11 @@
+ VALID_FIELDS = {"creates", "merges-into"}
+ 
+ 
++class IndentedDumper(yaml.Dumper):
++    def increase_indent(self, flow=False, indentless=False):
++        return super().increase_indent(flow, indentless=False)
++
++
+ def _path(change_dir: str) -> str:
+     return os.path.join(change_dir, ".sdd.yaml")
+ 
+@@ -43,7 +48,7 @@ def load(change_dir: str) -> dict:
+ def save(change_dir: str, data: dict) -> None:
+     path = _path(change_dir)
+     with open(path, "w", encoding="utf-8") as f:
+-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
++        yaml.dump(data, f, Dumper=IndentedDumper, sort_keys=False, allow_unicode=True)
+ 
+ 
+ def get_creates(change_dir: str) -> list[str]:
+@@ -148,6 +153,24 @@ def cmd_set_owner(change_dir: str, email: str) -> int:
+     return 0
+ 
+ 
++def cmd_update_index_description(index_path: str, capability: str, description: str) -> int:
++    if not os.path.exists(index_path):
++        print(f"ERROR: index file not found: {index_path}", file=sys.stderr)
++        return 2
++    with open(index_path, encoding="utf-8") as f:
++        data = yaml.safe_load(f) or {}
++    specs = data.get("specs") or []
++    for entry in specs:
++        if entry.get("capability") == capability:
++            entry["description"] = description
++            with open(index_path, "w", encoding="utf-8") as f:
++                yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
++            print(f"updated description for capability '{capability}'")
++            return 0
++    print(f"ERROR: capability '{capability}' not found in index", file=sys.stderr)
++    return 2
++
++
+ def main() -> int:
+     if len(sys.argv) < 2:
+         print(__doc__, file=sys.stderr)
+@@ -161,6 +184,8 @@ def main() -> int:
+         return cmd_set_owner(sys.argv[2], sys.argv[3])
+     if cmd == "merge-state" and len(sys.argv) == 3:
+         return cmd_merge_state(sys.argv[2])
++    if cmd == "update-index-description" and len(sys.argv) == 5:
++        return cmd_update_index_description(sys.argv[2], sys.argv[3], sys.argv[4])
+     print(__doc__, file=sys.stderr)
+     return 2
+ 
+
+===== P091 | repo mckinsey/agents-at-scale-marketplace | PR #179: feat: OpenAI responses executor | capacidade: claude-agent-observability
+--- SPEC VIVA
+### Requirement: Conditional OTEL initialization
+The executor SHALL initialize OpenTelemetry tracing only when the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable is set. When not set, tracing SHALL be completely disabled with zero overhead.
+
+#### Scenario: OTEL endpoint configured
+- **WHEN** `OTEL_EXPORTER_OTLP_ENDPOINT` is set to a valid URL
+- **THEN** the executor SHALL create a `TracerProvider` with an `OTLPSpanExporter` targeting that endpoint and instrument the Claude Agent SDK via `ClaudeAgentSDKInstrumentor().instrument()`
+
+#### Scenario: OTEL endpoint not configured
+- **WHEN** `OTEL_EXPORTER_OTLP_ENDPOINT` is not set
+- **THEN** no `TracerProvider` SHALL be created and no instrumentation SHALL be applied
+
+#### Scenario: OTEL headers configured
+- **WHEN** `OTEL_EXPORTER_OTLP_HEADERS` is set alongside `OTEL_EXPORTER_OTLP_ENDPOINT`
+- **THEN** the OTLP exporter SHALL include those headers in trace export requests (for authentication with backends like Langfuse, Phoenix, or Honeycomb)
+
+### Requirement: otel-environment-variables secret pattern
+The Helm chart deployment template SHALL load OTEL configuration from a K8s secret named `otel-environment-variables` via `envFrom` with `optional: true`, following the pattern established in the ark repository.
+
+#### Scenario: Secret exists
+- **WHEN** an `otel-environment-variables` secret exists in the namespace with `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`
+- **THEN** those values SHALL be available as environment variables in the executor pod and tracing SHALL be active
+
+#### Scenario: Secret does not exist
+- **WHEN** no `otel-environment-variables` secret exists in the namespace
+- **THEN** the executor SHALL start normally without tracing (the `optional: true` flag prevents pod startup failure)
+
+### Requirement: Agent and tool span capture
+When OTEL is enabled, the instrumentation SHALL capture agent spans for each `receive_response()` turn and child tool spans for each tool invocation via the SDK's PreToolUse/PostToolUse hooks.
+
+#### Scenario: Multi-turn conversation with tool use
+- **WHEN** OTEL is enabled and an agent uses the Read and Bash tools during a response
+- **THEN** the trace SHALL contain an agent span with child tool spans for Read and Bash, including input/output metadata
+
+--- ARQUIVOS DO PR (38)
+modified  +8     -0     .github/release-please-config.json
+modified  +3     -2     .github/release-please-manifest.json
+modified  +5     -0     .github/workflows/main-push.yaml
+modified  +3     -0     .github/workflows/pull-request.yaml
+modified  +2     -1     docs/content/executors/_meta.js   <== código ligado à spec
+added     +157   -0     docs/content/executors/openai-responses.mdx
+added     +6     -0     executors/openai-responses/.gitignore
+added     +40    -0     executors/openai-responses/Dockerfile
+added     +148   -0     executors/openai-responses/README.md
+added     +9     -0     executors/openai-responses/chart/Chart.yaml
+added     +73    -0     executors/openai-responses/chart/templates/deployment.yaml
+added     +19    -0     executors/openai-responses/chart/templates/executionengine.yaml
+added     +27    -0     executors/openai-responses/chart/templates/httproute.yaml
+added     +22    -0     executors/openai-responses/chart/templates/pvc.yaml
+added     +41    -0     executors/openai-responses/chart/templates/rbac.yaml
+added     +20    -0     executors/openai-responses/chart/templates/service.yaml
+added     +13    -0     executors/openai-responses/chart/templates/serviceaccount.yaml
+added     +95    -0     executors/openai-responses/chart/values.yaml
+added     +73    -0     executors/openai-responses/devspace.yaml
+added     +77    -0     executors/openai-responses/examples/companies-house-agent.yaml
+added     +127   -0     executors/openai-responses/examples/company-lookup-agent.yaml
+added     +92    -0     executors/openai-responses/examples/dsl-generator-agent.yaml
+added     +80    -0     executors/openai-responses/examples/sql-generator-agent.yaml
+added     +86    -0     executors/openai-responses/examples/website-search-agent.yaml
+added     +90    -0     executors/openai-responses/pyproject.toml
+added     +63    -0     executors/openai-responses/scripts/test-cluster.sh
+added     +6     -0     executors/openai-responses/scripts/test-company-lookup.sh
+added     +85    -0     executors/openai-responses/scripts/test-local.sh
+added     +2     -0     executors/openai-responses/setup.cfg
+added     +0     -0     executors/openai-responses/src/openai_responses_executor/__init__.py
+added     +22    -0     executors/openai-responses/src/openai_responses_executor/__main__.py
+added     +44    -0     executors/openai-responses/src/openai_responses_executor/app.py
+added     +17    -0     executors/openai-responses/src/openai_responses_executor/config.py
+added     +200   -0     executors/openai-responses/src/openai_responses_executor/executor.py
+added     +224   -0     executors/openai-responses/src/openai_responses_executor/models.py
+added     +413   -0     executors/openai-responses/tests/test_executor.py
+modified  +646   -456   marketplace.json
+added     +128   -0     openspec/specs/openai-responses-executor/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### docs/content/executors/_meta.js
+@@ -1,4 +1,5 @@
+ export default {
+   langchain: 'LangChain Executor',
+-  'claude-agent-sdk': 'Claude Agent SDK Executor'
++  'claude-agent-sdk': 'Claude Agent SDK Executor',
++  'openai-responses': 'OpenAI Responses Executor'
+ }
+
+===== P092 | repo PsychQuant/che-ical-mcp | PR #79: cluster: Wave 3 simple verify-followups (#67, #69, #71, #72, #77) | capacidade: eventkit-handler-test-harness
+--- SPEC VIVA
+# eventkit-handler-test-harness Specification
+
+## Purpose
+
+TBD - created by archiving change 'eventkit-handler-test-harness'. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: `EventKitManaging` protocol exposes only the methods currently tested
+
+The shim protocol SHALL declare only the EventKit surface that at least one landed test file invokes. Adding a method to the protocol WITHOUT a corresponding test use SHALL be rejected in review.
+
+#### Scenario: Initial shipment contains exactly the cleanup-handler surface
+
+- **WHEN** this change lands
+- **THEN** `EventKitManaging` declares exactly the two methods exercised by `CleanupHandlerTests` via `FakeEventKitManager`: `listCompletedReminderIdentifiers(calendarName:calendarSource:) -> [String]` and `deleteRemindersBatch(identifiers:onlyCompleted:) -> BatchDeleteResult`
+
+#### Scenario: Protocol expansion requires a landing test
+
+- **WHEN** a future change adds a method to `EventKitManaging`
+- **THEN** the same change MUST add at least one test in `Tests/CheICalMCPTests/` that invokes the new method via `FakeEventKitManager`
+
+---
+### Requirement: `CheICalMCPServer.init` accepts an injected `EventKitManaging` with production default
+
+Dependency injection SHALL use a default-argument initializer. Production code SHALL NOT need to change its instantiation.
+
+#### Scenario: Production instantiation unchanged
+
+- **WHEN** `main.swift` (or any production caller) invokes `CheICalMCPServer()` with no arguments
+- **THEN** the server resolves `reminderCleanupSource` to `EventKitManager.shared`
+
+#### Scenario: Test instantiation injects fake
+
+- **WHEN** a test invokes `CheICalMCPServer(reminderCleanupSource: FakeEventKitManager(...))`
+- **THEN** the server uses the supplied fake for every EventKit call the cleanup handler would otherwise make on `.shared`
+
+---
+### Requirement: `FakeEventKitManager` is scriptable per test
+
+The fake SHALL allow each test to pre-configure: what `listCompletedReminderIdentifiers` returns (including empty, duplicates) and whether `deleteRemindersBatch` succeeds per-ID.
+
+#### Scenario: Scripted identifier return values
+
+- **WHEN** a test sets the fake's scripted identifiers to `["r1", "r2", "r3"]`
+- **AND** the handler under test calls `listCompletedReminderIdentifiers`
+- **THEN** the fake returns `["r1", "r2", "r3"]`
+
+#### Scenario: Invocation recording for assertions
+
+- **WHEN** the handler calls `deleteRemindersBatch(identifiers: ["x", "y"], onlyCompleted: true)`
+- **THEN** the fake records the call so the test can assert on both the identifiers passed and the `onlyCompleted` flag
+
+##### Example: Binding-mode onlyCompleted wiring assertion
+
+- **GIVEN** a fake with a scripted `BatchDeleteResult` containing `failures: [("b", "Reminder is no longer completed")]`
+- **WHEN** the test calls `handleCleanupCompletedReminders` with `reminder_ids: ["a", "b"], dry_run: false`
+- **THEN** the fake records `deleteRemindersBatch(identifiers: ["a", "b"], onlyCompleted: true)`
+- **AND** the response `failures[0].error` contains `"no longer completed"`
+- **AND** the response `deleted_ids` does not contain `"b"`
+
+> Note: this wiring-level test pins that the handler passes the correct `onlyCompleted` flag and surfaces failures into the response. It does NOT pin the destructive guard inside `EventKitManager.deleteRemindersBatch` itself (that `if onlyCompleted && !reminder.isCompleted` branch requires a separate test against a real `EKReminder` with toggleable `isCompleted`, tracked in a follow-up issue).
+
+---
+### Requirement: `CleanupHandlerTests` pins documented contract invariants
+
+The test file SHALL include at least one test case per invariant established in #21 and #28 so a future refactor that breaks one fails loudly.
+
+#### Scenario: R2-F2 arithmetic invariant pinned
+
+- **WHEN** a cleanup call returns a response with `total`, `deleted_count`, `failures.count`, and `remaining`
+- **THEN** the test asserts `total == preview.count + remaining` for dry-run and `total == deleted_count + failures.count + remaining` for execute
+
+#### Scenario: #28 F1 onlyCompleted wiring pinned
+
+- **WHEN** a binding-mode call supplies `reminder_ids` and `dry_run=false`
+- **THEN** the test asserts `onlyCompleted == true` is passed to the fake's `deleteRemindersBatch`
+
+#### Scenario: F1 guard ordering pinned at integration level
+
+- **WHEN** a filter-mode call supplies `calendar_source` without `calendar_name`
+- **THEN** the test asserts `ToolError.invalidParameter` is thrown
+- **AND** the test asserts `listCompletedReminderIdentifiers` was never called on the fake
+
+#### Scenario: F8 3-branch response shape stability pinned
+
+- **WHEN** the handler returns from any of the three response branches (dry-run, execute-empty, execute-non-empty)
+- **THEN** the response JSON contains the stable key set: `dry_run`, `mode`, `total`, `deleted_count`, `deleted_ids`, `failures`, `remaining`
+
+---
+### Requirement: Test infrastructure has zero production runtime impact
+
+The production binary SHALL behave identically before and after this change.
+
+#### Scenario: No new dependencies in release build
+
+- **WHEN** `swift build -c release` is run
+- **THEN** the binary's linked module list is unchanged aside from protocol declarations in existing modules
+
+#### Scenario: No new Swift warnings
+
+- **WHEN** `swift build` is run at HEAD after this change
+- **THEN** no new warnings are emitted compared to the pre-change baseline
+
+---
+### Requirement: Existing `EventKitManager` call sites outside the cleanup handler are NOT refactored in this change
+
+Thirty-plus direct `eventKitManager.` call sites in `Server.swift` SHALL remain using the singleton directly. Retrofitting them is deferred to future changes that introduce their own handler tests.
+
+#### Scenario: Non-cleanup handlers continue using the singleton directly
+
+- **WHEN** a handler other than `handleCleanupCompletedReminders` (e.g., `handleCreateEvent`, `handleListEvents`) is invoked
+- **THEN** the code path is unchanged relative to the pre-change baseline
+- **AND** `swift test` shows no regression in pre-existing handler-adjacent tests
+
+--- ARQUIVOS DO PR (6)
+modified  +1     -0     .gitignore
+modified  +2     -2     CLAUDE.md
+modified  +19    -5     Sources/CheICalMCP/EventKit/EventKitManager.swift   <== código ligado à spec
+modified  +11    -13    Sources/CheICalMCP/Server.swift   <== código ligado à spec
+modified  +24    -6     openspec/specs/eventkit-error-sanitization/spec.md
+modified  +43    -1     scripts/sign-and-notarize.sh
+--- DIFF DO CÓDIGO LIGADO
+### Sources/CheICalMCP/EventKit/EventKitManager.swift
+@@ -1406,12 +1406,26 @@ actor EventKitManager: EventKitManaging {
+                 // missing the control-char escape applied by `writeFailureLog`;
+                 // we share `escapeForStderr` to keep both paths consistent
+                 // without violating R3.
++                //
++                // #69: defensive symmetry with R7's trusted-branch carve-out
++                // at writeFailureLog. Note the rationale differs here: R3
++                // binds to `sanitize(_:)` directly (NOT `sanitizeForResponse`)
++                // so trusted errors at this site receive a framework-style
++                // code (e.g. "error_unknown") that does NOT equal `rawLog`.
++                // The gate is therefore forward-compat hardening — if a
++                // future caller of `deleteRemindersBatch` propagates a
++                // `TrustedErrorMessage` conformer through this path, the
++                // stderr-amplification window stays closed by construction.
++                // In practice today, `eventStore.remove(reminder:commit:)`
++                // only throws NSError, so the gate doesn't fire on hot paths.
+                 let sanitized = EventKitErrorSanitizer.sanitize(error)
+-                let safeId = EventKitErrorSanitizer.escapeForStderr(id)
+-                let safeRawLog = EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog)
+-                FileHandle.standardError.write(
+-                    Data("deleteRemindersBatch(\(safeId)) failed: \(safeRawLog)\n".utf8)
+-                )
++                if !(error is TrustedErrorMessage) {
++                    let safeId = EventKitErrorSanitizer.escapeForStderr(id)
++                    let safeRawLog = EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog)
++                    FileHandle.standardError.write(
++                        Data("deleteRemindersBatch(\(safeId)) failed: \(safeRawLog)\n".utf8)
++                    )
++                }
+                 failures.append((id, sanitized.code))
+             }
+         }
+
+### Sources/CheICalMCP/Server.swift
+@@ -997,19 +997,17 @@ class CheICalMCPServer {
+             // Outer catch (#37 spec R8). Per-batch handlers route their own
+             // catches through writeFailureLog; this catch fires only when an
+             // error escapes ALL inner handling — so a framework error here
+-            // means the operator's last debug channel is stderr. #39 carve-out:
+-            // only write stderr for non-trusted errors. Trusted errors carry
+-            // identical text on the wire (`code == rawLog`) so duplicating to
+-            // stderr would just amplify noise; framework errors hide their
+-            // localizedDescription from the wire (sanitized to a code) so
+-            // stderr is the only place to surface it.
+-            let sanitized = EventKitErrorSanitizer.sanitizeForResponse(error)
+-            if !(error is TrustedErrorMessage) {
+-                FileHandle.standardError.write(
+-                    Data("handleToolCall(\(EventKitErrorSanitizer.escapeForStderr(name))) failed: \(EventKitErrorSanitizer.escapeForStderr(sanitized.rawLog))\n".utf8)
+-                )
+-            }
+-            return CallTool.Result(content: [.text("Error: \(sanitized.code)")], isError: true)
++            // means the operator's last debug channel is stderr. Delegates to
++            // `writeFailureLog` (#72) so the #41 / R7 trusted-branch carve-out,
++            // `escapeForStderr`, and any future hardening (#73 ANSI/NUL,
++            // thread-safety) are inherited from a single site instead of
++            // duplicated here.
++            let code = EventKitErrorSanitizer.writeFailureLog(
++                handler: "handleToolCall",
++                identifier: name,
++                error: error
++            )
++            return CallTool.Result(content: [.text("Error: \(code)")], isError: true)
+         }
+     }
+ 
+
+===== P093 | repo huytdps13400/react-native-ssl-manager | PR #5: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI | capacidade: ios-urlsession-documentation
+--- SPEC VIVA
+# ios-urlsession-documentation Specification
+
+## Purpose
+TBD - created by archiving change add-android-network-security-config. Update Purpose after archive.
+## Requirements
+### Requirement: iOS Networking Stack Coverage Documentation
+The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additional configuration.
+
+#### Scenario: README lists supported iOS stacks
+- **WHEN** a developer reads the README "Supported Networking Stacks" section
+- **THEN** they find that the following iOS stacks are covered:
+  - `fetch` (React Native networking)
+  - `URLSession` (Foundation)
+  - `SDWebImage`
+  - `Alamofire`
+  - Any library using `URLSession` under the hood
+
+#### Scenario: README lists iOS limitations
+- **WHEN** a developer reads the README
+- **THEN** they find that custom TLS stacks not using `URLSession` are NOT covered
+- **AND** this is clearly marked as a known limitation
+
+#### Scenario: Complex delegate or swizzling conflict limitation
+- **WHEN** a developer reads the README
+- **THEN** they find that apps with complex custom `URLSessionDelegate` implementations or other swizzling libraries may experience conflicts with TrustKit's swizzling
+- **AND** this is clearly marked as a known limitation
+
+### Requirement: Supported Stacks Summary Table
+The README SHALL include a summary table showing which networking stacks are covered on each platform and by which mechanism.
+
+#### Scenario: Platform coverage table in README
+- **WHEN** a developer reads the "Supported Networking Stacks" section
+- **THEN** they find a table with columns: Stack, Platform, Covered, Mechanism
+- **AND** the table includes entries for: OkHttp, Cronet, WebView, Coil, Glide, URLSession, SDWebImage, Alamofire
+
+
+--- ARQUIVOS DO PR (40)
+modified  +7     -0     .github/actions/setup/action.yml
+modified  +29    -53    .github/workflows/ci.yml
+removed   +0     -8     .npmignore
+modified  +57    -0     CHANGELOG.md
+modified  +96    -18    README.md
+added     +149   -0     __tests__/eager-init.test.js
+added     +120   -0     __tests__/graceful-degradation.test.js
+modified  +9     -12    __tests__/integration-cronet-coil-glide.test.js
+modified  +5     -15    __tests__/nsc-generation.test.js
+modified  +18    -6     __tests__/nsc-xml-generation.test.js
+modified  +3     -1     __tests__/pinned-okhttpclient.test.js
+modified  +5     -0     android/build.gradle
+modified  +15    -0     android/src/main/AndroidManifest.xml
+modified  +16    -1     android/src/main/AndroidManifestNew.xml
+modified  +4     -1     android/src/main/java/com/usesslpinning/PinnedOkHttpClient.kt
+modified  +9     -5     android/src/main/java/com/usesslpinning/SslPinningFactory.kt
+added     +23    -0     android/src/main/java/com/usesslpinning/SslPinningInitializer.kt
+added     +62    -0     android/src/main/java/com/usesslpinning/SslPinningPolicy.kt
+modified  +86    -12    android/src/main/java/com/usesslpinning/UseSslPinningModuleImpl.kt
+modified  +8     -0     android/src/newarch/com/usesslpinning/UseSslPinningModule.kt
+modified  +10    -0     android/src/oldarch/com/usesslpinning/UseSslPinningModule.kt
+added     +59    -0     android/src/test/java/com/usesslpinning/SslPinningPolicyTest.kt
+modified  +44    -29    android/ssl-pinning-setup.gradle
+modified  +63    -113   app.plugin.js
+modified  +4     -0     example/ios/Podfile
+modified  +213   -133   ios/SharedLogic.swift
+modified  +34    -0     ios/UseSslPinningModule.mm
+modified  +53    -26    ios/UseSslPinningModule.swift
+added     +70    -0     openspec/changes/add-eager-ssl-init/design.md
+added     +61    -0     openspec/changes/add-eager-ssl-init/proposal.md
+added     +28    -0     openspec/changes/add-eager-ssl-init/specs/expo-plugin/spec.md
+added     +79    -0     openspec/changes/add-eager-ssl-init/specs/ssl-pinning-api/spec.md
+added     +44    -0     openspec/changes/add-eager-ssl-init/tasks.md
+modified  +15    -4     package.json
+modified  +55    -9     scripts/nsc-utils.js
+modified  +23    -13    scripts/postinstall.js   <== código ligado à spec
+modified  +2     -0     src/NativeUseSslPinning.ts
+modified  +13    -0     src/UseSslPinning.types.ts
+modified  +66    -4     src/index.tsx
+modified  +1     -0     yarn.lock
+--- DIFF DO CÓDIGO LIGADO
+### scripts/postinstall.js
+@@ -106,30 +106,35 @@ if (fs.existsSync(sslConfigPath)) {
+ }
+ 
+ // Generate Network Security Config XML for Android
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
+ const androidDir = path.join(projectRoot, 'android');
+ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+   console.log('🔄 Generating Android Network Security Config XML...');
+ 
+   try {
+     const sslConfig = JSON.parse(fs.readFileSync(sslConfigPath, 'utf8'));
+     const sha256Keys = sslConfig.sha256Keys;
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+ 
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
+       );
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+       const xmlPath = path.join(xmlDir, 'network_security_config.xml');
+ 
+       if (fs.existsSync(xmlPath)) {
+         // Merge with existing NSC
+         const existingXml = fs.readFileSync(xmlPath, 'utf8');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, mergedXml);
+         console.log(
+           '✅ Merged SSL pins into existing network_security_config.xml'
+@@ -139,7 +144,7 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         if (!fs.existsSync(xmlDir)) {
+           fs.mkdirSync(xmlDir, { recursive: true });
+         }
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, xml);
+         console.log('✅ Generated network_security_config.xml');
+       }
+@@ -168,10 +173,15 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         }
+       }
+     } else {
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+     }
+   } catch (error) {
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+   }
+ } else if (!fs.existsSync(androidDir)) {
+   console.log('ℹ️ No android/ directory found, skipping NSC XML generation');
+
+===== P094 | repo aehrc/pathling | PR #2551: v9.4.0 | capacidade: r-search-to-column
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Convert FHIR search expression to Spark column
+
+The R library SHALL provide a function `pathling_search_to_column(pc, resource_type,
+search_expression)` that accepts a PathlingContext, a FHIR resource type name,
+and a FHIR search query string, and returns a Spark Column object representing
+the boolean filter condition.
+
+#### Scenario: Single search parameter
+
+- **WHEN** `pathling_search_to_column(pc, "Patient", "gender=male")` is called
+- **THEN** a Spark Column object (`spark_jobj`) is returned that evaluates to
+  true for Patient resources where gender equals male.
+
+#### Scenario: Multiple search parameters (AND)
+
+- **WHEN** `pathling_search_to_column(pc, "Patient", "gender=male&active=true")` is
+  called
+- **THEN** a Spark Column object is returned that evaluates to true for Patient
+  resources matching both conditions.
+
+#### Scenario: Date prefix search
+
+- **WHEN** `pathling_search_to_column(pc, "Patient", "birthdate=ge1990-01-01")` is
+  called
+- **THEN** a Spark Column object is returned that evaluates to true for Patient
+  resources with birth date on or after 1990-01-01.
+
+#### Scenario: Empty search expression
+
+- **WHEN** `pathling_search_to_column(pc, "Patient", "")` is called
+- **THEN** a Spark Column object is returned that evaluates to true for all
+  Patient resources.
+
+#### Scenario: Filter a DataFrame
+
+- **WHEN** a Column returned by `pathling_search_to_column` is applied to a DataFrame
+  of Patient resources using sparklyr's filter
+- **THEN** only resources matching the search criteria are retained.
+
+#### Scenario: Invalid search parameter
+
+- **WHEN** `pathling_search_to_column(pc, "Patient", "invalid-param=value")` is
+  called
+- **THEN** an error is raised indicating the parameter is unknown.
+
+### Requirement: Function is exported and documented
+
+The `pathling_search_to_column` function SHALL be exported in the package NAMESPACE
+and SHALL have roxygen2 documentation including description, parameter
+definitions, return value, and usage examples. The `@examples` block SHALL demonstrate filtering using `pathling_filter` instead of raw `j_invoke` calls.
+
+#### Scenario: Function is accessible after loading the package
+
+- **WHEN** the pathling package is loaded with `library(pathling)`
+- **THEN** `pathling_search_to_column` is available without qualifying the namespace.
+
+#### Scenario: Documentation is generated
+
+- **WHEN** `devtools::document()` is run on the package
+- **THEN** a man page is generated for `pathling_search_to_column` with all
+  documented parameters and examples.
+
+#### Scenario: Examples use pathling_filter for filtering
+
+- **WHEN** the roxygen `@examples` block demonstrates filtering a DataFrame
+- **THEN** it SHALL use `pathling_filter` and SHALL NOT contain `j_invoke`
+
+--- ARQUIVOS DO PR (81)
+added     +57    -0     .github/workflows/fhirpath-lab-api-release.yml
+added     +20    -0     deployment/fhirpath-lab-api/chart/Chart.yaml
+added     +64    -0     deployment/fhirpath-lab-api/chart/README.md
+added     +60    -0     deployment/fhirpath-lab-api/chart/templates/deployment.yaml
+added     +20    -0     deployment/fhirpath-lab-api/chart/templates/service.yaml
+added     +103   -0     deployment/fhirpath-lab-api/chart/values.schema.json
+added     +27    -0     deployment/fhirpath-lab-api/chart/values.yaml
+modified  +1     -1     encoders/pom.xml
+added     +45    -0     encoders/src/main/java/au/csiro/pathling/sql/SyntheticFieldUtils.java
+modified  +1     -2     encoders/src/main/scala/au/csiro/pathling/sql/PruneSyntheticFields.scala
+added     +72    -0     encoders/src/test/java/au/csiro/pathling/sql/SyntheticFieldUtilsTest.java
+added     +6     -0     fhirpath-lab-api/.dockerignore
+added     +24    -0     fhirpath-lab-api/Dockerfile
+added     +128   -0     fhirpath-lab-api/README.md
+added     +38    -0     fhirpath-lab-api/pyproject.toml
+added     +16    -0     fhirpath-lab-api/src/fhirpath_lab_api/__init__.py
+added     +30    -0     fhirpath-lab-api/src/fhirpath_lab_api/__main__.py
+added     +174   -0     fhirpath-lab-api/src/fhirpath_lab_api/app.py
+added     +271   -0     fhirpath-lab-api/src/fhirpath_lab_api/parameters.py
+added     +0     -0     fhirpath-lab-api/tests/__init__.py
+added     +271   -0     fhirpath-lab-api/tests/test_app.py
+added     +273   -0     fhirpath-lab-api/tests/test_parameters.py
+added     +557   -0     fhirpath-lab-api/uv.lock
+modified  +1     -1     fhirpath/pom.xml
+added     +109   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluationResult.java
+added     +344   -0     fhirpath/src/main/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluator.java
+modified  +3     -1     fhirpath/src/main/java/au/csiro/pathling/fhirpath/operator/BinaryOperatorType.java
+added     +404   -0     fhirpath/src/test/java/au/csiro/pathling/fhirpath/evaluation/SingleInstanceEvaluatorTest.java
+modified  +83    -0     lib/R/R/context.R   <== código ligado à spec
+modified  +1     -1     lib/R/pom.xml
+modified  +105   -0     lib/R/tests/testthat/test-context.R   <== código ligado à spec
+modified  +61    -0     lib/python/pathling/context.py
+modified  +1     -1     lib/python/pom.xml
+modified  +1     -3     lib/python/tests/conftest.py
+modified  +1     -1     library-api/pom.xml
+modified  +89    -0     library-api/src/main/java/au/csiro/pathling/library/PathlingContext.java
+added     +409   -0     library-api/src/test/java/au/csiro/pathling/library/EvaluateFhirPathTest.java
+modified  +1     -1     library-runtime/pom.xml
+added     +2     -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/.openspec.yaml
+added     +140   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/design.md
+added     +58    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/proposal.md
+added     +103   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-deployment/spec.md
+added     +193   -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/specs/fhirpath-lab-server/spec.md
+added     +73    -0     openspec/changes/archive/2026-02-16-fhirpath-lab-api/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/.openspec.yaml
+added     +72    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/design.md
+added     +34    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/proposal.md
+added     +91    -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/specs/r-evaluate-fhirpath/spec.md
+added     +9     -0     openspec/changes/archive/2026-02-17-add-r-evaluate-fhirpath/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/.openspec.yaml
+added     +39    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/design.md
+added     +29    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/proposal.md
+added     +73    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/specs/fhirpath-lab-server/spec.md
+added     +13    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-omit-nulls/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/.openspec.yaml
+added     +48    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/design.md
+added     +38    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/proposal.md
+added     +79    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/specs/fhirpath-lab-server/spec.md
+added     +14    -0     openspec/changes/archive/2026-02-17-fhirpath-lab-strip-null-values-java/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/design.md
+added     +31    -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/proposal.md
+added     +0     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/.gitkeep
+added     +2     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/specs/no-spec-changes.md
+added     +8     -0     openspec/changes/archive/2026-02-17-fix-union-operator-registration/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/.openspec.yaml
+added     +119   -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/design.md
+added     +56    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/proposal.md
+added     +97    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/specs/fhirpath-lab-server/spec.md
+added     +45    -0     openspec/changes/archive/2026-02-17-sanitise-fhirpath-lab-output/tasks.md
+added     +103   -0     openspec/specs/fhirpath-evaluation-api/spec.md
+added     +84    -0     openspec/specs/fhirpath-lab-deployment/spec.md
+added     +280   -0     openspec/specs/fhirpath-lab-server/spec.md
+added     +91    -0     openspec/specs/r-evaluate-fhirpath/spec.md
+modified  +1     -1     pom.xml
+modified  +7     -13    site/docs/fhirpath/index.md
+modified  +98    -0     site/docs/libraries/fhirpath.md
+modified  +1     -1     site/pom.xml
+modified  +1     -1     terminology/pom.xml
+modified  +1     -1     utilities/pom.xml
+--- DIFF DO CÓDIGO LIGADO
+### lib/R/R/context.R
+@@ -440,3 +440,86 @@ pathling_with_column <- function(df, pc, resource_type, expression, column) {
+     j_invoke("withColumn", as.character(column), col) %>%
+     sparklyr::sdf_register()
+ }
++
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
++                                       fhirpath_expression,
++                                       context_expression = NULL,
++                                       variables = NULL) {
++  # Convert R named list to a Java HashMap if variables are provided.
++  java_variables <- NULL
++  if (!is.null(variables)) {
++    sc <- spark_connection(pc)
++    java_variables <- j_invoke_new(sc, "java.util.HashMap")
++    for (name in names(variables)) {
++      invoke(java_variables, "put", name, variables[[name]])
++    }
++  }
++
++  jresult <- invoke(
++    pc, "evaluateFhirPath",
++    as.character(resource_type),
++    as.character(resource_json),
++    as.character(fhirpath_expression),
++    context_expression,
++    java_variables
++  )
++
++  # Convert Java SingleInstanceEvaluationResult to an R list.
++  jtyped_values <- invoke(jresult, "getResults")
++  size <- jtyped_values %>% invoke("size")
++  results <- if (size > 0L) {
++    lapply(seq_len(size), function(i) {
++      jtv <- jtyped_values %>% invoke("get", as.integer(i - 1))
++      list(
++        type = jtv %>% invoke("getType"),
++        value = jtv %>% invoke("getValue")
++      )
++    })
++  } else {
++    list()
++  }
++
++  list(
++    results = results,
++    expectedReturnType = invoke(jresult, "getExpectedReturnType")
++  )
++}
+
+### lib/R/tests/testthat/test-context.R
+@@ -211,3 +211,108 @@ test_that("pathling_filter and pathling_with_column work together in a pipe", {
+   # Should have only male patients.
+   expect_true(result %>% sparklyr::sdf_nrow() > 0)
+ })
++
++# ========== pathling_evaluate_fhirpath tests ==========
++
++# Sample Patient JSON used across evaluate_fhirpath tests.
++PATIENT_JSON <- '{
++  "resourceType": "Patient",
++  "id": "example",
++  "active": true,
++  "gender": "male",
++  "birthDate": "1990-01-01",
++  "name": [
++    {
++      "use": "official",
++      "family": "Smith",
++      "given": ["John", "James"]
++    },
++    {
++      "use": "nickname",
++      "family": "Smith",
++      "given": ["Johnny"]
++    }
++  ]
++}'
++
++# Helper to create a PathlingContext for evaluate_fhirpath tests.
++evaluate_test_setup <- function() {
++  spark <- def_spark()
++  pc <- pathling_connect(spark)
++  list(pc = pc)
++}
++
++test_that("evaluate_fhirpath returns a string result for name.family", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.family should return family names as strings.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.family")
++  expect_type(result, "list")
++  expect_true("results" %in% names(result))
++  expect_true("expectedReturnType" %in% names(result))
++  expect_equal(result$expectedReturnType, "string")
++  expect_equal(length(result$results), 2)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "Smith")
++})
++
++test_that("evaluate_fhirpath returns multiple values for name.given", {
++  setup <- evaluate_test_setup()
++  # Evaluating name.given should return all given names.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "name.given")
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath returns empty results for missing element", {
++  setup <- evaluate_test_setup()
++  # Evaluating a path that matches nothing should return an empty list.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "multipleBirthBoolean")
++  expect_equal(length(result$results), 0)
++})
++
++test_that("evaluate_fhirpath returns boolean result for active", {
++  setup <- evaluate_test_setup()
++  # Evaluating active should return a boolean.
++  result <- pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "active")
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "boolean")
++  expect_equal(result$results[[1]]$value, TRUE)
++  expect_equal(result$expectedReturnType, "boolean")
++})
++
++test_that("evaluate_fhirpath raises error for invalid expression", {
++  setup <- evaluate_test_setup()
++  # An invalid FHIRPath expression should raise an error.
++  expect_error(
++    pathling_evaluate_fhirpath(setup$pc, "Patient", PATIENT_JSON, "!!invalid!!")
++  )
++})
++
++test_that("evaluate_fhirpath with context expression", {
++  setup <- evaluate_test_setup()
++  # Using a context expression to compose the evaluation.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "given",
++    context_expression = "name"
++  )
++  expect_equal(length(result$results), 3)
++  values <- sapply(result$results, function(x) x$value)
++  expect_true("John" %in% values)
++  expect_true("James" %in% values)
++  expect_true("Johnny" %in% values)
++})
++
++test_that("evaluate_fhirpath with variable substitution", {
++  setup <- evaluate_test_setup()
++  # A string variable should be resolvable via %variable syntax.
++  result <- pathling_evaluate_fhirpath(
++    setup$pc, "Patient", PATIENT_JSON, "%myVar",
++    variables = list(myVar = "test")
++  )
++  expect_equal(length(result$results), 1)
++  expect_equal(result$results[[1]]$type, "string")
++  expect_equal(result$results[[1]]$value, "test")
++})
+
+===== P095 | repo Yourdaylight/stock_datasource | PR #59: 新增港股财务指标数据 | capacidade: data-management
+--- SPEC VIVA
+# data-management Specification
+
+## Purpose
+数据管理模块负责数据源监控、同步任务管理、数据质量检测和插件管理。提供基于交易日历的数据缺失检测、批量同步任务创建与执行跟踪、插件状态查询与详情展示、AI日志诊断等能力。
+## Requirements
+### Requirement: 基于交易日的数据缺失检测
+
+系统 SHALL 基于交易日历检测各插件对应ODS表的数据缺失情况。
+
+- 系统 SHALL 从 `ods_trade_calendar` 表获取交易日列表
+- 系统 SHALL 仅检查 `schedule.frequency = "daily"` 且 `schedule_enabled = true` 的插件
+- 系统 SHALL 返回每个插件的缺失日期列表
+- 系统 SHALL 支持手动触发检测
+- 系统 SHALL 支持配置检测天数范围（7/15/30/60/90/180/365天）
+- 定时自动检测由 `UnifiedScheduler` 负责（见 unified-data-scheduler spec）
+
+#### Scenario: 检测到数据缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** `schedule_enabled = true`
+- **AND** 交易日 `2026-01-08` 是开市日
+- **AND** `ods_daily` 表中不存在 `trade_date = '2026-01-08'` 的数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期包含 `2026-01-08`
+
+#### Scenario: 数据完整无缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** 所有交易日都有对应数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期列表为空
+
+#### Scenario: 未启用调度的插件不参与检测
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_rt_k` 的缺失情况
+
+#### Scenario: 周更新插件不参与每日检测
+
+- **GIVEN** 插件 `tushare_stock_basic` 的调度频率为 `weekly`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_stock_basic` 的缺失情况
+
+---
+
+### Requirement: 同步任务管理
+
+系统 SHALL 提供同步任务的创建、执行、状态跟踪和历史查询功能。
+
+- 系统 SHALL 支持创建增量同步、全量同步、回填同步任务
+- 系统 SHALL 支持至少3个任务并行执行
+- 系统 SHALL 在单次任务涉及多个日期时，在限速允许范围内并行处理多个日期
+- 系统 SHALL 根据插件配置的 `rate_limit` 动态调整日期并发数
+- 系统 SHALL 实时更新任务执行进度
+- 系统 SHALL 记录任务执行历史到数据库
+- 系统 SHALL 保留30天的任务历史，超过30天自动清理
+- 系统 SHALL 过滤 `config.json` 中 `enabled = false` 的插件，不参与调度执行
+- 系统 SHALL 过滤 `runtime_config.json` 中 `schedule_enabled = false` 的插件
+
+#### Scenario: 创建增量同步任务
+
+- **GIVEN** 用户选择插件 `tushare_daily`
+- **AND** 选择同步类型为 `incremental`
+- **WHEN** 用户触发同步
+- **THEN** 系统创建任务并返回 `task_id`
+- **AND** 任务状态为 `pending`
+
+#### Scenario: 任务执行进度更新
+
+- **GIVEN** 同步任务正在执行
+- **AND** 已处理 500 条记录，共 1000 条
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `progress = 50`
+- **AND** `records_processed = 500`
+
+#### Scenario: 任务执行完成
+
+- **GIVEN** 同步任务执行完成
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'completed'`
+- **AND** `completed_at` 有值
+
+#### Scenario: 任务执行失败
+
+- **GIVEN** 同步任务执行过程中发生错误
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'failed'`
+- **AND** `error_message` 包含错误信息及完整堆栈跟踪
+
+#### Scenario: 多任务并行执行
+
+- **GIVEN** 当前有2个任务正在执行
+- **AND** 用户触发第3个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第3个任务立即开始执行
+- **AND** 3个任务同时处于 `running` 状态
+
+#### Scenario: 并行任务达到上限
+
+- **GIVEN** 当前有3个任务正在执行
+- **AND** 用户触发第4个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第4个任务状态为 `pending`
+- **AND** 等待有任务完成后自动执行
+
+#### Scenario: 单任务多日期并行处理
+
+- **GIVEN** 用户触发回填任务，包含日期 `['2026-01-05', '2026-01-06', '2026-01-07']`
+- **AND** 插件 `rate_limit = 500`（每分钟500次）
+- **WHEN** 系统执行任务
+- **THEN** 系统根据限速计算并发数（如3个日期并行）
+- **AND** 同时拉取多个日期的数据
+
+#### Scenario: 限速较低时减少并发
+
+- **GIVEN** 用户触发回填任务，包含5个日期
+- **AND** 插件 `rate_limit = 60`（每分钟60次）
+- **WHEN** 系统执行任务
+- **THEN** 系统降低日期并发数（如1-2个日期并行）
+- **AND** 确保不超过API限速
+
+#### Scenario: 禁用插件不参与调度
+
+- **GIVEN** 插件 `akshare_hk_stock_list` 的 `config.json` 中 `enabled = false`
+- **WHEN** 用户触发全量手动同步
+- **THEN** 系统跳过该插件
+- **AND** 日志输出 "Skipping disabled plugin: akshare_hk_stock_list"
+
+---
+
+### Requirement: 批量任务管理
+
+系统 SHALL 以批量执行（BatchExecution）为维度管理和展示同步任务。
+
+- 系统 SHALL 为每次调度执行创建 `ScheduleExecutionRecord`，关联所有子任务
+- 系统 SHALL 支持查看批量任务详情，包括所有子任务状态和错误信息汇总
+- 系统 SHALL 支持停止正在运行的批量任务
+- 系统 SHALL 支持部分重试（仅重试失败/取消的子任务，在原任务上原地重试）
+- 系统 SHALL 支持批量删除执行记录
+- 系统 SHALL 支持按状态和触发类型筛选执行记录
+- 系统 SHALL 在错误信息汇总中提供一键复制功能（兼容 HTTP 非安全环境）
+
+#### Scenario: 查看批量任务详情
+
+- **GIVEN** 存在执行ID为 `abc12345` 的批量任务
+- **AND** 包含3个子任务，其中1个失败
+- **WHEN** 用户查看详情
+- **THEN** 系统返回 `BatchExecutionDetail`
+- **AND** `error_summary` 汇总所有失败任务的错误信息
+
+#### Scenario: 停止运行中的批量任务
+
+- **GIVEN** 批量任务 `abc12345` 状态为 `running`
+- **WHEN** 用户点击"停止任务"
+- **THEN** 系统取消所有未完成的子任务
+- **AND** 批量任务状态变为 `stopped`
+
+#### Scenario: 部分重试失败任务
+
+- **GIVEN** 批量任务 `abc12345` 已完成，其中2个子任务失败
+- **WHEN** 用户点击"重试失败任务"
+- **THEN** 系统仅重新执行2个失败的子任务
+- **AND** 在原任务记录上更新状态，不创建新的执行记录
+
+#### Scenario: 一键复制错误信息
+
+- **GIVEN** 批量任务包含失败子任务
+- **AND** 用户点击"一键复制"按钮
+- **WHEN** 系统执行复制
+- **THEN** 错误汇总文本复制到剪贴板
+- **AND** 在 HTTPS 环境使用 `navigator.clipboard` API
+- **AND** 在 HTTP 环境使用 `textarea + execCommand` 降级方案
+
+---
+
+### Requirement: 插件数据状态查询
+
+系统 SHALL 提供各插件的数据状态查询，包括最新数据日期、缺失天数、数据预览。
+
+- 系统 SHALL 返回插件对应ODS表的最新数据日期
+- 系统 SHALL 返回插件的调度频率（daily/weekly）
+- 系统 SHALL 返回插件的缺失日期数量
+- 系统 SHALL 提供数据预览接口
+
+#### Scenario: 查询插件数据状态
+
+- **GIVEN** 插件 `tushare_daily` 对应表 `ods_daily`
+- **AND** 表中最新数据日期为 `2026-01-09`
+- **AND** 有 2 个交易日缺失数据
+- **WHEN** 用户查询插件状态
+- **THEN** 系统返回 `latest_date = '2026-01-09'`
+- **AND** `missing_count = 2`
+- **AND** `schedule_frequency = 'daily'`
+
+#### Scenario: 预览插件数据
+
+- **GIVEN** 用户请求预览 `tushare_daily` 的数据
+- **AND** 指定日期为 `2026-01-09`
+- **WHEN** 系统查询数据
+- **THEN** 返回该日期的前100条数据记录
+
+---
+
+### Requirement: 插件调度频率展示
+
+系统 SHALL 在插件列表中展示各插件的调度频率和执行时间。
+
+- 系统 SHALL 从插件 `config.json` 读取 `schedule` 配置
+- 系统 SHALL 区分显示 `daily` 和 `weekly` 频率
+- 系统 SHALL 显示计划执行时间
+
+#### Scenario: 展示每日更新插件
+
+- **GIVEN** 插件 `tushare_daily` 的 `schedule.frequency = 'daily'`
+- **AND** `schedule.time = '18:00'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每日"
+- **AND** 显示执行时间为 "18:00"
+
+#### Scenario: 展示每周更新插件
+
+- **GIVEN** 插件 `tushare_stock_basic` 的 `schedule.frequency = 'weekly'`
+- **AND** `schedule.day_of_week = 'monday'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每周一"
+
+---
+
+### Requirement: 数据跳转展示
+
+系统 SHALL 支持从插件列表直接跳转查看插件数据。
+
+- 系统 SHALL 在插件行提供"查看数据"操作
+- 系统 SHALL 弹出数据预览弹窗
+- 系统 SHALL 支持按日期筛选数据
+
+#### Scenario: 跳转查看插件数据
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看数据"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出数据预览弹窗
+- **AND** 展示 `ods_daily` 表的最新数据
+
+#### Scenario: 按日期筛选数据
+
+- **GIVEN** 数据预览弹窗已打开
+- **AND** 用户选择日期 `2026-01-09`
+- **WHEN** 用户点击筛选
+- **THEN** 弹窗展示该日期的数据
+
+---
+
+### Requirement: 插件详情查看
+
+系统 SHALL 提供插件详情查看功能，展示插件的配置、数据结构和运行状态。
+
+- 系统 SHALL 展示插件的 `config.json` 配置信息
+- 系统 SHALL 展示插件的 `schema.json` 数据结构定义
+- 系统 SHALL 展示插件的运行状态（最新数据、缺失情况）
+- 系统 SHALL 以可读的方式格式化展示字段定义
+
+#### Scenario: 查看插件详情
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看详情"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出插件详情弹窗
+- **AND** 展示插件基本信息（名称、版本、描述）
+- **AND** 展示调度配置（频率、执行时间）
+- **AND** 展示数据结构（表名、字段列表、分区键、排序键）
+
+#### Scenario: 查看插件数据结构
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"数据结构"标签
+- **WHEN** 系统展示数据结构
+- **THEN** 显示表名 `ods_daily`
+- **AND** 显示字段列表（字段名、数据类型、是否可空、注释）
+- **AND** 显示分区键 `toYYYYMM(trade_date)`
+- **AND** 显示排序键 `["ts_code", "trade_date"]`
+
+#### Scenario: 查看插件API接口信息
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"接口配置"标签
+- **WHEN** 系统展示接口配置
+- **THEN** 显示数据源类型（tushare/akshare）
+- **AND** 显示API接口名称
+- **AND** 显示参数定义（如有）
+
+---
+
+### Requirement: 插件包导入导出（预留）
+
+系统 SHALL 预留插件包导入导出接口，为后续AI生成插件功能做准备。
+
+- 系统 SHALL 定义标准的插件包格式（.plugin.zip）
+- 系统 SHALL 预留导出API接口
+- 系统 SHALL 预留导入API接口
+- 本期不实现具体功能，仅定义接口规范
+
+> **注意**: 此功能为预留设计，当前版本不实现。
+
+#### Scenario: 导出插件包（预留）
+
+- **GIVEN** 用户选择导出插件 `tushare_daily`
+- **WHEN** 系统执行导出
+- **THEN** 生成包含 manifest.json、config.json、schema.json、plugin.py 的 zip 包
+
+#### Scenario: 导入插件包（预留）
+
+- **GIVEN** 用户上传插件包 `custom_plugin.plugin.zip`
+- **WHEN** 系统验证并导入
+- **THEN** 解压并注册新插件
+- **AND** 创建对应的ODS表
+
+---
+
+### Requirement: AI日志诊断
+
+系统 SHALL 提供AI驱动的日志诊断功能，分析系统日志并给出修复建议。
+
+- 系统 SHALL 读取最近的系统日志
+- 系统 SHALL 识别已知的错误模式
+- 系统 SHALL 为每个问题提供严重程度、类别和修复建议
+- 系统 SHALL 支持按错误级别过滤日志
+
+#### Scenario: 诊断发现配置问题
+
+- **GIVEN** 日志中包含 "TUSHARE_TOKEN environment variable not set"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `config`
+- **AND** 建议为 "请在.env文件中添加 TUSHARE_TOKEN=your_token"
+
+#### Scenario: 诊断发现数据问题
+
+- **GIVEN** 日志中包含 "No trading days found in calendar"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `data`
+- **AND** 建议为 "请先运行交易日历插件同步数据"
+
+#### Scenario: 系统运行正常
+
+- **GIVEN** 日志中没有错误或警告
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回摘要为 "系统运行正常，未发现明显问题"
+- **AND** 建议列表为空
+
+---
+
+### Requirement: 插件调度配置
+
+系统 SHALL 支持通过 `schedule_enabled` 和 `schedule_note` 配置项控制插件是否参与定时调度。
+
+- 系统 SHALL 在 `config.json` 中支持 `schedule_enabled` 配置项
+- 系统 SHALL 在 `config.json` 中支持 `schedule_note` 配置项说明不参与调度的原因
+- 系统 SHALL 在 `runtime_config.json` 中支持运行时覆盖 `schedule_enabled` 设置
+- 以下插件默认设置 `schedule_enabled: false`：
+  - `tushare_rt_k` - 实时数据插件，仅交易时段有数据
+  - `tushare_stk_mins` - 需要指定股票代码，不适合批量调度
+  - `tushare_trade_calendar` - 交易日历变化不频繁，建议每半年手动执行
+
+#### Scenario: 禁用插件不参与定时调度
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 定时调度执行
+- **THEN** 系统跳过 `tushare_rt_k`
+- **AND** 日志输出 "Skipping disabled plugin: tushare_rt_k"
+
+
+--- ARQUIVOS DO PR (68)
+added     +130   -0     frontend/src/api/hk-report.ts
+modified  +28    -0     frontend/src/api/report.ts
+modified  +409   -273   frontend/src/components/report/AIInsight.vue
+modified  +309   -191   frontend/src/components/report/TrendChart.vue
+modified  +0     -4     frontend/src/router/index.ts
+modified  +1     -4     frontend/src/views/PortfolioView.vue
+modified  +1     -1     frontend/src/views/datamanage/DataManageView.vue
+modified  +1     -6     frontend/src/views/market/MarketView.vue
+modified  +6     -1     frontend/src/views/research/ResearchView.vue
+modified  +1302  -105   frontend/src/views/research/components/FinancialReportPanel.vue
+added     +1373  -0     frontend/src/views/research/components/HKFinancialReportPanel.vue
+modified  +55    -0     openspec/changes/add-financial-statement-plugins/design.md
+modified  +1     -1     openspec/changes/add-financial-statement-plugins/proposal.md
+modified  +17    -0     openspec/changes/add-financial-statement-plugins/tasks.md
+added     +528   -0     openspec/changes/add-hk-financial-plugins/design.md
+added     +0     -0     openspec/changes/add-hk-financial-plugins/image/tasks/1770798614437.png
+added     +179   -0     openspec/changes/add-hk-financial-plugins/proposal.md
+added     +226   -0     openspec/changes/add-hk-financial-plugins/specs/hk-financial-plugins/spec.md
+added     +232   -0     openspec/changes/add-hk-financial-plugins/tasks.md
+added     +36    -0     scripts/create_hk_tables.py
+modified  +1     -1     skills/tushare-plugin-builder/scripts/validate_plugin.py
+modified  +2     -0     src/stock_datasource/agents/__init__.py
+added     +430   -0     src/stock_datasource/agents/hk_report_agent.py
+modified  +31    -8     src/stock_datasource/agents/orchestrator.py
+modified  +28    -41    src/stock_datasource/agents/report_agent.py
+modified  +43    -2     src/stock_datasource/config/predefined_groups.json
+modified  +19    -10    src/stock_datasource/models/database.py
+modified  +6     -0     src/stock_datasource/modules/__init__.py
+modified  +1     -0     src/stock_datasource/modules/datamanage/schemas.py   <== código ligado à spec
+modified  +158   -48    src/stock_datasource/modules/datamanage/service.py   <== código ligado à spec
+added     +1     -0     src/stock_datasource/modules/hk_report/__init__.py
+added     +275   -0     src/stock_datasource/modules/hk_report/router.py
+modified  +97    -8     src/stock_datasource/modules/report/router.py
+modified  +34    -2     src/stock_datasource/plugins/tushare_finace_indicator/extractor.py
+modified  +164   -40    src/stock_datasource/plugins/tushare_finace_indicator/service.py
+added     +4     -0     src/stock_datasource/plugins/tushare_hk_balancesheet/__init__.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_balancesheet/config.json
+added     +96    -0     src/stock_datasource/plugins/tushare_hk_balancesheet/extractor.py
+added     +273   -0     src/stock_datasource/plugins/tushare_hk_balancesheet/plugin.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_balancesheet/schema.json
+added     +195   -0     src/stock_datasource/plugins/tushare_hk_balancesheet/service.py
+added     +4     -0     src/stock_datasource/plugins/tushare_hk_cashflow/__init__.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_cashflow/config.json
+added     +96    -0     src/stock_datasource/plugins/tushare_hk_cashflow/extractor.py
+added     +273   -0     src/stock_datasource/plugins/tushare_hk_cashflow/plugin.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_cashflow/schema.json
+added     +197   -0     src/stock_datasource/plugins/tushare_hk_cashflow/service.py
+added     +4     -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/__init__.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/config.json
+added     +96    -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/extractor.py
+added     +290   -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/plugin.py
+added     +68    -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/schema.json
+added     +135   -0     src/stock_datasource/plugins/tushare_hk_fina_indicator/service.py
+added     +4     -0     src/stock_datasource/plugins/tushare_hk_income/__init__.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_income/config.json
+added     +96    -0     src/stock_datasource/plugins/tushare_hk_income/extractor.py
+added     +273   -0     src/stock_datasource/plugins/tushare_hk_income/plugin.py
+added     +18    -0     src/stock_datasource/plugins/tushare_hk_income/schema.json
+added     +195   -0     src/stock_datasource/plugins/tushare_hk_income/service.py
+modified  +0     -1     src/stock_datasource/plugins/tushare_income/schema.json
+modified  +62    -18    src/stock_datasource/plugins/tushare_income/service.py
+modified  +1     -1     src/stock_datasource/plugins/tushare_income_vip/schema.json
+modified  +85    -0     src/stock_datasource/services/financial_report_service.py
+added     +413   -0     src/stock_datasource/services/hk_financial_report_service.py
+modified  +1     -1     src/stock_datasource/services/task_queue.py
+modified  +2     -2     src/stock_datasource/services/task_worker.py
+added     +110   -0     src/stock_datasource/utils/stock_code.py
+modified  +25    -0     uv.lock
+--- DIFF DO CÓDIGO LIGADO
+### src/stock_datasource/modules/datamanage/schemas.py
+@@ -503,6 +503,7 @@ class GroupCategory(str, Enum):
+     """组合分类枚举."""
+     SYSTEM = "system"        # 系统维护
+     CN_STOCK = "cn_stock"    # A股相关
++    HK_STOCK = "hk_stock"    # 港股相关
+     INDEX = "index"          # 指数相关
+     ETF_FUND = "etf_fund"    # ETF基金相关
+     DAILY = "daily"          # 每日更新
+
+### src/stock_datasource/modules/datamanage/service.py
+@@ -226,6 +226,10 @@ def _get_plugin_date_column(self, plugin_name: str) -> Optional[str]:
+             "tushare_ths_index",        # dim table - uses list_date
+             "tushare_etf_basic",        # dim table - uses list_date
+             "akshare_hk_stock_list",    # dim table - uses list_date
++            "tushare_stock_company",    # dim table - company info
++            "tushare_index_member",     # dim table - index members
++            "tushare_ths_member",       # dim table - THS index members
++            "tushare_etf_index",        # dim table - ETF index info
+         }
+         if plugin_name in dim_tables:
+             return None
+@@ -243,6 +247,16 @@ def _get_plugin_date_column(self, plugin_name: str) -> Optional[str]:
+             "tushare_balancesheet": "ann_date",  # balance sheet uses ann_date
+             "tushare_cashflow": "ann_date",  # cash flow uses ann_date
+             "tushare_stk_surv": "surv_date",  # stock survey uses surv_date
++            "tushare_report_rc": "report_date",  # report recommendations use report_date
++            # VIP financial statement plugins (use ann_date or end_date)
++            "tushare_balancesheet_vip": "ann_date",
++            "tushare_cashflow_vip": "ann_date",
++            "tushare_income_vip": "ann_date",
++            # Hong Kong financial statement plugins (use end_date)
++            "tushare_hk_balancesheet": "end_date",
++            "tushare_hk_cashflow": "end_date",
++            "tushare_hk_income": "end_date",
++            "tushare_hk_fina_indicator": "end_date",
+ 
+         }
+         return date_column_map.get(plugin_name, "trade_date")
+@@ -349,85 +363,181 @@ def detect_missing_data(self, days: int = 30, force_refresh: bool = False) -> Mi
+         self.logger.info(f"Missing data detection complete: {plugins_with_missing}/{len(plugins_info)} plugins have missing data")
+         return summary
+     
++    def _batch_get_latest_dates(self, table_date_map: Dict[str, str]) -> Dict[str, Optional[str]]:
++        """Batch query latest dates for multiple tables in a single SQL.
++
++        Args:
++            table_date_map: {table_name: date_column} for tables that have date columns
++
++        Returns:
++            {table_name: latest_date_str or None}
++        """
++        if not table_date_map:
++            return {}
++
++        results: Dict[str, Optional[str]] = {t: None for t in table_date_map}
++        db_name = db_client.primary.database if hasattr(db_client, 'primary') else db_client.database
++
++        try:
++            # Step 1: Verify which (table, column) pairs actually exist via system.columns
++            table_names = list(table_date_map.keys())
++            placeholders = ", ".join(f"'{t}'" for t in table_names)
++            col_check_query = f"""
++            SELECT table, name
++            FROM system.columns
++            WHERE database = '{db_name}'
++            AND table IN ({placeholders})
++            """
++            col_df = db_client.execute_query(col_check_query)
++
++            if col_df.empty:
++                return results
++
++            # Build set of existing (table, column) pairs
++            existing_cols = set()
++            for _, row in col_df.iterrows():
++                existing_cols.add((row['table'], row['name']))
++
++            # Step 2: Build UNION ALL only for validated (table, date_column) pairs
++            union_parts = []
++            for table_name, date_col in table_date_map.items():
++                if (table_name, date_col) in existing_cols:
++                    union_parts.append(
++                        f"SELECT '{table_name}' AS tbl, max({date_col}) AS latest_date FROM {table_name}"
++                    )
++
++            if not union_parts:
++                return results
++
++            batch_query = " UNION ALL ".join(union_parts)
++            batch_df = db_client.execute_query(batch_query)
++
++            if not batch_df.empty:
++                for _, row in batch_df.iterrows():
++                    tbl = row['tbl']
++                    latest = row['latest_date']
++                    if latest is None:
++                        continue
++                    latest_str = str(latest).strip()
++                    if latest_str in ('', 'NaT', 'None', '\\N'):
++                        continue
++                    # Format as YYYY-MM-DD
++                    if hasattr(latest, 'strftime'):
++                        latest_str = latest.strftime('%Y-%m-%d')
++                    else:
++                        latest_str = latest_str[:10]  # Trim time part
++                    if latest_str.startswith('1970'):
++                        continue
++                    results[tbl] = latest_str
++
++        except Exception as e:
++            self.logger.warning(f"Batch latest date query failed, skipping latest dates: {e}")
++            # Don't fallback to per-plugin queries — that would be even slower.
++
++        return results
++
+     def get_plugin_list(self) -> List[PluginInfo]:
+         """Get list of all plugins with status info.
+         
+         Returns:
+             List of plugin info
+         """
+         plugins: List[PluginInfo] = []
+-        
++
++        # Phase 1: Collect plugin metadata (no DB queries)
++        plugin_metas = []
++        table_date_map: Dict[str, str] = {}  # {table_name: date_column}
++        table_to_plugin: Dict[str, str] = {}  # {table_name: plugin_name}
++
+         for plugin_name in plugin_manager.list_plugins():
+             try:
+                 plugin = plugin_manager.get_plugin(plugin_name)
+                 if not plugin:
+                     continue
+-                
+-                # Get schedule
++
+                 schedule = plugin.get_schedule()
+                 frequency = schedule.get("frequency", "daily")
+                 time = schedule.get("time", "18:00")
+-                
+-                # Get schema for table name
++
+                 schema = plugin.get_schema()
+                 table_name = schema.get("table_name", f"ods_{plugin_name}")
+                 date_column = self._get_plugin_date_column(plugin_name)
+-                
+-                # Get status - skip date-based queries for dimension tables (no date column)
+-                latest_date = None
+-                if date_column:
+-                    try:
+-                        latest_date = self.get_table_latest_date(table_name, date_column)
+-                    except Exception as e:
+-                        self.logger.warning(f"Failed to get latest date for plugin {plugin_name}: {e}")
+-                
+-                # Calculate missing count (simple check against today)
+-                # Skip for dimension tables (no date column)
+-                missing_count = 0
+-                if date_column and frequency == "daily" and latest_date:
+-                    try:
+-                        # Check if latest date is today
+-                        today = date.today().strftime('%Y-%m-%d')
+-                        if latest_date < today:
+-                            # Count trading days between latest and today
+-                            trading_days = self.get_trading_days(30)
+-                            for td in trading_days:
+-                                if td > latest_date:
+-                                    missing_count += 1
+-                                else:
+-                                    break
+-                    except Exception as e:
+-                        self.logger.warning(f"Failed to calculate missing count for plugin {plugin_name}: {e}")
+-                
+-                # Get category and role
++
+                 category = plugin.get_category().value
+                 role = plugin.get_role().value
+-                
+-                # Get dependencies
+                 dependencies = plugin.get_dependencies()
+                 optional_dependencies = plugin.get_optional_dependencies()
+-                
++
++                plugin_metas.append({
++                    "plugin_name": plugin_name,
++                    "plugin": plugin,
++                    "frequency": frequency,
++                    "time": time,
++                    "table_name": table_name,
++                    "date_column": date_column,
++                    "category": category,
++                    "role": role,
++                    "dependencies": dependencies,
++                    "optional_dependencies": optional_dependencies,
++                })
++
++                if date_column:
++                    table_date_map[table_name] = date_column
++                    table_to_plugin[table_name] = plugin_name
++
++            except Exception as e:
++                self.logger.error(f"Failed to get plugin info for {plugin_name}: {e}")
++                continue
++
++        # Phase 2: Batch query latest dates (1~2 DB queries instead of 63*3)
++        latest_dates = self._batch_get_latest_dates(table_date_map)
++
++        # Pre-fetch trading days once (not per-plugin)
++        trading_days = None
++        today_str = date.today().strftime('%Y-%m-%d')
++        try:
++            trading_days = self.get_trading_days(30)
++        except Exception:
++            pass
++
++        # Phase 3: Assemble results
++        for meta in plugin_metas:
++            try:
++                table_name = meta["table_name"]
++                date_column = meta["date_column"]
++                frequency = meta["frequency"]
++
++                latest_date = latest_dates.get(table_name) if date_column else None
++
++                missing_count = 0
++                if date_column and frequency == "daily" and latest_date and trading_days:
++                    if latest_date < today_str:
++                        for td in trading_days:
++                            if td > latest_date:
++                                missing_count += 1
++                            else:
++                                break
++
+                 info = PluginInfo(
+-                    name=plugin_name,
+-                    version=plugin.version,
+-                    description=plugin.description,
++                    name=meta["plugin_name"],
++                    version=meta["plugin"].version,
++                    description=meta["plugin"].description,
+                     type="data_source",
+-                    category=category,
+-                    role=role,
+-                    is_enabled=plugin.is_enabled(),
++                    category=meta["category"],
++                    role=meta["role"],
++                    is_enabled=meta["plugin"].is_enabled(),
+                     schedule_frequency=frequency,
+-                    schedule_time=time,
++                    schedule_time=meta["time"],
+                     latest_date=latest_date,
+                     missing_count=missing_count,
+-                    last_run_at=None,  # TODO: Get from task history
++                    last_run_at=None,
+                     last_run_status=None,
+-                    dependencies=dependencies,
+-                    optional_dependencies=optional_dependencies
++                    dependencies=meta["dependencies"],
++                    optional_dependencies=meta["optional_dependencies"],
+                 )
+                 plugins.append(info)
+             except Exception as e:
+-                # Log error but continue with other plugins - one plugin failure shouldn't break others
+-                self.logger.error(f"Failed to get plugin info for {plugin_name}: {e}")
++                self.logger.error(f"Failed to assemble plugin info for {meta.get('plugin_name', '?')}: {e}")
+                 continue
+         
+         return plugins
+
+===== P096 | repo daemonicai/dmon-core | PR #28: feat(providers): honour custom baseUrl in OpenAI model listing | capacidade: ollama-provider
+--- SPEC VIVA
+# Ollama Provider Spec
+
+## Purpose
+
+Define the `OllamaProviderExtension` and `OllamaProviderFactory` components that integrate an Ollama inference server into dmon as a first-class local provider, covering platform applicability, server reachability, wizard-driven configuration, capability heuristics derived from model IDs, and project isolation constraints.
+
+## Requirements
+
+### Requirement: OllamaProviderExtension implements IProviderExtension
+The system SHALL provide `OllamaProviderExtension` in project `Dmon.Providers.Ollama`, implementing `IProviderExtension` with: `ProviderName = "Ollama"`, `IsApplicable()` returning `true` on all platforms, `IsRunningAsync` pinging the configured base URL via OllamaSharp within a 2-second timeout, `EnsureRunningAsync` throwing `NotSupportedException`, `ListModelsAsync` delegating to `OllamaApiClient`, and `CreateFactory` returning an `OllamaProviderFactory`.
+
+#### Scenario: IsApplicable always true
+- **WHEN** `IsApplicable()` is called on `OllamaProviderExtension`
+- **THEN** it returns `true` regardless of platform or hardware
+
+#### Scenario: IsRunningAsync returns true when Ollama is reachable
+- **WHEN** `IsRunningAsync` is called and an Ollama server is reachable at the configured base URL
+- **THEN** it returns `true` within 2 seconds
+
+#### Scenario: IsRunningAsync returns false when Ollama is not reachable
+- **WHEN** `IsRunningAsync` is called and no server is reachable at the configured base URL
+- **THEN** it returns `false` without throwing
+
+#### Scenario: EnsureRunningAsync throws NotSupportedException
+- **WHEN** `EnsureRunningAsync` is called
+- **THEN** it throws `NotSupportedException` with a message indicating the user must start Ollama manually
+
+#### Scenario: ListModelsAsync returns models from running server
+- **WHEN** `ListModelsAsync` is called and an Ollama server is running
+- **THEN** it returns a non-empty list of `ModelInfo` with IDs matching those in the server's model library
+
+### Requirement: OllamaProviderFactory implements IProviderFactory
+The system SHALL provide `OllamaProviderFactory` in `Dmon.Providers.Ollama`, implementing `IProviderFactory` with: `AdapterName = "ollama"`, `DisplayName = "Ollama"`, `DefaultModelId = "llama3.2"`, `DefaultEnvVar = "OLLAMA_HOST"`. `CreateAsync` SHALL construct an `OllamaApiClient` using the base URL from `ProviderConfig.BaseUrl` (falling back to `http://localhost:11434`) and wrap it in `CapabilitiesDecorator`. `GetAvailableModelsAsync` SHALL query the Ollama server at the given base URL and return the model list; if unreachable it SHALL return an empty list without throwing.
+
+#### Scenario: CreateAsync returns a working IChatClient
+- **WHEN** `CreateAsync` is called with a `ProviderConfig` containing a valid `BaseUrl` and `DefaultModelId`
+- **THEN** it returns an `IChatClient` that is non-null and exposes `ChatClientCapabilities` via `GetService`
+
+#### Scenario: CreateAsync falls back to localhost when BaseUrl is null
+- **WHEN** `CreateAsync` is called with a `ProviderConfig` where `BaseUrl` is null
+- **THEN** the underlying `OllamaApiClient` connects to `http://localhost:11434`
+
+#### Scenario: GetAvailableModelsAsync returns empty list when server unreachable
+- **WHEN** `GetAvailableModelsAsync` is called and the Ollama server is not running
+- **THEN** it returns an empty list without throwing
+
+### Requirement: OllamaProviderFactory wizard flow
+`OllamaProviderFactory.GetNextStepAsync` SHALL drive a three-step wizard: (1) a `ChooseOneStep` with id `"deployment"` offering "Local (localhost)" and "Cloud (ollama.com)"; (2) a `TextInputStep` with id `"base-url"` whose default is `http://localhost:11434/api` for local or `https://ollama.com/api` for cloud, overridden by `OLLAMA_HOST` env var when set; (3) a `ChooseOneStep` with id `"model"` whose options are fetched live from the base URL via `GetAvailableModelsAsync`, showing a not-reachable hint when the list is empty; completing all steps returns a `WizardCompletedStep`.
+
+#### Scenario: First step requests deployment type
+- **WHEN** `GetNextStepAsync` is called with an empty `WizardState`
+- **THEN** it returns a `ChooseOneStep` with id `"deployment"` and exactly two options: "Local (localhost)" and "Cloud (ollama.com)"
+
+#### Scenario: Second step defaults to local base URL
+- **WHEN** `GetNextStepAsync` is called with an answered `"deployment"` step selecting "Local"
+- **THEN** it returns a `TextInputStep` with id `"base-url"` and default value `http://localhost:11434/api`
+
+#### Scenario: Second step defaults to cloud base URL
+- **WHEN** `GetNextStepAsync` is called with an answered `"deployment"` step selecting "Cloud"
+- **THEN** it returns a `TextInputStep` with id `"base-url"` and default value `https://ollama.com/api`
+
+#### Scenario: Second step uses OLLAMA_HOST when set
+- **WHEN** `GetNextStepAsync` is called for the `"base-url"` step and `OLLAMA_HOST` is set in the environment
+- **THEN** the returned `TextInputStep` has `Default` equal to the `OLLAMA_HOST` value and `Required = false`
+
+#### Scenario: Third step lists models from server
+- **WHEN** `GetNextStepAsync` is called with answered `"deployment"` and `"base-url"` steps and Ollama is running
+- **THEN** it returns a `ChooseOneStep` with id `"model"` whose options come from the live model list
+
+#### Scenario: Third step shows hint when server unreachable
+- **WHEN** `GetNextStepAsync` is called for the model step and Ollama is not reachable
+- **THEN** it returns a `ChooseOneStep` with id `"model"` containing a single non-selectable option indicating Ollama is not running
+
+#### Scenario: Wizard completes after model selection
+- **WHEN** `GetNextStepAsync` is called with answered `"deployment"`, `"base-url"`, and `"model"` steps
+- **THEN** it returns a `WizardCompletedStep` with a non-empty confirmation message
+
+### Requirement: Capability heuristic for Ollama models
+`OllamaProviderFactory.GetCapabilities(string modelId)` SHALL derive `ChatClientCapabilities` from the model ID using the pattern table defined in the `provider-extension` spec: tool-calling patterns (`*-it-*`, `*-instruct*`, `*-chat*`), reasoning patterns (`*reason*`, `qwen3*`, `*thinking*`, `*r1*`), embedding/reranker patterns (no tool calling, no reasoning). Unrecognised model IDs SHALL return `SupportsToolCalling = false`, `SupportsReasoning = false`.
+
+#### Scenario: Instruct model infers tool calling
+- **WHEN** `GetCapabilities("llama3.2:3b-instruct-q4_0")` is called
+- **THEN** `SupportsToolCalling = true` and `SupportsReasoning = false`
+
+#### Scenario: Reasoning model infers reasoning support
+- **WHEN** `GetCapabilities("qwen3:14b")` is called
+- **THEN** `SupportsReasoning = true`
+
+#### Scenario: Unknown model returns conservative defaults
+- **WHEN** `GetCapabilities("somemodel:latest")` is called for an unrecognised name
+- **THEN** `SupportsToolCalling = false` and `SupportsReasoning = false`
+
+### Requirement: Dmon.Providers.Ollama project isolation
+`Dmon.Providers.Ollama` SHALL reference only `Dmon.Abstractions` and `OllamaSharp`. It SHALL NOT reference `Dmon.Core`, `Dmon.Providers`, or any other internal project. `Dmon.Core` SHALL reference `Dmon.Providers.Ollama` at startup registration only.
+
+#### Scenario: Project dependency graph is clean
+- **WHEN** the `Dmon.Providers.Ollama.csproj` is inspected
+- **THEN** it contains `PackageReference` for `OllamaSharp` and `ProjectReference` for `Dmon.Abstractions` only
+
+#### Scenario: OllamaProviderExtension registered at startup
+- **WHEN** the daemon host starts
+- **THEN** `OllamaProviderExtension` is registered with `IProviderRegistry` before the first turn
+
+--- ARQUIVOS DO PR (15)
+modified  +4     -4     .dmon/config.yaml
+added     +2     -0     openspec/changes/archive/2026-06-08-openai-adapter-custom-baseurl-models/.openspec.yaml
+added     +66    -0     openspec/changes/archive/2026-06-08-openai-adapter-custom-baseurl-models/design.md
+added     +26    -0     openspec/changes/archive/2026-06-08-openai-adapter-custom-baseurl-models/proposal.md
+added     +42    -0     openspec/changes/archive/2026-06-08-openai-adapter-custom-baseurl-models/specs/provider-model-listing/spec.md
+added     +30    -0     openspec/changes/archive/2026-06-08-openai-adapter-custom-baseurl-models/tasks.md
+modified  +26    -7     openspec/specs/provider-model-listing/spec.md
+modified  +1     -1     src/Dmon.Abstractions/Providers/IProviderFactory.cs
+modified  +1     -1     src/Dmon.Core/Providers/ModelModelsHandler.cs
+modified  +2     -2     src/Dmon.Providers.Ollama/OllamaProviderFactory.cs   <== código ligado à spec
+modified  +2     -2     src/Dmon.Providers/AnthropicProviderFactory.cs
+modified  +2     -2     src/Dmon.Providers/GeminiProviderFactory.cs
+modified  +71    -3     src/Dmon.Providers/OpenAiProviderFactory.cs
+added     +126   -0     test/Dmon.Core.Tests/Providers/ModelModelsHandlerTests.cs
+modified  +228   -6     test/Dmon.Providers.Tests/OpenAiProviderFactoryTests.cs
+--- DIFF DO CÓDIGO LIGADO
+### src/Dmon.Providers.Ollama/OllamaProviderFactory.cs
+@@ -37,7 +37,7 @@ public ChatClientCapabilities GetCapabilities(string modelId)
+     }
+ 
+     public async ValueTask<IReadOnlyList<DmonModelInfo>> GetAvailableModelsAsync(
+-        string? apiKey, CancellationToken cancellationToken = default)
++        string? apiKey, string? baseUrl = null, CancellationToken cancellationToken = default)
+     {
+         Uri uri = NormalizeOllamaBaseUri(apiKey);
+ 
+@@ -118,7 +118,7 @@ public async ValueTask<WizardStep> GetNextStepAsync(
+         if (modelStep is null || !modelStep.IsAnswered)
+         {
+             string baseUrl = baseUrlStep.Value ?? baseUrlStep.Default ?? "http://localhost:11434";
+-            IReadOnlyList<DmonModelInfo> models = await GetAvailableModelsAsync(baseUrl, cancellationToken).ConfigureAwait(false);
++            IReadOnlyList<DmonModelInfo> models = await GetAvailableModelsAsync(baseUrl, cancellationToken: cancellationToken).ConfigureAwait(false);
+ 
+             IReadOnlyList<WizardOption> options = models.Count > 0
+                 ? models.Select(m => new WizardOption(m.Id, m.Id)).ToList()
+
+===== P097 | repo localstack/lstk | PR #328: feat(terraform): redirect S3 backend and remote-state to LocalStack | capacidade: cdk-proxy
+--- SPEC VIVA
+# cdk-proxy Specification
+
+## Purpose
+
+Provide an `lstk cdk` command that proxies the AWS CDK CLI against a running LocalStack AWS emulator, injecting the resolved LocalStack endpoints into the `cdk` subprocess environment so the CDK targets LocalStack directly without requiring `cdklocal`/`aws-cdk-local`.
+
+## Requirements
+### Requirement: CDK CLI proxy command
+The system SHALL provide an `lstk cdk` command that forwards all of its arguments to the real AWS CDK CLI (`cdk`) and, before invoking it, configures the subprocess environment to target the running LocalStack instance.
+
+#### Scenario: Pass through CDK arguments
+- **WHEN** the user runs `lstk cdk deploy MyStack --require-approval never`
+- **THEN** lstk invokes the `cdk` binary with `deploy MyStack --require-approval never` intact and propagates its exit code
+
+#### Scenario: Inject LocalStack endpoint into the CDK environment
+- **WHEN** lstk runs a CDK command
+- **THEN** the `cdk` subprocess receives `AWS_ENDPOINT_URL` set to the resolved LocalStack endpoint and `AWS_ENDPOINT_URL_S3` set to the corresponding S3 endpoint (with an `s3.` host prefix when the host is virtual-host-capable)
+
+#### Scenario: Honor an explicit endpoint override
+- **WHEN** `AWS_ENDPOINT_URL` is already set in the environment
+- **THEN** lstk uses that value instead of the auto-resolved endpoint
+
+### Requirement: Direct cdk invocation with no cdklocal dependency
+The system SHALL invoke the real `cdk` binary directly and SHALL NOT require or invoke `cdklocal`/`aws-cdk-local`. The binary name SHALL be configurable via `LSTK_CDK_CMD`, defaulting to `cdk`.
+
+#### Scenario: Resolve the cdk binary from PATH
+- **WHEN** `lstk cdk` runs and `cdk` is on `PATH`
+- **THEN** lstk locates and executes it
+
+#### Scenario: Override the binary name
+- **WHEN** `LSTK_CDK_CMD` is set to an alternative binary name
+- **THEN** lstk invokes that binary instead of `cdk`
+
+#### Scenario: Missing CDK binary
+- **WHEN** the configured CDK binary is not found on `PATH`
+- **THEN** lstk emits an actionable error directing the user to install the AWS CDK CLI and does not attempt to run anything
+
+### Requirement: Minimum CDK version
+The system SHALL require AWS CDK CLI version 2.177.0 or newer, because lstk points CDK at LocalStack purely through environment variables (`AWS_ENDPOINT_URL`/`AWS_ENDPOINT_URL_S3`), which older CDK versions do not honor.
+
+#### Scenario: CDK version is too old
+- **WHEN** the resolved `cdk` binary reports a version older than 2.177.0
+- **THEN** lstk fails with an actionable error explaining the minimum version, and does not run the command (so it cannot silently target real AWS)
+
+### Requirement: Mock credentials and AWS environment isolation
+The system SHALL provide LocalStack-compatible mock credentials to the `cdk` subprocess and SHALL strip ambient AWS configuration that could redirect CDK to real AWS. lstk SHALL NOT require, read, or inject the LocalStack auth token for CDK-to-LocalStack API calls; the auth token only activates the emulator container.
+
+CDK always operates against the default LocalStack account `000000000000`; lstk SHALL set a fixed mock `AWS_ACCESS_KEY_ID=test` and SHALL NOT derive the account from a flag or from the ambient `AWS_ACCESS_KEY_ID`.
+
+#### Scenario: Provide mock credentials and region
+- **WHEN** lstk runs a CDK command
+- **THEN** the subprocess environment contains `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test`, and the resolved region in `AWS_REGION`/`AWS_DEFAULT_REGION`
+
+#### Scenario: Strip ambient AWS configuration
+- **WHEN** the user's environment contains `AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_SESSION_TOKEN`, or real `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` values
+- **THEN** lstk removes or overrides them in the subprocess environment so CDK cannot resolve credentials or a profile that point at real AWS
+
+#### Scenario: A 12-digit AWS_ACCESS_KEY_ID does not change the account
+- **WHEN** the user's environment contains a 12-digit `AWS_ACCESS_KEY_ID` (an account id)
+- **THEN** lstk overrides it with `test` so CDK still operates against the default account `000000000000`
+
+### Requirement: Region selection
+The system SHALL accept the lstk-specific `--region` flag in leading position (before the CDK subcommand) and encode it into the subprocess environment, with the same parsing and precedence as `lstk terraform`. The system SHALL NOT accept an `--account` flag for CDK.
+
+#### Scenario: Region precedence
+- **WHEN** `--region` is omitted
+- **THEN** lstk resolves the region from `AWS_REGION`, falling back to `us-east-1`
+
+#### Scenario: Reject the --account flag
+- **WHEN** `--account` is provided to `lstk cdk` in leading position, with any value
+- **THEN** lstk fails at the command boundary with an error explaining that `--account` is not supported and that CDK always uses the default LocalStack account `000000000000`, and does not invoke `cdk`
+
+#### Scenario: Flags only in leading position
+- **WHEN** `--region` appears after the CDK subcommand (e.g. `lstk cdk deploy --region us-west-2`)
+- **THEN** lstk forwards it to `cdk` unchanged rather than consuming it
+
+### Requirement: Emulator gating for AWS-contacting commands
+The system SHALL require a running AWS emulator for CDK subcommands that contact AWS APIs and SHALL run a fixed set of offline subcommands without that requirement.
+
+#### Scenario: AWS-contacting command without a running emulator
+- **WHEN** the user runs an AWS-contacting subcommand (e.g. `lstk cdk deploy`) and the AWS emulator is not running
+- **THEN** lstk emits an actionable "LocalStack is not running" error (with a command to start it) and does not invoke `cdk`
+
+#### Scenario: A different emulator is running
+- **WHEN** an AWS-contacting CDK command is run while a non-AWS emulator (e.g. Snowflake or Azure) is running but the AWS emulator is not
+- **THEN** lstk fails with an AWS-specific error naming the running emulator rather than a misleading generic "not running" message
+
+#### Scenario: Offline command without a running emulator
+- **WHEN** the user runs an offline subcommand (e.g. `lstk cdk synth`, `lstk cdk ls`, `lstk cdk init`)
+- **THEN** lstk runs it without requiring a running emulator
+
+### Requirement: Streamed passthrough output
+The system SHALL stream the CDK subprocess's stdin, stdout, and stderr through unobstructed and SHALL NOT display a spinner or capture CDK output into lifecycle events.
+
+#### Scenario: Unobstructed streaming
+- **WHEN** a long-running CDK command (e.g. `lstk cdk deploy`) produces incremental output
+- **THEN** lstk streams that output directly to the terminal without a spinner or reformatting, and forwards interactive prompts via stdin
+
+#### Scenario: Propagate failure
+- **WHEN** the CDK command exits non-zero
+- **THEN** lstk returns a silent error carrying that exit status so the top-level handler does not reprint it
+
+--- ARQUIVOS DO PR (24)
+modified  +15    -3     cmd/terraform.go   <== código ligado à spec
+added     +287   -0     internal/iac/terraform/cli/backend.go
+added     +230   -0     internal/iac/terraform/cli/backend_test.go
+modified  +30    -12    internal/iac/terraform/cli/defaults.go
+modified  +121   -33    internal/iac/terraform/cli/exec.go
+modified  +46    -23    internal/iac/terraform/cli/override.go
+modified  +8     -7     internal/iac/terraform/cli/override_test.go
+added     +145   -0     internal/iac/terraform/cli/provision.go
+added     +122   -0     internal/iac/terraform/cli/provision_test.go
+added     +111   -0     internal/iac/terraform/cli/remotestate.go
+added     +126   -0     internal/iac/terraform/cli/remotestate_test.go
+added     +64    -0     internal/iac/terraform/cli/routing_test.go
+added     +81    -0     internal/iac/terraform/cli/version.go
+added     +60    -0     internal/iac/terraform/cli/version_test.go
+added     +2     -0     openspec/changes/add-terraform-s3-backend-remote-state/.openspec.yaml
+added     +122   -0     openspec/changes/add-terraform-s3-backend-remote-state/design.md
+added     +30    -0     openspec/changes/add-terraform-s3-backend-remote-state/proposal.md
+added     +135   -0     openspec/changes/add-terraform-s3-backend-remote-state/specs/terraform-proxy/spec.md
+added     +65    -0     openspec/changes/add-terraform-s3-backend-remote-state/tasks.md
+added     +146   -0     test/integration/terraform_s3backend_e2e_test.go
+added     +29    -0     test/integration/test-samples/iac/terraform/remote-state/consumer/main.tf
+added     +24    -0     test/integration/test-samples/iac/terraform/remote-state/producer/main.tf
+added     +21    -0     test/integration/test-samples/iac/terraform/s3-backend-locking/main.tf
+added     +20    -0     test/integration/test-samples/iac/terraform/s3-backend/main.tf
+--- DIFF DO CÓDIGO LIGADO
+### cmd/terraform.go
+@@ -75,9 +75,21 @@ Examples:
+ 				return emitValidationError(sink, err)
+ 			}
+ 
+-			// Unproxied subcommands (fmt/validate/version) never touch the
+-			// endpoint, so they run without requiring a running emulator.
+-			if tfcli.IsUnproxied(tfArgs) {
++			workdir, err := os.Getwd()
++			if err != nil {
++				return fmt.Errorf("resolving working directory: %w", err)
++			}
++			// -chdir switches terraform into another directory, so the S3-backend
++			// detection that decides whether an emulator is required must inspect
++			// that directory too (matching the resolution Run does internally).
++			if chdir != "" {
++				workdir = tfcli.ResolveChdir(workdir, chdir)
++			}
++
++			// Commands that don't need the emulator (fmt/validate/version, and
++			// init when no S3 backend is declared) run without bringing up or
++			// requiring a running emulator.
++			if !tfcli.RequiresEmulator(tfArgs, workdir, logger) {
+ 				return tfcli.Run(cmd.Context(), "", region, account, chdir, sink, logger, tfArgs)
+ 			}
+ 
+
+===== P098 | repo Larusso/unity-version-manager | PR #456: Add installation progress reporting | capacidade: download-modules-json-command
+--- SPEC VIVA
+# Spec: download-modules-json-command
+
+## Purpose
+
+The `download-modules-json` subcommand fetches the `modules.json` data for a given Unity version from the Unity release API and writes it to stdout or a file. It is intended as a developer/diagnostic tool and is gated behind a feature flag.
+
+## Requirements
+
+### Requirement: Feature flag gates the command
+The `uvm` crate SHALL expose `download-modules-json` as a subcommand only when compiled with the `dev-commands` feature flag. Production builds (without the flag) SHALL NOT include this subcommand or any of its dependencies.
+
+#### Scenario: Command absent in default build
+- **WHEN** `uvm` is built without `--features dev-commands`
+- **THEN** `uvm --help` does not list `download-modules-json`
+
+#### Scenario: Command present in dev build
+- **WHEN** `uvm` is built with `--features dev-commands`
+- **THEN** `uvm --help` lists `download-modules-json`
+
+---
+
+### Requirement: Version argument is required
+The command SHALL accept a single positional `<version>` argument in Unity version format (e.g. `2023.1.0f1`). The command SHALL fail with a usage error if the version is omitted or unparseable.
+
+#### Scenario: Valid version provided
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1`
+- **THEN** the command proceeds to fetch release data for that version
+
+#### Scenario: Version omitted
+- **WHEN** the user runs `uvm download-modules-json` with no arguments
+- **THEN** the command exits with a non-zero code and prints a usage error to stderr
+
+---
+
+### Requirement: Platform defaults to current host platform
+The command SHALL accept an optional `--platform <platform>` argument accepting `macos`, `linux`, or `windows` (case-insensitive, via `clap::ValueEnum`). When omitted, the platform SHALL default to the host platform.
+
+#### Scenario: Platform omitted on macOS host
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1` on a macOS machine
+- **THEN** the command fetches modules for the `macos` platform
+
+#### Scenario: Platform explicitly specified
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1 --platform linux`
+- **THEN** the command fetches modules for the `linux` platform regardless of host OS
+
+---
+
+### Requirement: Architecture defaults to current host architecture
+The command SHALL accept an optional `--architecture <arch>` argument accepting `x86_64` or `arm64` (case-insensitive, via `clap::ValueEnum`). When omitted, the architecture SHALL default to the host architecture (`x86_64` on Linux regardless of actual arch, per existing platform logic).
+
+#### Scenario: Architecture omitted
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1` on an arm64 macOS machine
+- **THEN** the command fetches modules for the `arm64` architecture
+
+#### Scenario: Architecture explicitly overridden
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1 --architecture x86_64`
+- **THEN** the command fetches modules for the `x86_64` architecture
+
+---
+
+### Requirement: Output defaults to stdout
+When `--output` is not specified, the command SHALL write the serialized JSON to stdout.
+
+#### Scenario: No output flag
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1`
+- **THEN** the JSON content is written to stdout
+- **THEN** the process exits with code 0
+
+---
+
+### Requirement: Output can be written to a file
+The command SHALL accept an optional `--output <path>` argument. When provided, the command SHALL write the JSON to the specified file path, creating the file if it does not exist and overwriting it if it does. If the parent directory does not exist, the command SHALL create it (including all intermediate directories) before writing the file.
+
+#### Scenario: Valid output path provided
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1 --output /tmp/modules.json`
+- **THEN** the file `/tmp/modules.json` is created (or overwritten) with the JSON content
+- **THEN** nothing is written to stdout
+- **THEN** the process exits with code 0
+
+#### Scenario: Output path in non-existent directory
+- **WHEN** the user runs `uvm download-modules-json 2023.1.0f1 --output /some/new/dir/modules.json`
+- **THEN** the directory `/some/new/dir/` is created recursively
+- **THEN** the file `/some/new/dir/modules.json` is written with the JSON content
+- **THEN** the process exits with code 0
+
+---
+
+### Requirement: JSON format matches modules.json produced during installation
+The output SHALL be the pretty-printed JSON serialization (`serde_json::to_string_pretty`) of the `Vec<Module>` slice returned by `FetchRelease` for the given version, platform, and architecture — identical to the format written by `write_modules_json` in `uvm_install`.
+
+#### Scenario: Output is valid JSON array
+- **WHEN** the command succeeds
+- **THEN** stdout (or the output file) contains a valid JSON array
+- **THEN** each element is a serialized `Module` object matching the structure written during installation
+
+---
+
+### Requirement: Version not found exits with error
+When the Unity release API returns no result for the requested version, the command SHALL exit with a non-zero code and print a human-readable error to stderr.
+
+#### Scenario: Unknown version
+- **WHEN** the user runs `uvm download-modules-json 9999.9.9f9`
+- **THEN** the command exits with code 1
+- **THEN** stderr contains a message indicating the version was not found
+
+--- ARQUIVOS DO PR (25)
+modified  +11    -0     Cargo.lock
+added     +2     -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/.openspec.yaml
+added     +144   -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/design.md
+added     +29    -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/proposal.md
+added     +122   -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/specs/installation-progress/spec.md
+added     +83    -0     openspec/changes/archive/2026-04-07-better-installation-progress-output/tasks.md
+added     +128   -0     openspec/specs/installation-progress/spec.md
+added     +43    -0     probe_access.sh
+added     +18    -0     tmux_workspace.yml
+modified  +1     -0     uvm/Cargo.toml
+modified  +67    -11    uvm/src/commands/install.rs
+modified  +10    -9     uvm/src/commands/mod.rs   <== código ligado à spec
+added     +550   -0     uvm/src/commands/progress.rs
+modified  +44    -13    uvm/src/main.rs
+modified  +12    -0     uvm_install/src/install/installer/mod.rs
+modified  +21    -1     uvm_install/src/install/installer/zip.rs
+modified  +131   -4     uvm_install/src/install/loader.rs
+modified  +1     -1     uvm_install/src/install/mod.rs
+modified  +321   -61    uvm_install/src/lib.rs
+modified  +18    -6     uvm_install/src/sys/linux/mod.rs
+modified  +8     -0     uvm_install/src/sys/linux/pkg.rs
+modified  +4     -0     uvm_install/src/sys/linux/xz.rs
+modified  +25    -12    uvm_install/src/sys/mac/mod.rs
+modified  +24    -0     uvm_install/src/sys/mac/pkg.rs
+modified  +2     -0     uvm_install/src/sys/win/mod.rs
+--- DIFF DO CÓDIGO LIGADO
+### uvm/src/commands/mod.rs
+@@ -1,18 +1,19 @@
+ use std::io;
+ 
+ pub mod detect;
+-pub mod list;
+-pub mod install;
+-pub mod uninstall;
+-pub mod version;
++#[cfg(feature = "dev-commands")]
++pub mod download_modules_json;
+ pub mod external;
+-pub mod presentation;
++pub mod gc;
++pub mod install;
+ pub mod launch;
++pub mod list;
+ pub mod modules;
+-pub mod gc;
+-#[cfg(feature = "dev-commands")]
+-pub mod download_modules_json;
++pub mod presentation;
++pub mod progress;
++pub mod uninstall;
++pub mod version;
+ 
+ pub trait Command {
+     fn execute(&self) -> io::Result<i32>;
+-}
+\ No newline at end of file
++}
+

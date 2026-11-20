@@ -1,0 +1,1853 @@
+===== P001 | langoai/lango PR #72 | capacidade do par: p2p-owner-shield
+PR: feat: merge dev into main with p2p, escrow, tooling, and docs updates
+arquivos ligados: internal/payment/eip3009/builder.go;internal/payment/eip3009/builder_test.go
+--- linhas alteradas (16; mostrando até 40)
++	// SignTransaction signs raw bytes (no additional hashing).
++	SignTransaction(ctx context.Context, rawTx []byte) ([]byte, error)
++	// SignMessage signs an arbitrary message (applies keccak256 before signing).
+-	sig, err := wallet.SignMessage(ctx, hash)
++	// Use SignTransaction (raw sign) because TypedDataHash already returns
++	// a keccak256 digest. SignMessage would double-hash, producing an
++	// invalid signature for on-chain verification.
++	sig, err := wallet.SignTransaction(ctx, hash)
+-		return nil, fmt.Errorf("sign message: %w", err)
++		return nil, fmt.Errorf("sign typed data: %w", err)
++func (w *testWallet) SignTransaction(_ context.Context, rawTx []byte) ([]byte, error) {
++	return crypto.Sign(rawTx, w.key)
++}
+-	return crypto.Sign(message, w.key)
++	hash := crypto.Keccak256(message)
++	return crypto.Sign(hash, w.key)
+--- candidata: smart-account [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Session key paymaster allowlist
+  | The `SessionPolicy` struct SHALL include an `allowedPaymasters` field (address array). When non-empty, `validateUserOp` SHALL enforce that the paymaster address in `paymasterAndData` is in the allowli
+  > - **WHEN** `paymasterAndData` has fewer than 20 bytes
+  > Three on-chain modules implementing ERC-7579 interfaces:
+  > 1. **LangoSessionValidator** (TYPE_VALIDATOR): Validates UserOperation signatures against registered session keys and their policies (targets, functions, spend limits, expiry). Session key registratio
+  > - `Manager`: Create (ECDSA keypair), encrypt via CryptoProvider callback, register on-chain, sign UserOps, revoke (cascade children)
+  > `UserOpSigner` interface in wallet package:
+  > - `SignUserOp(ctx, userOpHash, entryPoint, chainID) ([]byte, error)`
+  > - `budget.OnChainTracker`: Tracks per-session spending from on-chain data
+  > - **THEN** it calls eth_call with the EntryPoint.getNonce ABI-encoded calldata and returns the decoded uint256 nonce
+--- candidata: payment-service [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: USDC ERC-20 transfer transaction building
+  | The system SHALL build EIP-1559 ERC-20 transfer transactions by ABI-encoding `transfer(address,uint256)` with gas estimation and nonce management.
+  > - **THEN** the transaction is submitted on-chain and a PaymentReceipt with txHash and status "submitted" is returned
+  > - **WHEN** the amount plus today's total would exceed `maxDaily`
+  > #### Scenario: Payment to invalid address
+  > - **WHEN** `Send` is called with an invalid Ethereum address
+  > The system SHALL query the wallet's USDC balance via `balanceOf(address)` eth_call to the USDC contract.
+  > The system SHALL persist transaction records in an Ent PaymentTx schema with fields: id (UUID), tx_hash, from_address, to_address, amount, chain_id, status (pending/submitted/confirmed/failed), sessio
+  > - **THEN** the PaymentTx record is updated with status "failed" and the error message
+  > #### Scenario: On-chain config disabled by default
+--- candidata: config-system [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Configuration file loading
+  | The system SHALL load configuration from JSON or YAML files with a priority chain.
+  > The system SHALL load configuration from JSON or YAML files with a priority chain.
+  > The system SHALL validate configuration against a schema before use.
+  > The system SHALL validate configuration against a schema before use.
+  > - **THEN** validation SHALL fail with a clear error message
+  > - `maxContextPerLayer` (int): Maximum context items per layer in retrieval (default: 5)
+  > - **AND** `maxContextPerLayer` SHALL default to 5 if not specified or <= 0
+  > **Migration**: Remove `security.passphrase` from `lango.json` before import, or let the migration process ignore it.
+  > - **THEN** a compile error SHALL occur because the function no longer exists
+--- candidata: bootstrap-lifecycle [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified bootstrap sequence
+  | The system SHALL execute a complete bootstrap sequence: ensure data directory → open database → acquire passphrase → initialize crypto → load config profile. The result SHALL be a single struct contai
+  > The system SHALL execute a complete bootstrap sequence: ensure data directory → open database → acquire passphrase → initialize crypto → load config profile. The result SHALL be a single struct contai
+  > - **THEN** the system acquires a new passphrase (with confirmation), generates a salt, stores the checksum, creates a default config profile, and returns the Result
+  > - **THEN** the system returns a "passphrase checksum mismatch" error
+  > ### Requirement: Ephemeral keyfile shredding after crypto initialization
+  > The system SHALL shred the passphrase keyfile after successful crypto initialization and checksum verification when the passphrase source is keyfile and `KeepKeyfile` is false (default). Shred failure
+  > - **AND** crypto initialization and checksum verification succeed
+  > - **WHEN** `ShredKeyfile()` returns an error during bootstrap
+  > - **THEN** a warning is printed to stderr and bootstrap continues with the already-initialized crypto provider
+--- candidata: docs-only [PR]
+  | ## ADDED Requirements
+  | ### Requirement: README documents streaming in gateway feature
+  | README.md Features list SHALL describe the Gateway as supporting real-time streaming.
+  > ### Requirement: README documents observational memory context limit configs
+  > README.md Configuration Reference table SHALL include `observationalMemory.maxReflectionsInContext` and `observationalMemory.maxObservationsInContext` fields matching `ObservationalMemoryConfig` in `i
+  > #### Scenario: Context limit config fields present
+  > - **THEN** the table contains `observationalMemory.maxReflectionsInContext` (int, default `5`) and `observationalMemory.maxObservationsInContext` (int, default `20`)
+  > ### Requirement: README documents observational memory context limits
+  > README.md Observational Memory section SHALL describe context limits for reflections and observations.
+  > #### Scenario: Context limits bullet present
+  > - **THEN** there is a "Context Limits" bullet describing default limits of 5 reflections and 20 observations
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: payment-service): O PR é grande e pode reunir mudanças de uma nova versão ou de outros PRs. O trecho observado altera aspectos técnicos da assinatura de wallets, sem modificar a spec.
+
+===== P003 | zhukunpenglinyutong/desktop-cc-gui PR #700 | capacidade do par: codex-chat-canvas-execution-cards-visual-refactor
+PR: Fix-0.5.11
+arquivos ligados: src-tauri/src/shared/codex_core.rs;src/features/app/hooks/useAppServerEvents.test.tsx;src/features/app/hooks/useAppServerEvents.ts;src/features/messages/components/Messages.tsx;src/features/threads/hooks/useThreadEventHandlers.ts;src/features/threads/hooks/useThreadItemEvents.test.ts;src/features/threads/hooks/useThreadItemEvents.ts;src/features/threads/hooks/useThreadMessaging.ts;src/features/threads/hooks/useThreadsReducer.ts;src/services/tauri.ts
+--- linhas alteradas (3557; mostrando até 40)
+-use tokio::time::timeout;
++use tokio::time::{sleep, timeout};
++const TURN_START_THREAD_NOT_FOUND_RETRY_DELAYS_MS: [u64; 2] = [150, 350];
+-    session
+-        .note_codex_turn_start_pending(thread_id, timeout_duration)
+-        .await;
+-    session
+-        .send_request_with_timeout(
+-            "turn/start",
+-            Value::Object(params.clone()),
+-            timeout_duration,
+-        )
+-        .await
++    for (attempt_index, delay_ms) in TURN_START_THREAD_NOT_FOUND_RETRY_DELAYS_MS
++        .iter()
++        .copied()
++        .enumerate()
++    {
++        sleep(Duration::from_millis(delay_ms)).await;
++        session
++            .note_codex_turn_start_pending(thread_id, timeout_duration)
++            .await;
++        session
++            .start_codex_turn_timing(thread_id, crate::backend::app_server::now_millis())
++            .await;
++        let retry_response = session
++            .send_request_with_timeout(
++                "turn/start",
++                Value::Object(params.clone()),
++                timeout_duration,
++            )
++            .await?;
++        session
++            .record_codex_turn_start_response(thread_id, crate::backend::app_server::now_millis())
++            .await;
++        if !is_thread_not_found_response(&retry_response) {
++            return Ok(retry_response);
++        }
++        session
++            .clear_codex_foreground_work(Some(thread_id), None)
+--- candidata: conversation-realtime-cpu-stability [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Lossless Realtime Event Micro-Batching
+  | The client MUST support lossless micro-batching for high-frequency realtime conversation events to reduce dispatch/render amplification while preserving event semantics.
+  > The client MUST support lossless micro-batching for high-frequency realtime conversation events to reduce dispatch/render amplification while preserving event semantics.
+  > #### Scenario: preserve per-thread event ordering during batching
+  > - **WHEN** high-frequency `delta` events are enqueued for the same thread
+  > - **THEN** batched dispatch MUST preserve original relative event order
+  > - **AND** downstream reducers MUST observe the same logical sequence as non-batched mode
+  > #### Scenario: no event loss under burst traffic
+  > - **WHEN** burst realtime events exceed a single frame capacity
+  > - **THEN** the batching queue MUST flush in bounded chunks without dropping events
+--- candidata: conversation-realtime-client-performance [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Realtime Conversation Client MUST Expose A Three-Engine Performance Budget
+  | The client MUST define a shared performance budget for Codex, Claude Code, and Gemini realtime conversation turns so optimization decisions are evaluated against the same observable contract.
+  > ### Requirement: Realtime Conversation Client MUST Expose A Three-Engine Performance Budget
+  > The client MUST define a shared performance budget for Codex, Claude Code, and Gemini realtime conversation turns so optimization decisions are evaluated against the same observable contract.
+  > #### Scenario: streaming turn records client-side budget evidence
+  > - **WHEN** a Codex, Claude Code, or Gemini turn enters realtime streaming
+  > - **THEN** the client MUST be able to correlate event ingress cadence, batching flush cadence, reducer derivation cost, render-visible text cadence, and composer responsiveness evidence to the same wo
+  > - **AND** this evidence MUST remain bounded for long streaming turns
+  > #### Scenario: budget evidence distinguishes engine-specific symptoms from shared client amplification
+  > - **WHEN** Gemini, Claude Code, or Codex shows slow or choppy visible output
+--- candidata: codex-conversation-liveness [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Codex Conversation Liveness MUST Separate Draft, Identity, Runtime, And Turn State
+  | Codex conversation liveness MUST be modeled as separate draft, thread identity, runtime generation, and foreground turn states rather than treating a `threadId` or runtime-ready result as complete con
+  > ### Requirement: Codex Conversation Liveness MUST Separate Draft, Identity, Runtime, And Turn State
+  > Codex conversation liveness MUST be modeled as separate draft, thread identity, runtime generation, and foreground turn states rather than treating a `threadId` or runtime-ready result as complete con
+  > #### Scenario: runtime readiness does not prove thread identity readiness
+  > - **WHEN** a Codex runtime reconnect or `ensureRuntimeReady` action succeeds
+  > - **AND** the active `threadId` cannot be verified by `thread/resume`, `turn/start`, alias resolution, or an equivalent identity check
+  > - **THEN** the system MUST keep thread identity liveness in `stale`, `unrecoverable`, or equivalent non-ready state
+  > - **AND** the UI MUST NOT claim the old conversation has been restored solely because the runtime is ready
+  > #### Scenario: runtime generation guards stale lifecycle updates
+--- candidata: runtime-performance-evidence-gates [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Runtime Evidence Gate MUST Classify Closure Evidence
+  | The system MUST classify performance and stability closure evidence before declaring a runtime optimization or stability change ready for archive.
+  > The system MUST classify performance and stability closure evidence before declaring a runtime optimization or stability change ready for archive.
+  > #### Scenario: report classifies evidence source
+  > - **WHEN** runtime performance evidence is generated
+  > - **THEN** each scenario MUST be classified as `measured`, `proxy`, `unsupported`, or `manual-only`
+  > - **AND** the report MUST include a short reason for that classification
+  > #### Scenario: proxy evidence does not become release-grade proof
+  > - **WHEN** a scenario is backed only by fixture, jsdom, static, or proxy evidence
+  > - **THEN** the report MUST NOT describe the scenario as fully measured
+--- candidata: codex-stale-thread-binding-recovery [tasks+PR]
+  | # codex-stale-thread-binding-recovery Specification Delta
+  | ## ADDED Requirements
+  | ### Requirement: Verified Codex Thread Replacement MUST Survive Restart
+  > # codex-stale-thread-binding-recovery Specification Delta
+  > ### Requirement: Verified Codex Thread Replacement MUST Survive Restart
+  > 当 `Codex` stale thread 已被恢复到新的 canonical `threadId` 后，系统 MUST 将该 replacement 作为可恢复事实持久化，而不是只保留在当前进程内存里。
+  > #### Scenario: persisted alias remaps stale thread after restart
+  > - **WHEN** 某个 `Codex` 线程已经验证 `oldThreadId -> canonicalThreadId`
+  > - **AND** 用户重启应用后重新打开同一 workspace 或历史会话
+  > - **THEN** 生命周期入口 MUST 优先把旧 `threadId` canonicalize 到持久化的 `canonicalThreadId`
+  > - **AND** 系统 MUST NOT 再次优先调用已知失效的旧 `threadId`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: codex-stale-thread-binding-recovery): (vazia)
+
+===== P005 | elastic/terraform-provider-elasticstack PR #2852 | capacidade do par: ci-research-factory-issue-intake
+PR: sanitise research input
+arquivos ligados: .github/workflows-src/lib/sanitize-context.js
+--- linhas alteradas (51; mostrando até 40)
+- * HTML comment sanitisation and research-comment lookup helpers.
++ * HTML comment sanitisation, control/invisible-char removal, and research-comment lookup helpers.
++/**
++ * Removes non-printable ASCII control characters while preserving tab, newline,
++ * and carriage return. Also strips Unicode line/paragraph separators.
++ *
++ * Stripped ASCII:  \x00-\x08, \x0B, \x0C, \x0E-\x1F, \x7F
++ * Preserved:       \x09 (tab), \x0A (LF), \x0D (CR)
++ * Unicode:         \u2028, \u2029
++ *
++ * @param {string} text
++ * @returns {string}
++ */
++function stripControlChars(text) {
++  if (typeof text !== 'string') return '';
++  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u2028\u2029]/g, '');
++}
++/**
++ * Removes invisible Unicode characters that have no legitimate use in issue content:
++ * zero-width spaces/joiners, bidirectional marks, word/function/invisible operators,
++ * and the BOM (byte order mark).
++ *
++ * Ranges stripped:
++ *   \u200B-\u200F  — zero-width space, non-joiner, joiner, LTR mark, RTL mark
++ *   \u2060-\u2064  — word joiner, function application, invisible times/separator/plus
++ *   \uFEFF           — BOM / zero-width no-break space
++ *
++ * @param {string} text
++ * @returns {string}
++ */
++function stripInvisibleUnicode(text) {
++  if (typeof text !== 'string') return '';
++  return text.replace(/[\u200B-\u200F\u2060-\u2064\uFEFF]/g, '');
++}
++/**
++ * Composed sanitisation pipeline. Runs all three filters in sequence:
++ *
++ *   input → stripHtmlComments → stripControlChars → stripInvisibleUnicode → output
++ *
++ * Idempotent: applying twice produces the same result as applying once.
+--- candidata: ci-factory-comment-sanitisation [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: User-sourced content is sanitised before agent ingestion
+  | All factory issue intake workflows SHALL pass every user-sourced text field through `sanitizeUserContent` before writing it to disk for agent consumption. The affected fields are: issue body, issue co
+  > ### Requirement: User-sourced content is sanitised before agent ingestion
+  > All factory issue intake workflows SHALL pass every user-sourced text field through `sanitizeUserContent` before writing it to disk for agent consumption. The affected fields are: issue body, issue co
+  > The `sanitizeUserContent` function SHALL apply three filters in order:
+  > 1. **HTML comment stripping**: Remove all `<!-- ... -->` sequences, including unclosed sequences through end-of-string. This is the existing `stripHtmlComments` behaviour.
+  > 2. **Control character stripping**: Remove all ASCII control characters except `\x09` (tab), `\x0A` (line feed), and `\x0D` (carriage return). The stripped characters SHALL be: `\x00-\x08`, `\x0B`, `\
+  > 3. **Invisible Unicode stripping**: Remove zero-width and invisible Unicode characters: `\u200B-\u200F`, `\u2060-\u2064`, `\uFEFF`.
+  > #### Scenario: HTML comment stripping on issue body
+  > - **WHEN** an issue body contains `before<!-- hidden instructions -->after`
+--- candidata: ci-html-comment-sanitisation [tasks]
+  | # ci-html-comment-sanitisation Specification
+  | ## Purpose
+  | Shared deterministic helpers for stripping HTML comments from untrusted human-authored content before it is passed to agentic workflows, eliminating a prompt-injection surface where malicious users em
+  > # ci-html-comment-sanitisation Specification
+  > Shared deterministic helpers for stripping HTML comments from untrusted human-authored content before it is passed to agentic workflows, eliminating a prompt-injection surface where malicious users em
+  > ### Requirement: Shared library provides HTML-comment stripping
+  > The repository SHALL provide a shared helper under `.github/workflows-src/lib/` that exposes a `stripHtmlComments(text)` function. The function SHALL remove all HTML comment sequences — that is, text 
+  > #### Scenario: Input contains embedded HTML comment
+  > - **WHEN** `stripHtmlComments` is called with text containing `<!-- hidden -->`
+  > #### Scenario: Input contains multiple HTML comments
+  > - **WHEN** `stripHtmlComments` is called with text containing several disjoint HTML comments
+--- candidata: ci-change-factory-issue-intake [tasks]
+  | # `ci-change-factory-issue-intake` — Issue-labeled OpenSpec proposal factory
+  | Workflow implementation: authored source under `.github/workflows-src/change-factory-issue/`, generating checked-in `.github/workflows/change-factory-issue.md` (via `scripts/compile-workflow-sources`)
+  | ## Purpose
+  > # `ci-change-factory-issue-intake` — Issue-labeled OpenSpec proposal factory
+  > Workflow implementation: authored source under `.github/workflows-src/change-factory-issue/`, generating checked-in `.github/workflows/change-factory-issue.md` (via `scripts/compile-workflow-sources`)
+  > Define requirements for a GitHub Agentic Workflow that reacts to trusted GitHub issues labeled `change-factory` and creates exactly one linked OpenSpec change proposal pull request, without implementi
+  > The repository SHALL define the `change-factory` issue-intake automation as a repository-authored GitHub Agentic Workflow source under `.github/workflows-src/` that generates checked-in workflow artif
+  > - **WHEN** maintainers modify the `change-factory` issue-intake workflow
+  > - **AND** the generated `.github/workflows/change-factory-issue.md` and `.github/workflows/change-factory-issue.lock.yml` SHALL be checked in and SHALL match output from the repository generation comm
+  > ### Requirement: Workflow activates only for qualifying `change-factory` issue events
+  > The workflow MAY subscribe to GitHub `issues.opened` and `issues.labeled` events, but it SHALL activate the proposal agent only for eligible `change-factory` issue triggers. Eligible triggers SHALL in
+--- candidata: ci-implementation-research-block-format [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Block is delimited by stable HTML-comment markers
+  | The implementation-research block SHALL be delimited by exactly two HTML comments: an opening marker `<!-- implementation-research:start -->` and a closing marker `<!-- implementation-research:end -->
+  > ### Requirement: Block is delimited by stable HTML-comment markers
+  > The implementation-research block SHALL be delimited by exactly two HTML comments: an opening marker `<!-- implementation-research:start -->` and a closing marker `<!-- implementation-research:end -->
+  > #### Scenario: Body contains a research block
+  > - **WHEN** an issue body contains the markers `<!-- implementation-research:start -->` and `<!-- implementation-research:end -->`
+  > - **THEN** the content between (and including) those markers SHALL constitute the implementation-research block
+  > #### Scenario: Body contains no research block
+  > - **WHEN** an issue body does not contain the opening marker `<!-- implementation-research:start -->`
+  > - **THEN** the body SHALL be treated as having no implementation-research block
+--- candidata: kibana-dashboard [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: APM service map panel support (REQ-049) — ENVIRONMENT_ALL server-default suppression
+  | The provider SHALL treat `environment = "ENVIRONMENT_ALL"` returned by the Kibana API as a
+  > On import (no prior state), when the API returns `environment = "ENVIRONMENT_ALL"`, the provider
+  > configuration that omits `environment`, breaking `ImportStateVerify` and forcing practitioners to
+  > - WHEN Kibana 9.5+ returns `environment = "ENVIRONMENT_ALL"` in the API response
+  > - WHEN the panel is imported from Kibana 9.5+ (which returns `environment = "ENVIRONMENT_ALL"`)
+  > - WHEN apply runs and Kibana returns `environment = "ENVIRONMENT_ALL"` in the API response
+  > - WHEN apply runs and Kibana returns `environment = "production"` in the API response
+  > ### Requirement: Time slider control panel behavior (REQ-029)
+  > For `time_slider_control` panels, the resource SHALL accept an optional `time_slider_control_config` block. The block itself is optional; a panel with `type = "time_slider_control"` and no `time_slide
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: ci-factory-comment-sanitisation): (vazia)
+
+===== P007 | epam/ai-dial-admin-frontend PR #3662 | capacidade do par: run-compare-row-details
+PR: fix: [Assets --> Applications] The warning about saving in the Parameters tab does not work correctly  (Issue #1304)
+arquivos ligados: apps/ai-dial-admin/src/constants/i18n.ts;apps/ai-dial-admin/src/locales/en.ts
+--- linhas alteradas (4; mostrando até 40)
++  KeyRequired = 'Basic.KeyRequired',
++  KeyDuplicate = 'Basic.KeyDuplicate',
++    KeyRequired: 'Key cannot be empty',
++    KeyDuplicate: 'Key already exists',
+--- candidata: activity-audit-deployments-detail [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Audit detail page resolves container activities from the deployment-manager backend
+  | For activities whose `resourceType` is one of `AdapterDeployment`, `ApplicationDeployment`, `InterceptorDeployment`, `McpDeployment`, `NimDeployment`, or `InferenceDeployment`, the audit detail route 
+  > - An env present only in the latest snapshot produces an **empty bucket** on the BEFORE pass and a four-row bucket with `ADDED` on the AFTER pass.
+  > - An env present only in the previous snapshot produces a four-row bucket with `REMOVED` on the BEFORE pass and an **empty bucket** on the AFTER pass.
+  > - **THEN** the BEFORE pass's bucket for that index is empty (no rows pushed)
+  > - **AND** the AFTER pass's bucket for that index is empty
+  > - CPU rows (`cpuRequest`, `cpuLimit`) — values are normalized to millicores with an `m` suffix via `formatCpuValue`. A bare numeric value (e.g. `"0.5"`) becomes `"500m"`; a value already ending in `m`
+  > - Memory rows (`memoryRequest`, `memoryLimit`) — values are normalized to megabytes with a ` Mb` suffix via `formatMemoryValue`. A bare numeric byte count (e.g. `"1073741824"`) becomes `"1024 Mb"`; a 
+  > - `minReplicas` and `maxReplicas` rows SHALL emit a value **only when** `isNever`; otherwise their value is `undefined` (and the diff engine hides rows whose values are empty on both snapshots).
+  > - `probeEnabled` maps `"true"` → `t(BasicI18nKey.Yes)`, `"false"` → `t(BasicI18nKey.No)`. Other values fall through as raw.
+--- candidata: app-properties-table-editing [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Display rows derived from applicationProperties and scheme
+  | The table SHALL derive display rows at render time from `applicationProperties: Record<string, unknown>` and `schemeProperties: ApplicationPropertyRow[]`. Schema-derived rows SHALL appear first (in sc
+  > ### Requirement: Add row guarded against duplicate empty-key rows
+  > Clicking Add SHALL add a new empty-key row only if no empty-key row already exists. Subsequent Add clicks while an empty-key row is present SHALL be ignored silently.
+  > #### Scenario: First Add creates an empty row
+  > - **WHEN** no empty-key row exists and the user clicks Add
+  > - **THEN** a new row appears at the bottom of the user-added rows with an empty key field and an empty string value
+  > #### Scenario: Second Add ignored while empty row exists
+  > - **WHEN** an empty-key row already exists in the table and the user clicks Add again
+  > - **THEN** no additional empty row is created
+--- candidata: entity-container-status-banner [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Warning banner shown when entity source container is not running
+  | Entity detail views for Models, Applications, Toolsets, and Interceptors SHALL render a top-of-view warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sou
+  > Entity detail views for Models, Applications, Toolsets, and Interceptors SHALL render a top-of-view warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sou
+  > - **WHEN** an entity has `source.$type === 'container'` and `source.containerId` is empty
+  > While the container list fetch is in flight, `<ContainerStatusBanner>` SHALL render `null` (its state is `Container | null` and starts as `null`). If the fetch fails, the component SHALL render `null`
+  > Entity detail views for Models, Applications, Toolsets, Interceptors, and Adapters SHALL render a warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sourc
+  > Entity detail views for Models, Applications, Toolsets, Interceptors, and Adapters SHALL render a warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sourc
+  > - **WHEN** an entity has `source.$type === 'container'` and `source.containerId` is empty
+  > While the container list fetch is in flight, `<ContainerStatusBanner>` SHALL render `null` (its state is `Container | null` and starts as `null`). If the fetch fails, the component SHALL render `null`
+--- candidata: save-as-new-image-on-rename [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Rename detection in image header
+  | `ImagesButtonsWrapper` SHALL compute `isNameChanged` as `(image.name ?? '').trim() !== (originalImage.name ?? '').trim()` once per render via `useMemo`, and SHALL use it to drive both the fork-button 
+  > 2. `existingVersions[image.name]` is empty or undefined (the typed name has no known versions).
+  > In all other rename cases (typed name already has versions), the prop is omitted and the modal patch-bumps from the typed name's max version. In the no-rename case, the prop is omitted (today's behavi
+  > - **WHEN** `isNameChanged` is `true` and `existingVersions[image.name]` is empty
+  > #### Scenario: Rename to a name that already has versions
+  > #### Scenario: Modal context, version exists for typed name
+  > - **WHEN** the user is in the image creation popup (`isModal=true`) and types a name+version pair that already exists
+  > - **WHEN** the fork modal is open and the user edits the version field to a value that already exists for the entity name
+  > The fork button and modal title MUST continue to expose their visible labels through the existing `DialPrimaryButton` and `DialFormPopup` components from `@epam/ai-dial-ui-kit`, which already render s
+--- candidata: app-route-name-validation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: App Route Display Name restricted to alphanumeric and underscore
+  | The Display Name field for App Routes SHALL only accept characters matching `^[a-zA-Z0-9_]+$` (uppercase and lowercase letters, digits, and underscore). Any other character is forbidden.
+  > - **WHEN** the user enters a name already used by another App Route
+  > - **THEN** the "Display name already exists" error is shown
+  > - **WHEN** the user enters a name already used by another App Route
+  > - **THEN** the "Display name already exists" error is shown
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: app-properties-table-editing (fraca)): Humano: a spec da capacidade responsável está incompleta, pois o PR inclui casos de borda que ela não cobre.
+
+===== P010 | qixing-jk/all-api-hub PR #485 | capacidade do par: logging
+PR: feat(context-menus): per-entry visibility toggles + live refresh
+arquivos ligados: contexts/UserPreferencesContext.tsx;services/userPreferences.ts
+--- linhas alteradas (33; mostrando até 40)
++              contextMenu: {
++                enabled: true,
++              },
++        const shouldRefreshContextMenus =
++          typeof updates.contextMenu?.enabled === "boolean" ||
++          typeof updates.enabled === "boolean"
++        if (shouldRefreshContextMenus) {
++          void sendRuntimeMessage({
++            action: RuntimeActionIds.PreferencesRefreshContextMenus,
++          })
++        }
++              contextMenu: {
++                enabled: true,
++              },
++        const shouldRefreshContextMenus =
++          typeof updates.contextMenu?.enabled === "boolean" ||
++          typeof updates.enabled === "boolean"
++        if (shouldRefreshContextMenus) {
++          void sendRuntimeMessage({
++            action: RuntimeActionIds.PreferencesRefreshContextMenus,
++          })
++        }
++export interface ContextMenuVisibilityPreferences {
++  enabled: boolean
++}
++  contextMenu: ContextMenuVisibilityPreferences
++  contextMenu: ContextMenuVisibilityPreferences
++    contextMenu: {
++      enabled: true,
++    },
++    contextMenu: {
++      enabled: true,
++    },
+--- candidata: context-menu-entry-visibility [tasks+PR+termos]
+  | # Context Menu Entry Visibility
+  | ## ADDED Requirements
+  | ### Requirement: Per-entry context menu visibility is configurable and persisted
+  > For backward compatibility, missing visibility settings MUST be treated as enabled.
+  > #### Scenario: Missing contextMenus API does not throw
+  > - **GIVEN** `browser.contextMenus` is unavailable in the current runtime
+  > For backward compatibility, missing visibility settings MUST be treated as enabled.
+  > #### Scenario: Missing contextMenus API does not throw
+  > - **GIVEN** `browser.contextMenus` is unavailable in the current runtime
+  > For backward compatibility, missing visibility settings MUST be treated as enabled.
+  > #### Scenario: Missing contextMenus API does not throw
+--- candidata: web-ai-api-check [tasks+PR]
+  | # Web AI API Check
+  | ## ADDED Requirements
+  | ### Requirement: Manual context-menu trigger opens an in-page API Check modal
+  > The modal SHALL allow the user to edit `baseUrl`, `apiKey`, `apiType`, and `modelId` before running any network action.
+  > - **THEN** subsequent actions use the edited values
+  > ### Requirement: Best-effort extraction supports re-extract
+  > The system SHALL provide an explicit “Re-extract” action that re-runs extraction on the current text and updates candidate values in the modal.
+  > #### Scenario: Re-extract updates candidates
+  > - **THEN** the system updates the candidate `baseUrl` and `apiKey` values based on the pasted text
+  > - **AND** the user can still edit the fields after re-extraction
+  > #### Scenario: Selecting API type updates validation and actions
+--- candidata: auto-checkin [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Pre-trigger today’s daily auto check-in on UI open
+  | The extension MUST support a user preference `autoCheckin.pretriggerDailyOnUiOpen` (default **disabled**) that controls whether opening an extension UI surface attempts to trigger today’s scheduled **
+  > - **GIVEN** auto check-in is enabled and `pretriggerDailyOnUiOpen = true`
+  > - **AND** the dialog MUST include an action to navigate to the Auto Check-in details view
+  > When auto check-in is enabled, the extension MUST schedule and execute at most one **normal** auto check-in run per day within the user-configured time window.
+  > - **GIVEN** auto check-in is enabled with schedule mode `random`
+  > - **GIVEN** auto check-in is enabled with schedule mode `deterministic` at `09:00`
+  > - **GIVEN** an enabled account with `checkIn.siteStatus.isCheckedInToday = true`
+  > - **GIVEN** an enabled account is already checked-in today according to the site
+  > - **AND** at least one account fails in today’s normal run and retries are enabled
+--- candidata: account-key-auto-provisioning [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Auto-provision on account add is configurable
+  | The system MUST provide a user setting to enable or disable automatic default-key (token) provisioning when adding an account.
+  > The setting MUST be persisted in user preferences as `autoProvisionKeyOnAccountAdd` and MUST default to **enabled**.
+  > #### Scenario: Auto-provision enabled runs after successful add
+  > - **GIVEN** auto-provision on add is enabled
+  > When auto-provisioning on add is enabled, token inventory fetch and/or token creation MAY fail due to upstream auth or network issues. These failures MUST NOT cause the account add operation to be con
+  > - **GIVEN** auto-provision on add is enabled
+  > - The account is enabled (`disabled = false`)
+  > - **WHEN** the user runs the manual key repair action
+  > - `model_limits_enabled = false`
+--- candidata: changelog-on-update [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Automatic changelog opening on update is configurable
+  | The extension MUST support a user preference `openChangelogOnUpdate` (default **enabled**) that controls whether the extension automatically opens the docs changelog page after an extension update.
+  > The extension MUST support a user preference `openChangelogOnUpdate` (default **enabled**) that controls whether the extension automatically opens the docs changelog page after an extension update.
+  > #### Scenario: Default is enabled
+  > ### Requirement: When enabled, updates open the version-anchored changelog page
+  > ### Requirement: When disabled, updates do not open the changelog page
+  > The extension MUST provide a user-facing control to enable or disable `openChangelogOnUpdate`. The chosen value MUST be persisted and applied on subsequent extension updates.
+  > When a user opens an extension UI surface (popup/options/sidepanel), the UI MUST atomically consume and clear the pending marker. If `openChangelogOnUpdate` is enabled (default **enabled**), the UI MU
+  > When a user opens an extension UI surface (popup/options/sidepanel), the UI MUST atomically consume and clear the pending marker. If `openChangelogOnUpdate` is enabled (default **enabled**), the UI MU
+  > The extension MUST support a user preference `openChangelogOnUpdate` (default **enabled**) that controls whether the extension automatically shows the update log after an extension update.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: context-menu-entry-visibility): (vazia)
+
+===== P012 | kalbasit/ncps PR #1406 | capacidade do par: closure-pinning
+PR: feat(server): add Bearer token auth for GET/HEAD routes
+arquivos ligados: pkg/server/server.go
+--- linhas alteradas (49; mostrando até 40)
++	"crypto/sha256"
++	"crypto/subtle"
++	getToken        string
++// SetGetToken configures a Bearer token required to access GET and HEAD routes.
++// When non-empty, requests without a matching Authorization: Bearer <token> header
++// are rejected with 401 Unauthorized. The /healthz and /metrics routes are always
++// exempt.
++func (s *Server) SetGetToken(token string) { s.getToken = token }
++	s.router.Use(s.requireGetToken)
++// requireGetToken is a middleware that enforces Bearer token authentication for
++// GET and HEAD requests when s.getToken is non-empty. Infrastructure endpoints
++// (/healthz and /metrics) are always exempt regardless of configuration.
++func (s *Server) requireGetToken(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if s.getToken == "" {
++			next.ServeHTTP(w, r)
++			return
++		}
++		// Only apply to GET and HEAD; other methods have their own guards.
++		if r.Method != http.MethodGet && r.Method != http.MethodHead {
++			next.ServeHTTP(w, r)
++			return
++		}
++		// Infrastructure routes are always exempt.
++		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
++			next.ServeHTTP(w, r)
++			return
++		}
++		authHeader := r.Header.Get("Authorization")
++		const bearerPrefix = "Bearer "
++		// Hash both tokens to a fixed length before the constant-time compare.
++		// subtle.ConstantTimeCompare returns early when the slice lengths differ,
++		// so comparing the raw variable-length tokens directly would leak the
++		// secret's length via a timing side-channel. SHA-256 digests are always
++		// 32 bytes, so the comparison time is independent of both token contents
++		// and length.
++		presented := strings.TrimPrefix(authHeader, bearerPrefix)
++		presentedHash := sha256.Sum256([]byte(presented))
++		expectedHash := sha256.Sum256([]byte(s.getToken))
++		if !strings.HasPrefix(authHeader, bearerPrefix) ||
+--- candidata: read-path-auth [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Optional Bearer token for read paths
+  | The server SHALL support an optional read-path authentication token, configured
+  > ### Requirement: Optional Bearer token for read paths
+  > The server SHALL support an optional read-path authentication token, configured
+  > via the `--cache-get-token` flag (env `CACHE_GET_TOKEN`). When the token is
+  > non-empty, the server SHALL require an `Authorization: Bearer <token>` header
+  > that matches the configured token on every `GET` and `HEAD` request, and SHALL
+  > reject non-matching requests with `401 Unauthorized`. When the token is empty
+  > (the default), the server SHALL serve read paths without authentication,
+  > #### Scenario: No token configured allows anonymous reads
+--- candidata: api-surface [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: `HEAD /build-trace-v2/{drvName}/{outputName}.doi` endpoint
+  | The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > The system SHALL expose a GET endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns the stored build trace entry as JSON.
+  > - `500 Internal Server Error` — database error.
+  > The system SHALL expose a PUT endpoint under the `/upload` prefix for storing build trace entries. Authorization follows the same `putPermitted` boolean gate used by narinfo and NAR uploads.
+  > **Request:** `Content-Type: application/json`, body is a build trace v3 JSON object.
+  > **Authorization:** `putPermitted == false` (the default) causes an immediate `405 Method Not Allowed` response before any body is read. No per-request authentication. (Consistent with existing narinfo
+  > - `400 Bad Request` — malformed JSON or URL/body mismatch.
+  > - `405 Method Not Allowed` — PUT not permitted.
+--- candidata: cdc-chunking [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: CDC ingestion MUST validate total byte count before committing
+  | When CDC chunking completes (the chunker signals end-of-stream by closing `chunksChan`),
+  > ### Requirement: CDC ingestion MUST validate total byte count before committing
+  > the system SHALL compare the total accumulated uncompressed bytes (`totalSize`) against
+  > #### Scenario: Early-EOF truncation is rejected at commit
+  > - **WHEN** the decompressed NAR stream ends before `fileSize` bytes are consumed (e.g., upstream HTTP/2 stream drops with GOAWAY)
+  > - **THEN** `storeNarWithCDCFromReader` returns a non-nil error
+  > - **WHEN** the decompressed NAR stream produces exactly `fileSize` uncompressed bytes before EOF
+  > - **AND** `UpdateNarFileTotalChunks` is called regardless of how many bytes were chunked
+  > - **WHEN** `storeNarWithCDCFromReader` returns a non-nil error inside the CDC goroutine
+--- candidata: nar-concurrent-streaming [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Concurrent NAR streaming goroutines MUST terminate within a bounded time
+  | When multiple clients concurrently request the same NAR hash and one client's context is
+  > (without waiting for the next `cond.Broadcast()`) and the streaming goroutines for all
+  > - **THEN** client A's streaming goroutine MUST exit within a bounded time (≤ a few milliseconds after cancellation), without requiring a broadcast from the download goroutine
+  > #### Scenario: Non-cancelled client receives all bytes after sibling cancellation
+  > - **THEN** client B's reader SHALL receive all bytes of the NAR content
+  > - **AND** `io.ReadAll` on client B's reader SHALL complete without hanging
+  > - **AND** the streaming goroutine has finished forwarding all bytes to the client pipe
+  > - **AND** the storage goroutine SHALL continue to completion independently
+  > #### Scenario: Context-cancelled client exits loop without broadcast
+--- candidata: data-model [tasks]
+  | # Data Model Specification (Delta)
+  | ## MODIFIED Requirements
+  | ### Requirement: Engine selection by URL scheme
+  > #### Scenario: Schema parity at apply time
+  > - **THEN** the diff SHALL be empty for SQLite, PostgreSQL, and MySQL — proving the Ent schemas reproduce the documented shape exactly
+  > **Reason**: sqlc is replaced by Ent. Per-engine Querier interfaces (`sqlitedb.Querier`, `postgresdb.Querier`, `mysqldb.Querier`) and the `sqlc.yaml` configuration are removed in favour of a single Ent
+  > **Reason**: Type overrides previously declared in `sqlc.yaml` (`nar_files.file_size → uint64`, `chunks.size → uint32`, `chunks.compressed_size → uint32`, `nar_files.chunking_started_at → database/sql.
+  > **Migration**: Apply each type override on the corresponding Ent field declaration in `ent/schema/<entity>.go`. Ent's default field naming already produces `NarInfoID` and `URL` for the snake_case col
+  > **Reason**: The `sqlc generate` + `go generate ./pkg/database` workflow is replaced by `task ent:generate` (or `go generate ./ent/...` directly), which runs `go tool ent generate` to refresh the commi
+  > **Migration**: No code change required. The rule is removed from `CLAUDE.md` and replaced with a note that Atlas controls quoting in generated migrations and that SQL-only stubs follow per-dialect con
+  > **Migration**: `db/migrations/{sqlite,postgres,mysql}/*` are translated mechanically to `migrations/<dialect>/*` with preserved timestamps and Goose-format header directives. The `nix/dbmate-wrapper/`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: read-path-auth): A spec não define o uso de tokens; o PR adiciona esse comportamento.
+
+===== P015 | datenoio/iterabledata PR #11 | capacidade do par: vortex-format
+PR: Add LLM readiness roadmap: catalog, agent tools, and AI operations
+arquivos ligados: iterable/datatypes/vortex.py;iterable/helpers/detect.py
+--- linhas alteradas (1563; mostrando até 40)
+-        filename: str = None,
++        filename: str | None = None,
+-from __future__ import annotations
+-import importlib
+-from typing import Any, Literal, TypedDict
+-import chardet
+-from ..base import BaseCodec, BaseIterable
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-# Plugin discovery flag
+-_plugins_discovered = False
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+--- candidata: ai [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Block-Based Documentation Generation
+  | The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > independent blocks and returns a structured result containing per-block markdown and data
+  > #### Scenario: Generate selected blocks
+  > - **WHEN** `ai.doc.generate_blocks()` is called with `blocks=["general", "schema"]`
+  > - **THEN** the result contains a `blocks` mapping with entries for `general` and `schema`
+  > - **AND** each block entry contains a `markdown` string and a `data` dictionary
+  > - **AND** the result contains a `source` descriptor and a `full_document_markdown` string
+  > #### Scenario: Default block set
+--- candidata: convert [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: File Format Conversion
+  | The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > ### Requirement: File Format Conversion
+  > The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > The system SHALL support atomic writes for safer production file operations. When atomic writes are enabled, the system SHALL write to a temporary file and atomically rename it to the final destinatio
+  > #### Scenario: Atomic write on successful conversion
+  > - **WHEN** `convert()` is called with `atomic=True` and conversion completes successfully
+  > - **AND** the temporary file is atomically renamed to the final destination using `os.replace()`
+  > - **AND** the temporary file is removed after successful rename
+  > - **AND** the final output file is only visible when fully written
+--- candidata: format-registry [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Declarative Format Descriptors
+  | The system SHALL define each built-in format with a single declarative descriptor that records
+  > ### Requirement: Declarative Format Descriptors
+  > The system SHALL define each built-in format with a single declarative descriptor that records
+  > its canonical id, aliases, implementing module and class, whether its content is text or binary,
+  > whether it is flat/tabular, whether it supports writing, its optional-dependency extra (if any),
+  > and any leading-byte signatures used for content-based detection. The set of descriptors SHALL be
+  > the single source of truth for built-in format metadata.
+  > #### Scenario: Each format has exactly one descriptor
+  > - **WHEN** the format descriptor table is loaded
+--- candidata: database-engines [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Database Engine Support
+  | The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > ### Requirement: Database Engine Support
+  > The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > #### Scenario: PostgreSQL query as iterable source
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="SELECT id, name, created_at FROM users WHERE active = TRUE")`
+  > - **THEN** the system connects to PostgreSQL, executes the query, and returns an iterable that yields dict rows with keys `id`, `name`, `created_at`
+  > #### Scenario: PostgreSQL table name auto-query
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="users")` with a table name instead of SQL query
+  > - **THEN** the system automatically builds and executes `SELECT * FROM users`, returning an iterable of all rows from the table
+--- candidata: cloud-storage [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Cloud Storage URI Support
+  | The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > ### Requirement: Cloud Storage URI Support
+  > The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > - **WHEN** a user calls `open_iterable('s3://bucket/path/file.csv')`
+  > - **THEN** the system detects the S3 URI scheme, opens the file via fsspec, and returns an iterable that works identically to local files
+  > #### Scenario: Read compressed file from GCS
+  > - **WHEN** a user calls `open_iterable('gs://bucket/data.jsonl.gz')`
+  > - **THEN** the system detects the GCS URI, opens the file via fsspec, detects the gzip compression codec, and returns an iterable that transparently decompresses and parses the JSONL format
+  > #### Scenario: Write to Azure Blob Storage
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: (nenhuma)): A mudança não torna a spec deste par errada ou incompleta.
+
+===== P021 | Codagent-AI/agent-validator PR #142 | capacidade do par: agent-command
+PR: feat: add one-shot review suppression for task-compliance
+arquivos ligados: src/config/schema.ts;src/gates/review.ts;src/utils/log-parser.ts
+--- linhas alteradas (177; mostrando até 40)
++  one_shot: z.boolean().default(false),
++    one_shot: z.boolean().optional(),
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
++    one_shot: z.boolean().optional(),
+-  });
++  })
++  .transform((data) => ({
++    ...data,
++    one_shot: data.one_shot ?? false,
++    oneShotExplicit: data.one_shot !== undefined,
++  }));
++import type { DispatchForDiffArgs } from './review-dispatch-types.js';
++import { prepareOneShotPreservation } from './review-one-shot.js';
++import { invokeAdapter, omitFixBase } from './review-runtime-helpers.js';
++  ReviewOutputEntry,
+-import { REVIEW_ADAPTER_TIMEOUT_MS } from './review-types.js';
+-    const diff = await this.getDiff(entryPointPath, baseBranch, changeOptions);
+-    logDiffStats(diff, mainLogger);
+-    if (!diff.trim()) {
+-      return emptyDiffResult(jobId, startTime, logPaths, mainLogger);
+-    }
+-    const preferences = config.cli_preference || [];
+-    const parallel = config.parallel ?? false;
+-    const healthyAdapters = await collectHealthyAdapters(
+-      preferences,
+-      mainLogger,
++    const oneShotState = await prepareOneShotPreservation({
++      jobId,
++      config,
++      required,
++      loggerFactory,
++      logPathsSet,
++      logPaths,
+-    );
+--- candidata: run-lifecycle [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Automatic Rerun Detection
+  | The `run`, `check`, and `review` commands MUST automatically detect whether to operate in first-run or rerun mode based on the presence of log files. Explicit flags (`--uncommitted`, `--commit`) overr
+  > The `run`, `check`, and `review` commands MUST automatically detect whether to operate in first-run or rerun mode based on the presence of log files. Explicit flags (`--uncommitted`, `--commit`) overr
+  > - **WHEN** the command executes without explicit diff flags
+  > - **WHEN** the command executes without explicit diff flags
+  > - **AND** inject failure context into review gates whose sanitized job ID matches the log file prefix
+  > - **WHEN** the command executes without explicit diff flags
+  > The `rerun` subcommand MUST be removed from the CLI. Its behavior is subsumed by the automatic rerun detection in `run`, `check`, and `review`.
+  > - **WHEN** the user executes `agent-gauntlet rerun`
+  > - **GIVEN** the highest-numbered log for a job prefix contains no failures (status PASS)
+--- candidata: review-config [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Per-Adapter Configuration
+  | The system MUST support optional per-adapter configuration under the `cli.adapters` section of `.gauntlet/config.yml`. Each adapter entry is keyed by adapter name and the system MUST accept optional `
+  > The system MUST support optional per-adapter configuration under the `cli.adapters` section of `.gauntlet/config.yml`. Each adapter entry is keyed by adapter name and the system MUST accept optional `
+  > - **GIVEN** a `.gauntlet/config.yml` with `cli.adapters.gemini.allow_tool_use: false`
+  > - **WHEN** a review is executed using the Gemini adapter
+  > - **GIVEN** a `.gauntlet/config.yml` with no `allow_tool_use` setting for Claude
+  > - **WHEN** a review is executed using the Claude adapter
+  > - **GIVEN** a `.gauntlet/config.yml` with `cli.adapters.codex.thinking_budget: high`
+  > - **WHEN** a review is executed using the Codex adapter
+  > - **THEN** the Codex CLI MUST be invoked with `-c model_reasoning_effort="high"`
+--- candidata: log-management [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: JSON Review Result Files
+  | The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > - **WHEN** a review adapter completes execution
+  > - **THEN** the system SHALL write a `.json` file with the same base name as the log file (e.g., `review_src_claude.1.json` alongside `review_src_claude.1.log`)
+  > - **AND** the JSON file SHALL contain the adapter name, timestamp, status, raw LLM output, and violations array
+  > - **THEN** the violation object SHALL include a `status` field with initial value `"new"`
+  > - **AND** the violation object SHALL include `file`, `line`, `issue`, `priority`, and optional `fix` fields
+  > - **WHEN** the reviewer LLM produces output that cannot be parsed as valid JSON
+  > - **AND** the gate SHALL report an error status
+--- candidata: init-config [tasks]
+  | ## REMOVED Requirements
+  | ### Requirement: Interactive Config Prompts
+  | **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Migration**: Run `/gauntlet-setup` after `init` to configure checks and reviews.
+  > ### Requirement: Init generates YAML review config with built-in reference
+  > The `init` command SHALL generate a `.gauntlet/reviews/code-quality.yml` file that references the built-in code-quality review prompt.
+  > #### Scenario: Default init creates YAML review config
+  > - **THEN** `.gauntlet/reviews/code-quality.yml` SHALL be created with content referencing `builtin: code-quality`
+  > - **AND** the YAML file SHALL include default settings (`num_reviews: 1`)
+  > #### Scenario: Init with --yes flag creates YAML review config
+--- candidata: dynamic-review-control [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Review enabled filtering at job generation
+  | The system SHALL skip reviews with `enabled: false` during job generation unless the review name appears in the `enableReviews` set provided via CLI options. Reviews with `enabled: true` (or no `enabl
+  > ### Requirement: Review enabled filtering at job generation
+  > The system SHALL skip reviews with `enabled: false` during job generation unless the review name appears in the `enableReviews` set provided via CLI options. Reviews with `enabled: true` (or no `enabl
+  > #### Scenario: Disabled review skipped when no override provided
+  > - **WHEN** a review has `enabled: false` in its config
+  > - **AND** no `--enable-review` flag names that review
+  > - **THEN** the review SHALL NOT generate any jobs
+  > #### Scenario: Disabled review activated via CLI override
+  > - **WHEN** a review has `enabled: false` in its config
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: run-lifecycle): A spec é extensa, e não está claro se seu escopo inclui essa mudança. Essa classificação permanece incerta.
+
+===== P025 | kniwase/WebComPy PR #177 | capacidade do par: lockfile
+PR: feat: async rendering pipeline
+arquivos ligados: webcompy/cli/_generate.py;webcompy/cli/_server.py
+--- linhas alteradas (21; mostrando até 40)
+-def generate_static_site(app: WebComPyApp | None = None):
++async def generate_static_site(app: WebComPyApp | None = None):
+-                    html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++                    html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+-            html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++            html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+-            html = generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
++            html = await generate_html(ctx, **_generate_kwargs)  # type: ignore[arg-type]
+-                    return HTMLResponse(html_generator(ctx))
++                    return HTMLResponse(await html_generator(ctx))
+-        ctx = app.create_render_context("/")
+-        html = html_generator(ctx)
+-        ctx.dispose()
+-        async def send_html(_: Request):  # type: ignore
+-            return HTMLResponse(html)
++        async def send_html(request: Request):  # type: ignore
++            ctx = app.create_render_context("/")
++            try:
++                return HTMLResponse(await html_generator(ctx))
++            finally:
++                ctx.dispose()
+--- candidata: async-rendering [tasks+PR]
+  | # Async Rendering Pipeline
+  | ## Purpose
+  | The rendering pipeline supports async component definitions, async lifecycle hooks, and async child rendering. Sibling children are still rendered sequentially to preserve DOM ordering and short-circu
+  > - **WHEN** `generate_html()` is called during static site generation
+  > ### Requirement: generate_html() shall be async
+  > `generate_html()` SHALL be an `async def` function returning `str`. Callers SHALL `await` it. This applies to both SSG (`_generate.py`) and dev server (`_server.py`) contexts.
+  > #### Scenario: Calling generate_html() during SSG
+  > - **WHEN** `generate_static_site()` calls `await generate_html(app, ...)`
+  > #### Scenario: Calling generate_html() in the dev server
+  > - **WHEN** the Starlette ASGI handler calls `await generate_html(app, ...)`
+  > ### Requirement: generate_static_site() shall be async
+--- candidata: render-context [tasks+termos]
+  | # Render Context
+  | ## Purpose
+  | The render context provides request-scoped state isolation for server-side rendering. Each SSR request operates on a completely fresh `RenderContext` instance, ensuring no mutable state leaks between 
+  > The render context provides request-scoped state isolation for server-side rendering. Each SSR request operates on a completely fresh `RenderContext` instance, ensuring no mutable state leaks between 
+  > ### Requirement: RenderContext shall isolate all mutable rendering state per request
+  > #### Scenario: Creating a RenderContext for an SSR request
+  > - **WHEN** `app.create_render_context(path="/users/42")` is called on the server
+  > - **THEN** a single `RenderContext` SHALL be created internally via `create_render_context()`
+  > #### Scenario: Concurrent SSR requests are isolated
+  > - **WHEN** two HTTP requests arrive concurrently to the same `WebComPyApp`
+  > - **AND** `app.create_render_context(path="/page-a")` and `app.create_render_context(path="/page-b")` are called
+--- candidata: architecture [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: The framework shall operate in two environments from a single codebase
+  | The same Python source code SHALL execute correctly both in the browser (via PyScript/Emscripten) and on the server (standard CPython). In the browser, the framework manipulates the DOM directly and r
+  > `WebComPyApp` SHALL serve as the single entry point that wires together the root component, the router, and the reactive head management system. Developers SHALL only need to provide a root component 
+  > - **WHEN** a developer writes `app = WebComPyApp(root_component=MyApp)`
+  > - **WHEN** a developer writes `app = WebComPyApp(root_component=MyApp, router=router)`
+  > - **WHEN** `WebComPyApp` is created with a router
+  > - **WHEN** `WebComPyApp` is initialized
+  > - **WHEN** `WebComPyApp` is initialized
+  > Each `WebComPyApp` instance SHALL have its own DI scope. Global singletons SHALL NOT be used for app-scoped state, enabling multiple WebComPy applications on the same page.
+  > - **WHEN** two `WebComPyApp` instances are created with different root components
+--- candidata: plugin-system [tasks]
+  | # Plugin System
+  | ## Purpose
+  | The plugin system provides a formal extension mechanism for WebComPy applications. Third-party Python packages can hook into the application lifecycle, register DI services, and declare conditional Ja
+  > `WebComPyApp` SHALL create a `PluginManager` and initialize plugins during its startup sequence, before the root component is created.
+  > - **WHEN** `WebComPyApp.__init__()` is called with `config=AppConfig(plugins=[...])`
+  > - **WHEN** `generate_html()` is called on an app with plugins
+  > ### Requirement: Plugin lifecycle shall support per-request initialization
+  > `WebComPyPlugin` SHALL provide three lifecycle hooks: `on_app_init(app)` for immutable application-level setup, `on_render_context_init(ctx)` for per-request initialization (called on the server for e
+  > #### Scenario: Plugin with per-request DI provider
+  > - **WHEN** a plugin defines `on_render_context_init(self, ctx)` and calls `ctx.di_scope.provide(my_key, my_request_scoped_value)`
+  > - **AND** multiple SSR requests are processed concurrently
+--- candidata: cli [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: E2E tests shall verify async on_after_rendering works during router navigation
+  | The e2e test suite SHALL include test cases that verify components with async operations in `on_after_rendering` work correctly when navigated to via RouterLink (reactive path) and direct URL (hydrati
+  > - **WHEN** a developer calls `run_server(app)` with a `WebComPyApp` instance
+  > Static site generation SHALL be available via `python -m webcompy generate` (existing CLI) or `generate_static_site(app)` (function). Both SHALL produce a complete static site in the configured output
+  > #### Scenario: Generating via generate_static_site(app)
+  > - **WHEN** a developer calls `generate_static_site(app)` with a `WebComPyApp` instance
+  > The CLI SHALL support two configuration discovery patterns: the existing `webcompy_config.py` / `WebComPyConfig` pattern (deprecated) and direct `WebComPyApp` instance with `AppConfig` (preferred). Wh
+  > - **WHEN** a developer creates `WebComPyApp(root_component=Root, config=AppConfig(base_url="/app/"))`
+  > - **WHEN** the browser requests the wheel for an app named `myapp`
+  > - **THEN** the existing lock file SHALL be validated and reused without network requests
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: ssg-via-ssr; async-rendering (fraca)): O diff passa a usar uma promise. A avaliação sugere que isso não quebra a spec, embora os usos reais do aplicativo mereçam análise.
+
+===== P030 | denisfl/inbox PR #64 | capacidade do par: health-check-api
+PR: Add OAuthManager and storage adapters for Dropbox, Google Drive, OneDrive, Local, and S3
+arquivos ligados: config/routes.rb
+--- linhas alteradas (13; mostrando até 40)
++  # Settings
++  namespace :settings do
++    resource :storage, only: [ :show, :update ] do
++      post :test_connection
++      post :start_migration
++      post :cancel_migration
++    end
++    # OAuth flows for cloud storage providers
++    scope "storage/oauth/:provider", as: :storage_oauth, controller: "storage_oauth" do
++      get "authorize", action: :authorize
++      get "callback", action: :callback
++    end
++  end
+--- candidata: storage-oauth-manager [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: OAuth manager service
+  | The system SHALL provide an `OAuthManager` service that handles OAuth 2.0 authorization flows for Dropbox, Google Drive, and OneDrive.
+  > ### Requirement: OAuth manager service
+  > The system SHALL provide an `OAuthManager` service that handles OAuth 2.0 authorization flows for Dropbox, Google Drive, and OneDrive.
+  > - **WHEN** `OAuthManager.new.authorize_url(:dropbox)` is called
+  > - **THEN** the service SHALL return a URL to the Dropbox OAuth consent page with correct client_id, redirect_uri, and scopes
+  > #### Scenario: Handle callback with authorization code
+  > - **WHEN** `OAuthManager.new.handle_callback(:dropbox, code)` is called with a valid authorization code
+  > - **WHEN** `OAuthManager.new.refresh_access_token(:google_drive, refresh_token)` is called
+  > - **THEN** the service SHALL request a new access_token from the provider's token endpoint and return it with the new expiry time
+--- candidata: storage-settings-ui [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Storage settings page
+  | The system SHALL provide a settings page at `/settings/storage` where the user can view and configure the active storage provider.
+  > ### Requirement: Storage settings page
+  > The system SHALL provide a settings page at `/settings/storage` where the user can view and configure the active storage provider.
+  > #### Scenario: View current settings
+  > - **WHEN** the user navigates to `/settings/storage`
+  > - **THEN** the system SHALL display the currently configured provider, connection status, and provider-specific fields
+  > #### Scenario: No settings configured
+  > - **WHEN** the user navigates to `/settings/storage` and no `StorageSetting` exists
+  > - **THEN** the system SHALL show "Local disk" as the default provider with an option to switch
+--- candidata: unified-storage-adapter [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Unified storage adapter interface
+  | The system SHALL provide a `StorageAdapter::Base` abstract class with methods: `upload(file_path, key, namespace:)`, `download(key, namespace:)`, `delete(key, namespace:)`, `list(namespace:)`, `url(ke
+  > ### Requirement: Unified storage adapter interface
+  > The system SHALL provide a `StorageAdapter::Base` abstract class with methods: `upload(file_path, key, namespace:)`, `download(key, namespace:)`, `delete(key, namespace:)`, `list(namespace:)`, `url(ke
+  > #### Scenario: Upload file with namespace
+  > - **WHEN** `StorageAdapter.resolve.upload("/tmp/file.jpg", "abc123.jpg", namespace: :files)` is called
+  > - **THEN** the adapter SHALL store the file under the `files/` namespace and return the storage path as a String
+  > #### Scenario: Upload backup with namespace
+  > - **WHEN** `StorageAdapter.resolve.upload("/tmp/backup.sql.gz", "backup_20250727.sql.gz", namespace: :backups)` is called
+  > - **THEN** the adapter SHALL store the file under the `backups/` namespace and return the storage path as a String
+--- candidata: storage-migration-job [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Storage migration job
+  | The system SHALL provide a `StorageMigrationJob` that copies all existing files and backups from the old storage provider to the new one.
+  > The system SHALL provide a `StorageMigrationJob` that copies all existing files and backups from the old storage provider to the new one.
+  > - **THEN** the job SHALL iterate all `ActiveStorage::Blob` records, download each from the old service, and upload to the new service under `namespace: :files`
+  > - **WHEN** the migration job runs after switching providers
+  > - **THEN** the job SHALL iterate all `BackupRecord` entries with `storage_path`, download each backup file from the old service, and upload to the new service under `namespace: :backups`
+  > - **THEN** the system SHALL track total_items, completed_items, failed_items, and status in a `storage_migrations` table
+  > The system SHALL display migration progress on the storage settings page.
+  > - **WHEN** the user views storage settings and no migration is active
+  > - **THEN** the system SHALL show a "Migrate files" button if there are files on the old provider
+--- candidata: storage-health-check [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Storage health check job
+  | The system SHALL provide a recurring job that periodically verifies the configured cloud storage provider is reachable.
+  > The system SHALL provide a recurring job that periodically verifies the configured cloud storage provider is reachable.
+  > #### Scenario: Healthy cloud storage
+  > - **WHEN** the health check job runs and the cloud provider responds successfully
+  > - **THEN** the system SHALL update `StorageSetting.status` to `"connected"` and `last_checked_at` to the current time
+  > #### Scenario: Unreachable cloud storage
+  > - **WHEN** the health check job runs and the cloud provider fails to respond
+  > - **THEN** the system SHALL update `StorageSetting.status` to `"error"` and log a warning
+  > #### Scenario: Local storage always healthy
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: storage-oauth-manager): A spec não aborda OAuth, assunto da mudança.
+
+===== P033 | Juniper/nita-webapp PR #62 | capacidade do par: network-hosts-editor
+PR: changes to jenkins integration
+arquivos ligados: frontend/src/pages/NetworkDetailPage.tsx
+--- linhas alteradas (173; mostrando até 40)
+-import { useEffect, useRef, useState } from 'react'
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { useJenkinsStream, stateLabel } from '../components/LifecycleConsole'
++  jenkins_job_name: string
++}
++interface RobotSummary {
++  available: boolean
++  total?: number
++  passed?: number
++  failed?: number
++  skipped?: number
++  pass_percentage?: number
+-  if (status === 'SUCCESS') return `${base} bg-green-800 text-green-200`
+-  if (status === 'FAILED' || status === 'FAILURE') return `${base} bg-red-800 text-red-200`
+-  if (status === 'RUNNING' || status === 'PENDING') return `${base} bg-yellow-800 text-yellow-200`
++  const s = (status || '').toUpperCase()
++  if (s === 'SUCCESS') return `${base} bg-green-800 text-green-200`
++  if (s === 'FAILED' || s === 'FAILURE') return `${base} bg-red-800 text-red-200`
++  if (s === 'RUNNING' || s === 'PENDING') return `${base} bg-yellow-800 text-yellow-200`
++  // Robot Framework result summaries for TEST-category runs, keyed by history id.
++  const [robotSummaries, setRobotSummaries] = useState<Record<number, RobotSummary>>({})
+-  // History console viewer
++  // History console viewer (live SSE stream of the run's Jenkins console)
+-  const [consoleViewText, setConsoleViewText] = useState('')
+-  const [consoleViewLoading, setConsoleViewLoading] = useState(false)
+-  const [consoleViewError, setConsoleViewError] = useState<string | null>(null)
++  const {
++    lines: consoleViewLines,
++    state: consoleViewState,
++    startUrl: startConsoleViewStream,
++    reset: resetConsoleViewStream,
++  } = useJenkinsStream()
++  const consoleViewRef = useRef<HTMLPreElement>(null)
+-    setConsoleViewText('')
+-    setConsoleViewError(null)
+-    setConsoleViewLoading(true)
+-    apiFetch(`/api/v1/action-history/${h.id}/console/`)
+-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+-      .then((d: { console: string }) => setConsoleViewText(d.console ?? ''))
+-      .catch(() => setConsoleViewError('Failed to load console output'))
+--- candidata: spa-networks [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Networks page lists all networks
+  | The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > ### Requirement: Networks page lists all networks
+  > The `/networks` page SHALL fetch and display all networks from `GET /api/v1/networks/` in a table with columns: Name, Network Type, Description, Status, and Actions (View + Delete).
+  > - **WHEN** the user navigates to `/networks`
+  > - **THEN** a table is displayed with one row per network showing name, network type name, description, and status
+  > - **WHEN** the user clicks "View" on a network row
+  > - **THEN** the browser navigates to `/app/networks/:id`
+  > The page SHALL provide an inline form (toggled by "Add Network" button) with fields for name, description, network type (dropdown), host_file, and dynamic_ansible_workspace. On submit it SHALL POST to
+  > #### Scenario: Successful network creation
+--- candidata: spa-network-types [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Network Types page lists all types
+  | The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > The `/network-types` page SHALL fetch and display all network types from `GET /api/v1/network-types/` in a table with columns: Name, Description, Zip File, Roles, Resources, Actions.
+  > - **WHEN** the user navigates to `/network-types`
+  > - **THEN** a table is displayed with one row per network type showing its name, description, zip filename, role count, and resource count
+  > - **WHEN** the page is fetching network types
+  > #### Scenario: Fetch error
+  > The page SHALL allow the user to select a zip file and upload it via `POST /api/v1/network-types/upload/`. On success the list SHALL refresh.
+  > - **THEN** the file is POSTed to the API, and on a 2xx response the network types list refreshes
+  > - **THEN** the upload button SHALL be disabled
+--- candidata: console-streaming [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Stream Console Log via SSE
+  | The system SHALL expose a Server-Sent Events endpoint at
+  > ### Requirement: Stream Console Log via SSE
+  > `GET /api/v1/action-history/{id}/stream/` that streams the Jenkins build console
+  > output incrementally for the given action history entry.
+  > - Respond with `Content-Type: text/event-stream`.
+  > - Emit one or more `data: <text>` SSE events containing console output as the build runs.
+  > - Emit `event: done\ndata: \n\n` when the build log is complete, then close the connection.
+  > - Emit `event: error\ndata: <message>\n\n` and close if Jenkins is unreachable or an internal error occurs.
+  > - Emit `event: timeout\ndata: \n\n` and close after 30 minutes of continuous streaming (1800 poll attempts at 1-second intervals) to prevent zombie connections.
+--- candidata: jenkins-trigger-security [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Trigger Succeeds Regardless of Deployment Topology
+  | The system SHALL successfully trigger a Jenkins job via
+  > The system SHALL successfully trigger a Jenkins job via
+  > `POST /api/v1/networks/{id}/trigger/{action_id}/` when NITA is accessed through
+  > internal Jenkins hostname or port.
+  > All Jenkins communication SHALL originate from the Django application container
+  > to the internal Jenkins service (`jenkins:8080`), never from the client browser
+  > - AND the Jenkins job is queued successfully
+  > - WHEN POST /api/v1/networks/{id}/trigger/{action_id}/ is called
+  > - AND the Jenkins job is queued successfully
+--- candidata: network-lifecycle-streaming [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Jenkins Job Invocation Library
+  | The system SHALL provide a single shared backend helper for invoking a Jenkins
+  > ### Requirement: Shared Jenkins Job Invocation Library
+  > The system SHALL provide a single shared backend helper for invoking a Jenkins
+  > job that performs the authenticated build request used by every job-triggering
+  > endpoint. The helper SHALL authenticate using the configured Jenkins username
+  > and password with a CSRF crumb (Jenkins rejects anonymous build requests with
+  > `403`), reserve and return the job's build number (`nextBuildNumber`) for the
+  > invocation, and accept optional build parameters and file attachments. On a
+  > crumb/`Forbidden` failure it SHALL rebuild the server connection and retry once.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: spa-networks): O PR altera a integração com Jenkins, sem mudar o comportamento descrito na spec.
+
+===== P036 | strelov1/freehire PR #425 | capacidade do par: resume-skill-extraction
+PR: Single profile per user + jobs-facet edit modal + menu avatar
+arquivos ligados: web/src/lib/api.ts
+--- linhas alteradas (87; mostrando até 40)
+-  SearchProfile,
++  UserProfile,
+-  // Search profiles: named specialization + skills sets (cookie-only on the server).
++  // The single per-user profile: a specialization + skills set (cookie-only on the server).
+-  /** The current user's search profiles, most recently updated first. */
+-  async function listSearchProfiles(): Promise<SearchProfile[]> {
+-    const res = await request<{ data: SearchProfile[] }>('/api/v1/me/profiles');
++  /** The current user's profile, or null when they have not saved one yet. */
++  async function getProfile(): Promise<UserProfile | null> {
++    const res = await request<{ data: UserProfile | null }>('/api/v1/me/profile');
+-  /** Create a profile from a name, a non-empty set of specializations (job categories),
+-   *  and a non-empty set of skills. A duplicate name or the per-user cap is a 409; a bad
+-   *  specialization or empty skills is a 400. */
+-  async function createSearchProfile(
+-    name: string,
+-    specializations: string[],
+-    skills: string[],
+-  ): Promise<SearchProfile> {
+-    const res = await request<{ data: SearchProfile }>('/api/v1/me/profiles', {
+-      method: 'POST',
++  /** Create-or-replace the user's profile from a non-empty set of specializations (job
++   *  categories) and a non-empty set of skills. A bad specialization or empty skills is a
++   *  400. */
++  async function saveProfile(specializations: string[], skills: string[]): Promise<UserProfile> {
++    const res = await request<{ data: UserProfile }>('/api/v1/me/profile', {
++      method: 'PUT',
+-      body: JSON.stringify({ name, specializations, skills }),
+-    });
+-    return res.data;
+-  }
+-  /** Overwrite a profile's name, specializations, and/or skills; an omitted field is
+-   *  unchanged. */
+-  async function updateSearchProfile(
+-    id: number,
+-    patch: { name?: string; specializations?: string[]; skills?: string[] },
+-  ): Promise<SearchProfile> {
+-    const res = await request<{ data: SearchProfile }>(`/api/v1/me/profiles/${id}`, {
+-      method: 'PATCH',
+-      headers: { 'Content-Type': 'application/json' },
+-      body: JSON.stringify(patch),
+--- candidata: search-profiles [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Create a search profile
+  | A signed-in user SHALL be able to create a named search profile capturing a single `specialization` (one job category) and a non-empty set of `skills`. Skills are stored as canonical lowercase tokens,
+  > ### Requirement: Create a search profile
+  > A signed-in user SHALL be able to create a named search profile capturing a single `specialization` (one job category) and a non-empty set of `skills`. Skills are stored as canonical lowercase tokens,
+  > #### Scenario: Create a profile
+  > - **WHEN** an authenticated user sends `POST /api/v1/me/profiles` with a valid `name`, a `specialization` drawn from the category vocabulary, and a non-empty `skills` array
+  > - **THEN** the system stores the profile scoped to that user and responds `201` with `{"data": {id, name, specialization, skills, updated_at}}`
+  > - **WHEN** an authenticated user creates a profile with skills containing mixed case, surrounding whitespace, or duplicates
+  > - **THEN** the system stores each skill lowercased, trimmed, and deduplicated
+  > #### Scenario: Unauthenticated request is rejected
+--- candidata: resume-verdict [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Deterministic market skill-gap scoring
+  | The system SHALL compute a verdict for a search profile by comparing the profile's saved skills against the most in-demand skills on the live market for the profile's specialization(s). The market is 
+  > ### Requirement: Deterministic market skill-gap scoring
+  > The system SHALL compute a verdict for a search profile by comparing the profile's saved skills against the most in-demand skills on the live market for the profile's specialization(s). The market is 
+  > #### Scenario: Stack match reflects coverage of the top skills
+  > - **WHEN** a profile's skills cover 11 of the 20 top market skills for its specializations
+  > - **THEN** the verdict reports `stack_match` = 55 (round(11/20 × 100)) and marks those 11 rows `have: true`
+  > #### Scenario: Fewer than twenty market skills available
+  > - **WHEN** the market for the specializations returns only 8 distinct skills
+  > #### Scenario: No market data available
+--- candidata: header-navigation [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified header layout
+  | The site-wide header SHALL present three slots in a single row — the logo (left,
+  > The site-wide header SHALL present three slots in a single row — the logo (left,
+  > linking to `/`), a large search field (center, growing to fill available width),
+  > and a single menu trigger button (right) — using the same structure on every
+  > - **THEN** the header shows the logo, a centered search field, and one menu
+  > - **THEN** the header shows the logo, the search field, and one menu trigger
+  > ### Requirement: Instant search results
+  > The header search SHALL query as the user types (debounced) and render a
+  > from the existing jobs-search and companies-list APIs. An in-flight query
+--- candidata: web-frontend [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Companies list
+  | The frontend SHALL present companies from `GET /api/v1/companies`, showing each
+  > The page SHALL provide a name-search input. Typing SHALL filter the list against
+  > the API's `q` parameter (debounced), and the current query SHALL be mirrored into
+  > the URL query string (`?q=`) so a search survives reload, sharing, and
+  > a distinct empty state when a search matches nothing.
+  > #### Scenario: User searches companies by name
+  > - **WHEN** a user types a query into the companies search input
+  > is updated to `?q=<query>`
+  > #### Scenario: Search restored from the URL
+--- candidata: saved-searches [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Save a filter set
+  | A signed-in user SHALL be able to save the current job-search filter state under a name. The saved set captures the canonical search query string (the same serialization the filter URL and `GET /api/v
+  > A signed-in user SHALL be able to save the current job-search filter state under a name. The saved set captures the canonical search query string (the same serialization the filter URL and `GET /api/v
+  > #### Scenario: Create a saved search
+  > - **WHEN** an authenticated user sends `POST /api/v1/me/searches` with a valid `name` and a `query` string
+  > - **THEN** the system stores the set scoped to that user and responds `201` with `{"data": {id, name, query, updated_at}}`
+  > - **WHEN** an authenticated user creates a saved search with `query` equal to an empty string
+  > #### Scenario: Unauthenticated request is rejected
+  > - **WHEN** a request without a valid session cookie hits any `/api/v1/me/searches` endpoint
+  > A saved search name SHALL be trimmed and contain between 1 and 100 characters, and SHALL be unique per user (case-sensitive after trim).
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: search-profiles): A spec trata de skills de um resume; o PR aborda casos de uso de profile.
+
+===== P038 | Chorus-AIDLC/Chorus PR #407 | capacidade do par: agent-connection-observability
+PR: chore: release v0.13.1
+arquivos ligados: src/services/daemon-connection.service.ts
+--- linhas alteradas (40; mostrando até 40)
+-      // behaving exactly as before.
++      // behaving exactly as before. (No generation reconcile here: a cwd-less old
++      // daemon never self-reports startedAt, so a generation change is unprovable.)
++    // Generation probe (restart-window seam, fix-daemon-exit-orphan-running-turn):
++    // read the row's stored startedAt BEFORE the upsert refreshes it, so a NEW
++    // PROCESS GENERATION (different self-reported process start) is detectable. A
++    // crashed daemon that restarts within the staleness window reuses this row with
++    // a fresh lastSeenAt, which permanently defeats the age-only orphan-turn
++    // reconcile — the generation change is the only remaining evidence that the
++    // previous process (and any turn it left `running`) is dead.
++    const prior = await prisma.daemonConnection.findFirst({
++      where: { agentUuid, clientType: report.clientType, host, cwd },
++      select: { uuid: true, startedAt: true },
++    });
++    // New-generation orphan-turn reconcile: fire only when the row pre-existed AND
++    // both generations are provable (non-null startedAt on both sides) AND they
++    // differ. Same startedAt = the same process reconnecting (transient SSE drop) —
++    // nothing to reconcile. Null on either side is treated conservatively as
++    // unprovable (bias toward not interrupting). Fire-and-forget + lazily imported:
++    // registration must never fail, slow, or cycle on the session service
++    // (daemon-session.service imports this module for STALE_THRESHOLD_MS).
++    const incomingStartedAt = report.startedAt ?? null;
++    const priorStartedAt = prior?.startedAt instanceof Date ? prior.startedAt : null;
++    if (
++      prior &&
++      priorStartedAt !== null &&
++      incomingStartedAt !== null &&
++      priorStartedAt.getTime() !== incomingStartedAt.getTime()
++    ) {
++      void import("@/services/daemon-session.service")
++        .then(({ reconcileOrphanTurns }) =>
++          reconcileOrphanTurns(companyUuid, row.uuid, { force: true }),
++        )
++        .catch((err) => {
++          logger.error(
++            { err, companyUuid, connectionUuid: row.uuid },
++            "New-generation orphan-turn reconcile failed to dispatch",
++          );
++        });
++    }
+--- candidata: daemon-session-conversation [PR+termos]
+  | # daemon-session-conversation Specification
+  | ## MODIFIED Requirements
+  | ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > # daemon-session-conversation Specification
+  > ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > The server SHALL define a Prisma model `DaemonSessionTurn` representing one wake on a conversation. It SHALL carry at least: `uuid`, `sessionUuid` (referencing `DaemonSession.uuid`), `seq` (monotonic 
+  > #### Scenario: An autonomous task dispatch records a turn
+  > - **GIVEN** a task is assigned to a daemon agent, producing a wake on session I
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "task_assigned"`
+  > - **GIVEN** a human submits a free-text instruction to session I
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "human_instruction"` and `promptText` set to the submitted text
+--- candidata: cli-daemon [PR+termos]
+  | # cli-daemon
+  | ## ADDED Requirements
+  | ### Requirement: Daemon subcommand and notification subscription
+  > # cli-daemon
+  > The CLI SHALL provide a `chorus daemon` subcommand that runs a long-lived client process. On start it SHALL resolve credentials (see cli-auth), open a Server-Sent Events subscription to the remote Cho
+  > - **WHEN** the user runs `chorus daemon` with resolvable credentials
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > - **THEN** the Chorus server launches exactly as before, with no daemon behavior triggered
+  > ### Requirement: Task-dispatch wake of local headless Claude Code
+  > On receiving a relevant notification (at minimum `task_assigned`), the daemon SHALL spawn a local headless Claude Code subprocess (`claude -p` with `--output-format stream-json` and the Chorus MCP ser
+  > - **THEN** the daemon spawns a headless `claude -p` subprocess wired to the Chorus MCP server, passing the task context prompt over stdin, and the subprocess can act via `chorus_*` MCP tools
+--- candidata: daemon-interrupt-resume [PR]
+  | # daemon-interrupt-resume Specification
+  | ## ADDED Requirements
+  | ### Requirement: Control commands SHALL travel a reverse channel that is distinct from the wake path
+  > # daemon-interrupt-resume Specification
+  > The system SHALL provide a server→daemon control channel that reuses the existing
+  > daemon SHALL route it to a control handler WITHOUT enqueuing any wake. The control command
+  > action SHALL NOT be a member of the daemon's `WAKE_ACTIONS` set, and receiving a control
+  > event SHALL NOT spawn a new Claude subprocess. The server-side publish step SHALL be hidden
+  > behind a single control-dispatch function so a future dedicated bidirectional channel can
+  > - **WHEN** the daemon receives an SSE event with `type = "control"`
+  > - **AND** it MUST NOT enqueue anything on the WakeQueue or spawn a new subprocess
+--- candidata: daemon-session-transcript-read [PR]
+  | # daemon-session-transcript-read
+  | ## ADDED Requirements
+  | ### Requirement: Single-session transcript read API
+  > # daemon-session-transcript-read
+  > ### Requirement: Single-session transcript read API
+  > The system SHALL expose `GET /api/daemon-sessions/{sessionUuid}` returning the
+  > session together with its ordered turns, each turn carrying its retained
+  > owner/self + company visibility fence as the session list: an AGENT-KEY caller
+  > sees only its own sessions; a USER / super_admin caller sees only sessions of
+  > agents they own. A session that does not exist, lives in another company, or
+  > (non-disclosure) — the response MUST NOT reveal that another caller's session
+--- candidata: openclaw-event-bridge [PR]
+  | ## ADDED Requirements
+  | ### Requirement: The plugin SHALL run the SSE notification listener as a registered background service
+  | The plugin MUST register a background service via `api.registerService({ id, start, stop })` that opens the Chorus SSE notification stream (`<chorusUrl>/api/events/notifications`, Bearer auth) on `sta
+  > ### Requirement: The plugin SHALL run the SSE notification listener as a registered background service
+  > The plugin MUST register a background service via `api.registerService({ id, start, stop })` that opens the Chorus SSE notification stream (`<chorusUrl>/api/events/notifications`, Bearer auth) on `sta
+  > #### Scenario: Service starts and stops the SSE stream
+  > - **WHEN** the registered service's `start` is invoked
+  > ### Requirement: The plugin SHALL wake the agent in-process via enqueueSystemEvent, not via the HTTP hooks endpoint
+  > When an actionable notification arrives, the event router MUST wake the agent by calling `api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey })`. The legacy HTTP POST to the gateway 
+  > - **WHEN** the router dispatches it
+  > - **WHEN** both are dispatched before the agent consumes the first
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: daemon-session-conversation): O PR é amplo e parece reunir mudanças de versão.
+
+===== P042 | LuSrackhall/KeyTone PR #129 | capacidade do par: signature-management
+PR: Add waveform sound trimmer 在裁剪定义声音步骤中, 引入音频波形可视化组件, 降低用户制作键音专辑的难度
+arquivos ligados: sdk/server/server.go
+--- linhas alteradas (85; mostrando até 40)
++	"mime"
++		// ============================================================================
++		// 体验策略：SDK 预览播放严格限制 <= 5000ms
++		//
++		// 背景：SDK 侧目前缺少“暂停”能力；如果允许长片段预览，将造成体验不可控。
++		// 处理：当 isPreviewMode=true 时，严格拒绝超过 5 秒的预览请求。
++		// 注意：这里既做服务端兜底（权威限制），前端也会做一次提前校验以给更友好的提示。
++		// ============================================================================
++		if arg.IsPreviewMode {
++			const maxPreviewMs = 5000.0
++			if (arg.EndTime - arg.StartTime) > maxPreviewMs {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{
++					"message": "error: SDK预览播放仅支持<=5000ms的片段，请使用前端试听播放条",
++				})
++				return
++			}
++		}
++	// ============================================================================
++	// GET /get_audio_stream - 读取当前编辑专辑下的音频源文件（用于前端波形渲染）
++	//
++	// 说明：
++	// - 前端通过 sha256 + type（扩展名，如 ".wav"）定位 audioFiles/<sha256><type>
++	// - 该接口返回音频文件内容，支持 Range（由 http.ServeContent 处理）
++	// - 仅用于编辑器场景（依赖 audio_pkg_uuid 已加载）
++	// ============================================================================
++	keytonePkgRouters.GET("/get_audio_stream", func(ctx *gin.Context) {
++		type Arg struct {
++			Sha256 string `form:"sha256"`
++			Type   string `form:"type"`
++		}
++		var arg Arg
++		if err := ctx.ShouldBindQuery(&arg); err != nil || arg.Sha256 == "" || arg.Type == "" {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{
++				"message": "error: 参数接收失败",
++			})
++			return
++		}
++		// 基础校验：防止路径穿越/非法扩展名
++		if len(arg.Sha256) != 64 {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
+--- candidata: album-config-encryption [tasks+termos]
+  | # 规格增量：专辑配置加密
+  | ## 新增需求
+  | ### 需求：专辑配置加密触发
+  > - **给定** 专辑 UUID 存在于配置中的 `audio_pkg_uuid` 字段或目录名
+  > - **则** 配置以旧密钥（originalAlbumId）解密、更新 `audio_pkg_uuid` 为新 ID，并使用新 ID 重新加密写回 `core`，而后指示 JSON 随之刷新
+  > Normative: The `/keytone_pkg/apply_signature_config` endpoint SHALL accept albumPath, signatureId, requireAuthorization, contactEmail, contactAdditional, updateSignatureContent, and authorizationUUID 
+  > - **THEN** 返回200状态码和`{ message: "ok", qualificationCode: "<sha256>" }`响应体
+  > - **THEN** 返回400错误和`{ message: "error: 需要授权时必须提供联系邮箱" }`
+  > - **THEN** 返回404错误和`{ message: "error: 签名不存在或已被删除" }`
+  > - **THEN** 返回错误和`{ message: "error: 该签名未获得原始作者授权，无法应用到此专辑" }`
+  > Normative: The signature application process SHALL handle missing image files gracefully by skipping the copy and setting cardImagePath to empty string, log errors for debugging, and ensure partial fa
+--- candidata: export-flow [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: 导出状态机编排
+  | Normative: The composable `useExportSignatureFlow` SHALL 根据专辑状态按顺序驱动签名确认、授权策略、授权门控及签名选择；无论用户是否选择“需要签名”，流程都 MUST 在完成授权策略判断后才进入 `done`，取消任何步骤 MUST 终止本次导出并重置状态。
+  > Normative: The album selector component SHALL display direct export author signature information for albums that have signatures; the selected state display MUST be positioned on the top-right border 
+  > Normative: The AuthRequestDialog component SHALL automatically load signature data with authorization status when opened; the component MUST filter and display only unauthorized signatures to allow us
+  > - **WHEN** AuthRequestDialog 打开（visible=true）
+  > Normative: The system SHALL provide an AuthRequestDialog component that guides users through a 3-step wizard to generate authorization request files; the dialog MUST display only unauthorized signatur
+  > - **WHEN** AuthRequestDialog 打开
+  > - **WHEN** 状态机收到 authRequest 事件
+  > - **WHEN** AuthRequestDialog 发出 done 事件
+  > - **WHEN** AuthRequestDialog 发出 cancel 事件
+--- candidata: keytone-album-editor [PR+termos]
+  | # keytone-album-editor Spec Delta (add-album-sound-selector-search)
+  | ## ADDED Requirements
+  | ### Requirement: 键音专辑关键选择器支持输入搜索
+  > Normative: 系统 SHALL 提供可被前端访问的音频流数据源，用于从当前专辑的音频源文件生成波形；该数据源应当能够通过源文件引用信息定位（例如 sha256 + type）。
+  > - **GIVEN** 前端通过 `messageAudioPackage` 事件接收来自后端的键音包配置数据
+  > Normative: `initData()`、`watch(audioFiles)` 与 SSE 更新 三条路径 SHALL 复用 `keytoneAlbumMappers` 中的纯函数，以确保映射行为一致、避免重复代码与行为漂移。
+  > Normative: 联动声效步骤（Step4）的 UI 模板 SHALL 从父组件中拆出到 `steps/StepLinkageEffects.vue`，并通过 inject 使用父组件 provide 的 Context，以降低父组件模板复杂度且保持行为不变。
+  > Normative: 对于同一 `sha256` 的音频源文件，系统在新增别名时 SHALL 生成唯一 UUID 作为 `name_id`；删除旧别名后，后续新增 SHALL NOT 复用历史 `name_id`。
+  > - **GIVEN** 用户曾导入某音频文件（`sha256=A`）并产生别名 `name_id=U1`
+  > - **WHEN** 用户再次导入同一音频文件（同 `sha256=A`）
+  > - **GIVEN** 用户连续多次导入同一 `sha256` 文件
+--- candidata: encrypted-outputs [tasks]
+  | # Encrypted Outputs（增量）
+  | ## MODIFIED Requirements
+  | ### Requirement: 构建身份与对称密钥来源
+  > Note: A local debug tool (ktalbum-tools) MAY additionally try both the injected key and the default open-source key for the same version to improve inspection compatibility. This does not change the m
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: keytone-album-editor (fraca: limite de 5 s não descrito)): O PR acrescenta funcionalidades de assinatura e metadados, além das descritas na spec.
+
+===== P045 | rozx/Tsukuyomi PR #82 | capacidade do par: ai-chapter-title-tool
+PR: Feat/embedding chapters
+arquivos ligados: src/services/ai/tasks/prompts/translation.ts;src/services/ai/tasks/translation-service.ts;src/services/ai/tools/task-status-tools.ts
+--- linhas alteradas (15; mostrando até 40)
++  hasQueryChapterTool,
++  const chapterLookupHint = hasQueryChapterTool(tools)
++    ? '需要章节上下文时用 query_chapter（三类最稳 query：标题/系列名直搜、人物+具体动作+独特细节、事件锚点；中文转述日文标题字面差异大时优先用原文；避免抽象读后感、仅人名无动作；Top1 未必最佳默认看 Top3-5），再按需调 get_chapter_info 读全文。'
++    : '需要章节上下文时用 list_chapters 找到章节 ID 后调 get_chapter_info 读全文。';
+-8. **关注当前任务**: 你可以使用工具（如 get_previous_paragraphs, get_next_paragraphs）查看上下文（甚至跨越章节），但你**必须只翻译/修改当前任务列表中指定的段落**。上下文仅供参考，切勿翻译上下文段落作为输出。
++8. **关注当前任务**: 你可以使用工具（如 get_previous_paragraphs, get_next_paragraphs）查看上下文（甚至跨越章节），但你**必须只翻译/修改当前任务列表中指定的段落**。上下文仅供参考，切勿翻译上下文段落作为输出。${chapterLookupHint}
+-        enableChapterSummary: true,
+-  chapter_summary: {
+-    planning: ['working'],
+-    working: ['end'],
+-    end: [],
+-  },
+-    if (taskType === 'chapter_summary') {
+-      return '章节摘要任务不支持 review 状态';
+-    }
+--- candidata: chapter-embedding-search [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Title chunk for chapter heading semantics
+  | The system SHALL embed each chapter's title together with its first paragraph as a dedicated `title` chunk, distinct from the content chunks, to support title-driven and theme-driven semantic queries.
+  > The system SHALL compute per-query unit IDF weights online from the loaded book chunks and apply them in keyword scoring, replacing the fixed `PROPER_NOUN_BOOST` for non-identifier units in the chapte
+  > #### Scenario: IDF computation per query
+  > - **GIVEN** a query Q and the book's loaded chunks (content + title) for `queryChapters`
+  > - **GIVEN** a query unit U with computed `idf` weight, AND a hit (`unitScore > 0`) in the haystack
+  > - **GIVEN** a query unit U
+  > The system SHALL recognize chapter / volume identifiers (Arabic numerals, Chinese numerals, circled numbers ① – ⑳, Roman numerals Ⅰ – Ⅹ) as a distinct strong-signal class in keyword scoring, AND SHALL
+  > - **GIVEN** a query containing a circled number such as `⑥` or a Roman numeral such as `Ⅴ`
+  > - **WHEN** the system extracts query units for keyword scoring
+--- candidata: chapter-summary [PR+termos]
+  | # Capability: Chapter Summary
+  | ## ADDED Requirements
+  | ### Requirement: Chapter Summary Generation
+  > The system MUST provide the chapter summary to AI tools that provide chapter metadata/listing, but NOT for tools that already provide full content.
+  > #### Scenario: Provide summary in list tools
+  > When an AI tool retrieves chapter list or metadata (e.g., `list_chapters`)
+  > #### Scenario: Exclude summary in content tools
+  > **Reason**: AI-generated chapter summaries are replaced by chapter-level embedding search. Chapters no longer maintain a textual `summary` field; semantic understanding is provided by the new `query_c
+  > **Migration**: The `Chapter.summary` field and all generation code paths (`ChapterSummaryService`, the `chapter_summary` task type, auto-generation on translation initiation, manual "Re-summarize" but
+  > **Migration**: Delete the summary display component and the "Re-summarize" button from `ChapterContentPanel` and any related UI. Users seeking chapter context should rely on the AI's `query_chapter` t
+  > **Reason**: The `get_chapter_info` AI tool no longer emits a `summary` field; the `search_chapter_summaries` tool is removed. Chapter semantics are now queried via `query_chapter`.
+--- candidata: ai-context-building [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Automatic memory discovery from chunk entities
+  | The system SHALL identify entities present in a chunk and retrieve their attached memories.
+  > ### Requirement: Single-query book memory fetch with TTL cache
+  > The system SHALL fetch all memories for a book in a single IndexedDB query, cached for a short TTL, replacing the previous pattern of multiple per-entity `getMemoriesByAttachment` calls per chunk.
+  > ### Requirement: AI discovers chapter context via query_chapter
+  > The system SHALL inform AI tasks that chapter-level semantic context must be requested on demand via the `query_chapter` tool rather than arriving pre-injected.
+  > - **THEN** the prompt describes `query_chapter` as the way to locate semantically relevant chapters for the current task
+  > - **AND** the prompt notes that `get_chapter_info` returns full chapter content but no summary
+--- candidata: ai-paragraph-tools [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Cross-Chunk Context Retrieval
+  | All paragraph context retrieval tools (`get_previous_paragraphs`, `get_next_paragraphs`, `get_paragraph_position`) SHALL retrieve the specified paragraphs from the book content, ignoring any processin
+  > All paragraph context retrieval tools (`get_previous_paragraphs`, `get_next_paragraphs`, `get_paragraph_position`) SHALL retrieve the specified paragraphs from the book content, ignoring any processin
+  > - **WHEN** `get_previous_paragraphs` is called for the first paragraph in a chunk
+  > - **WHEN** `get_next_paragraphs` is called for the last paragraph in a chunk
+  > - **THEN** the prompt instructs the AI to use context tools freely but modify ONLY the assigned paragraphs.
+  > - **THEN** the prompt instructs the AI to use context tools freely but modify ONLY the assigned paragraphs.
+  > - **THEN** the prompt instructs the AI to use context tools freely but modify ONLY the assigned paragraphs.
+  > ### Requirement: Paragraph tools coordination with submission tools
+  > 段落查询工具（`get_previous_paragraphs`, `get_next_paragraphs`, `get_paragraph_info` 等）SHALL 与新的提交工具协同工作，确保 AI 可以查询上下文后使用 `add_translation_batch` 提交结果。
+--- candidata: ai-tool-chunk-boundary [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Tool context includes chunk boundaries
+  | The system SHALL extend the `ToolContext` interface to include optional chunk boundary information for enforcing paragraph access restrictions during chunked processing.
+  > - **WHEN** a non-chunked context calls tools (e.g., AI assistant chat, standalone tool usage)
+  > - **AND** tools SHALL allow access to any paragraphs without restriction
+  > - **WHEN** tools are invoked during this task
+  > - **WHEN** tools are invoked during this task
+  > - **WHEN** tools are invoked during this task
+  > ### Requirement: get_next_paragraphs respects chunk boundaries
+  > The system SHALL enforce chunk boundaries on the `get_next_paragraphs` tool, rejecting requests that would return paragraphs outside the current chunk.
+  > - **WHEN** AI calls `get_next_paragraphs` with paragraph_id P3 and count 2
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: chapter-summary): O tratamento de embeddings está alinhado à spec.
+
+===== P048 | Splode/pomotroid PR #406 | capacidade do par: macos-shortcuts
+PR: Feat/remember window position
+arquivos ligados: src-tauri/src/lib.rs;src-tauri/src/settings/mod.rs
+--- linhas alteradas (110; mostrando até 40)
+-            // CloseRequested: hide to tray instead of quitting if min_to_tray_on_close.
+-            // When actually closing (not hiding), also close any child windows so they
+-            // cannot be left orphaned with no way to reopen the main window.
++            // Restore saved window position/size if all four values are present and
++            // the saved rectangle still intersects at least one connected monitor.
++            if let (Some(wx), Some(wy), Some(ww), Some(wh)) = (
++                initial_settings.window_x,
++                initial_settings.window_y,
++                initial_settings.window_width,
++                initial_settings.window_height,
++            ) {
++                let on_screen = app
++                    .available_monitors()
++                    .unwrap_or_default()
++                    .into_iter()
++                    .any(|m| {
++                        let mp = m.position();
++                        let ms = m.size();
++                        let mx0 = mp.x as i64;
++                        let my0 = mp.y as i64;
++                        let mx1 = mx0 + ms.width as i64;
++                        let my1 = my0 + ms.height as i64;
++                        let wx0 = wx as i64;
++                        let wy0 = wy as i64;
++                        let wx1 = wx0 + ww as i64;
++                        let wy1 = wy0 + wh as i64;
++                        wx0 < mx1 && wx1 > mx0 && wy0 < my1 && wy1 > my0
++                    });
++                if on_screen {
++                    let _ = main_window.set_position(tauri::PhysicalPosition::new(wx, wy));
++                    let _ = main_window.set_size(tauri::PhysicalSize::new(ww, wh));
++                }
++            }
++            // Persist window position/size on move and resize, and close child windows
++            // when the main window is truly closed (not hidden to tray).
++            let db_for_pos = db.clone();
++            let win_for_pos = main_window.clone();
+-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+-                    let hide = db_for_close
+-                        .lock()
+--- candidata: window-position [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Window position is persisted on move and resize
+  | The system SHALL save the main window's position (`window_x`, `window_y`) and size (`window_width`, `window_height`) to the settings database whenever the window is moved or resized. Values are physic
+  > ### Requirement: Window position is persisted on move and resize
+  > The system SHALL save the main window's position (`window_x`, `window_y`) and size (`window_width`, `window_height`) to the settings database whenever the window is moved or resized. Values are physic
+  > #### Scenario: Position saved after window is moved
+  > - **WHEN** the user drags the main window to a new position
+  > - **THEN** the updated `window_x` and `window_y` values SHALL be written to the settings database
+  > #### Scenario: Size saved after window is resized
+  > - **WHEN** the user resizes the main window
+  > - **THEN** the updated `window_width` and `window_height` values SHALL be written to the settings database
+--- candidata: settings [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Language setting
+  | The system SHALL store a `language` setting in the settings database with a default value of `'auto'`. The value SHALL be either `'auto'` or a supported IETF BCP 47 locale tag (`'en'`, `'es'`, `'fr'`,
+  > The system SHALL store a `language` setting in the settings database with a default value of `'auto'`. The value SHALL be either `'auto'` or a supported IETF BCP 47 locale tag (`'en'`, `'es'`, `'fr'`,
+  > - **WHEN** the application runs for the first time with no existing settings
+  > The system SHALL provide a "Reset All Settings" action in Settings → About. The action SHALL use an inline two-step confirmation: the first interaction reveals a confirmation prompt with Cancel and Re
+  > - **THEN** the row SHALL return to the initial "Reset All Settings" button and no settings SHALL be changed
+  > - **THEN** `settings_reset_defaults` SHALL be invoked, all settings SHALL revert to factory defaults, and the row SHALL return to the initial button
+  > - **THEN** no reset button SHALL be present in that section
+  > - **THEN** the settings table SHALL contain `time_work_secs = "1500"`, `time_short_break_secs = "300"`, `time_long_break_secs = "900"` and SHALL NOT contain any `*_mins` keys
+  > - **THEN** the settings table SHALL contain `time_work_secs = "1500"` and SHALL NOT contain `time_work_mins`
+--- candidata: build-version [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Build version string baked in at compile time
+  | The system SHALL compute a semver-conformant build version string during `cargo build` by invoking `git describe --tags --long --always --dirty` in `build.rs` and emitting the result as the compile-ti
+  > The system SHALL compute a semver-conformant build version string during `cargo build` by invoking `git describe --tags --long --always --dirty` in `build.rs` and emitting the result as the compile-ti
+  > #### Scenario: Dev build (commits since last tag)
+  > - **WHEN** the binary is compiled with uncommitted changes present
+  > - **WHEN** `git describe` fails (no git binary, no tags, detached shallow clone)
+  > - **THEN** `APP_BUILD_VERSION` SHALL fall back to `{base}+unknown` where `{base}` is read from `tauri.conf.json`
+  > - **THEN** the About section SHALL display the returned string; if the call fails, it SHALL fall back to displaying the base version from `tauri.conf.json`
+  > The system SHALL compute a semver-conformant build version string during `cargo build` by invoking `git describe --tags --long --always --dirty` in `build.rs` and emitting the result as the compile-ti
+  > #### Scenario: Dev build (commits since last tag)
+--- candidata: diagnostic-logging [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Log file written to OS-conventional directory
+  | The system SHALL write a persistent log file to the platform's conventional application log directory, resolved via `app.path().app_log_dir()` using the app identifier `com.splode.pomotroid`.
+  > ### Requirement: Default log level captures errors, warnings, and key lifecycle events
+  > ### Requirement: Rust panics captured before process termination
+  > #### Scenario: Panic captured in log
+  > - **WHEN** the database cannot be opened
+  > - **WHEN** the audio output stream cannot be opened
+  > - **WHEN** a global shortcut cannot be registered
+  > - **WHEN** the system tray icon cannot be built
+  > - **WHEN** the file system watcher for custom themes cannot be created or fails
+--- candidata: timer-duration-keyboard-entry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Timer duration badge is an editable MM:SS input
+  | The Settings → Timer section SHALL replace the static time display badge for Focus, Short Break, and Long Break rows with an editable text input. The input SHALL display the current duration in `MM:SS
+  > - **WHEN** the settings window opens
+  > - **THEN** the duration SHALL be saved as 339 seconds and the badge SHALL display `5:39`
+  > - **THEN** the duration SHALL be saved as 1500 seconds and the badge SHALL display `25:00`
+  > - **WHEN** the user enters text that cannot be parsed (e.g. `abc`, `::`)
+  > - **THEN** the value SHALL be committed (parsed, clamped, saved) identically to pressing Enter
+  > - **THEN** the badge SHALL display `30:00` and 1800 seconds SHALL be saved
+  > - **THEN** the slider thumb SHALL move to position 6 (nearest whole minute) and 339 seconds SHALL be saved
+  > - **THEN** the slider thumb SHALL sit at position 25 and 1500 seconds SHALL be saved
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: window-position): O PR introduz regras que não estão necessariamente descritas na spec.
+
+===== P051 | HazelnutParadise/insyra PR #149 | capacidade do par: repl-engine
+PR: Enhance/stats
+arquivos ligados: cli/commands/hypothesis.go;cli/commands/pca.go;cli/commands/regression.go;cli/commands/stats_adv.go
+--- linhas alteradas (138; mostrando até 40)
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+--- candidata: dsl-commands [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Load data from file
+  | 系統 SHALL 提供 `load` 命令從檔案載入資料為 DataTable。
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`skewness`、`kurtosis`、`cov`。
+  > #### Scenario: Correlation
+  > - **THEN** 系統呼叫 `stats.Correlation()` 並顯示結果
+  > #### Scenario: Linear regression
+  > - **WHEN** 使用者執行 `regression linear y x1 x2`
+  > - **THEN** 系統呼叫 `stats.LinearRegression()` 並顯示迴歸結果
+  > - **THEN** 系統呼叫 `stats.PCA()` 取前 3 個主成份
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`kmeans`、`hclust`、`cutree`、`dbscan`、`silhouette`、`skewness`、`kurtosis`、`cov`。
+--- candidata: cli-entry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI entry point with cobra
+  | 系統 SHALL 提供 `cmd/insyra/main.go` 作為 CLI 程式入口，使用 cobra 框架建立 root command。
+--- candidata: env-management [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Environment create
+  | 系統 SHALL 提供 `env create <name>` 命令建立新環境。
+--- candidata: script-runner [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Script file execution
+  | 系統 SHALL 提供 `run` 命令執行 `.isr` 腳本檔。
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: dsl-commands): O PR adiciona funcionalidades de estatística que não constam da spec original.
+
+===== P054 | terwer/siyuan-plugin-picgo PR #677 | capacidade do par: picgo-headless-config-contract
+PR: feat(shell): improve PicGo plugin shell UX and reload notification 
+arquivos ligados: libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts
+--- linhas alteradas (56; mostrando até 40)
+-import { migrateV2WorkspacePicGoConfig, resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
++import { resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
+-      migrateV2WorkspacePicGoConfig(paths, this.logger)
+-    const that = this
+-    return new Promise<void>((resolve) => {
+-      let needUpdate = false
++    const initialState = picgo.getConfigMigrationState()
++    if (initialState.status === "running") {
++      siyuanApi.pushMsg({
++        msg: "检测到 PicGo 配置初始化或迁移任务，正在等待完成，请勿进行任何操作...",
++        timeout: 1000,
++      })
++      this.logger?.warn("检测到 PicGo 配置初始化或迁移任务，正在等待完成...")
++      await picgo.waitForConfigMigration()
++    }
+-      const checkConfig = () => {
+-        if (picgo.cfgUpdating) {
+-          needUpdate = true
+-          siyuanApi.pushMsg({
+-            msg: "检测到旧配置，正在迁移配置，请勿进行任何操作...",
+-            timeout: 1000,
+-          })
+-          that.logger?.warn("检测到旧配置，正在迁移配置，请勿进行任何操作...")
+-          setTimeout(checkConfig, 1000) // 递归检查
+-        } else {
+-          if (needUpdate) {
+-            siyuanApi.pushMsg({
+-              msg: "PicGO 图床历史配置迁移完成",
+-              timeout: 7000,
+-            })
+-            that.logger?.info("PicGO 图床历史配置迁移完成🎉")
+-          }
+-          that.logger?.info("PicGO instance is ready😄")
+-          resolve()
+-        }
+-      }
++    const finalState = picgo.getConfigMigrationState()
++    if (finalState.status === "failed") {
++      const errorText = finalState.error ? `，错误信息：${finalState.error}` : ""
++      siyuanApi.pushErrMsg({
+--- candidata: picgo-plugin-shell-ux [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 插件主界面使用轻量挂载式 shell
+  | `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > - **WHEN** 用户点击 PicGo 插件入口打开主界面
+  > - **AND** popup SHALL 显示在 PicGo 顶栏按钮附近
+  > - **AND** 该 shell SHALL 能够承载现有 PicGo 设置和操作界面
+  > - **WHEN** 用户重复点击 PicGo 插件入口
+  > - **WHEN** 用户关闭 PicGo shell 或插件被卸载/禁用
+  > PicGo 配置迁移和初始化检查 SHALL be idempotent and SHALL NOT run again merely because the main UI is opened.
+  > - **AND** 用户打开 PicGo 主界面
+--- candidata: picgo-unified-async-config-source [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  | PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  > PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > - **WHEN** PicGo 3.0 运行在 Kernel-backed Docker/Web 或 SiYuan workspace runtime
+  > - **THEN** PicGo main config、external/PicList config、SiYuan connection config、SiYuan integration behavior、plugin enable/config values、uploader config 和 uploader-owned state SHALL 通过 unified async faca
+  > - **AND** v2 中“只有 `picgo.cfg.json` 进入 Kernel storage”的规则 SHALL NOT 作为 3.0 限制
+  > - **WHEN** PicGo 3.0 区分 syncable user configuration 和 runtime artifacts
+  > - **THEN** third-party PicGo plugin packages、npm folders、`pluginBaseDir`、`zhiNpmPath`、logs、caches 和 build output SHALL 保持 PC/Electron-local artifacts
+  > ### Requirement: PicGo 3.0 使用统一 async 配置 facade
+--- candidata: picgo-product-library-boundary [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin product and library roles are explicit
+  | The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > - **WHEN** downstream code imports `universal-picgo`, `universal-picgo-store`, or `zhi-siyuan-picgo`
+  > - **THEN** the helper is exposed through a deliberate facade or moved to the product layer, and product code does not import library `src` paths directly
+  > The PicGo domain core SHALL avoid direct dependencies on product UI frameworks, SiYuan DOM state, Electron-only UI helpers, and implicit global runtime detection.
+  > The refactor SHALL make ownership of PicGo context, Siyuan API clients, configuration migration, event bus subscriptions, and plugin loader state explicit.
+  > - **WHEN** `SiyuanPicGo`, `picgoEventBus`, or `UniversalPicGo` lifecycle state is used
+  > - **WHEN** a PicGo core object is constructed by a library consumer
+  > - **THEN** construction does not implicitly perform unrelated product operations such as UI setup, host migration, npm plugin installation, or third-party plugin loading unless explicitly requested by
+--- candidata: picgo-public-contract-stability [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public API stability under internal refactor
+  | The plugin SHALL preserve its public API surface while internal modules are refactored.
+  > - **THEN** the exported symbols and module paths that form the public API remain available unless a separate breaking change is explicitly proposed
+  > The plugin SHALL continue to read and write existing user configuration, cache, and storage data without requiring migration that breaks current installs.
+  > - **THEN** the plugin continues writing data in the same externally compatible contract unless a separate migration is explicitly approved
+  > - **WHEN** the refactor is ready for review
+  > Docker/Web storage 持久化 SHALL 在不破坏既有桌面、本地文件和纯浏览器行为的前提下，让旧 localStorage PicGo 主配置具备可迁移路径。
+  > - **WHEN** Docker/Web 用户已有旧 localStorage PicGo 主配置且 Kernel 主配置文件不存在
+  > - **THEN** 系统 SHALL 将旧主配置迁移到 `data/storage/syp/picgo/picgo.cfg.json`
+  > - **WHEN** Kernel 主配置文件已存在且浏览器 localStorage 中也有旧 PicGo 主配置
+--- candidata: picgo-runtime-boundary-integrity [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Runtime capability boundaries are explicit
+  | The plugin SHALL define and enforce explicit runtime capability boundaries instead of relying on implicit Node/browser fallback behavior.
+  > #### Scenario: Browser target excludes Node escape paths
+  > - **THEN** the bundle does not include unapproved direct `eval`, `eval("require")`, `vm-browserify`, or Node polyfill escape paths
+  > - **THEN** the refactor records whether that artifact contains bundled polyfills, dynamic require, or generated eval paths before treating it as acceptable
+  > - **WHEN** the refactor is ready for review
+  > PicGo storage runtime capability SHALL 通过当前入口显式创建的 factory 或当前 JS realm 独立探测获得，不得由另一个 realm 中的隐式全局状态决定。
+  > - **WHEN** 设置页 iframe 初始化 PicGo 配置 UI
+  > - **WHEN** PicGo core 需要 filesystem、Kernel storage 或 localStorage 能力
+  > PicGo 3.0 runtime SHALL 将 unified async configuration facade 作为 user configuration access boundary。
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: picgo-plugin-shell-ux): O PR altera a formatação de erros, sem mudar as regras de negócio.
+
+===== P058 | koki-develop/Cork PR #33 | capacidade do par: per-workspace-statuses
+PR: feat(updater): add in-app updater via tauri-plugin-updater
+arquivos ligados: src-tauri/src/lib.rs
+--- linhas alteradas (2; mostrando até 40)
++        .plugin(tauri_plugin_updater::Builder::new().build())
++        .plugin(tauri_plugin_process::init())
+--- candidata: updater [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: アプリは起動時に最新リリースを自動チェックする
+  | Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > `Update available` toast の `Install and Restart` action ボタンが選択された場合、同じ toast id を保持したまま sonner の状態を遷移させ、`tauri-plugin-updater` の `downloadAndInstall` を呼び出さなければならない (MUST)。状態遷移は `available → downloadin
+  > - **WHEN** ダウンロード完了直後（plugin が `Finished` イベントを emit）
+  > CI でビルドされる `Cork.app.tar.gz` は、`TAURI_SIGNING_PRIVATE_KEY` (minisign 秘密鍵) と `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` を環境変数として受け取った `tauri build` が同名の `.sig` ファイル (base64 minisign) を生成し、release アセットとしてアップロ
+  > ビルド時、`tauri.conf.json` の `bundle.macOS.signingIdentity: "-"` によって Tauri が `.app` を ad-hoc 署名しなければならない (MUST)。`tauri-plugin-updater` が新 `.app` を `reqwest` でメモリにダウンロードし、`tar` 展開してから `std::fs::rename` で配
+  > - **AND** `cork --version` が新バージョン番号を返す (`cli/build.rs` が `package.json` の version を埋め込んでいるため)
+  > `tauri-plugin-updater` の endpoint は `https://github.com/koki-develop/Cork/releases/latest/download/latest.json` 単一でなければならない (MUST)。`latest.json` は CI (`release-please.yml` の `release` ジョブ) で生成され、その re
+  > - **THEN** プロセスは aarch64 として振る舞うため、`tauri-plugin-updater` は `darwin-aarch64` プラットフォームエントリを取得し、通常通り更新通知 toast を表示する
+--- candidata: mcp-server [tasks]
+  | # mcp-server
+  | ## ADDED Requirements
+  | ### Requirement: MCP サーバはアプリ起動時に設定に従って起動する
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+--- candidata: backend-update-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Update task command
+  | The Tauri backend SHALL provide a `update_task` command that updates a task's frontmatter fields (title, status) and body in a single call, and renames the file when the title changes.
+--- candidata: create-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: User can create a task
+  | The system SHALL allow users to create a new task from the board view.
+--- candidata: settings-save-unified [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 設定パネル内の変更は Save 押下時にのみ確定する
+  | 設定パネル内で編集される全項目（Workspace Directory および Statuses）は、Save ボタンが押されるまでバックエンドの永続化対象に反映されてはならない。ピッカーで選んだ workspace directory も、`useStatusEdit` のローカル編集と同じく未確定 pending 状態として保持される SHALL。
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: updater): O PR trata da infraestrutura do ciclo de vida do aplicativo desktop Cork, fora do escopo da spec.
+
+===== P060 | Mic92/gitea-mq PR #54 | capacidade do par: automerge-integration
+PR: batch: bors-style batch merge queue
+arquivos ligados: internal/forge/forge.go;internal/forge/mock.go;internal/gitea/client.go;internal/gitea/forge.go;internal/gitea/forge_test.go;internal/github/forge.go;internal/github/forge_test.go;internal/github/ghfake/server.go
+--- linhas alteradas (340; mostrando até 40)
++	"errors"
++// ErrNotFastForward is returned by FastForward when sha is not a descendant
++// of the branch's current tip. Callers treat it as "target moved, rebuild".
++var ErrNotFastForward = errors.New("forge: not a fast-forward")
++// PushDeniedError is returned by FastForward when the push is rejected by
++// branch protection / ruleset. Carries the forge's message so the user gets
++// an actionable hint (e.g. which whitelist to add the token user to).
++type PushDeniedError struct {
++	Branch  string
++	Message string
++}
++// MergeStep is the per-head outcome of a StackMerges call.
++type MergeStep struct {
++	Conflict bool
++	Err      error // non-conflict failure for this head; the stacker continues
++}
++// MergeStacker is optionally implemented by a Forge that can build a stack of
++// merge commits in one repository checkout. The batch engine type-asserts for
++// it and falls back to CreateMergeBranch + MergeInto otherwise. A returned
++// error is a whole-operation failure (clone/push); per-head outcomes are in
++// steps. tip is the branch SHA after the last successful merge, or "" when
++// every head conflicted/failed.
++type MergeStacker interface {
++	StackMerges(ctx context.Context, owner, repo, base string, heads []string, branch string) (tip string, steps []MergeStep, err error)
++}
++func (e *PushDeniedError) Error() string {
++	return fmt.Sprintf("forge: push to %s denied: %s", e.Branch, e.Message)
++}
++	// MergeInto merges headSHA into an existing branch and returns the new
++	// tip. conflict=true (err=nil) on merge conflict. Used to stack batch
++	// members onto the batch branch after CreateMergeBranch seeded it.
++	MergeInto(ctx context.Context, owner, name, branch, headSHA string) (sha string, conflict bool, err error)
++	// FastForward updates branch to sha without force. Returns
++	// ErrNotFastForward when sha is not a descendant of the current tip,
++	// *PushDeniedError when branch protection rejects the push.
++	FastForward(ctx context.Context, owner, name, branch, sha string) error
++	// ClosePR closes an open PR without merging. Idempotent on
++	// already-closed/merged.
++	ClosePR(ctx context.Context, owner, name string, number int64) error
++	MergeIntoFn         func(ctx context.Context, owner, name, branch, headSHA string) (string, bool, error)
+--- candidata: forge-abstraction [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Forge-qualified repository identity
+  | The system SHALL identify every managed repository by the triple `(forge, owner, name)`, where `forge` is one of `gitea` or `github`. Two repositories with identical `owner/name` on different forges S
+  > ### Requirement: Forge-qualified repository identity
+  > The system SHALL identify every managed repository by the triple `(forge, owner, name)`, where `forge` is one of `gitea` or `github`. Two repositories with identical `owner/name` on different forges S
+  > #### Scenario: Same owner/name on two forges
+  > - **WHEN** `gitea:org/app` and `github:org/app` are both managed
+  > - **THEN** each has its own queue, poller, and database `repos` row
+  > - **AND** enqueueing PR #1 on `gitea:org/app` does NOT affect `github:org/app`
+  > #### Scenario: Registry lookup is forge-qualified
+  > - **AND** only `gitea:org/app` is in the managed set
+--- candidata: queue-management [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Per-repository per-branch queues
+  | The system SHALL maintain independent queues for each combination of forge, repository, and target branch. PRs targeting `main` and PRs targeting `release/1.0` in the same repo SHALL have separate que
+  > ### Requirement: Per-repository per-branch queues
+  > The system SHALL maintain independent queues for each combination of forge, repository, and target branch. PRs targeting `main` and PRs targeting `release/1.0` in the same repo SHALL have separate que
+  > - **WHEN** PR #1 is enqueued in repo `gitea:org/app-a` targeting `main`
+  > - **AND** PR #2 is enqueued in repo `gitea:org/app-b` targeting `main`
+  > - **THEN** both PRs can be tested concurrently (one per queue)
+  > - **AND** removing PR #1 from `gitea:org/app-a` does not affect `gitea:org/app-b`'s queue
+  > #### Scenario: Independent branch queues within same repo
+  > - **WHEN** PR #1 targets `main` in repo `gitea:org/app`
+--- candidata: check-monitoring [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Commit status lifecycle reporting
+  | The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > #### Scenario: Full lifecycle status updates
+  > - **WHEN** PR #42 in `gitea:org/app` is enqueued
+  > - **THEN** status is `pending` with description "Queued (position #3)" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **WHEN** PR #42 becomes head-of-queue and merge branch is created
+  > - **THEN** status is `pending` with description "Testing merge result" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **WHEN** all checks pass on the merge branch
+  > - **THEN** status is `success` with description "Merge queue passed" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+--- candidata: web-dashboard [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Queue overview page
+  | The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > #### Scenario: Multiple repos with queued PRs
+  > - **AND** `gitea:org/app` has 3 active PRs and `github:org/lib` has 1 active PR
+  > - **THEN** the page displays each currently managed repository as a link
+  > - **AND** `org/app` shows forge `gitea` and a badge with "3"
+  > - **AND** `org/lib` shows forge `github` and a badge with "1"
+  > - **THEN** the page displays all currently managed repos
+  > #### Scenario: No managed repositories
+--- candidata: pr-detail-page [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: PR detail page
+  | The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > #### Scenario: Head-of-queue PR in testing state
+  > - **AND** PR #42 is the head-of-queue entry in state `testing`
+  > - **THEN** the page displays PR number, title, author, state (`testing`), queue position (1), and enqueued time
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/43` and `gitea:org/app` is in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/99` and `gitea:org/app` is in the managed set
+  > - **THEN** the page returns HTTP 200
+  > - **AND** displays "PR #99 is not in the merge queue"
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade; spec dona indicada pelo humano: forge-abstraction; queue-management): (vazia)

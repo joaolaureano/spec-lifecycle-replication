@@ -1,0 +1,420 @@
+===== P187 | netclaw-dev/netclaw PR #1486 | capacidade do par: tool-approval-gates
+PR: refactor(actors): per-entity actor protocol taxonomy
+arquivos ligados: src/Netclaw.Actors.Tests/Channels/DiscordApprovalPromptBuilderTests.cs;src/Netclaw.Actors.Tests/Sessions/ParentSessionApprovalBridgeTests.cs;src/Netclaw.Channels.Discord/DiscordApprovalPromptBuilder.cs;src/Netclaw.Channels.Slack/SlackApprovalBlockBuilder.cs
+--- linhas alteradas (4; mostrando até 40)
++using static Netclaw.Actors.Sessions.SessionProtocol;
++using static Netclaw.Actors.Sessions.SessionProtocol;
++using static Netclaw.Actors.Sessions.SessionProtocol;
++using static Netclaw.Actors.Sessions.SessionProtocol;
+--- candidata: actor-message-protocol [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Per-entity external protocol container
+  | Every actor entity SHALL declare its **external** messages — those that cross the actor boundary
+  > - **THEN** it is reached as `SessionProtocol.SendUserMessage`, not as a bare top-level type in a shared `Protocol` namespace
+  > - **THEN** that type is actor-private (not a member of `SessionProtocol`) and implements `INoSerializationVerificationNeeded`
+  > - **THEN** that type is a member of `SessionProtocol`, because it crosses the actor boundary
+  > The marker `I{Entity}Event` SHALL inherit `INetclawSerializableMessage` so that every persisted
+  > event is automatically bound to `NetclawProtobufSerializer`. There SHALL remain exactly one
+  > interface bound to `NetclawProtobufSerializer`. Value objects and the few commands that cross a
+  > persistence or remoting boundary MUST implement `INetclawSerializableMessage` explicitly.
+  > - **THEN** the record is bound to `NetclawProtobufSerializer` without a separate `INetclawSerializableMessage` declaration
+--- candidata: session-resume [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Recovered pending approvals restore turn context
+  | When a session recovers pending tool approvals from the journal, it SHALL also restore the original turn context for each pending approval. The restored context SHALL include the requester, audience, 
+  > - **WHEN** the client calls `ListSessionsAsync()`
+  > - **WHEN** the client calls `ListSessionsAsync()` and the daemon is not running
+--- candidata: bounded-tool-output [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Central bound + spill for every tool result
+  | `DispatchingToolExecutor` SHALL bound every tool result to an inline budget and,
+  > The inline budget SHALL be a property of the tool. `INetclawTool.InlineOutputBudgetChars`
+  > using the call's identifier (sanitized so it cannot escape the directory), and
+  > Define how Netclaw bounds tool output in memory, windows oversized results for
+  > The inline budget SHALL be a property of the tool. `INetclawTool.InlineOutputBudgetChars`
+  > using the call's identifier (sanitized so it cannot escape the directory), and
+
+===== P188 | arabold/docs-mcp-server PR #431 | capacidade do par: mime-type-detection
+PR: Fix embedding dimension resolution for custom models
+arquivos ligados: src/store/DocumentStore.ts
+--- linhas alteradas (282; mostrando até 40)
+-import type { AppConfig } from "../utils/config";
++import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
+-  private embeddings!: Embeddings;
+-  private readonly dbDimension: number;
++  private embeddings: Embeddings | null = null;
++  private dbDimension: number;
+-  private modelDimension!: number;
++  private modelDimension: number | null = null;
++  private getStoredDimensionForCurrentModel(): number | null {
++    const config = this.embeddingConfig;
++    if (!config) {
++      return null;
++    }
++    const stored = this.getEmbeddingMetadata();
++    if (stored.model !== config.modelSpec || stored.dimension === null) {
++      return null;
++    }
++    const dimension = Number(stored.dimension);
++    return Number.isInteger(dimension) && dimension >= 1 ? dimension : null;
++  }
+-    const currentModel = this.config.app.embeddingModel;
+-    const currentDimension = String(this.config.embeddings.vectorDimension);
++    const currentModel = this.embeddingConfig.modelSpec;
++    const currentDimension = String(this.dbDimension);
+-      this.embeddings = createEmbeddingModel(config.modelSpec, {
+-        requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
+-        vectorDimension: this.dbDimension,
+-      });
+-      // Use known dimensions if available, otherwise detect via test query
+-      if (config.dimensions !== null) {
+-        this.modelDimension = config.dimensions;
+-      } else {
+-        // Fallback: determine the model's actual dimension by embedding a test string
+-        // Use a timeout to fail fast if the embedding service is unreachable
+-        const testPromise = this.embeddings.embedQuery("test");
+-        let timeoutId: NodeJS.Timeout | undefined;
+-        const timeoutPromise = new Promise<never>((_, reject) => {
+-          timeoutId = setTimeout(() => {
+-            reject(
+-              new Error(
+--- candidata: embedding-model-change-safety [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Embedding Metadata Persistence
+  | The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > ### Requirement: Embedding Metadata Persistence
+  > The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > - `embedding_model`: The full model specification string (e.g., `openai:text-embedding-3-small`)
+  > - `embedding_dimension`: The configured vector dimension as a string (e.g., `"1536"`)
+  > The `metadata` table SHALL be created by a database migration with the schema `CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`.
+  > The metadata SHALL be written after successful embedding initialization during `DocumentStore.initialize()`. If embeddings are disabled (FTS-only mode), no embedding metadata SHALL be stored.
+  > #### Scenario: Metadata stored after successful embedding init
+  > - **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
+--- candidata: embedding-resolution [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Model Specification Parsing
+  | The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > **Supported providers:** `openai`, `vertex`, `gemini`, `aws`, `microsoft`, `sagemaker` (parse-only; model creation not yet implemented).
+  > **Code reference:** `src/store/embeddings/EmbeddingConfig.ts:290-317`
+  > #### Scenario: Model string without provider prefix
+  > - **WHEN** the model specification is `text-embedding-3-small` (no colon)
+  > - **THEN** the system SHALL use `openai` as the provider and `text-embedding-3-small` as the model name
+  > #### Scenario: Model string with provider prefix
+  > - **WHEN** the model specification is `gemini:embedding-001`
+--- candidata: embedding-generation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Chunk Metadata Header
+  | The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > This enriches the embedding vector with document context to improve semantic search relevance. The header is prepended only for the embedding input; it is not stored as part of the chunk content in th
+  > - **THEN** the embedding input SHALL be prefixed with `<title>React Docs</title>\n<url>https://react.dev/learn</url>\n<path>Learn / Installation / Setup</path>\n`
+  > - **AND** the chunk content in the database SHALL remain unchanged (without the header)
+  > - **THEN** the embedding input SHALL still include the metadata header with an empty path element
+  > The system SHALL batch chunks for embedding generation using two concurrent limits:
+  > - **Character limit** (`embeddings.batchChars`, default 50,000): total characters of all texts in the batch
+  > - **Count limit** (`embeddings.batchSize`, default 100): maximum number of items in a single batch
+
+===== P189 | epam/ai-dial-chat PR #7623 | capacidade do par: sticky-code-block-header
+PR: feat(chat): update code block download button (Issue #7589)
+arquivos ligados: apps/chat/src/components/Markdown/CodeBlock.tsx
+--- linhas alteradas (64; mostrando até 40)
+-import { IconCheck, IconCopy } from '@tabler/icons-react';
+-import { CSSProperties, FC, memo, useCallback } from 'react';
++import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
++import { CSSProperties, FC, memo, useCallback, useState } from 'react';
+-import { getDownLoadCurrentDate } from '@/src/utils/app/import-export';
++import { triggerDownload } from '@/src/utils/app/file';
++import { getDefaultExportFileName } from '@/src/utils/app/import-export';
+-import Download from '@/public/images/icons/download.svg';
++import { ChangeDownloadFileNameModal } from '@/src/components/Markdown/ChangeDownloadFileNameModal';
++    const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+-    const downloadAsFile = useCallback(() => {
+-      // languageExtensionMapping allows set empty extension
+-      const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
+-      // use the specific filename if it exists in languageFilenameMapping
+-      const suggestedFileName =
+-        languageFilenameMapping[displayLanguage] ??
+-        `ai-chat-code-${getDownLoadCurrentDate()}${fileExtension}`;
+-      const fileName = window.prompt(
+-        t(MarkdownI18nKeys.EnterFileName),
+-        suggestedFileName,
+-      );
+-      if (!fileName) {
+-        // User pressed cancel on prompt
+-        return;
+-      }
+-      const blob = new Blob([value], { type: 'attachment/plain' });
+-      const url = URL.createObjectURL(blob);
+-      const link = document.createElement('a');
+-      link.download = fileName;
+-      link.href = url;
+-      link.style.display = 'none';
+-      document.body.appendChild(link);
+-      link.click();
+-      document.body.removeChild(link);
+-      URL.revokeObjectURL(url);
+-    }, [displayLanguage, t, value]);
++    // languageExtensionMapping allows set empty extension
++    const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
++    const suggestedFileName =
++      languageFilenameMapping[displayLanguage] ??
+--- candidata: codeblock-download [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code block download button uses standard icon
+  | The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > ### Requirement: Code block download button uses standard icon
+  > The code block toolbar download button SHALL use the `IconDownload` icon from `@tabler/icons-react`, consistent with the MD table download button.
+  > #### Scenario: Download icon is visible in code block toolbar
+  > - **THEN** the download button SHALL display the `IconDownload` tabler icon (not the custom SVG)
+  > ### Requirement: Code block download opens in-app filename dialog
+  > When the user clicks the download button in a code block, the system SHALL open an in-app modal dialog (`ChangeDownloadFileNameModal`) for filename input instead of a native browser prompt.
+  > #### Scenario: Download button click opens modal
+  > - **WHEN** the user clicks the download button in a code block toolbar
+--- candidata: export [PR]
+  | ## Purpose
+  | Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  | ## Requirements
+  > Defines the naming conventions for files produced by chat export actions (conversations, prompts, table CSV downloads, and code block downloads), ensuring consistent, sortable filenames across all exp
+  > ### Requirement: Export filenames SHALL use a zero-padded ISO date prefix
+  > #### Scenario: Conversation export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `2026-07-03_` (not `2026-7-3_`)
+  > #### Scenario: Conversations history export filename uses zero-padded date
+  > - **THEN** the exported filename SHALL begin with `YYYY-MM-DD_` with zero-padded month and day
+  > #### Scenario: Prompt export filename uses zero-padded date
+  > - **WHEN** the user exports a single prompt
+--- candidata: markdown-table [termos]
+  | ## Purpose
+  | Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  | ## Requirements
+  > Defines the toolbar actions available on rendered markdown tables in chat messages, covering copy and download capabilities and the visual/interaction requirements for toolbar buttons.
+  > A toolbar SHALL be rendered above each markdown table in a chat message, offering one-click copy of the table data as CSV, plain text (TXT), and Markdown.
+  > - **WHEN** the user clicks the "Copy as CSV" toolbar button
+  > - **WHEN** the user clicks the "Copy as TXT" toolbar button
+  > #### Scenario: Copy as Markdown places a GFM table on the clipboard
+  > - **WHEN** the user clicks the "Copy as MD" toolbar button
+  > - **THEN** the table data SHALL be written to the clipboard as a GitHub-Flavored Markdown table, including a separator row with alignment markers
+  > - **WHEN** the user clicks any copy toolbar button
+--- candidata: edit-message-save-tooltip [termos]
+  | # Specification: Edit Message Save & Submit Tooltip
+  | ## Overview
+  | The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > The Save & Submit button, which appears when editing user or assistant messages, SHALL display helpful tooltip explanations that inform users why the button is disabled and what action they should tak
+  > ### Requirement: Save & Submit tooltip displays when button is disabled
+  > The system SHALL display a tooltip on the Save & Submit button explaining why the button is disabled. The tooltip text SHALL be contextual based on the disable condition.
+  > - **WHEN** user is editing a message and a file attachment is in the uploading state
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Wait for attachment to load"
+  > #### Scenario: Message content is empty
+  > - **WHEN** user is editing a message and the message content is empty (no text and no attachments)
+  > - **THEN** the Save & Submit button is disabled and displays tooltip "Please type message"
+
+===== P190 | Yourdaylight/stock_datasource PR #124 | capacidade do par: data-management
+PR: Worktree qmt plugin
+arquivos ligados: src/stock_datasource/modules/datamanage/schemas.py;src/stock_datasource/modules/datamanage/service.py
+--- linhas alteradas (57; mostrando até 40)
++    data_source: str | None = None  # Optional per-sync provider override
++    ts_code: str | None = None  # Required for per-symbol providers (e.g., QMT)
++class UpdatePluginDataSourceRequest(BaseModel):
++    """Request model for updating a plugin's default data source."""
++    data_source: str
++    data_source: str | None = None
++    data_source: str | None = None
++    available_data_sources: list[str] = []
++    data_source: str | None = None
++    available_data_sources: list[str] = []
+-from stock_datasource.config.runtime_config import save_runtime_config
++from stock_datasource.config.runtime_config import load_runtime_config, save_runtime_config
++    def _get_plugin_data_source_config(
++        self, plugin_name: str, config_data: dict[str, Any]
++    ) -> tuple[str | None, list[str]]:
++        available = config_data.get("available_data_sources", [])
++        default_source = config_data.get("data_source")
++        runtime_sources = load_runtime_config().get("plugin_data_sources", {})
++        data_source = runtime_sources.get(plugin_name, default_source)
++        return data_source, available
++    def update_plugin_data_source(self, plugin_name: str, data_source: str) -> PluginDetail:
++        plugin = plugin_manager.get_plugin(plugin_name)
++        if not plugin:
++            raise ValueError(f"Plugin {plugin_name} not found")
++        config_data = plugin.get_config()
++        _, available = self._get_plugin_data_source_config(plugin_name, config_data)
++        if data_source not in available:
++            raise ValueError(
++                f"Unsupported data_source '{data_source}' for {plugin_name}. "
++                f"Available: {', '.join(available)}"
++            )
++        current = load_runtime_config().get("plugin_data_sources", {})
++        current[plugin_name] = data_source
++        save_runtime_config(plugin_data_sources=current)
++        detail = self.get_plugin_detail(plugin_name)
++        if detail is None:
++            raise ValueError(f"Plugin {plugin_name} not found")
++        return detail
++                config_data = plugin.get_config()
++                data_source, available_data_sources = self._get_plugin_data_source_config(
+--- candidata: qmt-market-data [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: QMT gateway configuration
+  | The system SHALL support QMT market data access through a configurable gateway endpoint rather than requiring `xtquant` inside the main service process.
+  > #### Scenario: QMT gateway unavailable
+  > - **GIVEN** QMT is selected as a data source
+  > - **AND** the configured QMT gateway is unavailable
+  > ### Requirement: Historical market data provider selection
+  > The system SHALL support QMT as a selectable provider for historical market data in logical行情 plugins.
+  > #### Scenario: Use default provider
+  > - **GIVEN** a historical行情 plugin has `data_source = "tushare"` as its default
+  > - **WHEN** the user runs the plugin without a per-sync data-source override
+--- candidata: predefined-plugin-groups [tasks]
+  | # predefined-plugin-groups Specification
+  | ## Purpose
+  | 提供预定义的插件组合，基于表依赖关系自动配置，覆盖常见的数据同步场景，用户可直接使用这些组合进行一键同步。
+  > # predefined-plugin-groups Specification
+  > ### Requirement: Predefined Plugin Groups Configuration
+  > - **THEN** 返回 HTTP 400 Bad Request
+  > - **AND** 包含 `plugin_status` 字段表示各插件状态
+  > ### Requirement: Plugin Group Data Model Enhancement
+  > `PluginGroup` 数据模型 SHALL 扩展以支持预定义组合。
+  > - **WHEN** 定义 `PluginGroup` 模型
+  > - `plugin_names`: 包含的插件列表
+--- candidata: intelligent-strategy-system [termos]
+  | # 智能策略系统规范
+  | ## 概述
+  | 智能策略系统整合了传统策略回测和AI策略生成能力，为用户提供完整的"策略创建→回测验证→智能优化"闭环体验。
+  > category: Optional[StrategyCategory] = None,
+  > source: Optional[StrategySource] = None) -> List[StrategyInfo]:
+  > constraints: Optional[StrategyConstraints] = None) -> AIGeneratedStrategy:
+  > source: StrategySource  # builtin, ai_generated, user_custom
+  > performance_summary: Optional[PerformanceSummary]
+  > llm_model: str
+  > symbols: List[str]
+  > benchmark: Optional[str]
+--- candidata: open-api-gateway [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Open API Scope Restriction (CRITICAL)
+  | The Open API Gateway SHALL only expose interfaces generated by `ServiceGenerator` from plugin services (`src/stock_datasource/plugins/*/service.py`). The system SHALL obtain the list of exposable inte
+  > The Open API Gateway SHALL only expose interfaces generated by `ServiceGenerator` from plugin services (`src/stock_datasource/plugins/*/service.py`). The system SHALL obtain the list of exposable inte
+  > #### Scenario: Plugin route is accessible
+  > - **WHEN** an external user requests `/api/open/v1/stock_daily/query` and `stock_daily` is a registered plugin
+  > #### Scenario: Unknown plugin is rejected
+  > - **WHEN** an external user requests `/api/open/v1/nonexistent_plugin/query` where `nonexistent_plugin` is not registered in PluginManager
+  > - **THEN** the system returns HTTP 404 with message indicating the plugin does not exist
+  > - **WHEN** a request is sent to `/api/open/v1/{plugin}/{method}` with header `Authorization: Bearer sk-xxx` containing a valid, non-expired API Key
+  > - **WHEN** a request is sent to `/api/open/v1/{plugin}/{method}?api_key=sk-xxx` with a valid API Key
+
+===== P191 | PhilippPolterauer/cargo-samply PR #47 | capacidade do par: discovery
+PR: use "`=`" with `--samply-args` throughout docs
+arquivos ligados: src/cli.rs
+--- linhas alteradas (4; mostrando até 40)
+-    /// Arguments to pass to samply (e.g. `--samply-args "--rate 2000"`)
++    /// Arguments to pass to samply (e.g. `--samply-args="--rate 2000"`).
++    /// Use `=` so the full string is parsed as the value of `--samply-args`,
++    /// even when it starts with `--`.
+--- candidata: cli [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Standardized Cargo Flags
+  | The CLI SHALL align with standard Cargo conventions.
+  > - **WHEN** user runs `cargo samply -p my-pkg`
+  > - **WHEN** user runs `cargo samply --profile release`
+  > - **WHEN** user runs `cargo samply --test integration_suite`
+  > The CLI SHALL allow passing arguments directly to the `samply` process.
+  > - **WHEN** user runs `cargo samply --samply-args="--rate 2000" --bin app`
+  > - **THEN** `samply` is invoked with `--rate 2000`
+  > - Arguments containing spaces MUST be quoted.
+  > - **THEN** the dry-run output quotes the path: `samply record -- "/path/to/My Project/target/..."`
+--- candidata: execution [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Build-Driven Path Resolution
+  | The system SHALL determine the binary path by parsing the `CompilerArtifact` output from `cargo build`, rather than predicting the path.
+  > The system SHALL check for the existence of `samply` in the system PATH before starting the build.
+  > - **WHEN** `samply` is not installed
+  > The system SHALL check for the existence of `samply` in the system PATH before starting the build.
+  > - **WHEN** `samply` is not installed
+
+===== P192 | huytdps13400/react-native-ssl-manager PR #5 | capacidade do par: android-pinned-client-api
+PR: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI
+arquivos ligados: scripts/postinstall.js
+--- linhas alteradas (36; mostrando até 40)
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+--- candidata: expo-plugin [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Expo Plugin Registration
+  | The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > - **THEN** the plugin uses `ssl_config.json` from the project root
+  > - **WHEN** the plugin is added as `["react-native-ssl-manager", { "sslConfigPath": "./custom/path.json" }]`
+  > The Expo plugin SHALL automatically add the `ssl_config.json` file to the iOS Xcode project bundle resources during prebuild.
+  > The Expo plugin SHALL automatically copy the `ssl_config.json` file to the Android `assets` directory and ensure the INTERNET permission is present in `AndroidManifest.xml` during prebuild.
+  > The Expo config plugin and build scripts SHALL allow the Network Security Config
+  > - **WHEN** the plugin is configured with `pinExpiration: "2027-12-31"`
+  > - **THEN** the generated `network_security_config.xml` uses that expiration date
+--- candidata: ssl-pinning-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Set SSL Pinning State
+  | The library SHALL export a `setUseSSLPinning(usePinning: boolean): Promise<void>` function that enables or disables SSL certificate pinning at runtime by persisting the state to native storage (UserDe
+  > #### Scenario: App restart required
+  > - `SslPinningConfig`: an interface with a `sha256Keys` property mapping domain strings to arrays of SHA-256 pin strings
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > ### Requirement: TrustKit initialized at most once per process
+  > The iOS implementation SHALL initialize TrustKit at most once per process and
+  > optional `enforcePinning` flag so pinning can degrade gracefully and avoid a
+  > - **WHEN** `enforcePinning` is `false`
+--- candidata: android-network-security-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: XML Generation from SSL Config
+  | The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > #### Scenario: Generate XML from valid ssl_config.json
+  > - **WHEN** `ssl_config.json` contains domains with SHA-256 pins
+  > - **THEN** the library generates `res/xml/network_security_config.xml` with corresponding `<domain-config>` and `<pin-set>` entries
+  > - **WHEN** `ssl_config.json` contains `api.example.com` with 2 pins and `api.dev.example.com` with 1 pin
+  > - **THEN** the generated XML contains two `<domain-config>` blocks, one for each domain
+  > - **WHEN** XML is generated
+  > #### Scenario: ssl_config.json not found
+--- candidata: ios-urlsession-documentation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: iOS Networking Stack Coverage Documentation
+  | The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section

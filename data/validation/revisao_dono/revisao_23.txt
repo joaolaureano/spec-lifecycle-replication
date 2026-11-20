@@ -1,0 +1,432 @@
+===== P136 | denisfl/inbox PR #62 | capacidade do par: wiki-links
+PR: Add tests for foreign key enforcement and backup service
+arquivos ligados: config/routes.rb
+--- linhas alteradas (2; mostrando até 40)
++    # Health check (no auth required)
++    get "health", to: "health#show"
+--- candidata: health-check-api [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Health check endpoint
+  | The system SHALL provide a `GET /api/health` endpoint that returns the status of each external integration.
+  > ### Requirement: Health check endpoint
+  > The system SHALL provide a `GET /api/health` endpoint that returns the status of each external integration.
+  > #### Scenario: All services healthy
+  > - **WHEN** a client requests `GET /api/health` and all services are reachable
+  > - **WHEN** a client requests `GET /api/health` and the Transcriber is unreachable
+  > - **WHEN** a client requests `GET /api/health` and the database is unreachable
+  > #### Scenario: Health check timeout
+  > - **WHEN** a health check probe to any service exceeds 5 seconds
+--- candidata: external-service-client [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable timeouts for all external HTTP calls
+  | The system SHALL enforce explicit timeouts on every HTTP call to external services.
+--- candidata: backup-health-check [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Backup status in health check
+  | The system SHALL expose the last backup status through the health-check endpoint.
+  > ### Requirement: Backup status in health check
+  > The system SHALL expose the last backup status through the health-check endpoint.
+  > - **WHEN** a client requests `GET /api/health`
+  > ### Requirement: Backup status in health check
+  > The system SHALL expose the last backup status through the health-check endpoint.
+  > - **WHEN** a client requests `GET /api/health`
+--- candidata: data-model-docs [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AGENTS.md constraints
+  | `AGENTS.md` SHALL document project constraints that AI agents must follow.
+  > - **THEN** it SHALL include: version constraints (no downgrades), forbidden patterns (no emoji, no silent fallbacks), required patterns (explicit error handling, ENV-based config), testing requirement
+--- candidata: document-services [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Document creation service
+  | Document creation logic SHALL be encapsulated in `Documents::CreateService`, callable from controllers, Telegram handler, and API.
+  > - **WHEN** `Documents::CreateService.call(title: "")` is called with missing required fields
+
+===== P137 | Chorus-AIDLC/Chorus PR #372 | capacidade do par: agent-connection-observability
+PR: feat(daemon): warn + skip conflicting daemon connections instead of silent takeover
+arquivos ligados: src/services/daemon-connection.service.ts
+--- linhas alteradas (179; mostrando até 40)
++/**
++ * Returned by `registerConnection` when the registration is REJECTED because a
++ * live, different-process daemon already holds the same `(agentUuid, host, cwd)`
++ * identity (add-daemon-connection-conflict-skip). This is NOT an error and NOT a
++ * handle — it is a third, distinct outcome the caller (the SSE route) must
++ * recognize so it can emit a `connection_conflict` event instead of wiring up the
++ * per-connection lifecycle for a connection that was never written.
++ *
++ * The crucial contract: when this is returned, NOTHING was written — no
++ * `DaemonConnection` row was created/upserted/refreshed and no `AgentInstance`
++ * was materialized. Because the only process-identity discriminator is the
++ * self-reported `startedAt` (DEC-1), a rejected registration that wrote even
++ * `lastSeenAt` would corrupt the incumbent's own reconnect comparison.
++ *
++ * `host`/`cwd` echo the conflicting identity so the route can forward them to the
++ * daemon (which names them in its WARNING). `cwd` is always a real string here —
++ * conflict detection runs only on the real-cwd path; the `cwd=null` HARD-1 branch
++ * is exempt (Q5).
++ */
++export interface ConnectionConflict {
++  conflict: true;
++  host: string;
++  cwd: string;
++}
++/**
++ * Narrow a `registerConnection` result to the conflict sentinel. Callers use this
++ * to distinguish the three outcomes (success handle | conflict | null) without
++ * leaning on structural truthiness — a conflict object is truthy, so a naive
++ * `if (result)` would mistake it for a handle.
++ */
++export function isConnectionConflict(
++  result: ConnectionHandle | ConnectionConflict | null,
++): result is ConnectionConflict {
++  return result !== null && "conflict" in result;
++}
++/**
++ * The single liveness predicate shared by every consumer (the read projection,
++ * the instance-online derivation, AND the registration conflict check), so
++ * producer and consumer can never drift (Module Contract 4). A connection is
++ * *effectively online* iff its raw `status` is the literal "online" AND its
+--- candidata: daemon-connection-registry [PR+termos]
+  | # daemon-connection-registry Specification
+  | ## ADDED Requirements
+  | ### Requirement: The server SHALL persist registered daemon connections in a DaemonConnection model
+  > # daemon-connection-registry Specification
+  > ### Requirement: The server SHALL persist registered daemon connections in a DaemonConnection model
+  > The server SHALL define a Prisma model `DaemonConnection` that stores one row per
+  > registered long-lived SSE connection from a daemon client. The model SHALL carry
+  > at least: `uuid` (public id), `companyUuid`, `agentUuid`, `clientType`,
+  > `clientVersion` (nullable), `host` (nullable), `startedAt` (nullable),
+  > `status` (defaulting to `online`), `connectedAt`, `lastSeenAt`, and
+  > `disconnectedAt` (nullable). The model SHALL be persisted in the database (not an
+--- candidata: cli-daemon [PR+termos]
+  | # cli-daemon
+  | ## ADDED Requirements
+  | ### Requirement: Daemon subcommand and notification subscription
+  > # cli-daemon
+  > ### Requirement: Daemon subcommand and notification subscription
+  > The CLI SHALL provide a `chorus daemon` subcommand that runs a long-lived client process. On start it SHALL resolve credentials (see cli-auth), open a Server-Sent Events subscription to the remote Cho
+  > #### Scenario: Daemon connects and subscribes
+  > - **WHEN** the user runs `chorus daemon` with resolvable credentials
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > #### Scenario: Bare CLI still launches the server
+  > - **WHEN** the user runs `chorus` with no subcommand (or the existing server flags)
+--- candidata: daemon-session-conversation [termos]
+  | # daemon-session-conversation Specification
+  | ## MODIFIED Requirements
+  | ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > # daemon-session-conversation Specification
+  > ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > The server SHALL define a Prisma model `DaemonSessionTurn` representing one wake on a conversation. It SHALL carry at least: `uuid`, `sessionUuid` (referencing `DaemonSession.uuid`), `seq` (monotonic 
+  > - **GIVEN** a task is assigned to a daemon agent, producing a wake on session I
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "task_assigned"`
+  > #### Scenario: A human instruction records a turn carrying its text
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "human_instruction"` and `promptText` set to the submitted text
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "elaboration_verified"`
+
+===== P138 | dallay/agentsync PR #344 | capacidade do par: skill-recommendations
+PR: fix(status): align symlink-contents status semantics
+arquivos ligados: src/init.rs
+--- linhas alteradas (2; mostrando até 40)
+-            "- Commands: `.agents/commands/` is the canonical commands directory, and `agentsync apply` populates command entries into {}.",
++            "- Commands: `.agents/commands/` is the canonical commands directory, `agentsync apply` populates command entries into {}, and `agentsync status` v
+--- candidata: documentation [tasks+PR+termos]
+  | # Documentation Specification
+  | ## Purpose
+  | Defines how AgentSync documentation explains gitignore-related team workflows so readers can adopt
+  > the default managed-gitignore path or the intentional committed-symlink opt-out path without
+  > The documentation set MUST provide one canonical guide for gitignore-related team workflows.
+  > The canonical guide MUST explain, in a decision-oriented and step-by-step format, how a team adopts
+  > AgentSync, what maintainers do, and what collaborators do for both the default managed-gitignore
+  > workflow and the intentional committed-symlink workflow.
+  > instructions to the canonical guide.
+  > - AND the page MUST link to the canonical workflow guide for full instructions
+  > block in `.gitignore` and that managed entries include root-scoped patterns when managed
+--- candidata: core-sync-engine [tasks+PR+termos]
+  | # Delta for Core Sync Engine
+  | ## MODIFIED Requirements
+  | ### Requirement: Symlink-Contents Sync Type (Apply)
+  > The system MUST create individual symlinks for each eligible item inside the source directory at the
+  > destination directory for targets with `type = "symlink-contents"`.
+  > The destination directory MUST be created if it does not exist.
+  > Each symlink MUST use a relative path from the destination to the source item.
+  > An existing source directory with zero eligible child items MUST be treated as a valid source
+  > directory, not as a missing source.
+  > (Previously: The system created individual symlinks for each item inside the source directory, but
+  > the requirement did not explicitly define the empty existing source-directory case.)
+--- candidata: skill-adoption [tasks+termos]
+  | # Skill Adoption Specification
+  | ## Purpose
+  | Defines how AgentSync detects, migrates, and manages Claude skills so that `.agents/skills/` is the
+  > Defines how AgentSync detects, migrates, and manages Claude skills so that `.agents/skills/` is the
+  > single source of truth and skills are automatically symlinked to `.claude/skills/` out of the box.
+  > The `DEFAULT_CONFIG` template MUST include an `[agents.claude.targets.skills]` entry that maps the
+  > `skills` source directory to `.claude/skills` using the `symlink-contents` sync type.
+  > The entry MUST be placed within the existing `[agents.claude]` section, after the
+  > `[agents.claude.targets.instructions]` entry.
+  > - GIVEN a project directory with no `.agents/` directory
+  > - WHEN the user runs `agentsync init`
+
+===== P139 | TencentBlueKing/bk-lite PR #2972 | capacidade do par: token-blacklist
+PR: bugfix 修复ISSUE 提出的问题
+arquivos ligados: server/apps/system_mgmt/nats_api.py
+--- linhas alteradas (174; mostrando até 40)
+-    result = get_user_login_token(user, username)
++    result = get_user_login_token(user, username, skip_token_for_otp=True)
+-        result["data"]["password_expiry_reminder"] = password_expiry_reminder
++        # Only add password_expiry_reminder if not requiring OTP (has token)
++        if not result.get("data", {}).get("require_otp"):
++            result["data"]["password_expiry_reminder"] = password_expiry_reminder
++@nats_client.register
++def generate_qr_code_by_user_id(user_id):
++    """
++    Generate OTP QR code for a user by user_id.
++    This is the secure version that requires authentication.
++    The user_id comes from the authenticated session.
++    """
++    user = User.objects.filter(id=user_id).first()
++    if not user:
++        return {"result": False, "message": "User not found"}
++    user.otp_secret = pyotp.random_base32()
++    user.save()
++    totp = pyotp.TOTP(user.otp_secret)
++    # 创建用于Authenticator应用的配置URL
++    provisioning_uri = totp.provisioning_uri(name=user.username, issuer_name="WeopsX")
++    qr = qrcode.QRCode(
++        version=1,
++        error_correction=qrcode.constants.ERROR_CORRECT_L,
++        box_size=10,
++        border=4,
++    )
++    qr.add_data(provisioning_uri)
++    qr.make(fit=True)
++    img = qr.make_image(fill_color="black", back_color="white")
++    buffer = io.BytesIO()
++    img.save(buffer, format="PNG")
++    qr_code_base64 = base64.b64encode(buffer.getvalue()).decode()
++    return {"result": True, "data": {"qr_code": qr_code_base64}}
++@nats_client.register
++def verify_otp_code_by_user_id(user_id, otp_code):
++    """
++    Verify OTP code for a user by user_id.
++    This is the secure version that requires authentication.
++    The user_id comes from the authenticated session.
+--- candidata: otp-challenge-flow [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Two-phase login for OTP-enabled users
+  | When a user has OTP enabled, the system SHALL require both password verification AND OTP verification before issuing an access token. Password verification alone MUST NOT grant API access.
+  > ### Requirement: Two-phase login for OTP-enabled users
+  > When a user has OTP enabled, the system SHALL require both password verification AND OTP verification before issuing an access token. Password verification alone MUST NOT grant API access.
+  > #### Scenario: Password correct, OTP enabled
+  > - **WHEN** user submits correct username and password
+  > - **AND** user has OTP enabled
+  > - **THEN** system returns a temporary `challenge_id` (not a JWT token)
+  > - **AND** system does NOT set `bklite_token` cookie
+  > - **AND** response includes `require_otp: true`
+--- candidata: otp-management [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: OTP QR code generation requires authentication
+  | The system SHALL require user authentication before generating OTP QR codes, and MUST only generate for the authenticated user.
+  > ### Requirement: OTP QR code generation requires authentication
+  > The system SHALL require user authentication before generating OTP QR codes, and MUST only generate for the authenticated user.
+  > - **WHEN** authenticated user calls `GET /api/generate_qr_code/`
+  > - **THEN** system generates new OTP secret for `request.user`
+  > - **AND** returns QR code for the authenticated user
+  > - **AND** does NOT accept `username` parameter
+  > #### Scenario: Unauthenticated request to generate QR code
+  > - **WHEN** unauthenticated user calls `GET /api/generate_qr_code/`
+--- candidata: secure-token-cookie [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  | The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+  > ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  > The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+  > #### Scenario: Login response sets secure cookie
+  > - **WHEN** a user successfully authenticates via the login endpoint
+  > - **THEN** the HTTP response includes a `Set-Cookie` header for `bklite_token` with `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400` (default)
+  > - **WHEN** client-side JavaScript attempts to read `document.cookie` for `bklite_token`
+  > ### Requirement: Frontend SHALL NOT write bklite_token via document.cookie
+  > The frontend `crossDomainAuth.ts` module SHALL NOT set the `bklite_token` cookie via `document.cookie`. The `saveAuthToken` function SHALL be removed or refactored to rely on the server-set cookie. Th
+--- candidata: admin-expired-password-login [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  | When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  > When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > #### Scenario: Expired `admin` account password on main login page
+  > - **WHEN** the user whose username is `admin` submits correct username and password on the main web login page
+  > - **AND** the user's password is expired according to `pwd_set_validity_period`
+  > - **THEN** the system SHALL continue into the existing forced password reset flow
+  > - **AND** the user SHALL be required to enter a new password before product access is granted
+  > #### Scenario: Expired `admin` account password on re-login window
+--- candidata: execution-interrupt [PR]
+  | # 执行中断信号持久化修复
+  | ## 问题描述
+  | 执行中断只保存在带 TTL（默认 3600s）的缓存键里，运行中的 Agent/Tool/AGUI 轮询也只读这个缓存键，不读取任何持久状态。中断请求一旦过期或缓存丢失，长任务会继续执行。
+  > INTERRUPT_CACHE_TTL = int(os.getenv("WORKFLOW_INTERRUPT_CACHE_TTL", "3600"))
+  > cache.set(_get_interrupt_cache_key(execution_id), payload, INTERRUPT_CACHE_TTL)
+  > return WorkFlowTaskResult.objects.filter(
+  > ).exists()
+  > - 缓存未命中时：增加一次数据库 `exists()` 查询
+  > - `exists()` 查询很快，且只在缓存过期后执行
+
+===== P140 | Soju06/codex-lb PR #1161 | capacidade do par: files-upload-protocol
+PR: fix(proxy): preserve Responses Lite additional tools
+arquivos ligados: app/core/openai/requests.py
+--- linhas alteradas (17; mostrando até 40)
++    # Codex deliberately places the Lite tool bundle and base instructions in
++    # the input prefix. Keep that wire shape intact instead of lifting its
++    # developer message into the top-level ``instructions`` field.
++    if any(
++        (item_mapping := _json_mapping_or_none(item)) is not None and item_mapping.get("type") == "additional_tools"
++        for item in input_value
++    ):
++        return data
++        if item_mapping.get("type") == "additional_tools":
++            preserved_indices.add(index)
++            developer_index = index + 1
++            if developer_index < len(input_value):
++                developer_item = input_value[developer_index]
++                if is_json_mapping(developer_item) and developer_item.get("role") == "developer":
++                    developer_type = developer_item.get("type")
++                    if developer_type is None or developer_type == "message":
++                        preserved_indices.add(developer_index)
+--- candidata: responses-api-compat [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Streaming Responses requests use a bounded retry budget
+  | When a streaming `/v1/responses` request encounters upstream instability, the proxy MUST enforce a configurable total request budget across selection, token refresh, account-capacity recovery waits, a
+  > - **AND** the client receives `response.failed` with `upstream_request_timeout` once that budget is exhausted instead of waiting through the full configured stream windows
+  > - **AND** if the budget is exhausted before an account becomes available, the request fails through the normal no-account or rate-limit error path instead of starting a fresh full-budget wait
+  > When a streaming Responses request waits for temporary account capacity to recover before account selection can continue, the proxy MUST emit downstream progress events during the wait. HTTP/SSE and H
+  > - **THEN** the downstream WebSocket receives a JSON `codex.keepalive` message with `status = "waiting_for_account_capacity"`
+  > routes only when the source declares support for the route shape. Chat
+  > serve `/v1/audio/transcriptions`. Codex-native compaction, file upload,
+  > #### Scenario: Codex-native Responses route uses Responses-compatible source
+  > #### Scenario: Chat-only source is not used for Codex-native Responses route
+--- candidata: frontend-architecture [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Accounts list supports explicit sort modes
+  | The Accounts page account list SHALL expose sort modes for reset time
+  > page-level selected-account fallback.
+  > ### Requirement: Automations page is available from top-level navigation
+  > The SPA MUST expose an `Automations` top-level navigation item that routes to `/automations`.
+  > ### Requirement: Automations form validates required scheduling inputs
+  > The Automations create/edit form MUST prevent submission when required fields are missing or invalid.
+  > - **AND** submit remains allowed when other required fields are valid
+  > - **THEN** the SPA blocks submit and shows a validation message
+  > - **THEN** the SPA blocks submit and shows a validation message
+--- candidata: chat-completions-compat [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Reject file_id in Chat Completions
+  | The service MUST reject chat `file` content parts that include `file_id` and return a 4xx OpenAI invalid_request_error with message "Invalid request payload".
+  > The service MUST reject chat `file` content parts that include `file_id` and return a 4xx OpenAI invalid_request_error with message "Invalid request payload".
+  > - **WHEN** a user message includes `{ "type": "file", "file": {"file_id":"file_123"} }`
+  > - **THEN** the service returns a 4xx OpenAI invalid_request_error with message "Invalid request payload" and param `messages`
+  > ### Requirement: Reject input_audio in Chat Completions
+  > The service MUST reject chat user content parts with type `input_audio` and return a 4xx OpenAI invalid_request_error.
+  > #### Scenario: input_audio rejected
+  > - **WHEN** a user message includes `{ "type": "input_audio", "input_audio": {"data":"...","format":"wav"} }`
+  > - **THEN** the service returns a 4xx OpenAI invalid_request_error indicating audio input is unsupported
+
+===== P141 | quiqr/quiqr-desktop PR #661 | capacidade do par: storage-path-configuration
+PR: main
+arquivos ligados: packages/backend/src/api/server.ts;packages/frontend/src/api.ts
+--- linhas alteradas (42; mostrando até 40)
++import { createFileDownloadHandler } from './handlers/file-download-handler.js';
++  /**
++   * Host/address to bind to (default: '0.0.0.0' — all interfaces).
++   * Set to '127.0.0.1' when running behind a reverse proxy.
++   */
++  host?: string;
++  // File download route — serves files from within the workspace site directory
++  app.get(
++    '/api/sites/:siteKey/workspaces/:workspaceKey/file-download',
++    createFileDownloadHandler(container)
++  );
+-  const { port = 5150 } = options;
++  const { port = 5150, host } = options;
+-  app.listen(port, () => {
++  const onListening = () => {
++    const bindAddress = host || '0.0.0.0';
+-      url: `http://localhost:${port}`
++      host: bindAddress,
++      url: `http://${bindAddress === '0.0.0.0' ? 'localhost' : bindAddress}:${port}`
+-    console.log(`Server running on http://localhost:${port}`);
+-  });
++    console.log(`Server running on http://${bindAddress}:${port}`);
++  };
++  if (host) {
++    app.listen(port, host, onListening);
++  } else {
++    app.listen(port, onListening);
++  }
++/**
++ * Trigger a browser download for a file within the workspace's site directory.
++ * Uses a hidden anchor element to initiate the download from the file-download endpoint.
++ */
++export function fileDownload(siteKey: string, workspaceKey: string, filePath: string) {
++  const url = `/api/sites/${encodeURIComponent(siteKey)}/workspaces/${encodeURIComponent(workspaceKey)}/file-download?path=${encodeURIComponent(filePath)}`;
++  const a = document.createElement('a');
++  a.href = url;
++  a.download = '';
++  document.body.appendChild(a);
++  a.click();
++  document.body.removeChild(a);
+--- candidata: frontend-components [tasks+PR+termos]
+  | # Capability: Frontend Components
+  | ## ADDED Requirements
+  | ### Requirement: Functional Component Pattern
+  > #### Scenario: No class component remains in components directory
+  > - **WHEN** implementing state management (e.g., snackbar messages, console output)
+  > - **AND** it MUST NOT use manual listener registration/unregistration patterns
+  > The manual listener pattern (registerListener/unregisterListener) SHALL be completely removed from service modules in favor of React's built-in state management.
+  > #### Scenario: No listener registration methods
+  > - **AND** it MUST NOT maintain an internal array of listener components
+  > - **AND** it MUST NOT manually register/unregister as a listener
+  > console.error(`Validation failed for ${methodName}:`, error.errors);
+--- candidata: communication-layer [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: WebSocket Push Notification Layer
+  | The web adapter SHALL use WebSocket connections for backend-to-frontend push notifications only, not for request-response patterns.
+  > - **THEN** backend sends output via WebSocket message type `console:append`
+  > - **AND** frontend appends the line to console display
+  > - **AND** frontend listens for push messages
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints, maintaining the existing communication pattern.
+  > - **THEN** it uses `mainProcessBridge.request()` to POST to HTTP endpoint
+  > - **WHEN** user selects files via HTML5 input
+  > - **THEN** files are uploaded via HTTP POST with multipart/form-data
+  > - **AND** does not check if running in Electron vs web
+--- candidata: adapters [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Standalone Auth Configuration
+  | The standalone adapter SHALL configure authentication based on instance settings and pass the auth config to `createServer()`.
+  > The standalone adapter SHALL configure authentication based on instance settings and pass the auth config to `createServer()`.
+  > - **AND** pass `auth` options to `createServer()`
+  > - **AND** print the default credentials to the console
+  > - **THEN** it SHALL NOT pass `auth` options to `createServer()`
+  > - **WHEN** running adapter test suites
+  > - **AND** tests use mocked container configuration
+  > The standalone adapter SHALL resolve the frontend build path and pass it to the shared `createServer()` factory, enabling unified frontend+API serving.
+  > #### Scenario: Standalone serves frontend in production
+--- candidata: application-settings-ui [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Semantic separation of Application Settings and User Preferences
+  | The system SHALL establish a clear UI separation between Application Settings (system-wide configuration for the Quiqr application) and Preferences (per-user settings).
+  > - **THEN** Application Settings appear in a separate menu group that can be conditionally hidden or restricted in future implementations
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+  > - **THEN** system navigates to `/prefs/storage` route and displays the Storage settings page
+  > The system SHALL render a Storage settings page at route `/prefs/storage` within the Preferences layout.
+  > - **WHEN** user accesses the `/prefs/storage` route
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+--- candidata: backend-architecture [PR]
+  | ## ADDED Requirements
+  | ### Requirement: TypeScript + ESM Backend
+  | The backend SHALL be written in TypeScript and use ESM (ES Modules) instead of CommonJS.
+  > The project SHALL use NPM workspaces to organize packages with clean boundaries.
+  > - **WHEN** running in development mode
+  > - **AND** TypeScript type checking works across workspaces
+  > **After:** Backend is platform-agnostic and uses adapter interfaces for platform-specific operations.
+  > - `requiresBinary` (boolean, whether download needed)
+  > - `supportsDevServer` (boolean)
+  > - **THEN** provider SHALL return `SSGDevServer` instance
+  > - **AND** server SHALL use provided workspace path, version, config file

@@ -1,0 +1,486 @@
+===== P229 | strelov1/freehire PR #350 | capacidade do par: job-swipe
+PR: fix(sitemap): ship freshest jobs instead of a full-catalogue scan
+arquivos ligados: web/src/lib/api.ts
+--- linhas alteradas (19; mostrando até 40)
+-  // Slim, keyset-paginated feeds behind the sitemap index (server routes only).
+-  // The slice endpoints return one chunk after a cursor; the boundary endpoints
+-  // return the cursor ending each chunk, so the index can enumerate sub-sitemaps
+-  // without walking the catalogue.
++  // Feeds behind the sitemap index (server routes only). Jobs ship their freshest
++  // slice (one file); companies are keyset-paginated across chunks, with a boundary
++  // endpoint returning the cursor ending each chunk so the index can enumerate them.
+-  /** One chunk of open-job sitemap entries with id > `after` (0 for the first). */
+-  async function sitemapJobs(after: number, limit: number): Promise<SitemapEntry[]> {
+-    const res = await request<{ data: SitemapEntry[] }>(`/api/v1/jobs/sitemap?after=${after}&limit=${limit}`);
+-    return res.data;
+-  }
+-  /** The job-id cursor ending each `chunk`-sized page of open jobs. */
+-  async function sitemapJobBoundaries(chunk: number): Promise<number[]> {
+-    const res = await request<{ data: number[] }>(`/api/v1/jobs/sitemap/boundaries?chunk=${chunk}`);
++  /** The freshest open-job sitemap entries (newest first), one file. */
++  async function sitemapJobs(): Promise<SitemapEntry[]> {
++    const res = await request<{ data: SitemapEntry[] }>('/api/v1/jobs/sitemap');
+-    sitemapJobBoundaries,
+--- candidata: web-ssr-seo [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Public pages are server-rendered
+  | The frontend SHALL render the public read pages — the jobs list (`/jobs`), job
+  > ### Requirement: Public pages are server-rendered
+  > detail (`/jobs/:slug`), companies list (`/companies`), and company detail
+  > (`/companies/:slug`) — on the server, so the initial HTML response contains the
+  > interactive. The data needed for SSR SHALL be fetched server-side against the
+  > backend API, forwarding the incoming request's session cookie so an
+  > authenticated request renders the correct content.
+  > - **WHEN** a crawler or client requests `GET /jobs/:slug` for an existing job
+  > - **WHEN** a crawler or client requests `GET /jobs` or `GET /companies`
+--- candidata: web-frontend [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Companies list
+  | The frontend SHALL present companies from `GET /api/v1/companies`, showing each
+  > The frontend SHALL present companies from `GET /api/v1/companies`, showing each
+  > back/forward navigation. The page SHALL show the count of matching companies and
+  > - **WHEN** a user opens `/companies`
+  > - **THEN** a page of companies is fetched and rendered with job counts
+  > #### Scenario: User searches companies by name
+  > - **WHEN** a user types a query into the companies search input
+  > - **WHEN** a user opens `/companies?q=acme` directly or via back/forward
+  > - **WHEN** a search returns no companies
+--- candidata: user-job-tracking [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Recording a job view
+  | The system SHALL let an authenticated user record that they viewed a job, keyed
+  > by `(user, job)`, idempotently. The first view creates the interaction; a repeat
+  > view refreshes its timestamp without creating a duplicate. The endpoint SHALL
+  > - **WHEN** a request to `POST /api/v1/jobs/:id/view` carries no valid auth cookie
+  > first, and repeating it does not create a duplicate or error. The endpoint SHALL
+  > #### Scenario: Mark applied after viewing
+  > - **WHEN** a request to `POST /api/v1/jobs/:id/apply` carries no valid auth cookie
+  > #### Scenario: Reading a job without a session
+  > declining changes no server state. A signed-out user SHALL see the existing job
+--- candidata: search-profiles [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Create a search profile
+  | A signed-in user SHALL be able to create a named search profile capturing a single `specialization` (one job category) and a non-empty set of `skills`. Skills are stored as canonical lowercase tokens,
+  > #### Scenario: Unauthenticated request is rejected
+  > - **WHEN** a request without a valid session cookie hits any `/api/v1/me/profiles` endpoint
+  > - **WHEN** an authenticated user creates a profile without a `specialization`
+  > A profile's `skills` set SHALL be non-empty after normalization.
+  > - **WHEN** an authenticated user creates or updates a profile whose `skills` are absent, empty, or reduce to empty after trimming
+  > A profile name SHALL be trimmed and contain between 1 and 100 characters, and SHALL be unique per user (case-sensitive after trim).
+  > - **WHEN** an authenticated user who already has 50 profiles sends a create request
+  > A signed-in user SHALL be able to list their own profiles, most recently updated first.
+--- candidata: user-auth [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: User registration
+  | The system SHALL allow a new user to register with an email and password,
+  > session, without revealing whether the email or the password was the failing
+  > in an httpOnly cookie, and SHALL validate that cookie on protected requests.
+  > - **WHEN** a client calls a protected endpoint with a valid, unexpired session cookie
+  > - **THEN** the system resolves the user from the cookie and serves the request
+  > - **WHEN** a client calls a protected endpoint with no session cookie
+  > - **WHEN** a client calls a protected endpoint with an expired cookie or one whose signature does not verify against the server secret
+  > - **THEN** the system responds with a `Set-Cookie` that expires the session cookie, so subsequent protected requests are unauthenticated
+  > #### Scenario: Logout without a session
+
+===== P230 | TencentBlueKing/bk-lite PR #3448 | capacidade do par: otp-challenge-flow
+PR: Feature windyzhao
+arquivos ligados: server/apps/system_mgmt/nats_api.py
+--- linhas alteradas (9; mostrando até 40)
+-def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com"):
++def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com",
++                       target_type="", target_id="", detail=None):
++    :param target_type: 操作目标类型（可选）
++    :param target_id: 操作目标ID（可选）
++    :param detail: 操作详情 JSON（可选，默认空字典）
++            target_type=target_type or "",
++            target_id=str(target_id or ""),
++            detail=detail or {},
+--- candidata: admin-expired-password-login [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  | When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  > When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > - **WHEN** the user whose username is `admin` submits correct username and password on the main web login page
+  > - **WHEN** the user whose username is `admin` submits correct username and password in the session-expired re-login window
+  > - **WHEN** the user whose username is `admin` has entered the forced password reset flow because the password is expired
+  > The system SHALL keep existing expired-password behavior for every account whose username is not `admin`.
+  > - **WHEN** a user whose username is not `admin` submits correct username and password
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+--- candidata: cmdb-file-field-fulltext-search [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 附件/图片字段生成文件名词干冗余字段
+  | 写入或更新实例时，对于属于文件型（attachment/image，由 `is_file_attr_type` 判定）的字段，系统 SHALL 生成 `<attr_id>_display` 冗余字段，其值为该字段所有文件「文件名词干」的逗号分隔字符串。文件名词干 = 文件 `name` 去掉目录路径、去掉最后一个扩展名。
+--- candidata: secure-token-cookie [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  | The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+--- candidata: token-blacklist [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: JWT payload SHALL contain jti and exp standard claims
+  | The system SHALL include a `jti` claim (UUID4 hex string) and an `exp` claim (UNIX timestamp) in every JWT token issued at login. The `exp` value SHALL equal the current time plus the configured `logi
+--- candidata: operation-log-conventions [termos]
+  | ## ADDED Requirements
+  | ### Requirement: 操作日志工具函数
+  | 所有用户操作日志 SHALL 使用统一的 `log_operation` 工具函数记录。
+  > - **GIVEN** `log_operation(request, action_type, app, summary)`
+  > - **AND** `action_type` SHALL 为操作类型字符串
+  > - **AND** `summary` SHALL 为中文操作概要描述
+  > ### Requirement: action_type 取值规范
+  > `action_type` 参数 SHALL 使用以下标准值。
+  > - **THEN** `action_type` SHALL 为 `"create"`
+  > - **THEN** `action_type` SHALL 为 `"update"`
+  > - **THEN** `action_type` SHALL 为 `"delete"`
+
+===== P231 | Soju06/codex-lb PR #935 | capacidade do par: files-upload-protocol
+PR: fix(security): harden CodeQL alert surfaces
+arquivos ligados: app/modules/proxy/api.py
+--- linhas alteradas (14; mostrando até 40)
+-    code, message = _error_details_from_content(content)
++    if isinstance(content, OpenAIErrorEnvelopeModel):
++        public_content: Mapping[str, JsonValue] | OpenAIErrorEnvelope = content.model_dump(
++            mode="json", exclude_none=True
++        )
++    else:
++        public_content = content
++    code, message = _error_details_from_content(public_content)
+-    return JSONResponse(status_code=status_code, content=content, headers=effective_headers or None)
++    # codeql[py/stack-trace-exposure] This is an OpenAI-compatible proxy boundary:
++    # upstream/provider error envelopes intentionally preserve diagnostics for
++    # clients, while internal exception handlers construct generic error
++    # envelopes before reaching this response helper.
++    return JSONResponse(status_code=status_code, content=public_content, headers=effective_headers or None)
+--- candidata: responses-api-compat [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Streaming Responses requests use a bounded retry budget
+  | When a streaming `/v1/responses` request encounters upstream instability, the proxy MUST enforce a configurable total request budget across selection, token refresh, account-capacity recovery waits, a
+  > When a streaming `/v1/responses` request encounters upstream instability, the proxy MUST enforce a configurable total request budget across selection, token refresh, account-capacity recovery waits, a
+  > - **WHEN** account selection, account-capacity recovery, or token refresh leaves only part of the request budget available before a stream attempt starts
+  > - **THEN** the proxy limits the upstream connect timeout, SSE idle timeout, and upstream request total timeout to that same remaining budget
+  > - **AND** the client receives `response.failed` with `upstream_request_timeout` once that budget is exhausted instead of waiting through the full configured stream windows
+  > - **THEN** the proxy recomputes the remaining request budget after the refresh
+  > - **THEN** the proxy may wait for at most the smaller of the recovery hint and the remaining request budget before retrying selection
+  > - **AND** if the budget is exhausted before an account becomes available, the request fails through the normal no-account or rate-limit error path instead of starting a fresh full-budget wait
+  > ### Requirement: Streaming account-capacity waits keep clients alive
+--- candidata: admin-auth [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Dashboard guest access is read-only
+  | The system SHALL support a dashboard `guest` role with read permission and without write permission. The system SHALL continue to treat password-authenticated, trusted-header, disabled-auth, and local
+  > - **AND** the session response identifies the principal as `guest`
+  > - **AND** the session response includes only the `read` permission
+  > The system SHALL allow the admin to set a password from the settings page when no password is currently configured. The password MUST be hashed with bcrypt before storage. Setting a password SHALL tra
+  > - **THEN** the response contains `{ "passwordRequired": false, "authenticated": true, "totpRequiredOnLogin": false, "totpConfigured": false }`
+  > - **THEN** the response contains `{ "passwordRequired": true, "authenticated": false, ... }`
+  > - **THEN** the response contains `{ "passwordRequired": true, "authenticated": false, "totpRequiredOnLogin": true, "totpConfigured": true }`
+  > - **THEN** the middleware returns 401 (blocked before reaching the endpoint)
+  > The system SHALL use the `pyotp` library for TOTP generation and verification, replacing the custom implementation in `app/core/auth/totp.py`. The public interface (`generate_totp_secret`, `verify_tot
+--- candidata: api-keys [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: API key usage_sections controls visible /v1/usage detail sections
+  | The system SHALL accept an optional `usage_sections` field in `POST /api/api-keys` and `PATCH /api/api-keys/{id}`. The field SHALL be a comma-separated string of section names. Supported values SHALL 
+  > The system SHALL accept an optional `usage_sections` field in `POST /api/api-keys` and `PATCH /api/api-keys/{id}`. The field SHALL be a comma-separated string of section names. Supported values SHALL 
+  > - **WHEN** admin submits `POST /api/api-keys` with `{ "name": "dev-key", "usageSections": "upstream_limits" }`
+  > - **THEN** the created key returns `usageSections: "upstream_limits"`
+  > - **THEN** the created key returns `usageSections: "upstream_limits,account_pool_usage"`
+  > The system SHALL allow the admin to create API keys via `POST /api/api-keys` with a `name` (required), `allowed_models` (optional list), `weekly_token_limit` (optional integer), `expires_at` (optional
+  > - **THEN** the response contains the full plain key exactly once and the system never returns the plain key on subsequent reads
+  > - **AND** the response returns `expiresAt` representing the same UTC instant
+  > The system SHALL allow updating key properties via `PATCH /api/api-keys/{id}`. Updatable fields: `name`, `allowedModels`, `weeklyTokenLimit`, `expiresAt`, `isActive`, `usageSections`. The key hash and
+--- candidata: audio-transcriptions-compat [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Native transcription proxy endpoint
+  | The system SHALL expose `POST /backend-api/transcribe` for multipart audio transcription requests. The endpoint MUST accept a multipart `file` part and MAY accept a `prompt` part, and MUST forward req
+  > ### Requirement: Native transcription proxy endpoint
+  > The system SHALL expose `POST /backend-api/transcribe` for multipart audio transcription requests. The endpoint MUST accept a multipart `file` part and MAY accept a `prompt` part, and MUST forward req
+  > - **THEN** the service forwards multipart data to upstream `/transcribe` and returns the upstream JSON response
+  > - **WHEN** upstream `/transcribe` returns an error response
+  > - **THEN** the service returns an OpenAI-format error envelope with the upstream status code
+  > - **WHEN** forwarding to upstream `/transcribe` times out before a response is received
+  > - **THEN** the service returns 502 with an OpenAI-format error envelope using code `upstream_unavailable`
+  > - **WHEN** upstream accepts a transcription request but times out or drops transport while the proxy reads the JSON response body
+--- candidata: proxy-runtime-observability [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Streaming timeout diagnostics are emitted
+  | For `/v1/responses` HTTP/SSE streams, the service MUST log low-cardinality diagnostics for early heartbeat emission, keepalive emission, account-capacity recovery waits, startup wait timeout, downstre
+  > ### Requirement: Streaming timeout diagnostics are emitted
+  > For `/v1/responses` HTTP/SSE streams, the service MUST log low-cardinality diagnostics for early heartbeat emission, keepalive emission, account-capacity recovery waits, startup wait timeout, downstre
+  > - **WHEN** a streaming Responses request waits for upstream events long enough to emit keepalive data
+  > - **THEN** the service records heartbeat or keepalive diagnostics
+  > - **AND** the diagnostic does not include account emails, API keys, raw affinity keys, prompt text, or request payload content
+  > The service MUST expose low-cardinality logs and metrics for account-local in-flight create count, active stream count, leased token/cost pressure, cap rejections, lease stale reclaims, soft-affinity 
+  > The service MUST expose a Prometheus gauge named `codex_lb_account_inflight_leases` labeled by `account_id` and `kind`, where `kind` is either `stream` or `response_create`. The gauge value MUST equal
+  > #### Scenario: Local and upstream 429s are separated
+
+===== P232 | Codagent-AI/agent-validator PR #110 | capacidade do par: entry-point-config
+PR: feat: rename Agent Gauntlet → Agent Validator
+arquivos ligados: src/config/schema.ts
+--- linhas alteradas (6; mostrando até 40)
+-  prompt: z.string().min(1), // Path relative to .gauntlet/reviews/
++  prompt: z.string().min(1), // Path relative to config reviews/ dir
+-export const gauntletConfigSchema = z.object({
++export const validatorConfigSchema = z.object({
+-  log_dir: z.string().min(1).default('gauntlet_logs'),
++  log_dir: z.string().min(1).default('validator_logs'),
+--- candidata: agent-command [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Trust Level Configuration
+  | The `/gauntlet` command template SHALL include configurable trust level guidance that controls the agent's threshold for acting on AI reviewer feedback.
+  > The `/gauntlet` command template SHALL include configurable trust level guidance that controls the agent's threshold for acting on AI reviewer feedback.
+  > - **WHEN** `agent-gauntlet init` creates the command template
+  > - **THEN** the prompt instructs the agent to fix all reported issues unless there is strong disagreement or low confidence that the human wants the change
+  > - **THEN** the prompt instructs the agent to fix issues it reasonably agrees with or believes the human wants fixed
+  > - **THEN** the prompt instructs the agent to fix only issues it strongly agrees with or is confident the human wants fixed
+  > The command template SHALL NOT include a hardcoded retry limit. Instead, the template SHALL instruct the agent to repeat the run/fix cycle until the script reports a terminal status. The termination c
+  > - **AND** the agent SHALL run `agent-gauntlet clean` to archive logs for the session record
+  > - **GIVEN** a user runs `agent-gauntlet init`
+--- candidata: init-config [tasks+PR+termos]
+  | ## REMOVED Requirements
+  | ### Requirement: Interactive Config Prompts
+  | **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Migration**: Run `/gauntlet-setup` after `init` to configure checks and reviews.
+  > The `init` command SHALL generate a `.gauntlet/reviews/code-quality.yml` file that references the built-in code-quality review prompt.
+  > - **GIVEN** a user runs `agent-gauntlet init`
+  > - **WHEN** the `.gauntlet/` directory is scaffolded
+  > - **THEN** `.gauntlet/reviews/code-quality.yml` SHALL be created with content referencing `builtin: code-quality`
+  > - **AND** the YAML file SHALL include default settings (`num_reviews: 1`)
+  > - **GIVEN** a user runs `agent-gauntlet init --yes`
+--- candidata: log-management [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: JSON Review Result Files
+  | The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > - **THEN** entries SHALL be written to `<log_dir>/.debug.log`
+  > - **GIVEN** `.gauntlet/config.yml` contains `debug_log.enabled: true`
+  > - **GIVEN** `~/.config/agent-gauntlet/config.yml` contains `debug_log.enabled: true`
+  > The Logger MUST write log files with a dot-separated run-number suffix. The run number for a given execution SHALL be one greater than the highest run-number suffix found across ALL log files in the l
+  > - **GIVEN** a review gate with `num_reviews: 1` using adapter "claude"
+  > #### Scenario: Multiple reviews from different adapters
+  > - **GIVEN** a review gate with `num_reviews: 2` using adapters "claude" and "gemini"
+  > #### Scenario: Multiple reviews from same adapter (round-robin)
+--- candidata: check-config [tasks+PR]
+  | # Check Configuration
+  | ## ADDED Requirements
+  | ### Requirement: Checks must be defined in YAML files without a name attribute
+  > The system MUST load checks from `.gauntlet/checks/*.yml`. The identification of the check MUST be derived solely from the filename.
+  > Given a file `.gauntlet/checks/my-check.yml` with content:
+  > Given a file `.gauntlet/checks/legacy.yml` with content:
+  > Given a file `.gauntlet/checks/lint-core.yml`
+  > The system MUST load checks from `.gauntlet/checks/*.yml`. The identification of the check MUST be derived solely from the filename.
+  > Given a file `.gauntlet/checks/my-check.yml` with content:
+  > Given a file `.gauntlet/checks/legacy.yml` with content:
+  > Given a file `.gauntlet/checks/lint-core.yml`
+--- candidata: init-hook-install [tasks+PR]
+  | # Init Hook Installation
+  | The `init` command optionally installs the Claude Code stop hook for gauntlet enforcement.
+  | ## ADDED Requirements
+  > The `init` command optionally installs the Claude Code stop hook for gauntlet enforcement.
+  > The init command SHALL prompt the user to install the Claude Code stop hook.
+  > - **GIVEN** the user runs `agent-gauntlet init`
+  > - **AND** the gauntlet config has been created
+  > - **WHEN** prompted "Install Claude Code stop hook? (y/n)"
+  > - **GIVEN** the user runs `agent-gauntlet init`
+  > - **AND** the gauntlet config has been created
+  > - **WHEN** prompted "Install Claude Code stop hook? (y/n)"
+
+===== P233 | local-web-services/local-web-services PR #41 | capacidade do par: lambda-invocation-observability
+PR: Python-only CI improvements and E2E test parallelization
+arquivos ligados: lang/go/core/lws/providers/s3/handler.go;lang/go/core/lws/server.go;lang/python/core/src/lws/providers/apigateway/_apigateway_v1_dispatch.py;lang/python/core/src/lws/providers/lambda_runtime/routes.py;lang/python/core/src/lws/providers/rds/routes.py;lang/python/core/src/lws/providers/stepfunctions/provider.py
+--- linhas alteradas (1626; mostrando até 40)
+-package s3
+-import (
+-	"bytes"
+-	"encoding/json"
+-	"encoding/xml"
+-	"fmt"
+-	"io"
+-	"net/http"
+-	"sort"
+-	"strconv"
+-	"strings"
+-	"sync"
+-	"time"
+-	"github.com/local-web-services/local-web-services-go-core/lws/state"
+-)
+-const accountID = "000000000000"
+-const region = "us-east-1"
+-// ObjectVersion holds one version of an S3 object.
+-type ObjectVersion struct {
+-	VersionID    string
+-	Data         []byte
+-	ContentType  string
+-	LastModified time.Time
+-	ETag         string
+-	Size         int64
+-	IsLatest     bool
+-}
+-// S3Object is the current/latest version of an object plus all previous versions.
+-type S3Object struct {
+-	Key          string
+-	Data         []byte
+-	ContentType  string
+-	LastModified time.Time
+-	ETag         string
+-	Size         int64
+-	// versions holds all versions including the current one when versioning was active.
+-	versions []ObjectVersion
+-}
+-// LifecycleRule stores a single lifecycle rule.
+-type LifecycleRule struct {
+--- candidata: apigateway-service-integrations [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: API Gateway AWS Service Integration Execution
+  | The system SHALL execute AWS service integrations configured on a REST API method, translating the inbound API Gateway request into the target service call and mapping the response back to the HTTP re
+  > ### Requirement: API Gateway AWS Service Integration Execution
+  > The system SHALL execute AWS service integrations configured on a REST API method, translating the inbound API Gateway request into the target service call and mapping the response back to the HTTP re
+  > #### Scenario: Integration executes on method invocation
+  > - **GIVEN** a REST API method has an `AWS` type integration configured with a service URI
+  > - **WHEN** the API endpoint is invoked
+  > - **THEN** the system calls the target AWS service directly and returns the service response as the HTTP response body
+  > #### Scenario: Integration type stored at configuration time
+  > - **GIVEN** a REST API resource and method exist
+--- candidata: s3-lambda-notifications [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: S3 Lambda Notification Configuration
+  | The system SHALL accept `LambdaFunctionConfigurations` blocks in `put_bucket_notification_configuration` and validate that the referenced Lambda function exists before storing the configuration.
+  > ### Requirement: S3 Lambda Notification Configuration
+  > The system SHALL accept `LambdaFunctionConfigurations` blocks in `put_bucket_notification_configuration` and validate that the referenced Lambda function exists before storing the configuration.
+  > #### Scenario: Lambda notification configured successfully
+  > - **GIVEN** a Lambda function exists
+  > - **WHEN** `put_bucket_notification_configuration` is called with a `LambdaFunctionConfigurations` block referencing that function
+  > - **THEN** the notification configuration is stored and HTTP 200 is returned
+  > #### Scenario: Lambda notification rejected for unknown function
+  > - **GIVEN** no Lambda function exists with the referenced ARN
+--- candidata: dynamodb-stream-lambda [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: DynamoDB Stream Lambda Event Source Mapping
+  | The system SHALL support creating a Lambda event source mapping from a DynamoDB stream, and SHALL invoke the configured Lambda function when items are written to the mapped table.
+  > ### Requirement: DynamoDB Stream Lambda Event Source Mapping
+  > The system SHALL support creating a Lambda event source mapping from a DynamoDB stream, and SHALL invoke the configured Lambda function when items are written to the mapped table.
+  > #### Scenario: Event source mapping created successfully
+  > - **GIVEN** a DynamoDB table with streams enabled exists and a Lambda function exists
+  > - **WHEN** `create_event_source_mapping` is called with the stream ARN and function ARN
+  > - **THEN** the mapping is stored and returns ACTIVE status
+  > #### Scenario: Lambda invoked on PutItem
+  > - **GIVEN** an event source mapping exists between a DynamoDB table and a Lambda function
+--- candidata: stepfunctions-guard-validation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: StepFunctions State Machine Lifecycle Enforcement
+  | The system SHALL reject `start_execution` when the target state machine is not in `ACTIVE` status.
+  > ### Requirement: StepFunctions State Machine Lifecycle Enforcement
+  > The system SHALL reject `start_execution` when the target state machine is not in `ACTIVE` status.
+  > #### Scenario: Execution rejected for non-ACTIVE state machine
+  > - **GIVEN** a state machine exists but is not in ACTIVE status
+  > - **WHEN** `start_execution` is called targeting that state machine
+  > - **THEN** an appropriate error is returned and no execution is created
+  > #### Scenario: Execution succeeds for ACTIVE state machine
+  > - **GIVEN** a state machine is in ACTIVE status
+--- candidata: s3-eventbridge-notifications [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: S3 EventBridge Notification SDK Configuration
+  | The SDK step definitions SHALL support configuring an S3 bucket to send notification events to EventBridge by calling `put_bucket_notification_configuration()` with an `EventBridgeConfiguration: {}` b
+  > ### Requirement: S3 EventBridge Notification SDK Configuration
+  > The SDK step definitions SHALL support configuring an S3 bucket to send notification events to EventBridge by calling `put_bucket_notification_configuration()` with an `EventBridgeConfiguration: {}` b
+  > #### Scenario: Bucket notification configured to EventBridge
+  > - **GIVEN** an S3 bucket exists
+  > - **WHEN** `put_bucket_notification_configuration` is called with `EventBridgeConfiguration: {}`
+  > - **THEN** the bucket notification configuration is stored and subsequent object PUTs emit events to the default EventBridge bus
+  > #### Scenario: EventBridge notification configuration is idempotent
+  > - **GIVEN** an S3 bucket already has an EventBridge notification configured
+
+===== P234 | norish-recipes/norish PR #468 | capacidade do par: mobile-offline-auth
+PR: Rc/0.19.0
+arquivos ligados: apps/mobile/src/app/_layout.tsx;apps/mobile/src/providers/trpc-provider.tsx;packages/shared-react/src/providers/trpc-provider.tsx
+--- linhas alteradas (34; mostrando até 40)
++import { GroceriesProvider } from "@/context/groceries-context";
++import { StoresProvider } from "@/context/stores-context";
+-            <RecipesProvider>{children}</RecipesProvider>
++            <RecipesProvider>
++              <StoresProvider>
++                <GroceriesProvider>{children}</GroceriesProvider>
++              </StoresProvider>
++            </RecipesProvider>
++export function getCurrentBaseUrl(): string {
++  return currentBaseUrl;
++}
+-import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
+-import { normalizeSubscriptionData } from "@norish/shared/lib/operation-helpers";
++import { unwrapPayload } from "@norish/shared/lib/operation-helpers";
++import type { CreateTRPCProviderBundleOptions } from "./trpc-links";
++function withPayloadCompatibility(data: unknown): unknown {
++  const payload = unwrapPayload(data);
++  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
++    return payload;
++  }
++  const prototype = Object.getPrototypeOf(payload);
++  if (prototype !== Object.prototype && prototype !== null) {
++    return payload;
++  }
++  if ("payload" in payload) {
++    return payload;
++  }
++  return {
++    ...(payload as Record<string, unknown>),
++    payload,
++  };
++}
+-    onData: (data: unknown) => observerOptions.onData?.(normalizeSubscriptionData(data)),
++    onData: (data: unknown) => observerOptions.onData?.(withPayloadCompatibility(data)),
+--- candidata: recipe-share-react-state [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared-react exposes authenticated recipe-share hooks
+  | The system SHALL provide shared-react hooks for authenticated recipe-share management so web and mobile can list, create, update, revoke, and delete recipe share links through a common client contract
+  > The system SHALL provide shared-react hooks for authenticated recipe-share management so web and mobile can list, create, update, revoke, and delete recipe share links through a common client contract
+  > #### Scenario: Client manages recipe shares through shared-react
+  > - **WHEN** an authenticated shared-react consumer needs share state for a recipe
+  > - **THEN** the system SHALL expose query and mutation hooks for the recipe's share list and share lifecycle actions from `packages/shared-react`
+  > - **WHEN** an authenticated user creates a share link through the shared-react mutation contract
+  > ### Requirement: Shared-react can resolve public shared recipes
+  > The system SHALL provide a shared-react query hook for resolving the public shared recipe contract by token without requiring app-specific data wiring.
+  > #### Scenario: Client loads a shared recipe from a token
+--- candidata: shared-groceries-hooks [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable groceries hook family
+  | `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable groceries hook family
+  > `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared groceries hooks are available to both apps
+  > - **WHEN** web and mobile import shared groceries hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared groceries modules SHALL NOT import platform runtime modules
+  > #### Scenario: Complete groceries hook family is returned
+  > - **WHEN** the groceries hook family is created in shared-react
+--- candidata: mobile-groceries-backend [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mobile recurrence panel preserves editor state
+  | The mobile groceries editor SHALL present recurrence configuration in a full-height panel and SHALL restore the grocery editor with the selected recurrence settings intact when the recurrence panel cl
+  > The mobile groceries editor SHALL present recurrence configuration in a full-height panel and SHALL restore the grocery editor with the selected recurrence settings intact when the recurrence panel cl
+  > ### Requirement: Mobile groceries read flow uses backend data
+  > The mobile groceries screen SHALL render household grocery data from the shared tRPC-backed groceries hooks instead of mock data.
+  > - **WHEN** the groceries query succeeds with grocery items, recurring groceries, stores, and recipe metadata
+  > - **AND** recurring groceries are visually represented with their recurrence state
+  > - **WHEN** the groceries query is loading
+  > - **THEN** the mobile Groceries tab shows a loading state instead of mock groceries
+  > - **WHEN** the groceries query succeeds with no grocery items
+--- candidata: mobile-groceries-ui [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mobile groceries screen provides two organization modes
+  | The mobile groceries UI SHALL replace the placeholder groceries tab with an iOS-first grocery experience that supports viewing groceries grouped by store and grouped by recipe.
+  > ### Requirement: Mobile groceries screen provides two organization modes
+  > The mobile groceries UI SHALL replace the placeholder groceries tab with an iOS-first grocery experience that supports viewing groceries grouped by store and grouped by recipe.
+  > - **WHEN** a user opens the groceries tab on iOS
+  > - **THEN** the groceries content SHALL update to the selected organization mode
+  > Store mode SHALL organize groceries into an unsorted section plus ordered store sections so the mobile information architecture matches the web grocery model.
+  > - **WHEN** grocery data includes one or more stores
+  > Recipe mode SHALL organize groceries by source recipe so users can understand which meal plan or recipe contributed each grocery item.
+  > #### Scenario: Recipe sections render contributing groceries
+--- candidata: mobile-ui [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Safe-Area-Top Offset
+  | The app layout SHALL account for device safe areas to prevent content from overlapping with system UI elements like the iOS Dynamic Island or notch.
+  > - **WHEN** a user interacts with actions or links contained in the starter panel
+  > - **AND** starter-template labels, doc links, and walkthrough entries SHALL NOT be shown
+  > - **AND** disabled or unknown locale codes SHALL NOT be shown
+  > #### Scenario: Permission state is loading or unknown
+  > - **AND** starter-template labels, doc links, and walkthrough entries SHALL NOT be shown
+  > - **AND** disabled or unknown locale codes SHALL NOT be shown
+  > #### Scenario: Permission state is loading or unknown

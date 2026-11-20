@@ -1,0 +1,1225 @@
+===== P001 | repo langoai/lango | PR #72: feat: merge dev into main with p2p, escrow, tooling, and docs updates | capacidade: p2p-owner-shield
+--- SPEC VIVA
+## Purpose
+
+Hard-block privacy layer that prevents owner PII from being leaked through P2P responses, regardless of payment amount.
+
+## Requirements
+
+### Requirement: PII Redaction
+The system SHALL redact owner personal information from all P2P responses.
+
+#### Scenario: Owner name in response
+- **WHEN** a P2P response contains the configured owner name
+- **THEN** the system replaces it with "[owner-data-redacted]"
+
+#### Scenario: Email pattern in response
+- **WHEN** a P2P response contains an email address matching the configured owner email or general email patterns
+- **THEN** the system replaces it with "[owner-data-redacted]"
+
+#### Scenario: Phone pattern in response
+- **WHEN** a P2P response contains a phone number matching the configured owner phone or general phone patterns
+- **THEN** the system replaces it with "[owner-data-redacted]"
+
+### Requirement: Conversation Blocking
+The system SHALL block conversation history fields from P2P responses by default.
+
+#### Scenario: Conversation data in response
+- **WHEN** a P2P response contains keys like "conversation", "message_history", "chat_log", "session_history", or "chat_history"
+- **THEN** the system replaces the value with "[owner-data-redacted]"
+
+#### Scenario: Conversation blocking disabled
+- **WHEN** blockConversations is explicitly set to false
+- **THEN** conversation fields are not redacted
+
+### Requirement: Recursive Scanning
+The system SHALL recursively scan nested maps and slices for owner data.
+
+#### Scenario: Nested PII
+- **WHEN** owner data appears in a deeply nested map within the response
+- **THEN** the system detects and redacts it
+
+--- ARQUIVOS DO PR (800)
+modified  +4     -0     .gitignore
+modified  +3     -0     .gitmodules
+modified  +4     -0     .golangci.yml
+modified  +1     -1     Dockerfile
+modified  +17    -1     Makefile
+modified  +108   -39    README.md
+added     +0     -0     banner.png
+modified  +142   -410   cmd/lango/main.go
+added     +11    -0     contracts/deployments/84532-v2.json
+modified  +6     -0     contracts/foundry.lock
+modified  +5     -1     contracts/foundry.toml
+added     +82    -0     contracts/script/DeployV2.s.sol
+added     +43    -0     contracts/script/UpgradeV2.s.sol
+added     +51    -0     contracts/src/LangoBeaconVaultFactory.sol
+added     +421   -0     contracts/src/LangoEscrowHubV2.sol
+added     +177   -0     contracts/src/LangoVaultV2.sol
+added     +46    -0     contracts/src/interfaces/ILangoEconomy.sol
+added     +19    -0     contracts/src/interfaces/ISettler.sol
+added     +22    -0     contracts/src/settlers/DirectSettler.sol
+added     +102   -0     contracts/src/settlers/MilestoneSettler.sol
+added     +733   -0     contracts/test/LangoEscrowHubV2.t.sol
+added     +394   -0     contracts/test/LangoVaultV2.t.sol
+modified  +6     -5     docker-compose.yml
+modified  +138   -13    docs/architecture/overview.md
+modified  +72    -15    docs/architecture/project-structure.md
+modified  +83    -18    docs/automation/background.md
+modified  +28    -0     docs/automation/cron.md
+modified  +3     -3     docs/automation/workflows.md
+modified  +17    -11    docs/cli/automation.md
+modified  +219   -17    docs/cli/core.md
+modified  +8     -1     docs/cli/economy.md
+modified  +1     -0     docs/cli/index.md
+modified  +299   -0     docs/cli/p2p.md
+modified  +11    -13    docs/cli/smartaccount.md
+added     +115   -0     docs/cli/status.md
+modified  +18    -7     docs/configuration.md
+modified  +57    -8     docs/deployment/docker.md
+modified  +2     -2     docs/features/a2a-protocol.md
+added     +117   -0     docs/features/config-presets.md
+modified  +147   -2     docs/features/contracts.md
+modified  +62    -1     docs/features/economy.md
+modified  +39    -1     docs/features/index.md
+added     +221   -0     docs/features/mcp-integration.md
+modified  +120   -0     docs/features/multi-agent.md
+modified  +225   -0     docs/features/p2p-network.md
+modified  +13    -12    docs/features/smart-accounts.md
+modified  +90    -0     docs/features/zkp.md
+modified  +15    -0     docs/getting-started/quickstart.md
+modified  +19    -1     docs/index.md
+added     +32    -0     examples/discovery-and-handshake/Makefile
+added     +103   -0     examples/discovery-and-handshake/README.md
+added     +64    -0     examples/discovery-and-handshake/configs/alice.json
+added     +64    -0     examples/discovery-and-handshake/configs/bob.json
+added     +66    -0     examples/discovery-and-handshake/docker-compose.yml
+added     +43    -0     examples/discovery-and-handshake/docker-entrypoint-p2p.sh
+added     +153   -0     examples/discovery-and-handshake/scripts/test-discovery.sh
+added     +23    -0     examples/discovery-and-handshake/scripts/wait-for-health.sh
+added     +1     -0     examples/discovery-and-handshake/secrets/alice-passphrase.txt
+added     +1     -0     examples/discovery-and-handshake/secrets/bob-passphrase.txt
+added     +32    -0     examples/escrow-milestones/Makefile
+added     +132   -0     examples/escrow-milestones/README.md
+added     +84    -0     examples/escrow-milestones/configs/alice.json
+added     +78    -0     examples/escrow-milestones/configs/bob.json
+added     +9     -0     examples/escrow-milestones/contracts/DirectSettlerStub.sol
+added     +9     -0     examples/escrow-milestones/contracts/EscrowHubV2Stub.sol
+added     +9     -0     examples/escrow-milestones/contracts/MilestoneSettlerStub.sol
+added     +49    -0     examples/escrow-milestones/contracts/MockUSDC.sol
+added     +68    -0     examples/escrow-milestones/contracts/deploy-escrow.sh
+added     +102   -0     examples/escrow-milestones/docker-compose.yml
+added     +68    -0     examples/escrow-milestones/docker-entrypoint-escrow.sh
+added     +218   -0     examples/escrow-milestones/scripts/test-escrow.sh
+added     +23    -0     examples/escrow-milestones/scripts/wait-for-health.sh
+added     +1     -0     examples/escrow-milestones/secrets/alice-passphrase.txt
+added     +1     -0     examples/escrow-milestones/secrets/bob-passphrase.txt
+added     +33    -0     examples/firewall-and-reputation/Makefile
+added     +108   -0     examples/firewall-and-reputation/README.md
+added     +65    -0     examples/firewall-and-reputation/configs/alice.json
+added     +55    -0     examples/firewall-and-reputation/configs/bob.json
+added     +55    -0     examples/firewall-and-reputation/configs/charlie.json
+added     +95    -0     examples/firewall-and-reputation/docker-compose.yml
+added     +43    -0     examples/firewall-and-reputation/docker-entrypoint-p2p.sh
+added     +162   -0     examples/firewall-and-reputation/scripts/test-firewall.sh
+added     +23    -0     examples/firewall-and-reputation/scripts/wait-for-health.sh
+added     +1     -0     examples/firewall-and-reputation/secrets/alice-passphrase.txt
+added     +1     -0     examples/firewall-and-reputation/secrets/bob-passphrase.txt
+added     +1     -0     examples/firewall-and-reputation/secrets/charlie-passphrase.txt
+modified  +38    -11    examples/p2p-trading/README.md
+added     +55    -0     examples/p2p-trading/configs/alice.json
+added     +55    -0     examples/p2p-trading/configs/bob.json
+added     +55    -0     examples/p2p-trading/configs/charlie.json
+added     +33    -0     examples/paid-tool-marketplace/Makefile
+added     +130   -0     examples/paid-tool-marketplace/README.md
+added     +89    -0     examples/paid-tool-marketplace/configs/alice.json
+added     +80    -0     examples/paid-tool-marketplace/configs/bob.json
+added     +80    -0     examples/paid-tool-marketplace/configs/charlie.json
+added     +49    -0     examples/paid-tool-marketplace/contracts/MockUSDC.sol
+added     +133   -0     examples/paid-tool-marketplace/docker-compose.yml
+added     +62    -0     examples/paid-tool-marketplace/docker-entrypoint-p2p.sh
+added     +68    -0     examples/paid-tool-marketplace/scripts/setup-anvil.sh
+added     +200   -0     examples/paid-tool-marketplace/scripts/test-marketplace.sh
+added     +23    -0     examples/paid-tool-marketplace/scripts/wait-for-health.sh
+added     +1     -0     examples/paid-tool-marketplace/secrets/alice-passphrase.txt
+added     +1     -0     examples/paid-tool-marketplace/secrets/bob-passphrase.txt
+added     +1     -0     examples/paid-tool-marketplace/secrets/charlie-passphrase.txt
+added     +31    -0     examples/smart-account-basics/Makefile
+added     +121   -0     examples/smart-account-basics/README.md
+added     +69    -0     examples/smart-account-basics/configs/agent.json
+added     +12    -0     examples/smart-account-basics/contracts/EntryPointStub.sol
+added     +10    -0     examples/smart-account-basics/contracts/FactoryStub.sol
+added     +49    -0     examples/smart-account-basics/contracts/MockUSDC.sol
+added     +56    -0     examples/smart-account-basics/contracts/deploy-infra.sh
+added     +71    -0     examples/smart-account-basics/docker-compose.yml
+added     +64    -0     examples/smart-account-basics/docker-entrypoint-sa.sh
+added     +141   -0     examples/smart-account-basics/scripts/test-smart-account.sh
+added     +23    -0     examples/smart-account-basics/scripts/wait-for-health.sh
+added     +1     -0     examples/smart-account-basics/secrets/agent-passphrase.txt
+added     +27    -0     examples/team-workspace/Makefile
+added     +155   -0     examples/team-workspace/README.md
+added     +82    -0     examples/team-workspace/configs/leader.json
+added     +66    -0     examples/team-workspace/configs/worker1.json
+added     +66    -0     examples/team-workspace/configs/worker2.json
+added     +66    -0     examples/team-workspace/configs/worker3.json
+added     +49    -0     examples/team-workspace/contracts/MockUSDC.sol
+added     +43    -0     examples/team-workspace/contracts/deploy-team.sh
+added     +162   -0     examples/team-workspace/docker-compose.yml
+added     +60    -0     examples/team-workspace/docker-entrypoint-team.sh
+added     +211   -0     examples/team-workspace/scripts/test-team.sh
+added     +23    -0     examples/team-workspace/scripts/wait-for-health.sh
+added     +1     -0     examples/team-workspace/secrets/leader-passphrase.txt
+added     +1     -0     examples/team-workspace/secrets/worker1-passphrase.txt
+added     +1     -0     examples/team-workspace/secrets/worker2-passphrase.txt
+added     +1     -0     examples/team-workspace/secrets/worker3-passphrase.txt
+modified  +16    -0     go.mod
+modified  +41    -0     go.sum
+modified  +57    -16    internal/adk/agent.go
+modified  +167   -0     internal/adk/agent_test.go
+modified  +11    -5     internal/adk/errors.go
+modified  +148   -25    internal/adk/model.go
+modified  +493   -0     internal/adk/model_test.go
+modified  +16    -0     internal/adk/session_service.go
+modified  +188   -0     internal/adk/session_service_test.go
+modified  +16    -2     internal/adk/state.go
+modified  +104   -3     internal/adk/state_test.go
+modified  +104   -14    internal/adk/tools.go
+modified  +292   -0     internal/adk/tools_test.go
+added     +82    -0     internal/agent/schema.go
+added     +131   -0     internal/agent/schema_test.go
+modified  +8     -0     internal/agentregistry/defaults/automator/AGENT.md
+modified  +8     -0     internal/agentregistry/defaults/chronicler/AGENT.md
+modified  +8     -0     internal/agentregistry/defaults/librarian/AGENT.md
+modified  +8     -0     internal/agentregistry/defaults/navigator/AGENT.md
+modified  +8     -0     internal/agentregistry/defaults/operator/AGENT.md
+modified  +42    -7     internal/agentregistry/defaults/vault/AGENT.md
+modified  +320   -545   internal/app/app.go
+added     +291   -0     internal/app/bridge_integration_test.go
+added     +102   -0     internal/app/bridge_onchain_escrow.go
+added     +269   -0     internal/app/bridge_onchain_escrow_test.go
+added     +115   -0     internal/app/bridge_team_budget.go
+added     +102   -0     internal/app/bridge_team_budget_test.go
+added     +173   -0     internal/app/bridge_team_escrow.go
+added     +93    -0     internal/app/bridge_team_reputation.go
+added     +261   -0     internal/app/bridge_team_reputation_test.go
+added     +56    -0     internal/app/bridge_team_shutdown.go
+added     +172   -0     internal/app/bridge_team_shutdown_test.go
+added     +111   -0     internal/app/bridge_workspace_team.go
+modified  +60    -25    internal/app/channels.go
+added     +53    -0     internal/app/channels_test.go
+added     +9     -0     internal/app/convert.go
+modified  +6     -62    internal/app/deadline.go
+added     +859   -0     internal/app/modules.go
+added     +195   -0     internal/app/modules_test.go
+added     +284   -0     internal/app/parity_test.go
+modified  +18    -2     internal/app/tools.go
+modified  +95    -68    internal/app/tools_automation.go
+modified  +41    -61    internal/app/tools_browser.go
+modified  +20    -17    internal/app/tools_contract.go
+modified  +21    -52    internal/app/tools_data.go
+modified  +48    -38    internal/app/tools_economy.go
+modified  +52    -37    internal/app/tools_escrow.go
+modified  +33    -43    internal/app/tools_exec.go
+modified  +75    -82    internal/app/tools_filesystem.go
+modified  +46    -41    internal/app/tools_meta.go
+added     +75    -0     internal/app/tools_output.go
+modified  +55    -52    internal/app/tools_p2p.go
+modified  +37    -64    internal/app/tools_security.go
+modified  +6     -10    internal/app/tools_sentinel.go
+modified  +36    -29    internal/app/tools_smartaccount.go
+added     +252   -0     internal/app/tools_team.go
+added     +246   -0     internal/app/tools_team_escrow.go
+modified  +33    -0     internal/app/tools_test.go
+added     +482   -0     internal/app/tools_workspace.go
+modified  +12    -0     internal/app/types.go
+modified  +61    -1     internal/app/wiring.go
+modified  +11    -1     internal/app/wiring_automation.go
+modified  +39    -9     internal/app/wiring_economy.go
+modified  +15    -31    internal/app/wiring_observability.go
+modified  +131   -18    internal/app/wiring_p2p.go
+modified  +8     -0     internal/app/wiring_payment.go
+modified  +92    -6     internal/app/wiring_smartaccount.go
+added     +147   -0     internal/app/wiring_workspace.go
+modified  +10    -6     internal/appinit/builder.go
+modified  +20    -0     internal/appinit/module.go
+modified  +33    -10    internal/background/manager.go
+modified  +56    -0     internal/background/manager_test.go
+modified  +10    -0     internal/background/task.go
+modified  +20    -18    internal/bootstrap/phases.go
+modified  +1     -0     internal/cli/agent/catalog.go
+added     +24    -0     internal/cli/cliboot/cliboot.go
+added     +365   -0     internal/cli/configcmd/getset.go
+added     +156   -0     internal/cli/configcmd/getset_test.go
+added     +297   -0     internal/cli/configcmd/profile.go
+modified  +2     -0     internal/cli/doctor/checks/checks.go
+added     +116   -0     internal/cli/doctor/checks/workspace.go
+modified  +1     -0     internal/cli/economy/escrow.go
+modified  +80    -23    internal/cli/onboard/onboard.go
+added     +170   -0     internal/cli/p2p/git.go
+modified  +6     -1     internal/cli/p2p/p2p.go
+modified  +2     -1     internal/cli/p2p/p2p_test.go
+added     +210   -0     internal/cli/p2p/workspace.go
+modified  +2     -2     internal/cli/security/kms.go
+added     +421   -0     internal/cli/settings/dependencies.go
+added     +326   -0     internal/cli/settings/dependencies_test.go
+added     +170   -0     internal/cli/settings/dependency_panel.go
+modified  +358   -166   internal/cli/settings/editor.go
+modified  +119   -0     internal/cli/settings/editor_test.go
+modified  +13    -0     internal/cli/settings/forms_economy.go
+modified  +291   -0     internal/cli/settings/forms_impl_test.go
+modified  +67    -0     internal/cli/settings/forms_p2p.go
+modified  +20    -2     internal/cli/settings/forms_smartaccount.go
+added     +149   -0     internal/cli/settings/forms_system.go
+modified  +331   -80    internal/cli/settings/menu.go
+modified  +16    -15    internal/cli/settings/settings.go
+added     +320   -0     internal/cli/settings/setup_flow.go
+modified  +35    -2     internal/cli/smartaccount/deps.go
+modified  +12    -2     internal/cli/smartaccount/paymaster.go
+added     +93    -0     internal/cli/status/render.go
+added     +163   -0     internal/cli/status/status.go
+added     +212   -0     internal/cli/status/status_test.go
+modified  +39    -0     internal/cli/tui/banner.go
+modified  +14    -0     internal/cli/tui/styles.go
+modified  +78    -0     internal/cli/tuicore/state_update.go
+added     +5     -0     internal/cli/workflow/errors.go
+modified  +4     -4     internal/cli/workflow/workflow.go
+added     +12    -0     internal/config/constants.go
+modified  +203   -131   internal/config/loader.go
+modified  +110   -0     internal/config/loader_integration_test.go
+modified  +50    -0     internal/config/loader_test.go
+added     +82    -0     internal/config/presets.go
+added     +99    -0     internal/config/presets_test.go
+modified  +59    -3     internal/config/types.go
+modified  +3     -0     internal/config/types_automation.go
+modified  +34    -0     internal/config/types_economy.go
+modified  +57    -0     internal/config/types_p2p.go
+modified  +31    -9     internal/config/types_smartaccount.go
+added     +73    -0     internal/config/types_smartaccount_test.go
+modified  +6     -0     internal/configstore/store.go
+modified  +5     -0     internal/configstore/store_test.go
+modified  +81    -5     internal/contract/caller.go
+modified  +46    -1     internal/cron/executor.go
+modified  +95    -0     internal/cron/executor_test.go
+modified  +1     -0     internal/cron/job.go
+modified  +154   -49    internal/cron/scheduler.go
+modified  +364   -20    internal/cron/scheduler_test.go
+modified  +39    -0     internal/cron/store.go
+added     +120   -0     internal/deadline/deadline.go
+added     +111   -0     internal/deadline/deadline_test.go
+added     +64    -0     internal/deadline/resolve.go
+added     +92    -0     internal/deadline/resolve_test.go
+modified  +54    -5     internal/economy/escrow/ent_store.go
+modified  +5     -5     internal/economy/escrow/ent_store_test.go
+added     +8     -0     internal/economy/escrow/errors.go
+modified  +30    -0     internal/economy/escrow/hub/abi.go
+added     +285   -0     internal/economy/escrow/hub/abi/LangoEscrowHubV2.abi.json
+added     +181   -0     internal/economy/escrow/hub/abi/LangoVaultV2.abi.json
+modified  +44    -85    internal/economy/escrow/hub/client.go
+modified  +2     -2     internal/economy/escrow/hub/client_test.go
+added     +233   -0     internal/economy/escrow/hub/client_v2.go
+added     +161   -0     internal/economy/escrow/hub/client_v2_test.go
+added     +144   -0     internal/economy/escrow/hub/dangling_detector.go
+added     +185   -0     internal/economy/escrow/hub/dangling_detector_test.go
+modified  +103   -17    internal/economy/escrow/hub/hub_settler.go
+modified  +147   -7     internal/economy/escrow/hub/hub_settler_test.go
+added     +23    -0     internal/economy/escrow/hub/methods.go
+modified  +208   -26    internal/economy/escrow/hub/monitor.go
+modified  +307   -0     internal/economy/escrow/hub/monitor_test.go
+modified  +31    -0     internal/economy/escrow/hub/types.go
+added     +15    -0     internal/economy/escrow/noop_settler.go
+modified  +53    -72    internal/economy/escrow/sentinel/detector.go
+modified  +11    -0     internal/economy/escrow/sentinel/session_guard.go
+modified  +32    -0     internal/economy/escrow/sentinel/session_guard_test.go
+modified  +20    -9     internal/economy/escrow/sentinel/types.go
+modified  +28    -0     internal/economy/escrow/store.go
+modified  +63    -0     internal/economy/escrow/store_test.go
+modified  +9     -0     internal/economy/escrow/types.go
+modified  +16    -0     internal/ent/cronjob.go
+modified  +8     -0     internal/ent/cronjob/cronjob.go
+modified  +55    -0     internal/ent/cronjob/where.go
+modified  +18    -0     internal/ent/cronjob_create.go
+modified  +72    -0     internal/ent/cronjob_update.go
+modified  +2     -1     internal/ent/migrate/schema.go
+modified  +112   -2     internal/ent/mutation.go
+modified  +2     -2     internal/ent/runtime.go
+modified  +4     -0     internal/ent/schema/cron_job.go
+modified  +29    -1     internal/eventbus/economy_events.go
+modified  +34    -0     internal/eventbus/team_events.go
+added     +85    -0     internal/eventbus/workspace_events.go
+added     +113   -0     internal/gatekeeper/sanitizer.go
+added     +181   -0     internal/gatekeeper/sanitizer_test.go
+modified  +1     -0     internal/gateway/middleware_test.go
+modified  +71    -9     internal/gateway/server.go
+modified  +131   -0     internal/gateway/server_test.go
+modified  +11    -0     internal/lifecycle/registry.go
+modified  +22    -0     internal/lifecycle/registry_test.go
+modified  +1     -1     internal/orchestration/orchestrator.go
+modified  +227   -12    internal/orchestration/orchestrator_test.go
+modified  +215   -67    internal/orchestration/tools.go
+modified  +8     -3     internal/p2p/discovery/gossip.go
+added     +272   -0     internal/p2p/gitbundle/branch.go
+added     +173   -0     internal/p2p/gitbundle/branch_test.go
+added     +424   -0     internal/p2p/gitbundle/bundle.go
+added     +190   -0     internal/p2p/gitbundle/bundle_test.go
+added     +131   -0     internal/p2p/gitbundle/messages.go
+added     +290   -0     internal/p2p/gitbundle/protocol.go
+added     +135   -0     internal/p2p/gitbundle/store.go
+added     +121   -0     internal/p2p/gitbundle/store_test.go
+modified  +13    -0     internal/p2p/handshake/session.go
+modified  +12    -0     internal/p2p/node.go
+modified  +40    -0     internal/p2p/protocol/handler.go
+modified  +72    -0     internal/p2p/protocol/remote_agent.go
+added     +95    -0     internal/p2p/protocol/team_handler.go
+added     +88    -0     internal/p2p/team/bolt_store.go
+added     +246   -0     internal/p2p/team/bolt_store_test.go
+modified  +121   -2     internal/p2p/team/coordinator.go
+added     +57    -0     internal/p2p/team/coordinator_membership.go
+added     +67    -0     internal/p2p/team/coordinator_shutdown.go
+modified  +166   -0     internal/p2p/team/coordinator_test.go
+added     +373   -0     internal/p2p/team/health_monitor.go
+added     +267   -0     internal/p2p/team/health_monitor_test.go
+added     +362   -0     internal/p2p/team/integration_test.go
+modified  +74    -5     internal/p2p/team/team.go
+added     +82    -0     internal/p2p/workspace/chronicler.go
+added     +155   -0     internal/p2p/workspace/chronicler_test.go
+added     +100   -0     internal/p2p/workspace/contribution.go
+added     +138   -0     internal/p2p/workspace/contribution_test.go
+added     +7     -0     internal/p2p/workspace/errors.go
+added     +182   -0     internal/p2p/workspace/gossip.go
+added     +396   -0     internal/p2p/workspace/manager.go
+added     +393   -0     internal/p2p/workspace/manager_test.go
+added     +35    -0     internal/p2p/workspace/message.go
+added     +59    -0     internal/p2p/workspace/workspace.go
+modified  +8     -2     internal/payment/eip3009/builder.go   <== código ligado à spec
+modified  +6     -1     internal/payment/eip3009/builder_test.go   <== código ligado à spec
+modified  +110   -23    internal/payment/service.go
+modified  +2     -0     internal/payment/tx_builder.go
+modified  +10    -8     internal/payment/types.go
+modified  +4     -1     internal/prompt/defaults.go
+modified  +5     -2     internal/prompt/defaults_test.go
+modified  +1     -0     internal/prompt/loader.go
+modified  +4     -2     internal/prompt/section.go
+modified  +5     -0     internal/provider/anthropic/anthropic.go
+modified  +51    -5     internal/provider/gemini/gemini.go
+added     +352   -0     internal/provider/gemini/gemini_test.go
+modified  +129   -18    internal/provider/openai/openai.go
+modified  +351   -0     internal/provider/openai/openai_test.go
+modified  +1     -0     internal/provider/provider.go
+added     +46    -0     internal/provider/validate.go
+added     +77    -0     internal/provider/validate_test.go
+modified  +2     -0     internal/session/child_test.go
+modified  +14    -0     internal/session/ent_store.go
+modified  +5     -0     internal/session/store.go
+modified  +177   -38    internal/smartaccount/bundler/client.go
+modified  +5     -5     internal/smartaccount/bundler/client_test.go
+added     +97    -0     internal/smartaccount/bundler/revert.go
+added     +63    -0     internal/smartaccount/bundler/revert_test.go
+modified  +35    -2     internal/smartaccount/bundler/types.go
+modified  +92    -52    internal/smartaccount/factory.go
+modified  +63    -49    internal/smartaccount/factory_test.go
+modified  +25    -29    internal/smartaccount/integration_test.go
+modified  +100   -10    internal/smartaccount/manager.go
+modified  +139   -24    internal/smartaccount/manager_test.go
+modified  +1     -1     internal/smartaccount/paymaster/alchemy_test.go
+modified  +1     -1     internal/smartaccount/paymaster/approve_test.go
+modified  +111   -0     internal/smartaccount/paymaster/circle.go
+modified  +191   -2     internal/smartaccount/paymaster/circle_test.go
+added     +144   -0     internal/smartaccount/paymaster/permit/builder.go
+added     +264   -0     internal/smartaccount/paymaster/permit/builder_test.go
+modified  +1     -1     internal/smartaccount/paymaster/pimlico_test.go
+modified  +23    -30    internal/smartaccount/session/manager.go
+modified  +3     -1     internal/supervisor/proxy.go
+added     +149   -0     internal/supervisor/proxy_test.go
+modified  +21    -0     internal/testutil/mock_cron.go
+modified  +45    -14    internal/testutil/mock_session_store.go
+modified  +35    -0     internal/toolcatalog/catalog.go
+modified  +52    -2     internal/toolcatalog/dispatcher.go
+modified  +76    -2     internal/toolcatalog/dispatcher_test.go
+modified  +59    -10    internal/toolchain/hook_security.go
+modified  +63    -0     internal/toolchain/hook_security_test.go
+added     +215   -0     internal/toolchain/mw_output_manager.go
+added     +275   -0     internal/toolchain/mw_output_manager_test.go
+added     +63    -0     internal/toolchain/mw_truncate.go
+added     +128   -0     internal/toolchain/mw_truncate_test.go
+added     +293   -0     internal/tooloutput/compress.go
+added     +414   -0     internal/tooloutput/compress_test.go
+added     +83    -0     internal/tooloutput/detect.go
+added     +164   -0     internal/tooloutput/store.go
+added     +246   -0     internal/tooloutput/store_test.go
+added     +62    -0     internal/toolparam/extract.go
+added     +212   -0     internal/toolparam/extract_test.go
+added     +18    -0     internal/toolparam/response.go
+added     +131   -0     internal/tools/exec/guard.go
+added     +204   -0     internal/tools/exec/guard_test.go
+modified  +136   -0     internal/tools/filesystem/filesystem.go
+modified  +146   -0     internal/tools/filesystem/filesystem_test.go
+modified  +10    -3     internal/tools/payment/payment.go
+modified  +2     -2     internal/wallet/userop_test.go
+modified  +30    -4     internal/workflow/engine.go
+added     +114   -0     internal/workflow/engine_test.go
+modified  +8     -4     internal/x402/signer.go
+modified  +9     -0     mkdocs.yml
+added     +2     -0     openspec/changes/archive/2026-03-10-p2p-workspace-downstream-artifacts/.openspec.yaml
+added     +33    -0     openspec/changes/archive/2026-03-10-p2p-workspace-downstream-artifacts/design.md
+added     +29    -0     openspec/changes/archive/2026-03-10-p2p-workspace-downstream-artifacts/proposal.md
+added     +41    -0     openspec/changes/archive/2026-03-10-p2p-workspace-downstream-artifacts/specs/p2p-workspace-downstream/spec.md
+added     +45    -0     openspec/changes/archive/2026-03-10-p2p-workspace-downstream-artifacts/tasks.md
+added     +4     -0     openspec/changes/archive/2026-03-10-p2p-workspace-git/.openspec.yaml
+added     +73    -0     openspec/changes/archive/2026-03-10-p2p-workspace-git/design.md
+added     +42    -0     openspec/changes/archive/2026-03-10-p2p-workspace-git/proposal.md
+added     +53    -0     openspec/changes/archive/2026-03-10-p2p-workspace-git/specs/workspace/spec.md
+added     +65    -0     openspec/changes/archive/2026-03-10-p2p-workspace-git/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/.openspec.yaml
+added     +38    -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/design.md
+added     +42    -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/proposal.md
+added     +53    -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/specs/p2p-gitbundle/spec.md
+added     +43    -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/specs/p2p-workspace/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-10-simplify-p2p-workspace-git/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-10-team-escrow-workspace-connectivity/.openspec.yaml
+added     +74    -0     openspec/changes/archive/2026-03-10-team-escrow-workspace-connectivity/design.md
+added     +35    -0     openspec/changes/archive/2026-03-10-team-escrow-workspace-connectivity/proposal.md
+added     +99    -0     openspec/changes/archive/2026-03-10-team-escrow-workspace-connectivity/specs/team-connectivity/spec.md
+added     +55    -0     openspec/changes/archive/2026-03-10-team-escrow-workspace-connectivity/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/.openspec.yaml
+added     +74    -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/design.md
+added     +29    -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/proposal.md
+added     +113   -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/specs/app-team-economy-bridges/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/specs/economy-wiring/delta-app-team-economy-bridges.md
+added     +47    -0     openspec/changes/archive/2026-03-11-app-team-economy-bridges/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/.openspec.yaml
+added     +111   -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/design.md
+added     +35    -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/proposal.md
+added     +158   -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/specs/escrow-hub-v2-contracts/spec.md
+added     +86    -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/specs/onchain-escrow/spec.md
+added     +71    -0     openspec/changes/archive/2026-03-11-escrow-hub-v2-contracts/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/.openspec.yaml
+added     +44    -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/design.md
+added     +34    -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/proposal.md
+added     +52    -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/specs/eventmonitor-reorg-protection/spec.md
+added     +37    -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/specs/onchain-escrow/spec.md
+added     +40    -0     openspec/changes/archive/2026-03-11-eventmonitor-reorg-protection/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/.openspec.yaml
+added     +34    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/design.md
+added     +35    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/proposal.md
+added     +23    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/specs/economy-escrow/spec.md
+added     +29    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/specs/onchain-escrow/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/specs/p2p-team-payment/spec.md
+added     +37    -0     openspec/changes/archive/2026-03-11-fix-skipped-simplify-issues/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-03-11-observability-monitoring/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-03-11-observability-monitoring/design.md
+renamed   +0     -0     openspec/changes/archive/2026-03-11-observability-monitoring/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-03-11-observability-monitoring/specs/observability/spec.md
+added     +70    -0     openspec/changes/archive/2026-03-11-observability-monitoring/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/.openspec.yaml
+added     +67    -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/design.md
+added     +30    -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/proposal.md
+added     +178   -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/specs/p2p-team-coordination/spec.md
+added     +60    -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/specs/team-health-monitoring/spec.md
+added     +81    -0     openspec/changes/archive/2026-03-11-p2p-team-management-enhancements/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/design.md
+added     +44    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/proposal.md
+added     +12    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/specs/cron-scheduling/spec.md
+added     +16    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/specs/economy-escrow/spec.md
+added     +39    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/specs/team-health-monitoring/spec.md
+added     +39    -0     openspec/changes/archive/2026-03-12-code-review-git-bundle-enhancement/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-12-fix-automation-quality/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-03-12-fix-automation-quality/design.md
+added     +29    -0     openspec/changes/archive/2026-03-12-fix-automation-quality/proposal.md
+added     +71    -0     openspec/changes/archive/2026-03-12-fix-automation-quality/specs/cron-scheduling/spec.md
+added     +32    -0     openspec/changes/archive/2026-03-12-fix-automation-quality/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/.openspec.yaml
+added     +53    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/design.md
+added     +34    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/proposal.md
+added     +53    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/branch-per-task/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/git-state-tracking/spec.md
+added     +53    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/incremental-git-bundle/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/p2p-gitbundle/spec.md
+added     +19    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/p2p-team-coordination/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/specs/p2p-workspace/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-12-incremental-git-bundle/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-12-ux-simplify/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-03-12-ux-simplify/design.md
+added     +37    -0     openspec/changes/archive/2026-03-12-ux-simplify/proposal.md
+added     +19    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/brand-banner/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/cli-command-groups/spec.md
+added     +30    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/cli-onboard/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/cli-settings/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/cli-status-dashboard/spec.md
+added     +42    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/config-presets/spec.md
+added     +30    -0     openspec/changes/archive/2026-03-12-ux-simplify/specs/settings-tier-system/spec.md
+added     +50    -0     openspec/changes/archive/2026-03-12-ux-simplify/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-13-output-gatekeeper/.openspec.yaml
+added     +54    -0     openspec/changes/archive/2026-03-13-output-gatekeeper/design.md
+added     +28    -0     openspec/changes/archive/2026-03-13-output-gatekeeper/proposal.md
+added     +96    -0     openspec/changes/archive/2026-03-13-output-gatekeeper/specs/output-gatekeeper/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-13-output-gatekeeper/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/.openspec.yaml
+added     +35    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/design.md
+added     +39    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/proposal.md
+added     +19    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/specs/docker-deployment/spec.md
+added     +15    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/specs/docs-only/spec.md
+added     +66    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/specs/downstream-docs-sync/spec.md
+added     +49    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/specs/p2p-documentation/spec.md
+added     +55    -0     openspec/changes/archive/2026-03-13-sync-downstream-artifacts/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/design.md
+added     +33    -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/proposal.md
+added     +75    -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/specs/adaptive-idle-timeout/spec.md
+added     +39    -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/specs/auto-extend-timeout/spec.md
+added     +38    -0     openspec/changes/archive/2026-03-14-adaptive-idle-timeout/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-exec-security-hardening/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/design.md
+added     +35    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/proposal.md
+added     +27    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/specs/config-system/spec.md
+added     +38    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/specs/exec-command-guard/spec.md
+added     +19    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/specs/tool-exec/spec.md
+added     +23    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/specs/tool-execution-hooks/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-14-exec-security-hardening/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/.openspec.yaml
+added     +59    -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/design.md
+added     +35    -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/proposal.md
+added     +16    -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/specs/contract-interaction/spec.md
+added     +52    -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/specs/smart-account/spec.md
+added     +43    -0     openspec/changes/archive/2026-03-14-fix-onchain-bugs/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/design.md
+added     +40    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/proposal.md
+added     +24    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/specs/contract-interaction/spec.md
+added     +51    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/specs/payment-service/spec.md
+added     +16    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/specs/payment-tools/spec.md
+added     +53    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/specs/smart-account/spec.md
+added     +58    -0     openspec/changes/archive/2026-03-14-onchain-interaction-bugfix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/design.md
+added     +33    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/proposal.md
+added     +12    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/specs/config-system/spec.md
+added     +32    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/specs/economy-escrow/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/specs/sentinel-errors/spec.md
+added     +67    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/specs/toolparam-extraction/spec.md
+added     +45    -0     openspec/changes/archive/2026-03-14-refactor-v020-code-quality/tasks.md
+added     +14    -0     openspec/changes/archive/2026-03-14-settings-tui-discoverability/proposal.md
+added     +63    -0     openspec/changes/archive/2026-03-14-settings-tui-discoverability/specs/settings-discoverability.md
+added     +10    -0     openspec/changes/archive/2026-03-14-settings-tui-discoverability/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-adaptive-idle-timeout-review-fixes/.openspec.yaml
+added     +36    -0     openspec/changes/archive/2026-03-15-adaptive-idle-timeout-review-fixes/design.md
+added     +30    -0     openspec/changes/archive/2026-03-15-adaptive-idle-timeout-review-fixes/proposal.md
+added     +37    -0     openspec/changes/archive/2026-03-15-adaptive-idle-timeout-review-fixes/specs/adaptive-idle-timeout/spec.md
+added     +25    -0     openspec/changes/archive/2026-03-15-adaptive-idle-timeout-review-fixes/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-agent-tool-routing-fix/.openspec.yaml
+added     +25    -0     openspec/changes/archive/2026-03-15-agent-tool-routing-fix/design.md
+added     +19    -0     openspec/changes/archive/2026-03-15-agent-tool-routing-fix/proposal.md
+added     +26    -0     openspec/changes/archive/2026-03-15-agent-tool-routing-fix/specs/agent-routing/spec.md
+added     +17    -0     openspec/changes/archive/2026-03-15-agent-tool-routing-fix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/design.md
+added     +28    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/proposal.md
+added     +42    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/specs/paymaster-permit/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/specs/paymaster/spec.md
+added     +31    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/specs/smart-account/spec.md
+added     +27    -0     openspec/changes/archive/2026-03-15-entrypoint-v07-circle-permit/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-fix-automation-prompt-routing/.openspec.yaml
+added     +39    -0     openspec/changes/archive/2026-03-15-fix-automation-prompt-routing/design.md
+added     +23    -0     openspec/changes/archive/2026-03-15-fix-automation-prompt-routing/proposal.md
+added     +37    -0     openspec/changes/archive/2026-03-15-fix-automation-prompt-routing/specs/automation-prompt-routing/spec.md
+added     +21    -0     openspec/changes/archive/2026-03-15-fix-automation-prompt-routing/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/.openspec.yaml
+added     +41    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/design.md
+added     +30    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/proposal.md
+added     +9     -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/specs/multi-agent-orchestration/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/specs/smart-account/spec.md
+added     +49    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/specs/tool-catalog/spec.md
+added     +17    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/specs/tool-health-diagnostics/spec.md
+added     +27    -0     openspec/changes/archive/2026-03-15-fix-smartaccount-tool-discovery/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/design.md
+added     +30    -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/proposal.md
+added     +38    -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/specs/tool-catalog/spec.md
+added     +41    -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/specs/tool-health-diagnostics/spec.md
+added     +41    -0     openspec/changes/archive/2026-03-15-fix-tool-discovery-diagnosis/tasks.md
+added     +14    -0     openspec/changes/archive/2026-03-15-fs-smart-reading/proposal.md
+added     +12    -0     openspec/changes/archive/2026-03-15-fs-smart-reading/tasks.md
+added     +4     -0     openspec/changes/archive/2026-03-15-p2p-onchain-examples/.openspec.yaml
+added     +50    -0     openspec/changes/archive/2026-03-15-p2p-onchain-examples/design.md
+added     +32    -0     openspec/changes/archive/2026-03-15-p2p-onchain-examples/proposal.md
+added     +70    -0     openspec/changes/archive/2026-03-15-p2p-onchain-examples/specs/examples.md
+added     +28    -0     openspec/changes/archive/2026-03-15-p2p-onchain-examples/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/.openspec.yaml
+added     +44    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/design.md
+added     +31    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/proposal.md
+added     +12    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/specs/output-gatekeeper/spec.md
+added     +86    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/specs/proactive-output-gatekeeper/spec.md
+added     +23    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/specs/tool-filesystem/spec.md
+added     +31    -0     openspec/changes/archive/2026-03-15-proactive-output-gatekeeper/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-settings-dependency-discovery/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-03-15-settings-dependency-discovery/design.md
+added     +29    -0     openspec/changes/archive/2026-03-15-settings-dependency-discovery/proposal.md
+added     +103   -0     openspec/changes/archive/2026-03-15-settings-dependency-discovery/specs/settings-dependency-discovery/spec.md
+added     +77    -0     openspec/changes/archive/2026-03-15-settings-dependency-discovery/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/.openspec.yaml
+added     +44    -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/design.md
+added     +31    -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/proposal.md
+added     +107   -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/specs/cli-settings/spec.md
+added     +129   -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/specs/settings-hierarchical-menu/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-15-settings-tui-hierarchical-menu/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-smart-account-deploy-fix/.openspec.yaml
+added     +72    -0     openspec/changes/archive/2026-03-15-smart-account-deploy-fix/design.md
+added     +34    -0     openspec/changes/archive/2026-03-15-smart-account-deploy-fix/proposal.md
+added     +87    -0     openspec/changes/archive/2026-03-15-smart-account-deploy-fix/specs/smart-account/spec.md
+added     +45    -0     openspec/changes/archive/2026-03-15-smart-account-deploy-fix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/.openspec.yaml
+added     +32    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/design.md
+added     +35    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/proposal.md
+added     +20    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/specs/smart-account-init-validation/spec.md
+added     +16    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/specs/tool-catalog/spec.md
+added     +57    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/specs/tool-discovery-diagnostics/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-15-tool-discovery-audit-bugfix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/.openspec.yaml
+added     +32    -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/design.md
+added     +30    -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/proposal.md
+added     +23    -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/specs/paymaster/spec.md
+added     +8     -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/specs/smart-account/spec.md
+added     +31    -0     openspec/changes/archive/2026-03-15-v07-downstream-sync/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-16-app-module-build-transition/.openspec.yaml
+added     +51    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/design.md
+added     +31    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/proposal.md
+added     +77    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/specs/app-module-build/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/specs/cli-bootstrap-factory/spec.md
+added     +19    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/specs/config-default-walker/spec.md
+added     +51    -0     openspec/changes/archive/2026-03-16-app-module-build-transition/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/design.md
+added     +32    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/proposal.md
+added     +20    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/specs/bootstrap-lifecycle/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/specs/config-cli-commands/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/specs/config-presets/spec.md
+added     +21    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/specs/config-system/spec.md
+added     +16    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/specs/encrypted-config-profiles/spec.md
+added     +29    -0     openspec/changes/archive/2026-03-16-config-bootstrap-regression-fixes/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-16-fix-automation-systems-bugs/.openspec.yaml
+added     +57    -0     openspec/changes/archive/2026-03-16-fix-automation-systems-bugs/design.md
+added     +35    -0     openspec/changes/archive/2026-03-16-fix-automation-systems-bugs/proposal.md
+added     +54    -0     openspec/changes/archive/2026-03-16-fix-automation-systems-bugs/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-16-parity-verification-test/.openspec.yaml
+added     +41    -0     openspec/changes/archive/2026-03-16-parity-verification-test/design.md
+added     +23    -0     openspec/changes/archive/2026-03-16-parity-verification-test/proposal.md
+added     +87    -0     openspec/changes/archive/2026-03-16-parity-verification-test/specs/parity-verification/spec.md
+added     +23    -0     openspec/changes/archive/2026-03-16-parity-verification-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/design.md
+added     +27    -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/proposal.md
+added     +30    -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/specs/provider-openai-compatible/spec.md
+added     +72    -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/specs/streaming-tool-call-assembly/spec.md
+added     +51    -0     openspec/changes/archive/2026-03-17-fix-empty-tool-call-name/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/.openspec.yaml
+added     +46    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/design.md
+added     +29    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/proposal.md
+added     +23    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/specs/config-system/spec.md
+added     +23    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/specs/provider-interface/spec.md
+added     +28    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/specs/provider-model-validation/spec.md
+added     +16    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/specs/supervisor-architecture/spec.md
+added     +26    -0     openspec/changes/archive/2026-03-17-fix-fallback-model-leak/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/.openspec.yaml
+added     +46    -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/design.md
+added     +27    -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/proposal.md
+added     +33    -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/specs/provider-openai-compatible/spec.md
+added     +12    -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/specs/tool-schema-builder/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-17-fix-openai-tool-parameters/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-orphaned-function-call/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-03-17-fix-orphaned-function-call/design.md
+added     +26    -0     openspec/changes/archive/2026-03-17-fix-orphaned-function-call/proposal.md
+added     +47    -0     openspec/changes/archive/2026-03-17-fix-orphaned-function-call/specs/adk-architecture/spec.md
+added     +29    -0     openspec/changes/archive/2026-03-17-fix-orphaned-function-call/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-schema-builder-input-schema/.openspec.yaml
+added     +31    -0     openspec/changes/archive/2026-03-17-fix-schema-builder-input-schema/design.md
+added     +22    -0     openspec/changes/archive/2026-03-17-fix-schema-builder-input-schema/proposal.md
+added     +41    -0     openspec/changes/archive/2026-03-17-fix-schema-builder-input-schema/specs/tool-schema-builder/spec.md
+added     +17    -0     openspec/changes/archive/2026-03-17-fix-schema-builder-input-schema/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-fix-shutdown-inflight-context/.openspec.yaml
+added     +37    -0     openspec/changes/archive/2026-03-17-fix-shutdown-inflight-context/design.md
+added     +24    -0     openspec/changes/archive/2026-03-17-fix-shutdown-inflight-context/proposal.md
+added     +53    -0     openspec/changes/archive/2026-03-17-fix-shutdown-inflight-context/specs/gateway-server/spec.md
+added     +17    -0     openspec/changes/archive/2026-03-17-fix-shutdown-inflight-context/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/.openspec.yaml
+added     +64    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/design.md
+added     +35    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/proposal.md
+added     +71    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/specs/agent-routing/spec.md
+added     +47    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/specs/agent-turn-limit/spec.md
+added     +87    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/specs/multi-agent-orchestration/spec.md
+added     +68    -0     openspec/changes/archive/2026-03-17-multi-agent-quality-improvement/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/.openspec.yaml
+added     +47    -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/design.md
+added     +27    -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/proposal.md
+added     +74    -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/specs/provider-tool-replay/spec.md
+added     +8     -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/specs/streaming-tool-call-assembly/spec.md
+added     +37    -0     openspec/changes/archive/2026-03-17-provider-tool-replay-stabilization/tasks.md
+removed   +0     -70    openspec/changes/observability-monitoring/tasks.md
+added     +93    -0     openspec/specs/adaptive-idle-timeout/spec.md
+modified  +46    -0     openspec/specs/adk-architecture/spec.md
+modified  +99    -1     openspec/specs/agent-routing/spec.md
+modified  +46    -2     openspec/specs/agent-turn-limit/spec.md
+added     +81    -0     openspec/specs/app-module-build/spec.md
+added     +113   -0     openspec/specs/app-team-economy-bridges/spec.md
+added     +83    -0     openspec/specs/appinit-module-groups/spec.md
+modified  +23    -2     openspec/specs/appinit-modules/spec.md
+modified  +23    -11    openspec/specs/auto-extend-timeout/spec.md
+added     +35    -0     openspec/specs/automation-prompt-routing/spec.md
+modified  +16    -0     openspec/specs/background-execution/spec.md
+modified  +19    -0     openspec/specs/bootstrap-lifecycle/spec.md
+added     +53    -0     openspec/specs/branch-per-task/spec.md
+modified  +18    -0     openspec/specs/brand-banner/spec.md
+added     +59    -0     openspec/specs/cli-bootstrap-factory/spec.md
+modified  +26    -5     openspec/specs/cli-command-groups/spec.md
+modified  +29    -0     openspec/specs/cli-onboard/spec.md
+modified  +50    -28    openspec/specs/cli-settings/spec.md
+added     +38    -0     openspec/specs/cli-status-dashboard/spec.md
+modified  +31    -0     openspec/specs/config-cli-commands/spec.md
+added     +77    -0     openspec/specs/config-default-walker/spec.md
+added     +47    -0     openspec/specs/config-presets/spec.md
+modified  +90    -53    openspec/specs/config-system/spec.md
+modified  +30    -1     openspec/specs/contract-interaction/spec.md
+modified  +116   -3     openspec/specs/cron-scheduling/spec.md
+modified  +8     -0     openspec/specs/docker-deployment/spec.md
+modified  +14    -0     openspec/specs/docs-only/spec.md
+added     +70    -0     openspec/specs/downstream-docs-sync/spec.md
+modified  +67    -0     openspec/specs/economy-escrow/spec.md
+modified  +37    -0     openspec/specs/economy-wiring/spec.md
+modified  +12    -0     openspec/specs/encrypted-config-profiles/spec.md
+added     +158   -0     openspec/specs/escrow-hub-v2-contracts/spec.md
+added     +58    -0     openspec/specs/eventmonitor-reorg-protection/spec.md
+added     +42    -0     openspec/specs/exec-command-guard/spec.md
+modified  +21    -1     openspec/specs/gateway-server/spec.md
+added     +34    -0     openspec/specs/git-state-tracking/spec.md
+added     +53    -0     openspec/specs/incremental-git-bundle/spec.md
+modified  +90    -15    openspec/specs/multi-agent-orchestration/spec.md
+modified  +98    -3     openspec/specs/onchain-escrow/spec.md
+added     +82    -0     openspec/specs/output-gatekeeper/spec.md
+modified  +48    -0     openspec/specs/p2p-documentation/spec.md
+added     +70    -0     openspec/specs/p2p-gitbundle/spec.md
+added     +70    -0     openspec/specs/p2p-onchain-examples/spec.md
+modified  +169   -6     openspec/specs/p2p-team-coordination/spec.md
+modified  +11    -0     openspec/specs/p2p-team-payment/spec.md
+added     +41    -0     openspec/specs/p2p-workspace-downstream/spec.md
+added     +75    -0     openspec/specs/p2p-workspace/spec.md
+added     +85    -0     openspec/specs/parity-verification/spec.md
+added     +44    -0     openspec/specs/paymaster-permit/spec.md
+modified  +25    -1     openspec/specs/paymaster/spec.md
+modified  +48    -0     openspec/specs/payment-service/spec.md
+modified  +15    -0     openspec/specs/payment-tools/spec.md
+added     +88    -0     openspec/specs/proactive-output-gatekeeper/spec.md
+modified  +22    -0     openspec/specs/provider-interface/spec.md
+added     +32    -0     openspec/specs/provider-model-validation/spec.md
+modified  +59    -0     openspec/specs/provider-openai-compatible/spec.md
+added     +78    -0     openspec/specs/provider-tool-replay/spec.md
+modified  +43    -0     openspec/specs/sentinel-errors/spec.md
+added     +103   -0     openspec/specs/settings-dependency-discovery/spec.md
+added     +133   -0     openspec/specs/settings-hierarchical-menu/spec.md
+added     +34    -0     openspec/specs/settings-tier-system/spec.md
+added     +24    -0     openspec/specs/smart-account-init-validation/spec.md
+modified  +201   -44    openspec/specs/smart-account/spec.md
+added     +83    -0     openspec/specs/streaming-tool-call-assembly/spec.md
+modified  +15    -0     openspec/specs/supervisor-architecture/spec.md
+added     +103   -0     openspec/specs/team-connectivity/spec.md
+added     +68    -0     openspec/specs/team-health-monitoring/spec.md
+modified  +70    -4     openspec/specs/tool-catalog/spec.md
+added     +61    -0     openspec/specs/tool-discovery-diagnostics/spec.md
+modified  +18    -0     openspec/specs/tool-exec/spec.md
+modified  +20    -5     openspec/specs/tool-execution-hooks/spec.md
+modified  +22    -0     openspec/specs/tool-filesystem/spec.md
+added     +43    -0     openspec/specs/tool-health-diagnostics/spec.md
+added     +110   -0     openspec/specs/tool-schema-builder/spec.md
+added     +71    -0     openspec/specs/toolparam-extraction/spec.md
+modified  +26    -0     openspec/specs/workflow-engine/spec.md
+modified  +22    -10    prompts/AGENTS.md
+added     +6     -0     prompts/OUTPUT_PRINCIPLES.md
+modified  +137   -61    prompts/TOOL_USAGE.md
+modified  +16    -2     prompts/agents/automator/IDENTITY.md
+modified  +16    -2     prompts/agents/chronicler/IDENTITY.md
+modified  +16    -2     prompts/agents/librarian/IDENTITY.md
+modified  +16    -2     prompts/agents/navigator/IDENTITY.md
+modified  +16    -2     prompts/agents/operator/IDENTITY.md
+modified  +8     -2     prompts/agents/planner/IDENTITY.md
+modified  +16    -2     prompts/agents/vault/IDENTITY.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/payment/eip3009/builder.go
+@@ -15,6 +15,9 @@ import (
+ 
+ // WalletSigner abstracts wallet signing to avoid direct wallet package imports.
+ type WalletSigner interface {
++	// SignTransaction signs raw bytes (no additional hashing).
++	SignTransaction(ctx context.Context, rawTx []byte) ([]byte, error)
++	// SignMessage signs an arbitrary message (applies keccak256 before signing).
+ 	SignMessage(ctx context.Context, message []byte) ([]byte, error)
+ 	Address(ctx context.Context) (string, error)
+ }
+@@ -119,9 +122,12 @@ func Sign(
+ 		return nil, fmt.Errorf("typed data hash: %w", err)
+ 	}
+ 
+-	sig, err := wallet.SignMessage(ctx, hash)
++	// Use SignTransaction (raw sign) because TypedDataHash already returns
++	// a keccak256 digest. SignMessage would double-hash, producing an
++	// invalid signature for on-chain verification.
++	sig, err := wallet.SignTransaction(ctx, hash)
+ 	if err != nil {
+-		return nil, fmt.Errorf("sign message: %w", err)
++		return nil, fmt.Errorf("sign typed data: %w", err)
+ 	}
+ 
+ 	if len(sig) != 65 {
+
+### internal/payment/eip3009/builder_test.go
+@@ -74,8 +74,13 @@ type testWallet struct {
+ 	key *ecdsa.PrivateKey
+ }
+ 
++func (w *testWallet) SignTransaction(_ context.Context, rawTx []byte) ([]byte, error) {
++	return crypto.Sign(rawTx, w.key)
++}
++
+ func (w *testWallet) SignMessage(_ context.Context, message []byte) ([]byte, error) {
+-	return crypto.Sign(message, w.key)
++	hash := crypto.Keccak256(message)
++	return crypto.Sign(hash, w.key)
+ }
+ 
+ func (w *testWallet) Address(_ context.Context) (string, error) {
+
+===== P002 | repo BlackBeltTechnology/pi-agent-dashboard | PR #204: feat(restore-pi-version-skew-surface): pi-version advisory + per-session pi version | capacidade: package-install
+--- SPEC VIVA
+## Purpose
+
+Install, remove, and update pi packages (extensions, skills, themes, prompts) via REST + WebSocket. Surfaces a single-flight server contract with an FIFO client-side queue so multiple rapid clicks survive without orphaned spinners.
+## Requirements
+### Requirement: Server installs pi packages via PackageManager
+The server SHALL expose `POST /api/packages/install` accepting `{ source, scope, cwd? }`. It SHALL use pi's `DefaultPackageManager` to install the package. For `scope: "global"` it installs to `~/.pi/agent/settings.json`. For `scope: "local"` it installs to `<cwd>/.pi/settings.json`. The endpoint SHALL return immediately with an `operationId` and stream progress via WebSocket.
+
+#### Scenario: Install npm package globally
+- **WHEN** client sends `POST /api/packages/install` with `{ source: "npm:pi-doom", scope: "global" }`
+- **THEN** server calls `packageManager.installAndPersist("npm:pi-doom")` and returns `{ operationId }` with status 202
+
+#### Scenario: Install npm package locally
+- **WHEN** client sends `POST /api/packages/install` with `{ source: "npm:pi-tools", scope: "local", cwd: "/path/to/project" }`
+- **THEN** server calls `packageManager.installAndPersist("npm:pi-tools", { local: true })` scoped to the given cwd
+
+#### Scenario: Install git package
+- **WHEN** client sends `POST /api/packages/install` with `{ source: "git:github.com/user/repo", scope: "global" }`
+- **THEN** server installs via git clone and persists to settings
+
+#### Scenario: Concurrent install rejected
+- **WHEN** an install/remove/update operation is already running
+- **THEN** server returns 409 Conflict
+
+### Requirement: Server serializes package operations
+The server SHALL allow only one package operation (install, remove, or update) at a time. Concurrent requests SHALL receive a 409 Conflict response.
+
+#### Scenario: Second operation during active operation
+- **WHEN** an install is in progress and another install request arrives
+- **THEN** the second request receives 409 with message "A package operation is already in progress"
+
+### Requirement: Package card reflects install state immediately
+After a package install, remove, or update operation completes successfully, ALL instances of the installed packages list SHALL refresh automatically. The `useInstalledPackages` hook SHALL listen for `pi-package-event` DOM events and re-fetch the installed packages list when any operation completes with `success: true`.
+
+#### Scenario: Install from browse updates card to installed state
+- **WHEN** a package is installed via the Browse Packages section
+- **THEN** the PackageCard for that package immediately shows "Installed" status
+- **AND** no manual page refresh is required
+
+#### Scenario: Uninstall updates card to uninstalled state
+- **WHEN** a package is uninstalled from the Installed Packages section
+- **THEN** the PackageCard in Browse Packages immediately shows the Install button
+- **AND** no manual page refresh is required
+
+#### Scenario: Cross-component state sync
+- **WHEN** an install operation is triggered by one component (e.g., GlobalPackagesSection)
+- **THEN** other components using `useInstalledPackages` (e.g., PackageBrowser) also update
+
+### Requirement: Client queues package operations FIFO
+
+The dashboard client SHALL maintain a single FIFO queue of package operations (install, remove, update) shared across all components. At most one operation SHALL be in-flight to the server at any time. Subsequent enqueued operations SHALL be POSTed to `/api/packages/install|remove|update` only after the previous operation's `package_operation_complete` WebSocket message arrives.
+
+#### Scenario: Spinner survives a second click during an active install
+
+- **WHEN** the user clicks Install on package A and, before A completes, clicks Install on package B
+- **THEN** package A's row continues to show its spinner until A's `package_operation_complete` arrives
+- **AND** package B's row shows a "queued" indicator until A completes, then transitions to spinner
+
+#### Scenario: FIFO order across components
+
+- **WHEN** the user clicks Install on A in the Recommended Extensions panel and then on B in the Packages tab before A completes
+- **THEN** A is POSTed first, A completes, then B is POSTed — regardless of which component initiated each click
+
+#### Scenario: Completion advances the queue
+
+- **WHEN** the running operation's `package_operation_complete` WebSocket message arrives (either `success: true` or `success: false`)
+- **THEN** the next queued operation is shifted from the queue and POSTed within one event-loop tick
+
+#### Scenario: Idle queue accepts immediately
+
+- **WHEN** the user clicks Install on a package with no operations running or queued
+- **THEN** the operation is POSTed immediately without entering the queued state visibly
+
+### Requirement: Per-source state is shared across components
+
+The client SHALL expose per-source operation state (`idle | queued | running | success | error`) from a single source of truth. Multiple mounted components SHALL observe the same state for the same `source` string.
+
+#### Scenario: Recommended panel reflects an op started in Packages tab
+
+- **WHEN** an install for `npm:pi-flows` is started from the Packages tab
+- **THEN** the matching card in the Recommended Extensions panel (if mounted) shows the same spinner and status text
+
+#### Scenario: Component unmount does not orphan an op
+
+- **WHEN** the component that initiated an install unmounts before completion
+- **THEN** the operation continues to run on the server
+- **AND** completion advances the shared queue and refreshes installed-packages lists
+
+### Requirement: Duplicate enqueue is a no-op
+
+When a `source` is already in the `queued` or `running` state, a subsequent enqueue request for the same `source` SHALL be ignored. The status pill SHALL remain on its current value.
+
+#### Scenario: Double-click on Install button
+
+- **WHEN** the user clicks Install on a package twice in rapid succession
+- **THEN** exactly one operation is POSTed for that package
+
+#### Scenario: Install all overlapping with manual click
+
+- **WHEN** the user has clicked Install on package A, then clicks "Install all missing" which would also enqueue A
+- **THEN** A is enqueued exactly once and runs exactly once
+
+### Requirement: Queue retries once on 409 PackageOperationBusy
+
+When the server returns HTTP 409 (`PackageOperationBusyError`) for an operation POSTed by the queue, the client SHALL re-queue the request at the head of the queue and retry once after at least 500 ms. A second 409 SHALL surface as an `error` state for that source.
+
+#### Scenario: Transient 409 retried successfully
+
+- **WHEN** the queue POSTs operation A and the server returns 409 because an unrelated subsystem briefly held the lock
+- **AND** the lock is released within 500 ms
+- **THEN** the queue retries A and A succeeds normally without user intervention
+
+#### Scenario: Persistent 409 surfaces as error
+
+- **WHEN** two consecutive POSTs for the same operation both return 409
+- **THEN** the source enters `error` state with the server's error message
+- **AND** the queue advances to the next item
+
+### Requirement: Recommended Extensions exposes Install-all-missing action
+
+The Recommended Extensions panel SHALL show an "Install all missing" button in its header. When clicked, the button SHALL enqueue every recommended entry where `activeInPi === false`, in manifest order, using each entry's `installed.scope` if present, otherwise the panel's current scope. The button SHALL be disabled when no missing entries exist or when every missing entry is already queued or running.
+
+#### Scenario: Button enqueues all missing entries
+
+- **WHEN** the recommended manifest contains 3 entries, 2 of which have `activeInPi === false`
+- **AND** the user clicks "Install all missing"
+- **THEN** the 2 missing entries are enqueued in manifest order
+- **AND** the entry that is already active is not enqueued
+
+#### Scenario: Button respects per-entry installed scope
+
+- **WHEN** "Install all missing" enqueues an entry whose `installed.scope === "global"`
+- **THEN** that entry's POST uses `scope: "global"` regardless of the panel's current scope toggle
+
+#### Scenario: Button disabled when nothing to do
+
+- **WHEN** every recommended entry has `activeInPi === true`
+- **THEN** the "Install all missing" button is disabled
+- **AND** its tooltip indicates nothing to install
+
+#### Scenario: Button disabled while batch in flight
+
+- **WHEN** "Install all missing" has just been clicked and all missing entries are now in `queued` or `running` state
+- **THEN** the button is disabled
+- **AND** becomes enabled again only if a new missing entry appears (e.g., via a `package_operation_complete` that uninstalls one)
+
+### Requirement: PackageBrowser banner reports queue depth
+
+The PackageBrowser status banner SHALL display the currently running operation's source plus the number of queued operations when the queue is non-empty.
+
+#### Scenario: Single in-flight operation, empty queue
+
+- **WHEN** one install is running and zero are queued
+- **THEN** the banner reads "Installing &lt;source&gt;…" with no queue suffix
+
+#### Scenario: Operation running with queued items
+
+- **WHEN** one install is running and 2 are queued
+- **THEN** the banner reads "Installing &lt;source&gt;… (2 queued)"
+
+#### Scenario: Banner clears when queue empties
+
+- **WHEN** the last running operation completes successfully and the queue is empty
+- **THEN** the banner shows the existing 3-second success state, then hides — matching today's behavior
+
+### Requirement: Queue matches completion regardless of POST/WS arrival order
+
+The client queue SHALL correctly match a `package_operation_complete` WebSocket message to its in-flight operation regardless of whether the message arrives before or after the corresponding HTTP POST response has resolved. When `running.operationId` is `null` (HTTP response not yet parsed), the queue SHALL match by `source` instead. When `running.operationId` is set, the queue SHALL continue to match by `operationId`.
+
+This requirement closes a race window: for fast operations (notably local-path installs that have no network round-trip), the server's WebSocket broadcast can arrive before `fetch()` resolves the HTTP response body. Strict `operationId` matching during that window silently discards legitimate completions, leaving the spinner stuck and the queue blocked.
+
+The same matching rule SHALL apply to `package_progress` messages so progress updates during the same window are not lost.
+
+#### Scenario: Completion arrives before HTTP response (fast install)
+
+- **WHEN** the queue starts an install operation by POSTing to `/api/packages/install`
+- **AND** the server broadcasts `package_operation_complete` with the issued `operationId` BEFORE the client's `fetch()` resolves the response body
+- **THEN** the queue matches the completion by `source` (since `running.operationId` is still `null`)
+- **AND** the running op transitions to `success` (or `error` per the message payload)
+- **AND** the spinner clears within one render tick
+
+#### Scenario: Completion arrives after HTTP response (normal install)
+
+- **WHEN** the queue starts an install operation
+- **AND** the HTTP response resolves first, setting `running.operationId` to the issued id
+- **AND** the server later broadcasts `package_operation_complete` with that same id
+- **THEN** the queue matches by `operationId` and completes normally
+
+#### Scenario: Progress event during race window updates running message
+
+- **WHEN** the queue is mid-POST for an operation whose `running.operationId` is still `null`
+- **AND** a `package_progress` message for that operation arrives via WebSocket
+- **THEN** the queue updates `running.message` based on the progress event using `source` to match
+- **AND** later progress messages (after `operationId` is set) match by `operationId` as before
+
+#### Scenario: Local-path install does not orphan its spinner
+
+- **WHEN** the user clicks Install on a local-path source (e.g. `/home/user/my-extension`)
+- **AND** the install completes server-side in milliseconds, faster than the HTTP response round-trip
+- **THEN** the spinner clears on completion and does not remain in the `running` state indefinitely
+- **AND** subsequent enqueues for any other source proceed normally
+
+#### Scenario: Mismatched completion is still ignored
+
+- **WHEN** a `package_operation_complete` arrives whose `operationId` does not match `running.operationId` AND whose `source` does not match `running.source`
+- **THEN** the queue ignores the message and the running op is unaffected
+
+### Requirement: Install confirmation dialog supports scope selection
+The `PackageInstallConfirmDialog` SHALL accept the following props in addition to its existing props:
+
+- `scope: "global" | "local"` — currently selected scope (controlled by caller).
+- `onScopeChange?: (scope: "global" | "local") => void` — change handler; required when `lockScope` is undefined.
+- `lockScope?: "global" | "local"` — when set, the dialog SHALL hide the scope radio and use the locked scope unconditionally.
+
+When `lockScope` is undefined AND `onScopeChange` is provided, the dialog SHALL render a `Local | Global` radio group above the confirm button. Both options SHALL be selectable; the dialog SHALL NOT preflight whether the source is installable in either scope.
+
+When `lockScope` is set OR when `onScopeChange` is not provided, the dialog SHALL NOT render the radio. The dialog SHALL pass the locked-or-static scope to the install action verbatim.
+
+The default selection follows the caller's `scope` prop value.
+
+#### Scenario: Settings caller locks scope to global
+- **GIVEN** the dialog is opened from `SettingsPanel` with `lockScope="global"`
+- **THEN** the scope radio SHALL NOT be visible
+- **AND** confirming SHALL pass `scope: "global"` to the install action
+
+#### Scenario: Pi Resources caller offers radio
+- **GIVEN** the dialog is opened from `PiResourcesView` with `onScopeChange` provided and no `lockScope`
+- **THEN** the scope radio SHALL be visible with both Local and Global options
+- **AND** the default selection SHALL be the value of the `scope` prop
+- **AND** the user SHALL be able to switch the selection before confirming
+
+#### Scenario: Confirming with selected scope
+- **WHEN** the user picks `Global` and confirms
+- **THEN** the install action SHALL receive `scope: "global"` and `cwd: undefined`
+
+- **WHEN** the user picks `Local` and confirms
+- **THEN** the install action SHALL receive `scope: "local"` and `cwd: <current cwd>`
+
+
+--- ARQUIVOS DO PR (39)
+modified  +1     -0     CHANGELOG.md
+modified  +3     -1     docs/file-index-client.md
+modified  +3     -3     docs/file-index-extension.md
+modified  +3     -3     docs/file-index-server.md
+modified  +2     -2     docs/file-index-shared.md
+renamed   +0     -0     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/.openspec.yaml
+added     +56    -0     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/design.md
+renamed   +20    -5     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/proposal.md
+added     +39    -0     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/specs/bridge-extension/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/specs/pi-core-version-check/spec.md
+added     +57    -0     openspec/changes/archive/2026-06-30-restore-pi-version-skew-surface/tasks.md
+removed   +0     -2     openspec/changes/modernize-pi-version-handling/.openspec.yaml
+removed   +0     -202   openspec/changes/modernize-pi-version-handling/design.md
+removed   +0     -87    openspec/changes/modernize-pi-version-handling/proposal.md
+removed   +0     -29    openspec/changes/modernize-pi-version-handling/specs/bridge-extension/spec.md
+removed   +0     -75    openspec/changes/modernize-pi-version-handling/specs/pi-core-version-check/spec.md
+removed   +0     -75    openspec/changes/modernize-pi-version-handling/tasks.md
+removed   +0     -8     openspec/changes/restore-pi-version-skew-surface/DEFERRED.md
+modified  +39    -0     openspec/specs/bridge-extension/spec.md
+modified  +72    -0     openspec/specs/pi-core-version-check/spec.md
+added     +51    -0     packages/client/src/components/PiVersionAdvisory.tsx
+modified  +5     -0     packages/client/src/components/SessionHeader.tsx
+modified  +2     -0     packages/client/src/components/SettingsPanel.tsx   <== código ligado à spec
+added     +47    -0     packages/client/src/components/__tests__/PiVersionAdvisory.test.tsx
+added     +49    -0     packages/client/src/hooks/usePiCompatibility.ts
+modified  +2     -0     packages/extension/src/__tests__/git-poll.test.ts
+added     +54    -0     packages/extension/src/__tests__/pi-version-tracker.test.ts
+modified  +5     -2     packages/extension/src/bridge.ts   <== código ligado à spec
+modified  +3     -0     packages/extension/src/git-poll.ts
+modified  +49    -1     packages/extension/src/model-tracker.ts
+added     +81    -0     packages/server/src/__tests__/health-compatibility.test.ts
+modified  +21    -0     packages/server/src/__tests__/pi-version-skew.test.ts
+added     +52    -0     packages/server/src/__tests__/pi-version-update-handling.test.ts
+modified  +8     -0     packages/server/src/event-wiring.ts
+modified  +6     -3     packages/server/src/pi-version-skew.ts
+modified  +33    -0     packages/server/src/routes/system-routes.ts
+added     +30    -0     packages/shared/src/__tests__/pi-version-update-protocol.test.ts
+modified  +15    -0     packages/shared/src/protocol.ts
+modified  +6     -0     packages/shared/src/types.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/client/src/components/SettingsPanel.tsx
+@@ -11,6 +11,7 @@ import { fetchAutoInitWorktreePref, setAutoInitWorktreePref } from "../lib/git-a
+ import { useLocation, useRoute } from "wouter";
+ import { SettingsSectionSlot, SettingsDraftProvider, useSettingsDraftSource, type RegisteredSource, type SettingsDraftRegistry } from "@blackbelt-technology/dashboard-plugin-runtime";
+ import { VALID_SETTINGS_TABS } from "@blackbelt-technology/pi-dashboard-shared/dashboard-plugin/slot-types.js";
++import { PiVersionAdvisory } from "./PiVersionAdvisory.js";
+ import { ProviderAuthSection } from "./ProviderAuthSection.js";
+ import { ModelSelector } from "./ModelSelector.js";
+ import { KnownServersSection } from "./KnownServersSection.js";
+@@ -766,6 +767,7 @@ export function SettingsPanel({ availableModels, onMessage, onBack }: {
+ 
+             {activeTab === "general" && (
+               <>
++                <PiVersionAdvisory />
+                 <Section title={t("settings.interface", undefined, "Interface")}>
+                   <p className="text-xs text-[var(--text-tertiary)] mb-2">
+                     {t("settings.interfaceDescription", undefined, "Choose the dashboard interface language. The selection is saved in this browser.")}
+
+### packages/extension/src/bridge.ts
+@@ -45,7 +45,7 @@ import { tryDispatchExtensionCommand } from "./slash-dispatch.js";
+ import { flipHasUI } from "./hasui-flip.js";
+ import { runGitPollTick } from "./git-poll.js";
+ import { sendStateSync as _sendStateSync, replaySessionEntries as _replaySessionEntries, handleSessionChange as _handleSessionChange } from "./session-sync.js";
+-import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfChanged, sendCwdMissingIfChanged as _sendCwdMissingIfChanged, resetReconnectCaches as _resetReconnectCaches } from "./model-tracker.js";
++import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfChanged, sendCwdMissingIfChanged as _sendCwdMissingIfChanged, sendPiVersionIfChanged as _sendPiVersionIfChanged, resetReconnectCaches as _resetReconnectCaches } from "./model-tracker.js";
+ import { registerFlowEventListeners, FLOW_EVENT_MAP, SUBAGENT_EVENT_MAP } from "./flow-event-wiring.js";
+ import { refreshUiModules, subscribeUiInvalidate, handleUiManagement, type UiModulesBridgeCtx } from "./ui-modules.js";
+ import { inlineMessageText, type ReadFileOutcome } from "./markdown-image-inliner.js";
+@@ -1231,6 +1231,7 @@ function initBridge(pi: ExtensionAPI) {
+   function sendSessionNameIfChanged() { const bc = syncBc(); _sendSessionNameIfChanged(bc); applyBc(bc); }
+   function sendGitInfoIfChanged(cwd: string) { const bc = syncBc(); _sendGitInfoIfChanged(bc, cwd); applyBc(bc); }
+   function sendCwdMissingIfChanged(cwd: string) { const bc = syncBc(); _sendCwdMissingIfChanged(bc, cwd); applyBc(bc); }
++  function sendPiVersionIfChanged() { _sendPiVersionIfChanged(syncBc()); }
+ 
+   // Forward all pi core events to the dashboard.
+   // Events with special enrichment logic:
+@@ -2242,9 +2243,10 @@ function initBridge(pi: ExtensionAPI) {
+       }
+     }).catch(() => { stopSpinner(); });
+ 
+-    // Send initial git info
++    // Send initial git info + the session's pi version
+     sendGitInfoIfChanged(ctx.cwd);
+     sendCwdMissingIfChanged(ctx.cwd);
++    sendPiVersionIfChanged();
+ 
+     // Start metrics monitor and heartbeat
+     startMetricsMonitor();
+@@ -2331,6 +2333,7 @@ function initBridge(pi: ExtensionAPI) {
+       sendCwdMissingIfChanged,
+       sendSessionNameIfChanged,
+       sendModelUpdateIfChanged,
++      sendPiVersionIfChanged,
+     }), GIT_POLL_INTERVAL);
+     getBridgeState().timers!.push(gitPollTimer);
+   }
+

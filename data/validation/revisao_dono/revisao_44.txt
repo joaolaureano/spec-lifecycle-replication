@@ -1,0 +1,414 @@
+===== P267 | Mic92/gitea-mq PR #5 | capacidade do par: automerge-integration
+PR: Add three-level dashboard navigation and clickable commit status links 
+arquivos ligados: internal/gitea/client.go
+--- linhas alteradas (11; mostrando até 40)
++	"fmt"
++	"strings"
+-func MQStatus(state, description string) CommitStatus {
+-	return CommitStatus{Context: "gitea-mq", State: state, Description: description}
++func MQStatus(state, description, targetURL string) CommitStatus {
++	return CommitStatus{Context: "gitea-mq", State: state, Description: description, TargetURL: targetURL}
++}
++// DashboardPRURL constructs the dashboard URL for a specific PR.
++// The baseURL should be the GITEA_MQ_EXTERNAL_URL value.
++func DashboardPRURL(baseURL, owner, repo string, prNumber int64) string {
++	return strings.TrimRight(baseURL, "/") + fmt.Sprintf("/repo/%s/%s/pr/%d", owner, repo, prNumber)
+--- candidata: check-monitoring [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Commit status lifecycle reporting
+  | The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > The system SHALL post a `gitea-mq` status on the PR's original head commit, via the repo's forge (`Forge.SetMQStatus`), reflecting the merge queue lifecycle: `pending` when queued, `pending` when test
+  > - **WHEN** PR #42 in `gitea:org/app` is enqueued
+  > - **THEN** status is `pending` with description "Queued (position #3)" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** status is `pending` with description "Testing merge result" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** status is `success` with description "Merge queue passed" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+  > - **THEN** a `gitea-mq` check run is created with `status=queued`, summary "Queued (position #1)" and `details_url` set to `https://mq.example.com/repo/github/alice/tool/pr/7`
+  > - **WHEN** PR #42 in `gitea:org/app` is testing and check `ci/build` fails on the merge branch
+  > - **THEN** status is `failure` with description "Check failed: ci/build" and `target_url` set to `https://mq.example.com/repo/gitea/org/app/pr/42`
+--- candidata: web-dashboard [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Queue overview page
+  | The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > The system SHALL serve an HTML page at the root path (`/`) listing all currently managed repositories with a queue count badge. The repo list SHALL be read dynamically from the registry on each reques
+  > - **AND** `gitea:org/app` has 3 active PRs and `github:org/lib` has 1 active PR
+  > - **AND** `org/app` shows forge `gitea` and a badge with "3"
+  > - **WHEN** a user visits `/` and `gitea:org/app` is the only managed repo
+  > - **THEN** the next page load shows both `gitea:org/app` and `github:org/new-repo`
+  > - **WHEN** a user visits `/` and `gitea:org/app` and `gitea:org/old-repo` are managed
+  > - **AND** the discovery loop removes `gitea:org/old-repo` before the next page load
+  > - **THEN** the next page load shows only `gitea:org/app`
+--- candidata: pr-detail-page [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: PR detail page
+  | The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > The system SHALL serve an HTML page at `/repo/{forge}/{owner}/{name}/pr/{number}` showing the detail view for a single pull request in the merge queue. The system SHALL check whether the requested `(f
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/43` and `gitea:org/app` is in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/99` and `gitea:org/app` is in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/unknown/pr/42` and `gitea:org/unknown` is not in the managed set
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/abc`
+  > - **WHEN** a user visits `/repo/gitea/org/app/pr/-1`
+  > - **WHEN** a user visits `/repo/org/app/pr/42` and `gitea:org/app` is in the managed set
+  > - **THEN** the page is served as if the path were `/repo/gitea/org/app/pr/42`
+--- candidata: webhook-receiver [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: HTTP webhook endpoint
+  | The system SHALL expose per-forge HTTP webhook endpoints: `POST /webhook/gitea` for Gitea events and `POST /webhook/github` for GitHub App events. The legacy configurable path (default `/webhook`) SHA
+  > The system SHALL expose per-forge HTTP webhook endpoints: `POST /webhook/gitea` for Gitea events and `POST /webhook/github` for GitHub App events. The legacy configurable path (default `/webhook`) SHA
+  > - **WHEN** Gitea sends a POST request to `/webhook/gitea` with a valid event payload
+  > - **THEN** it is handled identically to `/webhook/gitea`
+  > - **WHEN** a GET request is sent to `/webhook/gitea`
+  > - **WHEN** a webhook request arrives at `/webhook/gitea` with a valid HMAC-SHA256 signature in `X-Gitea-Signature`
+  > - **WHEN** a webhook request arrives at `/webhook/gitea` without an `X-Gitea-Signature` header
+  > - **WHEN** a webhook arrives at `/webhook/gitea` for repo `org/other` which is NOT in the current managed set
+  > - **WHEN** the discovery loop has just removed `gitea:org/old-repo` from the managed set
+--- candidata: queue-management [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Per-repository per-branch queues
+  | The system SHALL maintain independent queues for each combination of forge, repository, and target branch. PRs targeting `main` and PRs targeting `release/1.0` in the same repo SHALL have separate que
+  > The system SHALL maintain independent queues for each combination of forge, repository, and target branch. PRs targeting `main` and PRs targeting `release/1.0` in the same repo SHALL have separate que
+  > - **WHEN** PR #1 is enqueued in repo `gitea:org/app-a` targeting `main`
+  > - **AND** PR #2 is enqueued in repo `gitea:org/app-b` targeting `main`
+  > - **AND** removing PR #1 from `gitea:org/app-a` does not affect `gitea:org/app-b`'s queue
+  > - **WHEN** PR #1 targets `main` in repo `gitea:org/app`
+  > - **AND** PR #2 targets `release/1.0` in repo `gitea:org/app`
+  > #### Scenario: Independent forge queues for same owner/name
+  > - **WHEN** PR #1 is enqueued in `gitea:org/app` targeting `main`
+
+===== P268 | atman-33/openspec-for-copilot PR #26 | capacidade do par: chat-integration
+PR: Add specialized agents and individual task execution
+arquivos ligados: src/utils/chat-prompt-runner.ts;src/utils/config-manager.ts
+--- linhas alteradas (7; mostrando até 40)
++		| "startSingleTask"
++		startSingleTask: string;
++			startSingleTask:
++				config.get<string>("customInstructions.startSingleTask") ?? "",
++			startSingleTask:
++				overrides.customInstructions?.startSingleTask ??
++				defaults.customInstructions.startSingleTask,
+--- candidata: codelens [PR]
+  | # CodeLens Requirements
+  | ## ADDED Requirements
+  | ### Requirement: CodeLens for Tasks
+--- candidata: configuration [tasks]
+  | # Spec: Chat Language Configuration
+  | ## ADDED Requirements
+  | ### Requirement: Configure Chat Language
+
+===== P269 | terwer/siyuan-plugin-picgo PR #677 | capacidade do par: picgo-paste-upload-ownership
+PR: feat(shell): improve PicGo plugin shell UX and reload notification 
+arquivos ligados: libs/zhi-siyuan-picgo/src/lib/siyuanPicgo.ts
+--- linhas alteradas (56; mostrando até 40)
+-import { migrateV2WorkspacePicGoConfig, resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
++import { resolveSiyuanPicGoPaths, type SiyuanPicGoInstanceOptions } from "./siyuanPicgoPaths"
+-      migrateV2WorkspacePicGoConfig(paths, this.logger)
+-    const that = this
+-    return new Promise<void>((resolve) => {
+-      let needUpdate = false
++    const initialState = picgo.getConfigMigrationState()
++    if (initialState.status === "running") {
++      siyuanApi.pushMsg({
++        msg: "检测到 PicGo 配置初始化或迁移任务，正在等待完成，请勿进行任何操作...",
++        timeout: 1000,
++      })
++      this.logger?.warn("检测到 PicGo 配置初始化或迁移任务，正在等待完成...")
++      await picgo.waitForConfigMigration()
++    }
+-      const checkConfig = () => {
+-        if (picgo.cfgUpdating) {
+-          needUpdate = true
+-          siyuanApi.pushMsg({
+-            msg: "检测到旧配置，正在迁移配置，请勿进行任何操作...",
+-            timeout: 1000,
+-          })
+-          that.logger?.warn("检测到旧配置，正在迁移配置，请勿进行任何操作...")
+-          setTimeout(checkConfig, 1000) // 递归检查
+-        } else {
+-          if (needUpdate) {
+-            siyuanApi.pushMsg({
+-              msg: "PicGO 图床历史配置迁移完成",
+-              timeout: 7000,
+-            })
+-            that.logger?.info("PicGO 图床历史配置迁移完成🎉")
+-          }
+-          that.logger?.info("PicGO instance is ready😄")
+-          resolve()
+-        }
+-      }
++    const finalState = picgo.getConfigMigrationState()
++    if (finalState.status === "failed") {
++      const errorText = finalState.error ? `，错误信息：${finalState.error}` : ""
++      siyuanApi.pushErrMsg({
+--- candidata: picgo-plugin-shell-ux [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 插件主界面使用轻量挂载式 shell
+  | `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > `siyuan-plugin-picgo` SHALL provide a lightweight mounted plugin shell for the main PicGo UI instead of requiring the normal entry path to open a SiYuan dialog.
+  > - **WHEN** 用户点击 PicGo 插件入口打开主界面
+  > - **AND** popup SHALL 显示在 PicGo 顶栏按钮附近
+  > - **AND** 该 shell SHALL 能够承载现有 PicGo 设置和操作界面
+  > - **WHEN** 用户重复点击 PicGo 插件入口
+  > - **WHEN** 用户关闭 PicGo shell 或插件被卸载/禁用
+  > PicGo 配置迁移和初始化检查 SHALL be idempotent and SHALL NOT run again merely because the main UI is opened.
+  > - **AND** 用户打开 PicGo 主界面
+--- candidata: picgo-unified-async-config-source [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  | PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > ### Requirement: PicGo 3.0 supersedes v2 main-config-only persistence 边界
+  > PicGo 3.0 SHALL 将 `docker-picgo-storage-persistence` 视为已完成的 v2 compatibility baseline 和 migration source，而不是继续作为 3.0 product boundary。
+  > - **WHEN** PicGo 3.0 运行在 Kernel-backed Docker/Web 或 SiYuan workspace runtime
+  > - **THEN** PicGo main config、external/PicList config、SiYuan connection config、SiYuan integration behavior、plugin enable/config values、uploader config 和 uploader-owned state SHALL 通过 unified async faca
+  > - **AND** v2 中“只有 `picgo.cfg.json` 进入 Kernel storage”的规则 SHALL NOT 作为 3.0 限制
+  > - **WHEN** PicGo 3.0 区分 syncable user configuration 和 runtime artifacts
+  > - **THEN** third-party PicGo plugin packages、npm folders、`pluginBaseDir`、`zhiNpmPath`、logs、caches 和 build output SHALL 保持 PC/Electron-local artifacts
+  > ### Requirement: PicGo 3.0 使用统一 async 配置 facade
+--- candidata: picgo-product-library-boundary [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin product and library roles are explicit
+  | The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > The refactor SHALL define separate architectural roles for the SiYuan plugin product and the reusable PicGo/Siyuan libraries.
+  > - **WHEN** downstream code imports `universal-picgo`, `universal-picgo-store`, or `zhi-siyuan-picgo`
+  > - **THEN** the helper is exposed through a deliberate facade or moved to the product layer, and product code does not import library `src` paths directly
+  > The PicGo domain core SHALL avoid direct dependencies on product UI frameworks, SiYuan DOM state, Electron-only UI helpers, and implicit global runtime detection.
+  > The refactor SHALL make ownership of PicGo context, Siyuan API clients, configuration migration, event bus subscriptions, and plugin loader state explicit.
+  > - **WHEN** `SiyuanPicGo`, `picgoEventBus`, or `UniversalPicGo` lifecycle state is used
+  > - **WHEN** a PicGo core object is constructed by a library consumer
+  > - **THEN** construction does not implicitly perform unrelated product operations such as UI setup, host migration, npm plugin installation, or third-party plugin loading unless explicitly requested by
+--- candidata: picgo-public-contract-stability [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public API stability under internal refactor
+  | The plugin SHALL preserve its public API surface while internal modules are refactored.
+  > - **THEN** the exported symbols and module paths that form the public API remain available unless a separate breaking change is explicitly proposed
+  > The plugin SHALL continue to read and write existing user configuration, cache, and storage data without requiring migration that breaks current installs.
+  > - **THEN** the plugin continues writing data in the same externally compatible contract unless a separate migration is explicitly approved
+  > - **WHEN** the refactor is ready for review
+  > Docker/Web storage 持久化 SHALL 在不破坏既有桌面、本地文件和纯浏览器行为的前提下，让旧 localStorage PicGo 主配置具备可迁移路径。
+  > - **WHEN** Docker/Web 用户已有旧 localStorage PicGo 主配置且 Kernel 主配置文件不存在
+  > - **THEN** 系统 SHALL 将旧主配置迁移到 `data/storage/syp/picgo/picgo.cfg.json`
+  > - **WHEN** Kernel 主配置文件已存在且浏览器 localStorage 中也有旧 PicGo 主配置
+--- candidata: picgo-headless-config-contract [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 无界面消费者可以在不依赖已安装插件产品的情况下创建 PicGo 管理器
+  | `zhi-siyuan-picgo` SHALL 暴露面向 SiYuan 消费者的公共无界面管理器或等价门面。创建和使用该门面 MUST NOT 要求 `siyuan-plugin-picgo` 已经作为 SiYuan 插件安装，也不得要求 `/data/plugins/siyuan-plugin-picgo` 存在。
+  > ### Requirement: 无界面消费者可以在不依赖已安装插件产品的情况下创建 PicGo 管理器
+  > `zhi-siyuan-picgo` SHALL 暴露面向 SiYuan 消费者的公共无界面管理器或等价门面。创建和使用该门面 MUST NOT 要求 `siyuan-plugin-picgo` 已经作为 SiYuan 插件安装，也不得要求 `/data/plugins/siyuan-plugin-picgo` 存在。
+  > #### Scenario: Publisher 在未安装 PicGo 插件产品时创建管理器
+  > - **WHEN** 外部消费者在 `/data/plugins/siyuan-plugin-picgo/plugin.json` 不存在的 SiYuan 工作空间中创建无界面管理器
+  > - **AND** PicGo 库契约 SHALL 不要求调用方执行插件安装检测
+  > #### Scenario: 独立 PicGo 插件继续使用同一底层契约
+  > - **WHEN** `siyuan-plugin-picgo` 内部使用 PicGo 配置和上传行为
+  > ### Requirement: 无界面消费者可以读取和保存 PicGo 配置
+
+===== P270 | LuSrackhall/KeyTone PR #129 | capacidade do par: encrypted-outputs
+PR: Add waveform sound trimmer 在裁剪定义声音步骤中, 引入音频波形可视化组件, 降低用户制作键音专辑的难度
+arquivos ligados: sdk/server/server.go
+--- linhas alteradas (85; mostrando até 40)
++	"mime"
++		// ============================================================================
++		// 体验策略：SDK 预览播放严格限制 <= 5000ms
++		//
++		// 背景：SDK 侧目前缺少“暂停”能力；如果允许长片段预览，将造成体验不可控。
++		// 处理：当 isPreviewMode=true 时，严格拒绝超过 5 秒的预览请求。
++		// 注意：这里既做服务端兜底（权威限制），前端也会做一次提前校验以给更友好的提示。
++		// ============================================================================
++		if arg.IsPreviewMode {
++			const maxPreviewMs = 5000.0
++			if (arg.EndTime - arg.StartTime) > maxPreviewMs {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{
++					"message": "error: SDK预览播放仅支持<=5000ms的片段，请使用前端试听播放条",
++				})
++				return
++			}
++		}
++	// ============================================================================
++	// GET /get_audio_stream - 读取当前编辑专辑下的音频源文件（用于前端波形渲染）
++	//
++	// 说明：
++	// - 前端通过 sha256 + type（扩展名，如 ".wav"）定位 audioFiles/<sha256><type>
++	// - 该接口返回音频文件内容，支持 Range（由 http.ServeContent 处理）
++	// - 仅用于编辑器场景（依赖 audio_pkg_uuid 已加载）
++	// ============================================================================
++	keytonePkgRouters.GET("/get_audio_stream", func(ctx *gin.Context) {
++		type Arg struct {
++			Sha256 string `form:"sha256"`
++			Type   string `form:"type"`
++		}
++		var arg Arg
++		if err := ctx.ShouldBindQuery(&arg); err != nil || arg.Sha256 == "" || arg.Type == "" {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{
++				"message": "error: 参数接收失败",
++			})
++			return
++		}
++		// 基础校验：防止路径穿越/非法扩展名
++		if len(arg.Sha256) != 64 {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
+--- candidata: signature-management [tasks+termos]
+  | # 签名管理功能规格增量
+  | ## ADDED Requirements
+  | ### Requirement: 签名授权申请
+  > Normative: The signature picker dialog SHALL additionally provide an "Authorization Request" button when the album requires authorization; clicking this button SHALL open the AuthRequestDialog for the
+  > Normative: The system SHALL copy signature card images from the signature storage directory to the album's audioFiles directory, generating unique filenames using SHA1(qualificationCode + originalFile
+  > - **THEN** 图片文件被复制到`{albumPath}/audioFiles/`，新文件名为哈希值+扩展名，cardImagePath更新为相对路径`audioFiles/{newFilename}`
+  > Normative: The client SHALL call POST /signature/delete with JSON { id }; on success the backend MUST respond 200 with { success: true }, and on failure MUST return an appropriate 4xx/5xx with an erro
+  > Normative: The client SHALL request export via POST /signature/export with the encryptedId; the backend MUST return a .ktsign binary stream whose payload is the KeyB-encrypted JSON export (cardImage e
+  > - 后端根据存储数据构建导出内容（内部 JSON），并使用密钥B进行对称加密，最终返回经 AES-GCM 加密后以十六进制编码的字节流（Content-Type: application/octet-stream）
+  > Normative: The system SHALL broadcast full config via `/stream` after any signature change; the frontend MUST update local state from the `signature` field without requiring manual refresh.
+  > - **自动通过现有的 `/stream` 端点推送全量配置数据**（现有机制，无需新增代码）
+--- candidata: album-config-encryption [tasks+termos]
+  | # 规格增量：专辑配置加密
+  | ## 新增需求
+  | ### 需求：专辑配置加密触发
+  > - **给定** 专辑 UUID 存在于配置中的 `audio_pkg_uuid` 字段或目录名
+  > - **则** 配置以旧密钥（originalAlbumId）解密、更新 `audio_pkg_uuid` 为新 ID，并使用新 ID 重新加密写回 `core`，而后指示 JSON 随之刷新
+  > Normative: The `/keytone_pkg/apply_signature_config` endpoint SHALL accept albumPath, signatureId, requireAuthorization, contactEmail, contactAdditional, updateSignatureContent, and authorizationUUID 
+  > - **THEN** 返回200状态码和`{ message: "ok", qualificationCode: "<sha256>" }`响应体
+  > - **THEN** 返回400错误和`{ message: "error: 需要授权时必须提供联系邮箱" }`
+  > - **THEN** 返回404错误和`{ message: "error: 签名不存在或已被删除" }`
+  > - **THEN** 返回错误和`{ message: "error: 该签名未获得原始作者授权，无法应用到此专辑" }`
+  > Normative: The signature application process SHALL handle missing image files gracefully by skipping the copy and setting cardImagePath to empty string, log errors for debugging, and ensure partial fa
+--- candidata: export-flow [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: 导出状态机编排
+  | Normative: The composable `useExportSignatureFlow` SHALL 根据专辑状态按顺序驱动签名确认、授权策略、授权门控及签名选择；无论用户是否选择“需要签名”，流程都 MUST 在完成授权策略判断后才进入 `done`，取消任何步骤 MUST 终止本次导出并重置状态。
+  > Normative: The album selector component SHALL display direct export author signature information for albums that have signatures; the selected state display MUST be positioned on the top-right border 
+  > Normative: The AuthRequestDialog component SHALL automatically load signature data with authorization status when opened; the component MUST filter and display only unauthorized signatures to allow us
+  > - **WHEN** AuthRequestDialog 打开（visible=true）
+  > Normative: The system SHALL provide an AuthRequestDialog component that guides users through a 3-step wizard to generate authorization request files; the dialog MUST display only unauthorized signatur
+  > - **WHEN** AuthRequestDialog 打开
+  > - **WHEN** 状态机收到 authRequest 事件
+  > - **WHEN** AuthRequestDialog 发出 done 事件
+  > - **WHEN** AuthRequestDialog 发出 cancel 事件
+--- candidata: keytone-album-editor [PR]
+  | # keytone-album-editor Spec Delta (add-album-sound-selector-search)
+  | ## ADDED Requirements
+  | ### Requirement: 键音专辑关键选择器支持输入搜索
+  > Normative: 系统 SHALL 提供可被前端访问的音频流数据源，用于从当前专辑的音频源文件生成波形；该数据源应当能够通过源文件引用信息定位（例如 sha256 + type）。
+  > - **GIVEN** 前端通过 `messageAudioPackage` 事件接收来自后端的键音包配置数据
+  > Normative: `initData()`、`watch(audioFiles)` 与 SSE 更新 三条路径 SHALL 复用 `keytoneAlbumMappers` 中的纯函数，以确保映射行为一致、避免重复代码与行为漂移。
+  > Normative: 联动声效步骤（Step4）的 UI 模板 SHALL 从父组件中拆出到 `steps/StepLinkageEffects.vue`，并通过 inject 使用父组件 provide 的 Context，以降低父组件模板复杂度且保持行为不变。
+  > Normative: 对于同一 `sha256` 的音频源文件，系统在新增别名时 SHALL 生成唯一 UUID 作为 `name_id`；删除旧别名后，后续新增 SHALL NOT 复用历史 `name_id`。
+  > - **GIVEN** 用户曾导入某音频文件（`sha256=A`）并产生别名 `name_id=U1`
+  > - **WHEN** 用户再次导入同一音频文件（同 `sha256=A`）
+  > - **GIVEN** 用户连续多次导入同一 `sha256` 文件
+
+===== P271 | localstack/lstk PR #367 | capacidade do par: terraform-proxy
+PR: Add global --json flag to `lstk`, so commands can support JSON output
+arquivos ligados: cmd/terraform.go
+--- linhas alteradas (3; mostrando até 40)
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+--- candidata: cdk-proxy [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CDK CLI proxy command
+  | The system SHALL provide an `lstk cdk` command that forwards all of its arguments to the real AWS CDK CLI (`cdk`) and, before invoking it, configures the subprocess environment to target the running L
+--- candidata: json-flag [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Global --json flag on built-in commands
+  | The root command SHALL register a persistent `--json` boolean flag, alongside `--non-interactive`, whose resolved value SHALL be exposed to every built-in command via `env.Env`.
+
+===== P272 | Hedgehogues/awesome-claude PR #2 | capacidade do par: sdd-archive-cases
+PR: Release 0.6.1
+arquivos ligados: skills/sdd/scripts/_sdd_yaml.py;skills/sdd/scripts/state.py
+--- linhas alteradas (54; mostrando até 40)
++    _sdd_yaml.py merge-state <change-dir>
++    _sdd_yaml.py update-index-description <index-yaml-path> <capability> <description>
+-    return load(change_dir).get("creates") or []
++    creates = load(change_dir).get("creates") or []
++    return [entry if isinstance(entry, str) else entry.get("name", "") for entry in creates]
++def read_creates_with_meta(change_dir: str) -> list[dict]:
++    """Return creates entries normalized to [{name: str, title: str | None}].
++    Supports both string entries ("name") and object entries ({name, title}).
++    """
++    creates = load(change_dir).get("creates") or []
++    result = []
++    for entry in creates:
++        if isinstance(entry, str):
++            result.append({"name": entry, "title": None})
++        elif isinstance(entry, dict):
++            result.append({"name": entry.get("name", ""), "title": entry.get("title")})
++    return result
++def merge_state(change_dir: str) -> None:
++    state_path = os.path.join(change_dir, ".sdd-state.yaml")
++    if not os.path.exists(state_path):
++        return
++    with open(state_path, encoding="utf-8") as f:
++        state = yaml.safe_load(f) or {}
++    data = load(change_dir)
++    if not data:
++        return
++    for field in ("stage", "last_step_at"):
++        if field in state:
++            data[field] = state[field]
++    save(change_dir, data)
++def cmd_merge_state(change_dir: str) -> int:
++    if not os.path.exists(_path(change_dir)):
++        print(f"ERROR: .sdd.yaml not found in {change_dir}", file=sys.stderr)
++        return 2
++    merge_state(change_dir)
++    return 0
++    if cmd == "merge-state" and len(sys.argv) == 3:
++        return cmd_merge_state(sys.argv[2])
++    state.py is-final <stage>
++FIELD_VALIDATORS = {
+--- candidata: sdd-state [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: State-file location
+  | `.sdd-state.yaml` SHALL располагаться в директории change'а: `openspec/changes/<change-name>/.sdd-state.yaml` — рядом с `proposal.md`, `tasks.md`, `.sdd.yaml`. Файл MUST быть один на change.
+  > `.sdd-state.yaml` SHALL располагаться в директории change'а: `openspec/changes/<change-name>/.sdd-state.yaml` — рядом с `proposal.md`, `tasks.md`, `.sdd.yaml`. Файл MUST быть один на change.
+  > #### Scenario: Один change — один state-file
+  > - **WHEN** пользователь работает с change `foo`
+  > - **THEN** state-file для него находится только в `openspec/changes/foo/.sdd-state.yaml`; глобальных или сторонних реестров нет
+  > - **WHEN** sdd-скилл создал или обновил `.sdd-state.yaml` в активном change'е
+  > `.sdd-state.yaml` SHALL содержать минимум поля: `stage` (одно из: `proposed | contradiction-ok | contradiction-failed | applying | verifying | verify-ok | verify-failed | archiving | archived | archiv
+  > Дополнительные поля по контексту: `verify_result` (`{total, failed, failed_tasks}` для verifying-стадий), `contradiction_last_run`, `contradiction_hard_issues`.
+  > - **THEN** файл содержит как минимум `stage`, `last_step_at`, `owner`; парсится через `yaml.safe_load` без ошибок
+--- candidata: sdd-archive [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Inline spec-verification
+  | `/sdd:archive` SHALL выполнять L1/L2/L3 верификацию реализации против live `spec.md` после merge specs в `openspec/specs/`, до копирования `test-plan.md` и удаления `.sdd-state.yaml`. Отдельная команд
+  > `/sdd:archive` SHALL выполнять L1/L2/L3 верификацию реализации против live `spec.md` после merge specs в `openspec/specs/`, до копирования `test-plan.md` и удаления `.sdd-state.yaml`. Отдельная команд
+  > - **WHEN** пользователь вызывает `/sdd:archive <change-name>` и все Requirements из live spec'ов прошли L1+L2+L3
+  > - **THEN** скилл архивирует change, прогоняет inline spec-verify, копирует `test-plan.md` в `openspec/specs/<cap>/`, обновляет `.sdd-state.yaml` со `stage: archived`, удаляет `.sdd-state.yaml`
+  > #### Scenario: Spec-verify fail после merge specs
+  > - **WHEN** specs уже merged в `openspec/specs/`, но verify обнаружил `missing` или `partial` Requirements
+  > - **THEN** скилл обновляет `.sdd-state.yaml` со `stage: archive-failed`, выводит red-banner с двумя опциями (`git restore openspec/specs/` или новый change через `/sdd:propose`), MUST NOT удалять `.sd
+  > При неудачном spec-verify внутри `/sdd:archive` (specs уже merged) скилл SHALL вывести выделенный red-banner:
+  > 🔴 OR: start a new change via /sdd:propose
+--- candidata: structured-apply-output [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Three SDD workflow skills produce a fixed-order user-facing report
+  | The skills `sdd:apply`, `sdd:contradiction`, and `sdd:archive` SHALL each produce a final user-facing report whose blocks appear in this exact canonical order, top-to-bottom:
+  > No content SHALL appear below `## Вопросы к пользователю`. The block order is identical across the three skills, with the exception that `## Как проверить` exists only in `sdd:apply`.
+  > - **WHEN** `sdd:apply` finishes implementation for a change with non-empty `.sdd.yaml.creates`
+  > - **THEN** `## Технические статусы` lists facts only (file paths, test results, exit codes, index.yaml updates), no prose
+  > - **THEN** `## Реализованные фичи` lists each capability from `.sdd.yaml.creates` with status `done` or `partial`
+  > - **WHEN** `sdd:contradiction` finishes its detector phases for a change directory
+  > - **WHEN** `sdd:archive` finishes archiving a completed change with non-empty `.sdd.yaml.creates`
+  > - **THEN** `## Архивированные артефакты` lists each archived capability from `.sdd.yaml.creates` with paths to `openspec/specs/<capability>/spec.md` and `openspec/specs/<capability>/test-plan.md`
+  > The `sdd:apply` skill SHALL render a mandatory block `## Как проверить` immediately after `## Реализованные фичи` and before any optional block. The block SHALL provide concrete verification guidance 
+--- candidata: archive-merges-into-support [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: sdd:archive верифицирует merges-into capabilities
+  | `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > ### Requirement: sdd:archive верифицирует merges-into capabilities
+  > `sdd:archive` SHALL читать поле `merges-into` из `<change-dir>/.sdd.yaml` в шаге 7 и запускать L1/L2/L3 верификацию для каждой capability из этого поля, симметрично обработке `creates`. Текст шага 7 S
+  > #### Scenario: Change с непустым merges-into
+  > - **WHEN** `.sdd.yaml.merges-into` содержит одну или более capabilities
+  > - **THEN** для каждой capability из `merges-into` выполняется L1/L2/L3 верификация против `openspec/specs/<cap>/spec.md`
+  > - **THEN** вердикт (passed / gaps_found / human_needed) учитывается наравне с `creates`
+  > #### Scenario: Verify-fail для merges-into
+  > - **WHEN** L1/L2/L3 для capability из `merges-into` возвращает `gaps_found`
+--- candidata: sdd-ownership [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Owner поле в .sdd.yaml
+  | `.sdd.yaml` каждого change'а SHALL содержать поле `owner:` со строковым значением (email) — единственный владелец change'а. MUST быть инициализировано при `/sdd:propose` через identity-resolver.
+  > `.sdd.yaml` каждого change'а SHALL содержать поле `owner:` со строковым значением (email) — единственный владелец change'а. MUST быть инициализировано при `/sdd:propose` через identity-resolver.
+  > - **THEN** `identity.py` выводит ошибку на stderr и завершается с ненулевым кодом
+  > Каждый sdd-скилл, изменяющий состояние change'а (`/sdd:contradiction`, `/sdd:apply`, `/sdd:archive`), SHALL вызывать `identity.py` в начале выполнения и сравнивать результат с `owner:` из `.sdd.yaml`.
+  > #### Scenario: Своя change
+  > #### Scenario: Чужая change, согласие на перезапись
+  > #### Scenario: Чужая change, отказ от перезаписи
+  > - **THEN** скилл останавливается с сообщением «работа над чужим change'ем отклонена»; ничего не меняет
+  > ### Requirement: Owner живёт только в change-уровне

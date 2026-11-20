@@ -1,0 +1,455 @@
+===== P149 | travishathaway/osmprj PR #8 | capacidade do par: color-output
+PR: Add limit to concurrent downloads, implement processing pipeline
+arquivos ligados: src/commands/sync.rs;src/output.rs
+--- linhas alteradas (799; mostrando até 40)
++use tokio::sync::Semaphore;
++/// Return type for an import task: source name plus an optional post-process warning.
++type ImportResult = Result<(String, Option<OsmprjError>), (String, OsmprjError)>;
++/// Issue a HEAD request to determine the file size before downloading.
++/// Returns 0 on failure or if `Content-Length` is absent — those sources
++/// sort to the back of the download queue without causing a sync failure.
++async fn fetch_content_length(client: &reqwest::Client, url: &str) -> u64 {
++    client
++        .head(url)
++        .send()
++        .await
++        .ok()
++        .and_then(|r| r.content_length())
++        .unwrap_or(0)
++}
++/// Sort a list of `(name, url, size)` tuples largest-first by `size`.
++/// Uses a stable sort so equal-sized sources preserve their original order.
++fn sort_sources_by_size(sources: &mut [(String, String, u64)]) {
++    sources.sort_by_key(|b| std::cmp::Reverse(b.2));
++}
+-    while let Some(chunk) = stream
+-        .chunk()
+-        .await
+-        .map_err(|e| OsmprjError::DownloadFailed {
+-            url: url.to_string(),
+-            message: e.to_string(),
+-        })?
+-    {
+-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++    let stream_result = async {
++        while let Some(chunk) = stream
++            .chunk()
+-            .map_err(OsmprjError::Io)?;
+-        bar.inc(chunk.len() as u64);
++            .map_err(|e| OsmprjError::DownloadFailed {
++                url: url.to_string(),
++                message: e.to_string(),
++            })?
++        {
++            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+--- candidata: sync-command [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Sync accepts optional source filter
+  | `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > ### Requirement: Sync accepts optional source filter
+  > `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > #### Scenario: Sync all sources
+  > - **THEN** all sources defined in `osmprj.toml` are downloaded and imported
+  > #### Scenario: Sync specific sources
+  > - **WHEN** user runs `osmprj sync albania us-alabama`
+  > - **THEN** only the `albania` and `us-alabama` sources are processed
+  > #### Scenario: Unknown source name
+--- candidata: pipelined-sync [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Import begins immediately when download completes
+  | The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > ### Requirement: Import begins immediately when download completes
+  > The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > #### Scenario: Small source imports while large source downloads
+  > - **WHEN** source A (100 MB) finishes downloading while source B (1 GB) is still downloading
+  > - **THEN** source A's import begins immediately, running concurrently with source B's download
+  > #### Scenario: Import semaphore blocks when at capacity
+  > - **WHEN** `max_concurrent_imports = 1` and an import is already running
+  > - **THEN** the next completed download's import waits until the running import finishes before starting
+--- candidata: sync-concurrency-controls [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Concurrent download limit is configurable
+  | The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > ### Requirement: Concurrent download limit is configurable
+  > The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > #### Scenario: Default concurrent downloads
+  > - **WHEN** `osmprj.toml` has no `max_concurrent_downloads` field
+  > - **THEN** at most 3 PBF downloads run simultaneously
+  > #### Scenario: Custom concurrent downloads
+  > - **WHEN** `osmprj.toml` sets `max_concurrent_downloads = 2`
+  > - **THEN** at most 2 PBF downloads run simultaneously
+--- candidata: test-http-server [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: PBF fixture cache
+  | The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > `download.geofabrik.de` are made during test runs after the first setup. The cache location SHALL
+  > On first use the fixture SHALL be downloaded from `download.geofabrik.de` and a `.md5` sidecar
+  > SHALL be computed and stored alongside it.
+  > #### Scenario: Cache populated on first use
+  > - **THEN** the `pbf_fixture_cache` fixture downloads the file from Geofabrik and saves it to that path
+  > - **WHEN** `tests/fixtures/pbf/europe/monaco-latest.osm.pbf` already exists
+  > - **THEN** no download is attempted and the existing file is used
+--- candidata: osm2pgsql-tuner [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Tuner computes cache size from RAM and PBF size
+  | The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > #### Scenario: Cache capped by available RAM
+  > The tuner SHALL set `--flat-nodes=<data_dir>/<source_name>.nodes` and `--cache=0` when PBF size is ≥ 8.0 GB and `ssd=true`, or when PBF size is ≥ 30.0 GB regardless of storage type.
+  > Every generated osm2pgsql command SHALL include `--slim` and `--create`. `--drop` SHALL never be included. This ensures middle tables are retained for subsequent replication updates.
+  > - **WHEN** tuner builds a command for any source
+  > - **THEN** the command contains `--slim` and `--create` and does not contain `--drop`
+  > ### Requirement: Database and schema flags always present
+  > The generated command SHALL always include `--database=<database_url>` and `--schema=<effective_schema>`.
+
+===== P150 | memorysaver/looplia-core PR #47 | capacidade do par: workflow-execution
+PR: feat: skill auto-discovery system (v0.8.0)
+arquivos ligados: apps/cli/src/commands/run.ts;packages/provider/src/claude-agent-sdk/streaming/interactive-query-executor.ts;packages/provider/src/claude-agent-sdk/streaming/query-executor.ts
+--- linhas alteradas (10; mostrando até 40)
+-  return resolve(homedir(), ".looplia");
++  return process.env.LOOPLIA_HOME ?? resolve(homedir(), ".looplia");
+-import { loopliaSystemPrompt } from "./prompts/looplia-system";
++import { getLoopliaSystemPrompt } from "./prompts/looplia-system";
+-          append: `${loopliaSystemPrompt}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, reso
++          append: `${getLoopliaSystemPrompt(loopliaHome)}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user 
+-import { loopliaSystemPrompt } from "./prompts/looplia-system";
++import { getLoopliaSystemPrompt } from "./prompts/looplia-system";
+-          append: `${loopliaSystemPrompt}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, reso
++          append: `${getLoopliaSystemPrompt(loopliaHome)}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user 
+--- candidata: skill-search-command [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Search skills.sh registry
+  | The CLI SHALL provide a `looplia skill search <query>` subcommand that searches the skills.sh registry for skills matching the query.
+  > The CLI SHALL provide a `looplia skill search <query>` subcommand that searches the skills.sh registry for skills matching the query.
+  > - **WHEN** user runs `looplia skill search "pdf"`
+  > - **THEN** system searches skills.sh registry using `npx skills find "pdf"`
+  > - **THEN** system displays matching skills in a formatted table
+  > - **WHEN** user runs `looplia skill search "nonexistent-skill-xyz"`
+  > - **THEN** system displays "No skills found matching your query."
+  > - **WHEN** user runs `looplia skill search` without a query
+  > - **THEN** system displays error "Error: Search query required"
+--- candidata: skill-architecture [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Core Plugin Orchestration Scope
+  | The looplia-core plugin SHALL contain only workflow orchestration skills that are essential for the workflow engine operation. Domain-specific capabilities (such as web search, content analysis, code 
+  > The looplia-core plugin SHALL contain only workflow orchestration skills that are essential for the workflow engine operation. Domain-specific capabilities (such as web search, content analysis, code 
+  > - **WHEN** inspecting the looplia-core plugin skills directory
+  > - **THEN** they SHALL install the `search-and-research` plugin from the `looplia-skills` registry
+  > Domain-specific skills SHALL be distributed via external repositories (e.g., `github.com/memorysaver/looplia-skills`) and discovered through the skill registry system.
+  > - **WHEN** a user runs `looplia registry sync`
+  > - **THEN** skills from configured registry sources (including `looplia-skills`) are compiled into the skill catalog
+  > - **AND** domain skills can be installed with `looplia skill add <name>`
+  > #### Scenario: Default registry includes looplia-skills
+--- candidata: build-validation [tasks+termos]
+  | # Build Validation Capability
+  | Validation hooks for the build command that ensure generated workflows have valid YAML frontmatter and well-formed structure.
+  | ## ADDED Requirements
+  > - **GIVEN** the agent writes a file to `~/.looplia/workflows/*.md`
+  > - **GIVEN** the agent writes a file with invalid YAML to `~/.looplia/workflows/*.md`
+  > - **GIVEN** file path `~/.looplia/workflows/my-workflow.md`
+  > - **GIVEN** file path `/Users/user/.looplia/workflows/test.md`
+  > #### Scenario: Reject non-workflow paths
+  > - **GIVEN** file paths like `sandbox/outputs/result.json` or `plugins/skill/SKILL.md`
+--- candidata: skill-discovery [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Build-time skill discovery
+  | The system SHALL search for relevant skills during `looplia build` based on the workflow description provided by the user.
+  > The system SHALL search for relevant skills during `looplia build` based on the workflow description provided by the user.
+  > - **WHEN** user runs `looplia build "analyze PDFs and create Excel reports"`
+  > - **THEN** system searches skills.sh registry using the description as query
+  > - **WHEN** user runs `looplia build` with a description
+  > - **THEN** system logs "No additional skills found, using local catalog"
+  > - **WHEN** user runs `looplia build "..." --skip-research`
+  > - **THEN** system skips skill discovery phase
+  > The system SHALL maintain an `auto-discovery-plugin` at `~/.looplia/plugins/auto-discovery-plugin/` with proper Claude plugin structure.
+
+===== P151 | codeready-toolchain/claw-operator PR #158 | capacidade do par: standard-library-testing
+PR: feat: skip device-pairing app deployment when `disableDevicePairing` is true
+arquivos ligados: internal/controller/suite_test.go
+--- linhas alteradas (6; mostrando até 40)
++// setCoreDeploymentsAvailable marks claw and claw-proxy Deployments as available (no device-pairing).
++func setCoreDeploymentsAvailable(t *testing.T, ctx context.Context, instanceName, namespace string) { //nolint:unparam
++	t.Helper()
++	setDeploymentAvailable(t, ctx, getClawDeploymentName(instanceName), namespace)
++	setDeploymentAvailable(t, ctx, getProxyDeploymentName(instanceName), namespace)
++}
+--- candidata: status-conditions [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Ready condition indicates overall readiness
+  | The controller SHALL maintain a Ready condition type to indicate whether the Claw instance is ready for use. When device pairing is disabled, the Ready condition SHALL NOT depend on the device-pairing
+  > The controller SHALL maintain a Ready condition type to indicate whether the Claw instance is ready for use. When device pairing is disabled, the Ready condition SHALL NOT depend on the device-pairing
+  > #### Scenario: Ready condition set to True when ready (device pairing enabled)
+  > - **WHEN** the claw, proxy, and device-pairing Deployments all have Available=True status
+  > #### Scenario: Ready condition set to True when ready (device pairing disabled)
+  > - **WHEN** `shouldDisableDevicePairing()` returns `true` and the claw and proxy Deployments have Available=True status
+  > - **THEN** the controller SHALL NOT check the device-pairing Deployment status
+  > The controller SHALL read the Available condition from managed Deployments to determine readiness. The set of managed Deployments SHALL vary based on whether device pairing is enabled.
+  > #### Scenario: Deployments checked when device pairing enabled
+--- candidata: optional-device-pairing-app-deployment [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Device pairing resources are skipped when disabled
+  | The controller SHALL NOT build, render, or apply any `claw-device-pairing` Kustomize component resources (Deployment, Service, ServiceAccount, ClusterRole, RoleBinding, Route) when `shouldDisableDevic
+  > ### Requirement: Device pairing resources are skipped when disabled
+  > The controller SHALL NOT build, render, or apply any `claw-device-pairing` Kustomize component resources (Deployment, Service, ServiceAccount, ClusterRole, RoleBinding, Route) when `shouldDisableDevic
+  > - **THEN** the controller SHALL NOT create a Deployment named `{instance}-device-pairing`
+  > - **THEN** the controller SHALL NOT create a Service named `{instance}-device-pairing`
+  > - **THEN** the controller SHALL NOT create a ServiceAccount named `{instance}-device-pairing`
+  > - **THEN** the controller SHALL NOT create a Route named `{instance}-device-pairing`
+  > - **THEN** the Claw instance SHALL reach `Ready=True` without the device-pairing deployment
+  > - **THEN** the controller SHALL create all device-pairing resources as normal
+--- candidata: device-pairing-deployment [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Device pairing manifests exist as embedded Kustomize directory
+  | The system SHALL include a `claw-device-pairing` directory under `internal/assets/manifests/` containing a `kustomization.yaml` and resource YAML files for ServiceAccount, Deployment, Service, and Rou
+  > ### Requirement: Device pairing manifests exist as embedded Kustomize directory
+  > The system SHALL include a `claw-device-pairing` directory under `internal/assets/manifests/` containing a `kustomization.yaml` and resource YAML files for ServiceAccount, Deployment, Service, and Rou
+  > - **WHEN** examining `internal/assets/manifests/claw-device-pairing/`
+  > - **THEN** it SHALL list all four resource files and apply the `app.kubernetes.io/name: claw-device-pairing` label via the Kustomize `labels` directive
+  > ### Requirement: Device pairing resources use CLAW_INSTANCE_NAME naming
+  > All device-pairing resource names SHALL use the `CLAW_INSTANCE_NAME-device-pairing` template, which is replaced with the actual Claw CR name at build time by the existing `bytes.ReplaceAll` in `buildK
+  > - **THEN** the ServiceAccount SHALL be named `instance-device-pairing`
+  > - **THEN** the Deployment SHALL be named `instance-device-pairing`
+--- candidata: unified-kustomize-controller [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Controller watches OpenClaw resources
+  | The OpenClawReconciler controller SHALL watch OpenClaw custom resources in all namespaces and trigger reconciliation when changes occur.
+  > The OpenClawReconciler controller SHALL watch OpenClaw custom resources in all namespaces and trigger reconciliation when changes occur.
+  > - **THEN** the controller reconciliation loop is triggered with the resource name and namespace
+  > ### Requirement: Controller sets namespace on all resources
+  > The controller SHALL set the namespace on all built resources to match the OpenClaw instance's namespace.
+  > - **THEN** the controller iterates each resource and sets namespace to instance.Namespace
+  > - **THEN** all resources are created in the same namespace as the OpenClaw CR
+  > - **THEN** the controller logs the OpenClaw name and namespace being reconciled
+  > The controller SHALL use the Kustomize API to build manifests in-memory from two embedded manifest subdirectories: one for claw resources and one for claw-proxy resources.
+--- candidata: claw-controller [termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Controller builds kustomized objects from embedded manifests
+  | The system SHALL build kustomized objects from three embedded manifest directories: `claw`, `claw-proxy`, and `claw-device-pairing`. The `buildKustomizedObjects()` function SHALL load all three groups
+  > The system SHALL build kustomized objects from three embedded manifest directories: `claw`, `claw-proxy`, and `claw-device-pairing`. The `buildKustomizedObjects()` function SHALL load all three groups
+  > #### Scenario: Device pairing manifests are loaded
+  > - **THEN** it SHALL load manifest files from `manifests/claw-device-pairing/` alongside `manifests/claw/` and `manifests/claw-proxy/`
+  > #### Scenario: CLAW_INSTANCE_NAME replacement applies to device-pairing manifests
+  > - **THEN** all `CLAW_INSTANCE_NAME` occurrences in device-pairing manifests SHALL be replaced with "instance"
+  > - **THEN** the returned objects SHALL include resources from all three directories: claw, claw-proxy, and claw-device-pairing
+  > ### Requirement: Route host is injected into device-pairing Route
+  > The controller SHALL inject the resolved Claw Route host into the device-pairing Route's `.spec.host` field during reconciliation, using the same host obtained from `getRouteURL()`.
+
+===== P152 | mckinsey/agents-at-scale-ark PR #2066 | capacidade do par: query-extension-docs
+PR: feat(api): implement K8s user impersonation for SSO-authenticated requests
+arquivos ligados: lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/client.py
+--- linhas alteradas (20; mostrando até 40)
++from ark_sdk.impersonation import ImpersonationConfig
+-def get_client(namespace: Optional[str], version: str):
+-    # If namespace is None, get it from context
++def _build_headers(impersonation: Optional[ImpersonationConfig] = None) -> Optional[dict]:
++    if impersonation is None:
++        return None
++    headers = {"Impersonate-User": impersonation.username}
++    if impersonation.groups:
++        headers["Impersonate-Group"] = ",".join(impersonation.groups)
++    return headers
++def get_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
+-    return clazz(namespace)
++    return clazz(namespace, default_headers=_build_headers(impersonation))
+-async def with_ark_client(namespace: Optional[str], version: str):
++async def with_ark_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
++        impersonation: Optional impersonation config for K8s user identity
+-    ark_client = get_client(namespace, version)
+-    yield ark_client
++    ark_client = get_client(namespace, version, impersonation)
++    yield ark_client
+--- candidata: api-impersonation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: JWT claim extraction and request state propagation
+  | The auth middleware SHALL capture the decoded JWT payload returned by `TokenValidator.validate_token()` and store user identity on `request.state.user_identity` as a structured object containing `user
+  > The auth middleware SHALL capture the decoded JWT payload returned by `TokenValidator.validate_token()` and store user identity on `request.state.user_identity` as a structured object containing `user
+  > The username SHALL be extracted from the claim specified by `IMPERSONATION_USERNAME_CLAIM` (default: `email`). The groups SHALL be extracted from the claim specified by `IMPERSONATION_GROUPS_CLAIM` (d
+  > Claims SHALL be extracted regardless of whether impersonation is enabled, to support future authorization features.
+  > #### Scenario: JWT with email and groups claims
+  > - **WHEN** a request arrives with a valid JWT containing `{"email": "jane@acme.com", "groups": ["team-a", "admins"]}`
+  > - **AND** `IMPERSONATION_USERNAME_CLAIM=email` and `IMPERSONATION_GROUPS_CLAIM=groups`
+  > - **THEN** `request.state.user_identity.username` is `"jane@acme.com"`
+  > - **AND** `request.state.user_identity.groups` is `["team-a", "admins"]`
+--- candidata: ark-api-rbac [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: ark-api chart RBAC configuration
+  | The ark-api Helm chart SHALL create only namespace-scoped RBAC resources (`Role` + `RoleBinding`). The chart SHALL NOT include any `ClusterRole`, `ClusterRoleBinding`, or toggle for cluster-wide permi
+  > The ark-api Helm chart SHALL create only namespace-scoped RBAC resources (`Role` + `RoleBinding`). The chart SHALL NOT include any `ClusterRole`, `ClusterRoleBinding`, or toggle for cluster-wide permi
+  > - **THEN** only a namespace-scoped `Role` and `RoleBinding` are created
+  > The `GET /api/v1/namespaces` endpoint SHALL return a list of namespaces the service account can see. When the service account lacks cluster-level permission to list namespaces, the endpoint SHALL retu
+  > #### Scenario: Service account with namespace list permission
+  > - **WHEN** the service account has a ClusterRole granting `list` on `namespaces`
+  > - **AND** a client calls `GET /api/v1/namespaces`
+  > - **THEN** the endpoint returns all namespaces the service account can list
+  > #### Scenario: Service account without namespace list permission
+--- candidata: mcp-server-resolution [tasks]
+  | # MCP Server Resolution for Named Executors
+  | ## ADDED Requirements
+  | ### Requirement: MCPServerConfig type on ExecutionEngineRequest
+  > Each `MCPServerConfig` SHALL contain `name`, `url`, `transport`, `timeout`, `headers`, and `tools` fields. All values SHALL be fully resolved — no secret references, configmap references, or service r
+  > #### Scenario: MCPServer with secret-based headers
+  > - **WHEN** an MCPServer CRD has headers referencing Kubernetes secrets
+  > - **THEN** the `MCPServerConfig.headers` SHALL contain the resolved plaintext values
+  > If an MCPServer CRD cannot be found or its address/headers cannot be resolved, the server SHALL be skipped with a warning log. Other servers SHALL still be included.
+  > Each `MCPServerConfig` SHALL contain `name`, `url`, `transport`, `timeout`, `headers`, and `tools` fields. All values SHALL be fully resolved — no secret references, configmap references, or service r
+  > #### Scenario: MCPServer with secret-based headers
+  > - **WHEN** an MCPServer CRD has headers referencing Kubernetes secrets
+--- candidata: mcp-auth-ark-api-orchestration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: ark-api exposes POST /auth/start to initiate an authorization flow
+  | ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > | 404 | MCPServer not found in the resolved namespace | this requirement (scenario below) |
+  > - **WHEN** `POST /api/v1/mcp-servers/{name}/auth/start` is called with `{name}` referencing a non-existent MCPServer in the resolved namespace
+  > The four auth endpoints (`auth/start`, `auth/callback`, `auth/status`, `auth/logout`) SHALL NOT introduce a new inbound-authentication contract. They inherit the same trust boundary as every other rou
+  > - ark-api SHALL create the Secret in the resolved namespace with `type: Opaque`, an empty `data` block, and the label `ark.mckinsey.com/mcpserver: <mcp-server-name>`. If a Secret with the default name
+  > - **THEN** ark-api SHALL create a Secret named `<name>-oauth` in the same namespace with `type: Opaque`, the `ark.mckinsey.com/mcpserver: <name>` label, and an empty `data` block
+  > - **AND** a Secret named `<name>-oauth` already exists in the same namespace with the `ark.mckinsey.com/mcpserver: <name>` label (possibly empty `data`, possibly partial DCR credentials from a prior f
+  > - **AND** a Secret named `cloudflare-oauth` exists in the same namespace WITHOUT the `ark.mckinsey.com/mcpserver: cloudflare` label (used in the namespace for an unrelated purpose)
+
+===== P153 | yazelin/ching-tech-os PR #3 | capacidade do par: text-viewer
+PR: feat: 新增專案發包期程管理、附件/連結 MCP 工具
+arquivos ligados: frontend/css/project-management.css
+--- linhas alteradas (147; mostrando até 40)
++/* ==========================================================================
++   Deliveries (發包/交貨管理)
++   ========================================================================== */
++.pm-deliveries-list {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++.pm-delivery-card {
++  display: flex;
++  align-items: flex-start;
++  gap: 12px;
++  padding: 12px;
++  background: var(--bg-surface-dark);
++  border-radius: 8px;
++  border: 1px solid var(--border-subtle);
++  transition: all 0.15s;
++}
++.pm-delivery-card:hover {
++  border-color: var(--border-light);
++}
++/* 狀態指示條 */
++.pm-delivery-status-indicator {
++  width: 4px;
++  height: 100%;
++  min-height: 60px;
++  border-radius: 2px;
++  flex-shrink: 0;
++  align-self: stretch;
++}
++.pm-delivery-status-indicator.pending {
++  background: var(--status-pending-color);
++}
++.pm-delivery-status-indicator.ordered {
++  background: var(--color-primary);
++}
++.pm-delivery-status-indicator.delivered {
++  background: var(--color-warning);
++}
++.pm-delivery-status-indicator.completed {
+--- candidata: mcp-tools [PR+termos]
+  | # mcp-tools Spec Delta
+  | ## ADDED Requirements
+  | ### Requirement: 搜尋 NAS 共享檔案 MCP 工具
+  > #### Scenario: add_delivery_schedule 工具
+  > - **WHEN** AI 呼叫 `add_delivery_schedule` 工具
+  > - `vendor`：廠商名稱（必填）
+  > - `quantity`：數量與單位（選填，如「2 台」）
+  > - `expected_delivery_date`：預計交貨日（選填，格式 YYYY-MM-DD）
+  > - `status`：狀態（選填，預設 pending）
+  > - `notes`：備註（選填）
+  > #### Scenario: update_delivery_schedule 工具
+--- candidata: project-management [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 專案管理視窗佈局
+  | 專案管理應用程式 SHALL 提供雙欄式介面佈局與標籤頁切換。
+  > - **WHEN** 前端請求 `GET /api/projects?status={status}&q={keyword}`
+  > - **AND** 包含欄位：id、name、description、status、start_date、end_date、created_at、updated_at、created_by
+  > - **AND** 包含欄位：id、project_id、name、milestone_type、planned_date、actual_date、status、notes、sort_order、created_at、updated_at
+  > - **WHEN** 發包狀態為「待發包」（pending）
+  > - **WHEN** 發包狀態為「已發包」（ordered）
+  > - **WHEN** 發包狀態為「已到貨」（delivered）
+  > - **WHEN** 發包狀態為「已完成」（completed）
+  > - **WHEN** 前端請求 `GET /api/projects/{id}/deliveries`
+--- candidata: mobile-app-layout [PR] (sem texto no censo)
+--- candidata: design-system [termos]
+  | ## ADDED Requirements
+  | ### Requirement: CSS Design Token System
+  | 系統 SHALL 在 `main.css` 中定義完整的 CSS 變數（Design Tokens），涵蓋所有 UI 顏色。
+  > - **THEN** 可使用 `--tag-color-*` 系列變數
+  > - **THEN** 可使用 `--modal-bg` 和 `--modal-border` 變數
+  > - **OR** 使用已定義的 `--*-bg-subtle` 系列變數
+  > - **WHEN** 系統設定 `data-theme="light"` 於 html 元素
+  > - **AND** 透過 `--color-primary`、`--color-background`、`--color-accent` 變數引用
+  > - **AND** 透過 `--color-success`、`--color-warning`、`--color-error` 變數引用
+  > The system SHALL use industry-standard CSS variable naming conventions for text colors.
+  > #### Scenario: Text color variables use --text-* prefix
+
+===== P154 | opencue/gitguardex PR #647 | capacidade do par: readme-multi-agent-mermaid
+PR: fix(release): auto-bump direct npm publish versions
+arquivos ligados: test/metadata.test.js
+--- linhas alteradas (10; mostrando até 40)
++test('package publish lifecycle bumps already-published direct npm publish versions', () => {
++  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
++  const scriptPath = path.join(repoRoot, 'scripts', 'prepublish-bump-version.js');
++  const scriptSource = fs.readFileSync(scriptPath, 'utf8');
++  assert.equal(pkg.scripts?.prepublishOnly, 'node scripts/prepublish-bump-version.js');
++  assert.match(pkg.files.join('\n'), /^scripts\/prepublish-bump-version\.js$/m);
++  assert.match(scriptSource, /npm view/);
++  assert.match(scriptSource, /GITHUB_ACTIONS/);
++  assert.match(scriptSource, /package-lock\.json/);
++});
+--- candidata: release-workflow [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Direct npm publish auto-bumps already-published versions
+  | Direct maintainer `npm publish` SHALL check whether the current package version is already present on npm and SHALL bump package release metadata to the next unpublished patch version before publish c
+  > ### Requirement: Direct npm publish auto-bumps already-published versions
+  > Direct maintainer `npm publish` SHALL check whether the current package version is already present on npm and SHALL bump package release metadata to the next unpublished patch version before publish c
+  > #### Scenario: already-published direct publish version
+  > - **GIVEN** a maintainer runs `npm publish` from the Guardex package checkout
+  > - **AND** the current `package.json` version already exists on npm
+  > - **WHEN** the prepublish lifecycle runs
+  > - **THEN** `package.json` SHALL be updated to the next unpublished patch version
+  > - **AND** `package-lock.json` root package metadata SHALL be updated to the same version
+--- candidata: release-version-bump [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: release version bumps stay publishable and documented
+  | The release workflow SHALL advance package metadata to a publishable version and record the matching release notes in the same change.
+  > ### Requirement: release version bumps stay publishable and documented
+  > The release workflow SHALL advance package metadata to a publishable version and record the matching release notes in the same change.
+  > #### Scenario: patch release prep for npm publish
+  > - **GIVEN** the published npm version for `@imdeadpool/guardex` is `7.0.6`
+  > - **WHEN** the repo prepares the next publishable release
+  > - **THEN** `package.json` SHALL declare version `7.0.7`
+  > - **AND** the root package entry in `package-lock.json` SHALL also declare version `7.0.7`
+  > ### Requirement: publishable release bumps stay documented
+--- candidata: how-it-works-nextjs-frontend [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: how-it-works-nextjs-frontend behavior
+  | The system SHALL provide a standalone Next.js frontend under `frontend/` that renders a "How it works" demo layout for GuardeX.
+  > - **AND** the page includes top mode pills and bottom step controls matching the workflow narrative.
+  > - **AND** package scripts support local development (`dev`, `build`, `start`, `lint`).
+  > - **AND** the page includes top mode pills and bottom step controls matching the workflow narrative.
+  > - **AND** package scripts support local development (`dev`, `build`, `start`, `lint`).
+--- candidata: cli-doctor-foundations [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Typed protected-main doctor sandbox lifecycle
+  | The system SHALL keep the protected-main `gx doctor` sandbox path behaviorally equivalent while moving the lifecycle sequencing out of `src/cli/main.js` and into a dedicated doctor module.
+  > ### Requirement: Typed protected-main doctor sandbox lifecycle
+  > The system SHALL keep the protected-main `gx doctor` sandbox path behaviorally equivalent while moving the lifecycle sequencing out of `src/cli/main.js` and into a dedicated doctor module.
+  > #### Scenario: Protected-main doctor lifecycle is extracted without behavior drift
+  > - **THEN** `src/cli/main.js` delegates that lifecycle to `src/doctor/index.js`
+  > ### Requirement: Typed protected-main doctor sandbox lifecycle
+  > ### Requirement: Typed protected-main doctor sandbox lifecycle
+  > ### Requirement: Typed protected-main doctor sandbox lifecycle
+--- candidata: split-main-cli-into-subcommands [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: cli main module SHALL be a thin dispatcher
+  | `src/cli/main.js` SHALL contain only the dispatch table for `gx`, the
+  > - **WHEN** `gx --help`, `gx --version`, `gx doctor --help`, and
+  > - **WHEN** `gx --help`, `gx --version`, `gx doctor --help`, and

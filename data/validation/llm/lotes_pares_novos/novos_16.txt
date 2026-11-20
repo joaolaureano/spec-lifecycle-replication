@@ -1,0 +1,3540 @@
+===== P162 | repo qzw881130/AI-NovelFlow | PR #18: feat: 新增旁白角色和多关键帧参考 | capacidade: character-voice
+--- SPEC VIVA
+# character-voice Specification
+
+## Purpose
+定义角色音色能力要求，包括音色提示词存储、参考音频生成与存储、角色库音色管理界面，以及分镜台词音频生成时引用角色参考音频的能力。
+## Requirements
+### Requirement: 角色存储音色提示词
+
+系统 SHALL 允许每个角色存储可选的音色提示词，描述音色特征。
+
+#### Scenario: 创建角色时存储音色提示词
+- **WHEN** 创建角色时提供了 voice_prompt 数据
+- **THEN** voice_prompt 字段 SHALL 被存储到数据库
+
+#### Scenario: 音色提示词可更新
+- **WHEN** 用户编辑角色的音色提示词
+- **THEN** 更新后的 voice_prompt SHALL 被保存
+
+#### Scenario: 音色提示词可选
+- **WHEN** 角色没有 voice_prompt
+- **THEN** 角色记录 SHALL 仍有效，voice_prompt 为 null
+
+### Requirement: 角色存储参考音频 URL
+
+系统 SHALL 允许每个角色存储可选的参考音频 URL，指向生成的音色样本。
+
+#### Scenario: 生成后存储参考音频 URL
+- **WHEN** 音色生成成功完成
+- **THEN** reference_audio_url 字段 SHALL 更新为音频文件 URL
+
+#### Scenario: 参考音频可重新生成
+- **WHEN** 用户为已有音频的角色重新生成音色
+- **THEN** 旧音频文件 SHALL 被替换为新音频，URL 更新
+
+### Requirement: 通过 voice_design 工作流生成音色样本
+
+系统 SHALL 提供 API 端点使用 voice_design ComfyUI 工作流生成音色样本。
+
+#### Scenario: 创建音色生成任务
+- **WHEN** 用户为有 voice_prompt 的角色请求生成音色
+- **THEN** 系统 SHALL 创建类型为 "character_voice" 的任务
+- **AND** 任务 SHALL 使用 voice_design 工作流
+
+#### Scenario: 音色生成需要音色提示词
+- **WHEN** 用户为没有 voice_prompt 的角色请求生成音色
+- **THEN** 系统 SHALL 返回错误消息，提示需要 voice_prompt
+
+#### Scenario: 音色生成使用角色音色提示词
+- **WHEN** 音色生成任务执行时
+- **THEN** 角色的 voice_prompt SHALL 被注入到工作流的 voice_prompt_node_id 节点
+
+### Requirement: 角色库显示音色提示词
+
+角色库 UI SHALL 显示每个角色的音色提示词，并支持在编辑模态框中编辑。
+
+#### Scenario: 角色卡片显示音色提示词
+- **WHEN** 角色有 voice_prompt 值
+- **THEN** 角色卡片 SHALL 显示音色提示词文本
+
+#### Scenario: 编辑模态框编辑音色提示词
+- **WHEN** 用户在编辑模态框中编辑角色的音色提示词并保存
+- **THEN** 更新后的 voice_prompt SHALL 保存到数据库
+
+### Requirement: 角色库提供音频播放
+
+角色库 UI SHALL 为有参考音频的角色提供音频播放功能。
+
+#### Scenario: 有音频的角色显示音频播放器
+- **WHEN** 角色有 reference_audio_url
+- **THEN** 角色卡片 SHALL 显示音频播放按钮
+
+#### Scenario: 音频播放器播放参考音频
+- **WHEN** 用户点击音频播放按钮
+- **THEN** 参考音频 SHALL 通过浏览器播放
+
+### Requirement: 生成音色按钮
+
+角色库 UI SHALL 为每个角色提供"生成音色"按钮，与生成人设图按钮并排显示。
+
+#### Scenario: 生成音色按钮触发生成
+- **WHEN** 用户点击生成音色按钮
+- **THEN** 系统 SHALL 调用该角色的音色生成 API
+
+#### Scenario: 生成音色显示生成中状态
+- **WHEN** 音色生成进行中
+- **THEN** 按钮 SHALL 显示加载/生成中状态
+- **AND** 系统 SHALL 轮询追踪任务进度
+
+#### Scenario: 生成音色成功完成
+- **WHEN** 音色生成任务完成
+- **THEN** 角色的 reference_audio_url SHALL 更新
+- **AND** 音频播放按钮 SHALL 显示并可播放新音频
+
+### Requirement: 角色参考音频用于分镜台词生成
+
+系统 SHALL 允许分镜音频生成功能引用角色的参考音频作为语音克隆的音色来源。
+
+#### Scenario: 分镜音频生成引用角色参考音频
+- **WHEN** 为分镜角色台词生成音频
+- **THEN** 系统 SHALL 使用角色的 `reference_audio_url` 作为 ComfyUI 工作流的参考音频输入
+- **AND** 参考音频 SHALL 通过 `LoadAudio` 节点加载
+
+#### Scenario: 角色无参考音频时的错误处理
+- **WHEN** 为分镜台词生成音频时角色没有 `reference_audio_url`
+- **THEN** 系统 SHALL 返回错误信息：`角色 "{name}" 尚未生成音色，请先在角色库中生成`
+- **AND** 任务 SHALL 不被创建
+
+#### Scenario: 参考音频下载到本地
+- **WHEN** 音频生成任务执行时
+- **THEN** 系统 SHALL 先将参考音频下载到本地
+- **AND** 若参考音频是本地路径（`/api/files/` 前缀），系统 SHALL 直接使用
+- **AND** 若参考音频是远程 URL，系统 SHALL 下载到临时目录
+
+### Requirement: 分镜音频生成查询角色信息
+
+系统 SHALL 在分镜音频生成时查询角色的完整信息，包括参考音频 URL。
+
+#### Scenario: 查询角色参考音频
+- **WHEN** 创建分镜音频生成任务
+- **THEN** 系统 SHALL 通过角色名称查询角色的 `reference_audio_url`
+- **AND** 若角色不在角色库中，系统 SHALL 返回警告信息
+
+#### Scenario: 角色不存在时的处理
+- **WHEN** 台词中的角色名称在角色库中找不到
+- **THEN** 系统 SHALL 返回警告：`角色 "{name}" 不存在于角色库中`
+- **AND** 系统 SHALL 不为该台词创建任务
+
+### Requirement: 角色库显示参考音频状态用于分镜生成
+
+角色库 UI SHALL 显示角色的参考音频状态，帮助用户了解该角色是否可用于分镜音频生成。
+
+#### Scenario: 角色无参考音频时提示
+- **WHEN** 角色没有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"未生成音色"提示（灰色标签）
+- **AND** 提示 SHALL 使用 `voiceNotGenerated` 翻译键
+
+#### Scenario: 角色有参考音频时显示可用状态
+- **WHEN** 角色有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"音色已就绪"状态（绿色标签）
+- **AND** 提示 SHALL 使用 `voiceReady` 翻译键
+
+#### Scenario: 角色卡片显示音频播放按钮
+- **WHEN** 角色有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"播放音频"按钮
+- **AND** 点击按钮 SHALL 播放/停止参考音频
+
+### Requirement: 角色库 i18n 翻译键
+
+系统 SHALL 提供角色音色状态相关的翻译键。
+
+#### Scenario: 翻译键定义
+- **WHEN** 显示角色音色状态
+- **THEN** 系统 SHALL 使用以下翻译键：
+  - `characters.voiceReady`: "音色已就绪"
+  - `characters.voiceNotGenerated`: "未生成音色"
+  - `characters.playAudio`: "播放"
+  - `characters.stopAudio`: "停止"
+  - `characters.regenerateVoice`: "重新生成音色"
+  - `characters.generateVoice`: "生成音色"
+
+### Requirement: 用户可上传本地音频作为参考音频
+
+系统 SHALL 允许用户从本地上传音频文件作为角色的参考音频。
+
+#### Scenario: 上传音频文件成功
+- **WHEN** 用户上传有效的音频文件（MP3/WAV/FLAC/OGG/M4A，≤10MB）
+- **THEN** 系统 SHALL 保存音频到本地存储
+- **AND** 角色 `reference_audio_url` SHALL 更新为新音频路径
+- **AND** 返回成功响应
+
+#### Scenario: 上传不支持的文件格式
+- **WHEN** 用户上传非音频格式的文件
+- **THEN** 系统 SHALL 返回错误消息，提示支持的格式
+- **AND** 不创建任何文件
+
+#### Scenario: 上传文件过大
+- **WHEN** 用户上传超过 10MB 的音频文件
+- **THEN** 系统 SHALL 返回错误消息，提示文件大小限制
+
+### Requirement: 角色库提供上传音频按钮
+
+角色库 UI SHALL 为每个角色提供"上传音频"按钮，用于上传本地音频。
+
+#### Scenario: 显示上传音频按钮
+- **WHEN** 角色卡片渲染时
+- **THEN** 在音色区域 SHALL 显示"上传音频"按钮
+- **AND** 按钮 SHALL 与"生成音色"按钮并列显示
+
+#### Scenario: 点击上传音频按钮触发文件选择
+- **WHEN** 用户点击"上传音频"按钮
+- **THEN** 系统 SHALL 打开文件选择对话框
+- **AND** 文件类型过滤器 SHALL 限制为音频格式
+
+#### Scenario: 上传成功后更新 UI
+- **WHEN** 音频上传成功完成
+- **THEN** 角色卡片 SHALL 显示"音色已就绪"状态
+- **AND** 音频播放按钮 SHALL 显示并可播放新音频
+
+#### Scenario: 上传失败显示错误提示
+- **WHEN** 音频上传失败
+- **THEN** 系统 SHALL 显示错误提示信息
+- **AND** 角色卡片状态 SHALL 保持不变
+
+### Requirement: 上传音频与生成音频可互换
+
+系统 SHALL 允许用户在上传音频和生成音频之间自由切换。
+
+#### Scenario: 上传音频替换生成音频
+- **WHEN** 角色已有通过 ComfyUI 生成的参考音频
+- **AND** 用户上传新音频
+- **THEN** 旧音频 SHALL 被新上传音频替换
+- **AND** `reference_audio_url` SHALL 更新为新音频路径
+
+#### Scenario: 生成音频替换上传音频
+- **WHEN** 角色已有用户上传的参考音频
+- **AND** 用户点击"生成音色"按钮
+- **THEN** 新生成的音频 SHALL 替换已上传音频
+- **AND** `reference_audio_url` SHALL 更新为新音频路径
+
+### Requirement: 角色库 i18n 翻译键扩展
+
+系统 SHALL 提供音频上传相关的翻译键。
+
+#### Scenario: 翻译键定义
+- **WHEN** 显示音频上传相关 UI
+- **THEN** 系统 SHALL 使用以下翻译键：
+  - `characters.uploadAudio`: "上传音频"
+  - `characters.uploadingAudio`: "上传中..."
+  - `characters.uploadAudioSuccess`: "音频上传成功"
+  - `characters.uploadAudioFailed`: "音频上传失败"
+  - `characters.audioFormatError`: "不支持的音频格式，请上传 MP3/WAV/FLAC/OGG/M4A 格式"
+  - `characters.audioSizeError`: "音频文件大小不能超过 10MB"
+
+
+--- ARQUIVOS DO PR (111)
+modified  +8     -2     backend/app/api/characters.py   <== código ligado à spec
+modified  +579   -4     backend/app/api/shots.py
+modified  +9     -0     backend/app/constants/prompt_template.py
+modified  +36    -2     backend/app/constants/workflow.py
+modified  +4     -0     backend/app/models/novel.py
+modified  +9     -0     backend/app/models/shot.py
+modified  +19    -0     backend/app/repositories/character_repository.py
+modified  +4     -1     backend/app/repositories/shot_repository.py
+modified  +42    -0     backend/app/repositories/task.py
+modified  +3     -0     backend/app/schemas/character.py
+modified  +54    -1     backend/app/schemas/shot.py
+added     +353   -0     backend/app/services/audio_merge_service.py
+added     +346   -0     backend/app/services/audio_reference_service.py
+modified  +43    -1     backend/app/services/character_service.py   <== código ligado à spec
+modified  +67    -7     backend/app/services/comfyui/service.py
+modified  +64    -0     backend/app/services/comfyui/workflows.py
+modified  +9     -1     backend/app/services/novel_service.py
+modified  +57    -1     backend/app/services/prompt_template_service.py
+modified  +167   -72    backend/app/services/shot_audio_service.py
+added     +720   -0     backend/app/services/shot_keyframe_service.py
+modified  +40    -2     backend/app/services/shot_video_service.py
+added     +76    -0     backend/migrations/add_keyframe_narrator_fields.py
+added     +44    -0     backend/migrations/add_keyframe_template_fields.py
+added     +36    -0     backend/migrations/add_reference_audio_type.py
+modified  +6     -0     backend/requirements.txt
+added     +277   -0     backend/workflows/keyframe_flux2_klein.json
+added     +729   -0     debug/workflows/LTX-2.3_-_I2V_T2V_Basic_GGUF-API.json
+added     +5988  -0     debug/workflows/LTX-2.3_-_I2V_T2V_Basic_GGUF.json
+added     +271   -0     debug/workflows/Ltx2高动态图生视频V1-提示词非括写版-GGUF.json
+modified  +201   -3     frontend/my-app/src/api/shots.ts
+added     +400   -0     frontend/my-app/src/components/AudioReferenceSelector.tsx
+added     +666   -0     frontend/my-app/src/components/KeyframesManager.tsx
+modified  +55    -1     frontend/my-app/src/i18n/locales/en-US/chapters.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/en-US/characters.ts   <== código ligado à spec
+modified  +1     -0     frontend/my-app/src/i18n/locales/en-US/common.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/en-US/novels.ts
+modified  +10    -0     frontend/my-app/src/i18n/locales/en-US/settings.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/en-US/tasks.ts
+modified  +55    -1     frontend/my-app/src/i18n/locales/ja-JP/chapters.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ja-JP/characters.ts   <== código ligado à spec
+modified  +1     -0     frontend/my-app/src/i18n/locales/ja-JP/common.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ja-JP/novels.ts
+modified  +10    -0     frontend/my-app/src/i18n/locales/ja-JP/settings.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ja-JP/tasks.ts
+modified  +55    -1     frontend/my-app/src/i18n/locales/ko-KR/chapters.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ko-KR/characters.ts   <== código ligado à spec
+modified  +1     -0     frontend/my-app/src/i18n/locales/ko-KR/common.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ko-KR/novels.ts
+modified  +10    -0     frontend/my-app/src/i18n/locales/ko-KR/settings.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/ko-KR/tasks.ts
+modified  +55    -1     frontend/my-app/src/i18n/locales/zh-CN/chapters.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-CN/characters.ts   <== código ligado à spec
+modified  +3     -0     frontend/my-app/src/i18n/locales/zh-CN/common.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-CN/novels.ts
+modified  +10    -0     frontend/my-app/src/i18n/locales/zh-CN/settings.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-CN/tasks.ts
+modified  +55    -1     frontend/my-app/src/i18n/locales/zh-TW/chapters.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-TW/characters.ts   <== código ligado à spec
+modified  +1     -0     frontend/my-app/src/i18n/locales/zh-TW/common.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-TW/novels.ts
+modified  +10    -0     frontend/my-app/src/i18n/locales/zh-TW/settings.ts
+modified  +2     -0     frontend/my-app/src/i18n/locales/zh-TW/tasks.ts
+modified  +147   -35    frontend/my-app/src/pages/ChapterGenerate/components/AudioGenTab.tsx
+modified  +104   -50    frontend/my-app/src/pages/ChapterGenerate/components/ShotForm.tsx
+modified  +1     -0     frontend/my-app/src/pages/ChapterGenerate/components/ShotSplitTab.tsx
+modified  +150   -5     frontend/my-app/src/pages/ChapterGenerate/components/VideoGenTab.tsx
+modified  +28    -0     frontend/my-app/src/pages/ChapterGenerate/stores/index.ts
+modified  +37    -2     frontend/my-app/src/pages/ChapterGenerate/stores/slices/dataSlice.ts
+modified  +423   -0     frontend/my-app/src/pages/ChapterGenerate/stores/slices/generationSlice.ts
+modified  +53    -1     frontend/my-app/src/pages/ChapterGenerate/stores/slices/types.ts
+modified  +29    -13    frontend/my-app/src/pages/Characters/components/CharacterCard.tsx   <== código ligado à spec
+modified  +1     -0     frontend/my-app/src/pages/Novels/components/EditNovelModal.tsx
+modified  +4     -1     frontend/my-app/src/pages/PromptConfig/hooks/usePromptConfigState.ts
+modified  +4     -2     frontend/my-app/src/pages/PromptConfig/index.tsx
+modified  +1     -1     frontend/my-app/src/pages/PromptConfig/types.ts
+modified  +254   -10    frontend/my-app/src/pages/Settings/components/MappingModal.tsx
+modified  +3     -2     frontend/my-app/src/pages/Settings/components/UploadModal.tsx
+modified  +6     -4     frontend/my-app/src/pages/Settings/components/WorkflowCard.tsx
+modified  +5     -4     frontend/my-app/src/pages/Settings/components/WorkflowManager.tsx
+modified  +1     -1     frontend/my-app/src/pages/Settings/types.ts
+modified  +12    -1     frontend/my-app/src/pages/Settings/utils.ts
+modified  +16    -0     frontend/my-app/src/types/index.ts
+added     +2     -0     openspec/changes/add-keyframe-audio-support/.openspec.yaml
+added     +893   -0     openspec/changes/add-keyframe-audio-support/design.md
+added     +64    -0     openspec/changes/add-keyframe-audio-support/proposal.md
+added     +163   -0     openspec/changes/add-keyframe-audio-support/specs/audio-reference/spec.md
+added     +246   -0     openspec/changes/add-keyframe-audio-support/specs/keyframe-control/spec.md
+added     +215   -0     openspec/changes/add-keyframe-audio-support/specs/narrator-support/spec.md
+added     +141   -0     openspec/changes/add-keyframe-audio-support/specs/shot-audio-generation/spec.md
+added     +78    -0     openspec/changes/add-keyframe-audio-support/specs/shot-dialogue-parse/spec.md
+added     +22    -0     openspec/changes/add-keyframe-audio-support/specs/video-gen-status-sync/spec.md
+added     +50    -0     openspec/changes/add-keyframe-audio-support/specs/workflow-node-mapping/spec.md
+added     +349   -0     openspec/changes/add-keyframe-audio-support/tasks.md
+added     +2     -0     openspec/changes/archive/2026-03-15-fix-video-gen-status-sync/.openspec.yaml
+added     +91    -0     openspec/changes/archive/2026-03-15-fix-video-gen-status-sync/design.md
+added     +38    -0     openspec/changes/archive/2026-03-15-fix-video-gen-status-sync/proposal.md
+added     +31    -0     openspec/changes/archive/2026-03-15-fix-video-gen-status-sync/specs/video-gen-status-sync/spec.md
+added     +14    -0     openspec/changes/archive/2026-03-15-fix-video-gen-status-sync/tasks.md
+modified  +1     -1     openspec/config.yaml
+added     +430   -0     openspec/schemas/spec-driven-custom/schema.yaml
+added     +195   -0     openspec/schemas/spec-driven-custom/templates/design.md
+added     +46    -0     openspec/schemas/spec-driven-custom/templates/proposal.md
+added     +50    -0     openspec/schemas/spec-driven-custom/templates/spec.md
+added     +44    -0     openspec/schemas/spec-driven-custom/templates/tasks.md
+added     +95    -0     openspec/specs/audio-reference/spec.md
+added     +120   -0     openspec/specs/keyframe-control/spec.md
+added     +127   -0     openspec/specs/narrator-support/spec.md
+modified  +54    -11    openspec/specs/shot-audio-generation/spec.md
+modified  +32    -14    openspec/specs/shot-dialogue-parse/spec.md
+added     +37    -0     openspec/specs/video-gen-status-sync/spec.md
+modified  +27    -3     openspec/specs/workflow-node-mapping/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### backend/app/api/characters.py
+@@ -58,6 +58,7 @@ async def list_characters(
+             "startChapter": c.start_chapter,
+             "endChapter": c.end_chapter,
+             "isIncremental": c.is_incremental,
++            "isNarrator": c.is_narrator or False,
+             "sourceRange": c.source_range,
+             "lastParsedAt": format_datetime(c.last_parsed_at),
+             "createdAt": format_datetime(c.created_at),
+@@ -93,6 +94,7 @@ async def get_character(character_id: str, novel_repo: NovelRepository = Depends
+             "startChapter": character.start_chapter,
+             "endChapter": character.end_chapter,
+             "isIncremental": character.is_incremental,
++            "isNarrator": character.is_narrator or False,
+             "sourceRange": character.source_range,
+             "lastParsedAt": format_datetime(character.last_parsed_at),
+             "createdAt": format_datetime(character.created_at),
+@@ -179,9 +181,13 @@ async def delete_character(character_id: str, character_repo: CharacterRepositor
+     character = character_repo.get_by_id(character_id)
+     if not character:
+         raise HTTPException(status_code=404, detail="角色不存在")
+-    
++
++    # 不允许删除旁白角色
++    if character.is_narrator:
++        raise HTTPException(status_code=400, detail="旁白角色不可删除")
++
+     character_repo.delete(character)
+-    
++
+     return {"success": True, "message": "删除成功"}
+ 
+ 
+
+### backend/app/services/character_service.py
+@@ -566,4 +566,46 @@ def _validate_workflow_node_mapping(self, workflow: Workflow, task_type: str) ->
+         if missing_fields:
+             return False, f"工作流 '{workflow.name}' 的映射配置不完整，缺少以下必需字段：{', '.join(missing_fields)}。请在【系统配置-ComfyUI工作流】中配置完整后再试。"
+ 
+-        return True, ""
+\ No newline at end of file
++        return True, ""
++
++    # ==================== 旁白角色管理 ====================
++
++    def ensure_narrator_character(self, novel_id: str, db: Session = None) -> Dict[str, Any]:
++        """
++        确保小说有旁白角色，不存在则创建
++
++        Args:
++            novel_id: 小说ID
++            db: 数据库会话
++
++        Returns:
++            操作结果，包含旁白角色信息
++        """
++        db = db or self.db
++        character_repo = CharacterRepository(db)
++
++        # 查询是否已存在旁白角色
++        narrator = character_repo.get_narrator(novel_id)
++        if narrator:
++            return {
++                "success": True,
++                "message": "旁白角色已存在",
++                "data": {
++                    "id": narrator.id,
++                    "name": narrator.name,
++                    "isNarrator": True
++                }
++            }
++
++        # 创建旁白角色
++        narrator = character_repo.create_narrator(novel_id)
++
++        return {
++            "success": True,
++            "message": "旁白角色创建成功",
++            "data": {
++                "id": narrator.id,
++                "name": narrator.name,
++                "isNarrator": True
++            }
++        }
+\ No newline at end of file
+
+### frontend/my-app/src/i18n/locales/en-US/characters.ts
+@@ -74,5 +74,7 @@ export default {
+     uploadAudioFailed: 'Audio upload failed',
+     invalidAudioFormat: 'Unsupported audio format. Only MP3, WAV, FLAC, OGG, M4A are supported',
+     audioTooLarge: 'Audio file too large. Maximum size is 10MB',
++    // Narrator character
++    narrator: 'Narrator',
+   },
+ };
+
+### frontend/my-app/src/i18n/locales/ja-JP/characters.ts
+@@ -76,5 +76,7 @@ export default {
+     uploadAudioFailed: 'オーディオのアップロードに失敗しました',
+     invalidAudioFormat: 'サポートされていないオーディオ形式です。MP3、WAV、FLAC、OGG、M4Aのみ対応しています',
+     audioTooLarge: 'オーディオファイルが大きすぎます。最大サイズは10MBです',
++    // ナレーターキャラクター
++    narrator: 'ナレーター',
+   },
+ };
+
+### frontend/my-app/src/i18n/locales/ko-KR/characters.ts
+@@ -76,5 +76,7 @@ export default {
+     uploadAudioFailed: '오디오 업로드 실패',
+     invalidAudioFormat: '지원하지 않는 오디오 형식입니다. MP3, WAV, FLAC, OGG, M4A만 지원됩니다',
+     audioTooLarge: '오디오 파일이 너무 큽니다. 최대 크기는 10MB입니다',
++    // 나레이터 캐릭터
++    narrator: '나레이터',
+   },
+ };
+
+### frontend/my-app/src/i18n/locales/zh-CN/characters.ts
+@@ -74,5 +74,7 @@ export default {
+     uploadAudioFailed: '音频上传失败',
+     invalidAudioFormat: '不支持的音频格式，仅支持 MP3、WAV、FLAC、OGG、M4A',
+     audioTooLarge: '音频文件过大，最大支持 10MB',
++    // 旁白角色
++    narrator: '旁白',
+   },
+ };
+
+### frontend/my-app/src/i18n/locales/zh-TW/characters.ts
+@@ -74,5 +74,7 @@ export default {
+     uploadAudioFailed: '音訊上傳失敗',
+     invalidAudioFormat: '不支援的音訊格式，僅支援 MP3、WAV、FLAC、OGG、M4A',
+     audioTooLarge: '音訊檔案過大，最大支援 10MB',
++    // 旁白角色
++    narrator: '旁白',
+   },
+ };
+
+### frontend/my-app/src/pages/Characters/components/CharacterCard.tsx
+@@ -1,7 +1,7 @@
+ /**
+  * 角色卡片组件
+  */
+-import { Loader2, User, Trash2, Edit2, Upload, Wand2, Sparkles, Mic, Play, Square, Music } from 'lucide-react';
++import { Loader2, User, Trash2, Edit2, Upload, Wand2, Sparkles, Mic, Play, Square, Music, BookOpen } from 'lucide-react';
+ import { useState, useRef } from 'react';
+ import { useTranslation } from '../../../stores/i18nStore';
+ import type { Character } from '../../../types';
+@@ -74,6 +74,8 @@ export function CharacterCard({
+       className={`bg-white rounded-lg shadow-sm border overflow-hidden hover:shadow-md transition-all group ${
+         highlightedId === character.id
+           ? 'ring-4 ring-blue-500 ring-opacity-50 border-blue-500 animate-pulse'
++          : character.isNarrator
++          ? 'border-purple-300 bg-purple-50/30'
+           : 'border-gray-200'
+       }`}
+     >
+@@ -88,31 +90,45 @@ export function CharacterCard({
+           />
+         ) : (
+           <div className="absolute inset-0 flex items-center justify-center">
+-            <User className="h-20 w-20 text-gray-300" />
++            {character.isNarrator ? (
++              <BookOpen className="h-20 w-20 text-purple-300" />
++            ) : (
++              <User className="h-20 w-20 text-gray-300" />
++            )}
++          </div>
++        )}
++
++        {/* Narrator Badge */}
++        {character.isNarrator && (
++          <div className="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full flex items-center gap-1">
++            <BookOpen className="h-3 w-3" />
++            {t('characters.narrator')}
+           </div>
+         )}
+ 
+         {/* Status Badge */}
+-        {character.generatingStatus === 'running' && (
+-          <div className="absolute top-2 left-2 px-2 py-1 bg-blue-500 text-white text-xs rounded-full flex items-center gap-1">
++        {character.generatingStatus === 'running' && !character.isNarrator && (
++          <div className={`absolute top-2 left-2 px-2 py-1 bg-blue-500 text-white text-xs rounded-full flex items-center gap-1 ${character.isNarrator ? 'left-24' : ''}`}>
+             <Loader2 className="h-3 w-3 animate-spin" />
+             {t('characters.generating')}
+           </div>
+         )}
+         {character.generatingStatus === 'failed' && (
+-          <div className="absolute top-2 left-2 px-2 py-1 bg-red-500 text-white text-xs rounded-full">
++          <div className={`absolute top-2 left-2 px-2 py-1 bg-red-500 text-white text-xs rounded-full ${character.isNarrator ? 'left-24' : ''}`}>
+             {t('characters.generateFailed')}
+           </div>
+         )}
+ 
+-        {/* Delete Button - 右上角 */}
+-        <button
+-          onClick={() => onDelete(character.id)}
+-          className="absolute top-2 right-2 p-2 bg-white/90 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+-          title={t('common.delete')}
+-        >
+-          <Trash2 className="h-4 w-4" />
+-        </button>
++        {/* Delete Button - 右上角 (旁白角色不显示删除按钮) */}
++        {!character.isNarrator && (
++          <button
++            onClick={() => onDelete(character.id)}
++            className="absolute top-2 right-2 p-2 bg-white/90 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
++            title={t('common.delete')}
++          >
++            <Trash2 className="h-4 w-4" />
++          </button>
++        )}
+ 
+         {/* Edit Button - 左下角 */}
+         <button
+
+===== P163 | repo UseJunior/safe-docx | PR #370: feat(odf-core,docx-mcp): ODF compare_documents — intra-paragraph (run-level) tracked changes (#356) | capacidade: docx-primitives
+--- SPEC VIVA
+# docx-primitives Specification
+
+## Purpose
+Define behavior guarantees for the docx-primitives-ts library: deterministic text matching with fallback modes, list label extraction, semantic tag handling, OOXML layout mutations, XML round-trip fidelity, and paragraph bookmark identity.
+## Requirements
+### Requirement: Unique Substring Matching with Fallback Modes
+The matching engine SHALL find a unique substring match in paragraph text using a prioritized chain of fallback modes: exact → quote_normalized → flexible_whitespace → quote_optional.
+
+#### Scenario: exact match found for literal substring
+- **GIVEN** paragraph text containing the needle as a literal substring exactly once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `unique` and mode `exact`
+- **AND** `matchedText` SHALL equal the needle verbatim
+
+#### Scenario: not_found when needle is absent
+- **WHEN** `findUniqueSubstringMatch` is called with a needle not present in any fallback mode
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: multiple when needle appears more than once
+- **GIVEN** paragraph text containing the needle more than once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `multiple` with an accurate `matchCount`
+
+#### Scenario: not_found for empty needle
+- **WHEN** `findUniqueSubstringMatch` is called with an empty string needle
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: quote_normalized matches curly quotes against straight quotes
+- **GIVEN** paragraph text containing curly double or single quotes
+- **WHEN** the needle uses straight quote equivalents and no exact match exists
+- **THEN** the result SHALL have status `unique` and mode `quote_normalized`
+
+#### Scenario: exact mode preferred over quote_normalized when both match
+- **GIVEN** paragraph text that matches the needle exactly AND via quote normalization
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have mode `exact`
+
+#### Scenario: flexible_whitespace matches across spacing variance
+- **GIVEN** paragraph text with extra spaces, tabs, or newlines between words
+- **WHEN** the needle uses single-space equivalents and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `flexible_whitespace`
+
+#### Scenario: quote_optional matches quoted and unquoted term references
+- **GIVEN** paragraph text containing quoted terms
+- **WHEN** the needle omits the quotes and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `quote_optional`
+
+### Requirement: List Label Extraction and Stripping
+The list label engine SHALL detect and extract structured list labels from paragraph text, supporting letter, roman, number, section, article, and numbered heading patterns.
+
+#### Scenario: extract parenthesized letter labels
+- **GIVEN** paragraph text starting with a parenthesized letter like `(a)` or `(A)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER` and the full label including parentheses
+
+#### Scenario: single-char roman-like letters classified as LETTER not ROMAN
+- **GIVEN** paragraph text starting with `(i)` or `(v)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER`
+
+#### Scenario: extract multi-char roman numeral labels
+- **GIVEN** paragraph text starting with a multi-character roman numeral like `(ii)`, `(iv)`, `(xiii)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ROMAN`
+
+#### Scenario: extract section labels with sub-paragraph support
+- **GIVEN** paragraph text starting with `Section 1`, `Section 1.2`, or `Section 3.1(a)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `SECTION` with the full section reference
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract article labels with roman numeral support
+- **GIVEN** paragraph text starting with `Article 1` or `Article IV`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ARTICLE`
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract numbered heading labels
+- **GIVEN** paragraph text starting with `1.`, `1.1`, or `2.3.1` followed by a space
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `NUMBERED_HEADING`
+
+#### Scenario: null label for plain text without list patterns
+- **GIVEN** paragraph text without any recognized list label pattern
+- **WHEN** `extractListLabel` is called
+- **THEN** `label` and `label_type` SHALL be `null`
+
+#### Scenario: stripListLabel removes label and leading whitespace
+- **GIVEN** paragraph text with a recognized list label
+- **WHEN** `stripListLabel` is called
+- **THEN** the result SHALL contain `stripped_text` with the label and leading whitespace removed
+- **AND** `result.label` SHALL contain the extracted label
+
+### Requirement: Semantic Tag Emission and Stripping
+The semantic tag engine SHALL emit/strip `<highlighting>` and `<font>` tags for formatting visibility and support `stripAllInlineTags` for removing all known inline tags.
+
+#### Scenario: strip highlight tags leaves content intact
+- **GIVEN** text containing `<highlighting>` tags
+- **WHEN** `stripHighlightTags` is called
+- **THEN** the tag wrappers SHALL be removed and the inner content preserved
+
+### Requirement: OOXML Layout Mutations
+The layout engine SHALL perform deterministic OOXML mutations for paragraph spacing, table row height, and table cell padding, creating missing container elements as needed.
+
+#### Scenario: setParagraphSpacing creates missing pPr and spacing containers
+- **GIVEN** a paragraph element without `w:pPr` or `w:spacing` children
+- **WHEN** `setParagraphSpacing` is called with `beforeTwips`, `afterTwips`, `lineTwips`, and `lineRule`
+- **THEN** the engine SHALL create `w:pPr` and `w:spacing` elements
+- **AND** SHALL set the requested attributes in twip units
+
+#### Scenario: setParagraphSpacing preserves unrelated formatting nodes
+- **GIVEN** a paragraph with existing `w:pPr` children (e.g., `w:jc` for justification)
+- **WHEN** `setParagraphSpacing` is called
+- **THEN** existing `w:pPr` children SHALL be preserved
+- **AND** a `w:spacing` element SHALL be added or updated
+
+#### Scenario: setTableRowHeight reports missing indexes
+- **WHEN** `setTableRowHeight` is called with table or row indexes that do not exist in the document
+- **THEN** the result SHALL report `missingTableIndexes` and `missingRowIndexes`
+- **AND** SHALL only apply mutations to existing rows
+
+#### Scenario: setTableCellPadding creates tcPr and tcMar containers
+- **GIVEN** a table cell without `w:tcPr` or `w:tcMar` children
+- **WHEN** `setTableCellPadding` is called with directional padding values
+- **THEN** the engine SHALL create the container elements and set padding in `dxa` units
+- **AND** untargeted cells SHALL NOT be modified
+
+### Requirement: XML Round-Trip Fidelity
+The XML engine SHALL parse and serialize OOXML without data loss, preserving elements, attributes, namespaces, and text content through round-trips.
+
+#### Scenario: parse and serialize preserves element structure
+- **WHEN** valid XML is parsed and immediately serialized
+- **THEN** the output SHALL contain all original elements, attributes, and text content
+
+#### Scenario: namespaced XML preserved through round-trip
+- **GIVEN** XML using OOXML namespaces (e.g., `w:document`, `w:body`)
+- **WHEN** the XML is parsed and serialized
+- **THEN** namespace prefixes and URIs SHALL be preserved
+
+#### Scenario: textContent returns concatenated text of nested elements
+- **GIVEN** an element containing nested child elements with text
+- **WHEN** `textContent` is called
+- **THEN** the result SHALL be the concatenated text content of all descendants
+
+#### Scenario: textContent returns empty string for null or undefined input
+- **WHEN** `textContent` is called with `null` or `undefined`
+- **THEN** the result SHALL be an empty string
+
+### Requirement: Paragraph Bookmark Identity
+The bookmark engine SHALL mint and persist stable `_bk_*` identifiers for paragraphs, ensuring unique addressability and idempotent allocation.
+
+#### Scenario: insertParagraphBookmarks mints IDs matching expected pattern
+- **WHEN** `insertParagraphBookmarks` is called on a document with paragraphs lacking bookmarks
+- **THEN** each paragraph SHALL receive a `_bk_*` identifier matching the pattern `_bk_[0-9a-f]{12}`
+
+#### Scenario: getParagraphBookmarkId retrieves minted ID
+- **GIVEN** a paragraph with a previously minted `_bk_*` bookmark
+- **WHEN** `getParagraphBookmarkId` is called
+- **THEN** the result SHALL return the stable identifier
+
+### Requirement: Comparator Round-Trip Semantic Invariants
+
+The comparator SHALL enforce semantic round-trip invariants using the package read-text surface and structural diagnostics.
+
+#### Scenario: Accept-all and reject-all preserve semantic read-text parity
+- **GIVEN** a comparison output document with tracked changes
+- **WHEN** `Accept All` is applied to the output
+- **THEN** the read-text output SHALL match the revised input document
+- **AND** when `Reject All` is applied, the read-text output SHALL match the original input document
+
+#### Scenario: Structural diagnostics remain equivalent across round-trip projections
+- **GIVEN** a comparison output document with numbering, notes, and bookmarks
+- **WHEN** `Accept All` and `Reject All` projections are computed
+- **THEN** numbering, footnote/endnote, and bookmark integrity diagnostics SHALL remain equivalent to the revised and original baselines respectively
+
+### Requirement: Inplace Bookmark Safety Uses Semantic Parity
+
+The inplace reconstruction safety gate SHALL compare bookmark semantics rather than strict bookmark ID identity.
+
+#### Scenario: Inplace remains valid when bookmark IDs are remapped but semantics are preserved
+- **GIVEN** a corpus pair where bookmark IDs may differ after reconstruction
+- **WHEN** bookmark names, bookmark-reference targets, unresolved-reference sets, and start/end integrity diagnostics match
+- **THEN** inplace reconstruction SHALL be accepted
+- **AND** the comparator SHALL NOT downgrade to rebuild mode for bookmark-ID mismatch alone
+
+#### Scenario: Inplace downgrades when semantic bookmark parity fails
+- **GIVEN** a corpus pair where round-trip checks fail
+- **WHEN** semantic bookmark parity or other round-trip safety checks do not hold
+- **THEN** the comparator SHALL downgrade from inplace to rebuild mode
+- **AND** the fallback reason SHALL be `round_trip_safety_check_failed`
+
+### Requirement: Inplace Paragraph-Boundary Bookmark Preservation
+
+When inplace reconstruction creates paragraphs for deleted or moved-source atoms, paragraph-boundary bookmark markers SHALL be preserved.
+
+#### Scenario: Created inplace paragraphs retain bookmark boundary markers
+- **GIVEN** source paragraphs that contain boundary `w:bookmarkStart` and `w:bookmarkEnd` markers
+- **WHEN** inplace reconstruction emits created paragraphs for deleted or moved-source content
+- **THEN** leading and trailing bookmark markers SHALL be preserved in the created output paragraphs
+- **AND** bookmark start/end integrity diagnostics SHALL remain valid after reconstruction
+
+### Requirement: Tracked Change Acceptance Engine
+The docx-primitives library SHALL programmatically accept all tracked changes in OOXML document body content, resolving each revision type into its accepted state.
+
+#### Scenario: accept insertions by unwrapping w:ins wrappers
+- **GIVEN** a document body containing `w:ins` elements wrapping inserted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:ins` wrapper elements SHALL be removed
+- **AND** their child content SHALL be promoted to the parent element in place
+
+#### Scenario: accept deletions by removing w:del elements and content
+- **GIVEN** a document body containing `w:del` elements wrapping deleted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:del` elements and their children SHALL be removed entirely
+
+#### Scenario: accept property changes by removing change records
+- **GIVEN** a document body containing property change records (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** the change record elements SHALL be removed
+- **AND** the current formatting properties SHALL be preserved
+
+#### Scenario: accept moves by keeping destination and removing source
+- **GIVEN** a document body containing `w:moveFrom` and `w:moveTo` pairs
+- **WHEN** the acceptance engine processes the document
+- **THEN** `w:moveFrom` elements and their children SHALL be removed
+- **AND** `w:moveTo` wrapper elements SHALL be removed with child content promoted to the parent
+
+#### Scenario: bottom-up processing resolves nested revisions
+- **GIVEN** nested tracked changes (e.g., a `w:del` inside a `w:ins`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** inner revisions SHALL be resolved before outer revisions
+- **AND** no orphaned elements SHALL remain
+
+#### Scenario: orphaned moves handled with safe fallback
+- **GIVEN** a `w:moveFrom` without a corresponding `w:moveTo` (or vice versa)
+- **WHEN** the acceptance engine processes the document
+- **THEN** orphaned `w:moveFrom` SHALL be treated as `w:del` (removed)
+- **AND** orphaned `w:moveTo` SHALL be treated as `w:ins` (unwrapped)
+
+### Requirement: Run Merging with Safety Barriers
+The docx-primitives library SHALL merge adjacent format-identical runs to reduce XML fragmentation, while enforcing safety barriers that prevent merges across structural boundaries.
+
+#### Scenario: merge adjacent runs with equivalent formatting
+- **GIVEN** a paragraph containing adjacent runs with identical effective run properties
+- **WHEN** `merge_runs` is called
+- **THEN** the adjacent runs SHALL be consolidated into a single run
+- **AND** the merged run SHALL preserve the original visible text and formatting
+
+#### Scenario: never merge across field boundaries
+- **GIVEN** a paragraph containing runs separated by `fldChar` or `instrText` elements
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across the field boundary
+- **AND** field structure SHALL remain intact
+
+#### Scenario: never merge across comment range boundaries
+- **GIVEN** a paragraph containing runs separated by `commentRangeStart` or `commentRangeEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across comment range boundaries
+
+#### Scenario: never merge across bookmark boundaries
+- **GIVEN** a paragraph containing runs separated by `bookmarkStart` or `bookmarkEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across bookmark boundaries
+
+#### Scenario: never merge across tracked-change wrapper boundaries
+- **GIVEN** a paragraph containing runs inside different tracked-change wrappers (`w:ins`, `w:del`, `w:moveFrom`, `w:moveTo`)
+- **WHEN** `merge_runs` is called
+- **THEN** runs in different tracked-change wrappers SHALL NOT be merged
+
+### Requirement: Redline Simplification with Author Constraint
+The docx-primitives library SHALL consolidate adjacent tracked-change wrappers of the same type and author to reduce XML verbosity, without altering document semantics.
+
+#### Scenario: merge adjacent same-author same-type tracked-change wrappers
+- **GIVEN** adjacent `w:ins` (or `w:del`) wrappers attributed to the same author
+- **WHEN** `simplify_redlines` is called
+- **THEN** the adjacent wrappers SHALL be consolidated into a single wrapper
+- **AND** the merged wrapper SHALL preserve all child content
+
+#### Scenario: never merge wrappers from different authors
+- **GIVEN** adjacent tracked-change wrappers attributed to different authors
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+- **AND** author attribution SHALL be preserved
+
+#### Scenario: never merge across different change types
+- **GIVEN** adjacent tracked-change wrappers of different types (e.g., `w:ins` followed by `w:del`)
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+
+### Requirement: Table Context in Document View
+
+The document view pipeline SHALL derive table structure context for each paragraph inside a body-level table. The `TableContext` type SHALL include: `table_id` (body-level index string like `_tbl_0`), `table_index` (0-based), `row_index`, `col_index` (grid-aware, accounting for `gridSpan`), `col_header` (text from header row), `total_rows`, `total_cols`, `is_header_row` (true for row index 0), `para_in_cell`, and `cell_para_count`.
+
+Table context derivation SHALL use ancestor-based DOM walking from each paragraph to find the enclosing `w:tc`, `w:tr`, and `w:tbl` elements. Only body-level tables (direct children of `w:body`) SHALL be indexed. Paragraphs inside nested tables SHALL receive the context of their enclosing body-level table cell.
+
+The paragraph set and ordering produced by `buildDocumentView()` SHALL remain identical to the existing `getParagraphs()` traversal. Empty table cell paragraphs SHALL be preserved (not skipped) to maintain structural completeness.
+
+#### Scenario: [SDX-TABLE-01] Simple table produces correct table context
+- **WHEN** a document contains a 2-row x 3-column table
+- **THEN** each cell paragraph has `table_context` with correct `row_index`, `col_index`, `total_rows`, `total_cols`, and `is_header_row`
+
+#### Scenario: [SDX-TABLE-02] gridSpan produces grid-aware column indices
+- **WHEN** a table cell has `w:gridSpan val="2"`
+- **THEN** subsequent cells in the row have `col_index` offset by the span value
+
+#### Scenario: [SDX-TABLE-03] Tracked-change wrapped rows are included
+- **WHEN** a `w:tr` element is wrapped in `w:ins`
+- **THEN** paragraphs in the wrapped row receive table context with the correct `row_index`
+
+#### Scenario: [SDX-TABLE-04] Nested table paragraphs get outer cell context
+- **WHEN** a cell contains a nested `w:tbl`
+- **THEN** paragraphs inside the nested table receive the context of the outer body-level table cell
+
+#### Scenario: [SDX-TABLE-05] Empty cells are preserved
+- **WHEN** a table cell contains only an empty `w:p`
+- **THEN** the empty paragraph is included in document view nodes with `table_context` set
+
+### Requirement: Table-Aware Toon Rendering
+
+`renderToon()` SHALL emit `#TABLE` and `#END_TABLE` structural markers around table content. The `#TABLE` marker format SHALL be: `#TABLE {table_id} | {rows} rows × {cols} cols`. Column headers are NOT repeated in the marker — they appear exactly once in the `th(0,N)` data rows which carry editable `_bk_*` IDs. The `#END_TABLE` marker SHALL be emitted when leaving a table.
+
+Table cell paragraphs SHALL use `th(row,col)` (header row) or `td(row,col)` (data rows) in the style column instead of the paragraph style.
+
+`formatToonDataLine()` SHALL be exported as a standalone helper for per-node rendering with table-aware styles.
+
+#### Scenario: [SDX-TABLE-06] Toon output includes table markers
+- **WHEN** `renderToon()` is called with nodes containing `table_context`
+- **THEN** `#TABLE` appears before the first table node and `#END_TABLE` after the last
+
+#### Scenario: [SDX-TABLE-07] Style column uses th/td notation
+- **WHEN** a node has `table_context` with `is_header_row=true`
+- **THEN** the style column shows `th(row_index,col_index)` instead of the paragraph style
+
+### Requirement: Shared DOM Helpers
+
+`isW()` and `getDirectChildrenByName()` SHALL be exported from `dom-helpers.ts` for namespace-aware element checks and direct-child queries across primitives modules.
+
+#### Scenario: [SDX-TABLE-08] isW checks namespace and localName
+- **WHEN** `isW(el, 'tbl')` is called on a WordprocessingML element
+- **THEN** it returns true only if the element has the correct namespace URI and local name
+
+
+--- ARQUIVOS DO PR (25)
+added     +97    -0     openspec/changes/add-odf-intra-paragraph-compare/design.md
+added     +61    -0     openspec/changes/add-odf-intra-paragraph-compare/proposal.md
+added     +22    -0     openspec/changes/add-odf-intra-paragraph-compare/specs/mcp-server/spec.md
+added     +103   -0     openspec/changes/add-odf-intra-paragraph-compare/specs/odf-core/spec.md
+added     +27    -0     openspec/changes/add-odf-intra-paragraph-compare/tasks.md
+modified  +4     -0     packages/docx-core/src/index.ts
+modified  +32    -14    packages/docx-core/src/integration/libreoffice-oracle.ts
+modified  +1     -1     packages/docx-mcp/docs/tool-reference.generated.md
+modified  +1     -1     packages/docx-mcp/src/tool_catalog.ts   <== código ligado à spec
+modified  +7     -7     packages/docx-mcp/src/tools/odf/compare_documents.ts
+modified  +20    -6     packages/docx-mcp/src/tools/odf/odf_compare.test.ts
+added     +110   -0     packages/docx-mcp/src/tools/odf/odf_compare_inline.test.ts
+modified  +9     -4     packages/docx-mcp/src/tools/odf/odf_compare_session.test.ts
+modified  +81    -1     packages/odf-core/src/compare/diff.test.ts
+modified  +139   -1     packages/odf-core/src/compare/diff.ts
+modified  +230   -23    packages/odf-core/src/compare/emit.ts
+added     +82    -0     packages/odf-core/src/compare/emit_degrade.test.ts
+added     +352   -0     packages/odf-core/src/compare/emit_inline.test.ts
+modified  +34    -16    packages/odf-core/src/compare/index.ts
+added     +151   -0     packages/odf-core/src/compare/inline_diff.test.ts
+added     +118   -0     packages/odf-core/src/compare/inline_diff.ts
+added     +151   -0     packages/odf-core/src/compare/inline_map.test.ts
+added     +160   -0     packages/odf-core/src/compare/inline_map.ts
+added     +119   -0     packages/odf-core/src/compare/lo_inline_roundtrip.test.ts
+modified  +9     -7     packages/odf-core/src/shared/odf/text_segments.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/docx-mcp/src/tool_catalog.ts
+@@ -312,7 +312,7 @@ export const SAFE_DOCX_TOOL_CATALOG = [
+   {
+     name: 'compare_documents',
+     description:
+-      'Compare two documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or file_path to compare session edits against the original. DOCX and ODF (.odt) support both modes; ODF compares at paragraph granularity (a modified paragraph counts as one deletion plus one insertion).',
++      'Compare two documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or file_path to compare session edits against the original. DOCX and ODF (.odt) support both modes; ODF compares at inline granularity (a modified paragraph is marked up in place — only the changed spans are struck or inserted).',
+     input: z.object({
+       original_file_path: z.string().optional().describe('Path to the original DOCX or .odt file.'),
+       revised_file_path: z.string().optional().describe('Path to the revised DOCX or .odt file.'),
+
+===== P164 | repo AshkanYarmoradi/go-mink | PR #175: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan | capacidade: outbox-publishing
+--- SPEC VIVA
+# outbox-publishing Specification
+
+## Purpose
+TBD - created by archiving change fix-review-correctness-bugs. Update Purpose after archive.
+## Requirements
+### Requirement: Webhook delivery success is 2xx only
+The webhook outbox publisher SHALL treat a response as delivered only when its status
+code is in the `2xx` range (`>= 200 && < 300`). Any `3xx`, `4xx`, or `5xx` response
+SHALL return an error so the outbox retries or dead-letters the message, so an
+unfollowed redirect or other non-success status can never be recorded as delivered.
+
+#### Scenario: A 3xx response is not treated as delivered
+- **WHEN** a webhook endpoint returns `304` (or another `3xx` the HTTP client does not auto-follow for a POST)
+- **THEN** `sendMessage` returns an error and the outbox does not mark the message completed
+
+#### Scenario: 2xx variants remain successful
+- **WHEN** the endpoint returns `200`, `201`, `202`, or `204`
+- **THEN** the message is recorded as delivered
+
+
+--- ARQUIVOS DO PR (46)
+modified  +3     -1     CHANGELOG.md
+modified  +1     -1     README.md
+modified  +88    -0     adapters/adapter.go
+added     +40    -0     adapters/feed_filter_test.go
+added     +84    -0     adapters/memory/filtered_feed_test.go
+modified  +22    -5     adapters/memory/memory.go
+added     +50    -0     adapters/memory/rewrite.go
+added     +113   -0     adapters/postgres/filtered_feed_test.go
+modified  +1     -0     adapters/postgres/postgres.go
+added     +39    -0     adapters/postgres/rewrite.go
+modified  +78    -0     adapters/postgres/subscription.go   <== código ligado à spec
+added     +77    -0     e2e_reencrypt_inplace_test.go
+modified  +9     -0     errors.go
+modified  +4     -2     examples/README.md
+added     +32    -0     examples/feed-filter/README.md
+added     +84    -0     examples/feed-filter/main.go
+added     +87    -0     examples/reencrypt-inplace/main.go
+added     +2     -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/.openspec.yaml
+added     +142   -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/design.md
+added     +86    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/proposal.md
+added     +35    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/specs/retention-policies/spec.md
+added     +21    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/design.md
+added     +103   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/proposal.md
+added     +58    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/in-place-stream-re-encryption/spec.md
+added     +25    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/stored-event-encryption/spec.md
+added     +28    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/tasks.md
+added     +2     -0     openspec/changes/filtered-feed-read/.openspec.yaml
+added     +131   -0     openspec/changes/filtered-feed-read/design.md
+added     +124   -0     openspec/changes/filtered-feed-read/proposal.md
+added     +39    -0     openspec/changes/filtered-feed-read/specs/event-subscriptions/spec.md
+added     +40    -0     openspec/changes/filtered-feed-read/tasks.md
+added     +62    -0     openspec/specs/in-place-stream-re-encryption/spec.md
+modified  +34    -0     openspec/specs/retention-policies/spec.md
+added     +29    -0     openspec/specs/stored-event-encryption/spec.md
+added     +211   -0     reencrypt_inplace_test.go
+modified  +151   -17    retention.go
+added     +253   -0     retention_checkpoint_test.go
+added     +14    -0     retention_errors.go
+modified  +123   -0     store.go
+added     +39    -0     store_filtered_test.go
+modified  +5     -1     website/docs/advanced/security.md
+modified  +34    -0     website/docs/core/event-store.md
+modified  +2     -1     website/docs/roadmap.md
+modified  +42    -0     website/docs/security.md
+--- DIFF DO CÓDIGO LIGADO
+### adapters/postgres/subscription.go
+@@ -6,6 +6,8 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"log"
++	"strconv"
++	"strings"
+ 	"time"
+ 
+ 	"go-mink.dev/adapters"
+@@ -187,6 +189,82 @@ func (a *PostgresAdapter) LoadFromPosition(ctx context.Context, fromPosition uin
+ 	return a.scanEvents(rows)
+ }
+ 
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, error) {
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++
++	limit = adapters.DefaultLimit(limit, 1000)
++
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++
++	return a.scanEvents(rows)
++}
++
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
++		b.WriteString(" AND ")
++		b.WriteString(column)
++		b.WriteString(" IN (")
++		for i, v := range values {
++			if i > 0 {
++				b.WriteByte(',')
++			}
++			b.WriteByte('$')
++			b.WriteString(strconv.Itoa(idx))
++			args = append(args, v)
++			idx++
++		}
++		b.WriteByte(')')
++	}
++
++	writeInClause("event_type", filter.EventTypes)
++	writeInClause("stream_id", filter.StreamIDs)
++
++	if filter.Category != "" {
++		b.WriteString(" AND stream_id LIKE $")
++		b.WriteString(strconv.Itoa(idx))
++		// LIKE '<category>-%': the same "<category>-" prefix FeedFilter.Matches uses (via
++		// adapters.CategoryStreamPrefix), escaped so metacharacters in the category are
++		// matched literally rather than over-matching adjacent categories.
++		args = append(args, escapeLikePattern(adapters.CategoryStreamPrefix(filter.Category))+"%")
++		idx++
++	}
++
++	return b.String(), args, idx
++}
++
+ // SubscribeAll subscribes to all events across all streams.
+ // Events are delivered starting from the specified global position.
+ // This uses polling-based subscription with continuous updates.
+
+===== P165 | repo exasol/exasol-personal | PR #169: feat: standardize exasol connect --json into one invocation document | capacidade: connect-sql-input
+--- SPEC VIVA
+# connect-sql-input Specification
+
+## Purpose
+TBD - created by archiving change add-connect-command-and-file-flags. Update Purpose after archive.
+## Requirements
+### Requirement: Inline SQL via --command
+
+`exasol connect` SHALL accept a `-c`/`--command <SQL>` flag whose argument is one or more SQL statements. When the flag is supplied, the command SHALL execute the statements non-interactively and then exit, without starting the interactive shell or reading stdin.
+
+The supplied SQL SHALL be split into statements on `;` terminators using the same splitting rules as the interactive shell (quote- and comment-aware), and each statement SHALL be executed in order against the database. Results SHALL be printed using the same formatter as the interactive shell, honoring `--json` and `--json` format options.
+
+#### Scenario: Single statement
+
+- **WHEN** the user runs `exasol connect -c "SELECT 1"`
+- **THEN** the statement is executed and its result is printed
+- **AND** the command exits without entering the interactive shell
+
+#### Scenario: Multiple semicolon-separated statements
+
+- **WHEN** the user runs `exasol connect -c "CREATE TABLE t(x INT); INSERT INTO t VALUES (1); SELECT * FROM t"`
+- **THEN** each statement is executed in order
+- **AND** the result of each result-producing statement is printed in order
+
+#### Scenario: Trailing or empty statements are ignored
+
+- **WHEN** the supplied SQL contains empty segments (e.g. a trailing `;` or `;;`)
+- **THEN** empty segments are skipped and no error is raised for them
+
+### Requirement: SQL script via --file
+
+`exasol connect` SHALL accept a `-f`/`--file <path>` flag whose argument is the path to a SQL script file. When the flag is supplied, the command SHALL read the file, execute its `;`-separated statements non-interactively in order, and then exit, without starting the interactive shell or reading stdin.
+
+The file contents SHALL be split and executed using the same rules as `--command`.
+
+#### Scenario: Run a script file
+
+- **WHEN** the user runs `exasol connect -f script.sql` and `script.sql` contains multiple `;`-separated statements
+- **THEN** each statement is executed in order and results are printed
+
+#### Scenario: Missing or unreadable file
+
+- **WHEN** the file given to `--file` does not exist or cannot be read
+- **THEN** the command exits with a non-zero status and a clear error message
+- **AND** no statements are executed
+
+### Requirement: Flag precedence and mutual exclusivity
+
+The `--command` and `--file` flags SHALL be mutually exclusive. Supplying both SHALL cause the command to exit with a non-zero status and a clear error message before connecting to the database. When neither flag is supplied, `exasol connect` SHALL retain its existing interactive and stdin behavior unchanged.
+
+#### Scenario: Both flags supplied
+
+- **WHEN** the user runs `exasol connect -c "SELECT 1" -f script.sql`
+- **THEN** the command exits with a non-zero status and an error stating the flags are mutually exclusive
+
+#### Scenario: Neither flag supplied preserves existing behavior
+
+- **WHEN** the user runs `exasol connect` with neither `--command` nor `--file`
+- **THEN** the command behaves as before: interactive shell on a TTY, or reads SQL from stdin when piped
+
+### Requirement: Non-interactive exit status
+
+When run with `--command` or `--file`, `exasol connect` SHALL exit with a non-zero status if any executed statement fails, so that callers and scripts can detect errors.
+
+#### Scenario: Statement fails
+
+- **WHEN** a statement supplied via `--command` or `--file` fails to execute
+- **THEN** the command reports the error
+- **AND** exits with a non-zero status
+
+
+--- ARQUIVOS DO PR (22)
+modified  +1     -0     README.md
+modified  +6     -1     cmd/exasol/connect.go   <== código ligado à spec
+modified  +17    -5     cmd/exasol/connect_test.go
+modified  +11    -2     cmd/exasol/main.go
+modified  +38    -17    internal/connect/connect.go   <== código ligado à spec
+modified  +246   -29    internal/connect/connect_test.go
+modified  +139   -34    internal/connect/exasol/database.go
+modified  +192   -29    internal/connect/exasol/database_test.go
+added     +23    -0     internal/connect/exasol/execution_error.go
+modified  +16    -4     internal/connect/exasol/query_result.go
+added     +115   -0     internal/connect/json_execution.go
+modified  +10    -6     internal/connect/shell.go
+added     +145   -0     internal/connect/types/sql_error.go
+added     +162   -0     internal/connect/types/sql_error_test.go
+added     +182   -0     internal/connect/types/statement.go
+added     +63    -0     internal/connect/types/statement_test.go
+modified  +2     -0     internal/connect/types/types.go
+added     +2     -0     openspec/changes/standardize-connect-json-output/.openspec.yaml
+added     +43    -0     openspec/changes/standardize-connect-json-output/design.md
+added     +26    -0     openspec/changes/standardize-connect-json-output/proposal.md
+added     +116   -0     openspec/changes/standardize-connect-json-output/specs/connect-json-output/spec.md
+added     +17    -0     openspec/changes/standardize-connect-json-output/tasks.md
+--- DIFF DO CÓDIGO LIGADO
+### cmd/exasol/connect.go
+@@ -16,14 +16,19 @@ const connectCmdShortDesc = "Open an SQL connection to a running database"
+ const connectCmdLongDesc = connectCmdShortDesc + `
+ 
+ Establish an SQL connection to the database instance in an active deployment.
++When run non-interactively with --json, stdout contains one JSON document for
++the full invocation. Statement records include statementType and rowsAffected;
++result-set statements report rowsAffected as 0 when the driver does not expose
++affected-row metadata. Interactive --json sessions continue to print one JSON
++document per executed statement instead of an invocation envelope.
+ `
+ 
+ const connectCmdExample = `  exasol connect
+   exasol connect --json
+   exasol connect --csv -c "SELECT * FROM products" > products.csv
+   exasol connect -c "SELECT 1; SELECT 2"
+   exasol connect -f script.sql
+-	printf 'SELECT 1;\n' | exasol connect --json=compact`
++  printf 'SELECT 1;\n' | exasol connect --json=compact`
+ 
+ var connectOpts = connect.Opts{
+ 	ExecuteOnSemicolon: true,
+
+### internal/connect/connect.go
+@@ -6,7 +6,6 @@ package connect
+ import (
+ 	"context"
+ 	"encoding/csv"
+-	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -194,9 +193,9 @@ func Connect(
+ 	}
+ 
+ 	// The interactive preview cap applies only when an interactive shell is
+-	// actually started. --command/--file and piped input return everything by
+-	// default, so they behave as non-interactive (unlimited) unless --max-rows
+-	// is set explicitly.
++	// actually started. --command/--file and non-interactive JSON execution
++	// return everything by default, so they behave as non-interactive
++	// (unlimited) unless --max-rows is set explicitly.
+ 	interactiveShell := !nonInteractive && util.IsInteractiveStdin()
+ 
+ 	modeDefault := 0
+@@ -205,6 +204,17 @@ func Connect(
+ 	}
+ 	maxRows := effectiveMaxRows(opts.MaxRows, modeDefault)
+ 
++	if nonInteractive && opts.OutputFormat == OutputFormatJSON {
++		return runJSONStatements(
++			ctx,
++			nonInteractiveSQL,
++			database,
++			output,
++			opts.JSONFormat,
++			maxRows,
++		)
++	}
++
+ 	processInput := func(input string) error {
+ 		// The input string is expected to be trimmed of whitespace
+ 		if input == "" {
+@@ -237,15 +247,25 @@ func Connect(
+ 		}
+ 	}
+ 
+-	return RunShellWithOpts(processInput, ShellOpts{ExecuteOnSemicolon: opts.ExecuteOnSemicolon})
++	return RunShellWithOpts(processInput, ShellOpts{
++		ExecuteOnSemicolon: opts.ExecuteOnSemicolon,
++	})
+ }
+ 
+ // resolveNonInteractiveSQL returns the SQL to run non-interactively, derived
+-// from --file or --command. The boolean reports whether a non-interactive
+-// source was supplied; when false, the caller falls back to the interactive
+-// shell. A --file that cannot be read yields an error before any database
+-// connection is attempted.
++// from --file, --command, or piped stdin in JSON mode. The boolean reports
++// whether a non-interactive source was supplied; when false, the caller falls
++// back to the shell path. A --file that cannot be read yields an error before
++// any database connection is attempted.
+ func resolveNonInteractiveSQL(opts *Opts) (string, bool, error) {
++	return resolveNonInteractiveSQLFrom(opts, os.Stdin, util.IsInteractiveStdin())
++}
++
++func resolveNonInteractiveSQLFrom(
++	opts *Opts,
++	stdin io.Reader,
++	interactiveStdin bool,
++) (string, bool, error) {
+ 	switch {
+ 	case opts.File != "":
+ 		contents, err := os.ReadFile(opts.File)
+@@ -256,6 +276,13 @@ func resolveNonInteractiveSQL(opts *Opts) (string, bool, error) {
+ 		return string(contents), true, nil
+ 	case opts.Command != "":
+ 		return opts.Command, true, nil
++	case !interactiveStdin && opts.OutputFormat == OutputFormatJSON:
++		contents, err := io.ReadAll(stdin)
++		if err != nil {
++			return "", false, fmt.Errorf("reading piped SQL from stdin: %w", err)
++		}
++
++		return string(contents), true, nil
+ 	default:
+ 		return "", false, nil
+ 	}
+@@ -304,16 +331,10 @@ func printResultJSON(
+ 	queryResult generaltypes.QueryResulter,
+ 	jsonFormat JSONFormat,
+ ) error {
+-	encoder := json.NewEncoder(output)
+-	encoder.SetEscapeHTML(false)
+-	if normalizeJSONFormat(jsonFormat) == JSONFormatPretty {
+-		encoder.SetIndent("", "  ")
+-	}
+-
+-	return encoder.Encode(jsonQueryResult{
++	return encodeJSONDocument(output, jsonQueryResult{
+ 		Columns: queryResult.ColumnNames(),
+ 		Rows:    queryResult.Values(),
+-	})
++	}, jsonFormat)
+ }
+ 
+ func printResultCSV(output io.Writer, queryResult generaltypes.QueryResulter) error {
+
+===== P166 | repo HazelnutParadise/insyra | PR #149: Enhance/stats | capacidade: script-runner
+--- SPEC VIVA
+# script-runner Specification
+
+## Purpose
+TBD - created by archiving change cli-repl. Update Purpose after archive.
+## Requirements
+### Requirement: Script file execution
+系統 SHALL 提供 `run` 命令執行 `.isr` 腳本檔。
+
+#### Scenario: Run script file
+- **WHEN** 使用者執行 `run "analysis.isr"`
+- **THEN** 系統讀取檔案，逐行送入 command registry 執行
+
+#### Scenario: Script with comments
+- **WHEN** 腳本檔包含以 `#` 開頭的行
+- **THEN** 系統跳過註解行
+
+#### Scenario: Script with blank lines
+- **WHEN** 腳本檔包含空行
+- **THEN** 系統跳過空行
+
+#### Scenario: Script error handling
+- **WHEN** 腳本中某一行執行失敗
+- **THEN** 系統顯示錯誤訊息（含行號），並繼續執行後續行（或依設定停止）
+
+#### Scenario: Script variable scope
+- **WHEN** 腳本中使用 `load "data.csv" as t1` 再使用 `show t1`
+- **THEN** 腳本共享同一個 ExecContext，變數在腳本行之間可用
+
+#### Scenario: Run script from CLI
+- **WHEN** 使用者執行 `insyra run "analysis.isr"`
+- **THEN** 系統在當前環境下執行腳本，執行完畢後存回環境狀態
+
+
+--- ARQUIVOS DO PR (73)
+added     +38    -0     .github/workflows/clustering-parity.yml
+added     +38    -0     .github/workflows/knn-parity.yml
+modified  +1     -1     Docs/README.md
+modified  +9     -1     Docs/cli-dsl.md
+modified  +570   -250   Docs/stats.md
+modified  +12    -12    Docs/tutorials/ab-test-decision-with-statistics.md
+modified  +6     -6     Docs/tutorials/market-trend-forecasting-with-yfinance.md
+added     +198   -0     cli/commands/clustering.go
+added     +89    -0     cli/commands/clustering_test.go
+modified  +39    -39    cli/commands/hypothesis.go   <== código ligado à spec
+added     +178   -0     cli/commands/knn.go
+added     +64    -0     cli/commands/knn_test.go
+modified  +3     -3     cli/commands/pca.go   <== código ligado à spec
+modified  +12    -12    cli/commands/regression.go   <== código ligado à spec
+modified  +21    -9     cli/commands/stats_adv.go   <== código ligado à spec
+modified  +21    -1     openspec/specs/dsl-commands/spec.md
+added     +1     -0     stats/AGENTS.md
+added     +182   -0     stats/CLAUDE.md
+added     +1232  -0     stats/REFACTOR_PLAN.md
+modified  +81    -93    stats/anova.go
+added     +72    -0     stats/anova_core.go
+added     +94    -0     stats/anova_core_test.go
+modified  +9     -9     stats/anova_test.go
+modified  +18    -24    stats/chi_square.go
+modified  +3     -3     stats/chi_square_test.go
+added     +281   -0     stats/clustering.go
+added     +288   -0     stats/clustering_corpus_test.go
+added     +170   -0     stats/clustering_test.go
+modified  +103   -180   stats/correlation.go
+added     +60    -0     stats/correlation_ci_test.go
+modified  +8     -8     stats/correlation_test.go
+added     +99    -0     stats/crosslang_clustering_generated_test.go
+added     +192   -0     stats/crosslang_clustering_test.go
+added     +474   -0     stats/crosslang_helpers_test.go
+added     +91    -0     stats/crosslang_knn_generated_test.go
+added     +158   -0     stats/crosslang_knn_test.go
+added     +1339  -0     stats/crosslang_public_methods_test.go
+modified  +11    -32    stats/diag.go
+modified  +20    -5     stats/diag_test.go
+added     +141   -0     stats/dist_math_util_test.go
+added     +59    -0     stats/distutil.go
+modified  +62    -92    stats/ftest.go
+modified  +15    -15    stats/ftest_test.go
+added     +1092  -0     stats/internal/clustering/cluster.go
+added     +176   -0     stats/internal/clustering/cluster_theory_helpers_test.go
+added     +46    -0     stats/internal/clustering/cluster_theory_test.go
+added     +120   -0     stats/internal/knn/generated_corpus_test.go
+added     +691   -0     stats/internal/knn/knn.go
+added     +67    -0     stats/internal/knn/knn_test.go
+added     +148   -0     stats/internal/linalg/linalg.go
+added     +137   -0     stats/internal/linalg/linalg_r_test.go
+added     +244   -0     stats/knn.go
+added     +263   -0     stats/knn_corpus_test.go
+added     +223   -0     stats/knn_test.go
+modified  +36    -37    stats/kurtosis.go
+modified  +30    -7     stats/kurtosis_test.go
+added     +78    -0     stats/mathutil.go
+modified  +18    -4     stats/moment_test.go
+modified  +25    -47    stats/moments.go
+added     +148   -0     stats/olsutil.go
+modified  +28    -36    stats/pca.go
+added     +314   -0     stats/primitives_r_test.go
+modified  +169   -585   stats/regression.go
+modified  +24    -29    stats/regression_test.go
+added     +28    -0     stats/sampleutil.go
+modified  +18    -24    stats/skewness.go
+modified  +18    -5     stats/skewness_test.go
+added     +1098  -0     stats/testdata/crosslang_baseline.R
+added     +1439  -0     stats/testdata/crosslang_baseline.py
+modified  +51    -111   stats/ttest.go
+modified  +12    -3     stats/ttest_test.go
+modified  +33    -85    stats/ztest.go
+modified  +8     -2     stats/ztest_test.go
+--- DIFF DO CÓDIGO LIGADO
+### cli/commands/hypothesis.go
+@@ -34,9 +34,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -56,9 +56,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 4 {
+ 			equalVariance = strings.EqualFold(args[3], "equal")
+ 		}
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -74,9 +74,9 @@ func runTTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "t=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -110,9 +110,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 5 {
+ 			alternative = parseAlternativeHypothesis(args[4])
+ 		}
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -140,9 +140,9 @@ func runZTestCommand(ctx *ExecContext, args []string) error {
+ 		if len(args) >= 6 {
+ 			alternative = parseAlternativeHypothesis(args[5])
+ 		}
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "z=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -164,9 +164,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -189,9 +189,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if len(cells) != aLevels*bLevels {
+ 			return fmt.Errorf("twoway requires exactly %d cells", aLevels*bLevels)
+ 		}
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "FA=%v pA=%v FB=%v pB=%v\n", result.FactorA.F, result.FactorA.P, result.FactorB.F, result.FactorB.P)
+ 		return nil
+@@ -203,9 +203,9 @@ func runAnovaCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.RepeatedMeasuresANOVA(subjects...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.RepeatedMeasuresANOVA(subjects...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Factor.F, result.Factor.P)
+ 		return nil
+@@ -231,9 +231,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.FTestForVarianceEquality(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ftest failed")
++		result, err := stats.FTestForVarianceEquality(a, b)
++		if err != nil {
++			return fmt.Errorf("ftest failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -245,9 +245,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LeveneTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("levene test failed")
++		result, err := stats.LeveneTest(groups)
++		if err != nil {
++			return fmt.Errorf("levene test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "F=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -259,9 +259,9 @@ func runFTestCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.BartlettTest(groups)
+-		if result == nil {
+-			return fmt.Errorf("bartlett test failed")
++		result, err := stats.BartlettTest(groups)
++		if err != nil {
++			return fmt.Errorf("bartlett test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -291,9 +291,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			probabilities = append(probabilities, value)
+ 		}
+-		result := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
+-		if result == nil {
+-			return fmt.Errorf("chi-square gof failed")
++		result, err := stats.ChiSquareGoodnessOfFit(dl, probabilities, true)
++		if err != nil {
++			return fmt.Errorf("chi-square gof failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+@@ -309,9 +309,9 @@ func runChiSqCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ChiSquareIndependenceTest(row, col)
+-		if result == nil {
+-			return fmt.Errorf("chi-square independence test failed")
++		result, err := stats.ChiSquareIndependenceTest(row, col)
++		if err != nil {
++			return fmt.Errorf("chi-square independence test failed: %w", err)
+ 		}
+ 		_, _ = fmt.Fprintf(ctx.Output, "chi2=%v p=%v\n", result.Statistic, result.PValue)
+ 		return nil
+
+### cli/commands/pca.go
+@@ -24,9 +24,9 @@ func runPCACommand(ctx *ExecContext, args []string) error {
+ 	if err != nil || n < 1 {
+ 		return fmt.Errorf("invalid number of components: %s", coreArgs[1])
+ 	}
+-	result := stats.PCA(dt, n)
+-	if result == nil {
+-		return fmt.Errorf("pca failed")
++	result, err := stats.PCA(dt, n)
++	if err != nil {
++		return fmt.Errorf("pca failed: %w", err)
+ 	}
+ 	ctx.Vars[alias] = result.Components
+ 	ctx.Vars[alias+"_eigenvalues"] = result.Eigenvalues
+
+### cli/commands/regression.go
+@@ -35,9 +35,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 			}
+ 			xs = append(xs, x)
+ 		}
+-		regressionResult := stats.LinearRegression(y, xs...)
+-		if regressionResult == nil {
+-			return fmt.Errorf("failed to run linear regression")
++		regressionResult, err := stats.LinearRegression(y, xs...)
++		if err != nil {
++			return fmt.Errorf("failed to run linear regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = regressionResult
+ 		_, _ = fmt.Fprintf(ctx.Output, "linear regression stored in %s (R2=%v)\n", alias, regressionResult.RSquared)
+@@ -54,9 +54,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil || degree < 1 {
+ 			return fmt.Errorf("invalid polynomial degree: %s", coreArgs[3])
+ 		}
+-		result := stats.PolynomialRegression(y, x, degree)
+-		if result == nil {
+-			return fmt.Errorf("failed to run polynomial regression")
++		result, err := stats.PolynomialRegression(y, x, degree)
++		if err != nil {
++			return fmt.Errorf("failed to run polynomial regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "polynomial regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -66,9 +66,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.ExponentialRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run exponential regression")
++		result, err := stats.ExponentialRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run exponential regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "exponential regression stored in %s (R2=%v)\n", alias, result.RSquared)
+@@ -78,9 +78,9 @@ func runRegressionCommand(ctx *ExecContext, args []string) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		result := stats.LogarithmicRegression(y, x)
+-		if result == nil {
+-			return fmt.Errorf("failed to run logarithmic regression")
++		result, err := stats.LogarithmicRegression(y, x)
++		if err != nil {
++			return fmt.Errorf("failed to run logarithmic regression: %w", err)
+ 		}
+ 		ctx.Vars[alias] = result
+ 		_, _ = fmt.Fprintf(ctx.Output, "logarithmic regression stored in %s (R2=%v)\n", alias, result.RSquared)
+
+### cli/commands/stats_adv.go
+@@ -38,9 +38,9 @@ func runCorrCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	result := stats.Correlation(x, y, method)
+-	if result == nil {
+-		return fmt.Errorf("failed to calculate correlation")
++	result, err := stats.Correlation(x, y, method)
++	if err != nil {
++		return fmt.Errorf("failed to calculate correlation: %w", err)
+ 	}
+ 	_, _ = fmt.Fprintf(ctx.Output, "correlation=%v p=%v\n", result.Statistic, result.PValue)
+ 	return nil
+@@ -63,9 +63,9 @@ func runCorrMatrixCommand(ctx *ExecContext, args []string) error {
+ 		}
+ 	}
+ 
+-	corr, p := stats.CorrelationMatrix(dt, method)
+-	if corr == nil {
+-		return fmt.Errorf("failed to compute correlation matrix")
++	corr, p, err := stats.CorrelationMatrix(dt, method)
++	if err != nil {
++		return fmt.Errorf("failed to compute correlation matrix: %w", err)
+ 	}
+ 	ctx.Vars[alias] = corr
+ 	if p != nil {
+@@ -87,7 +87,11 @@ func runCovCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Covariance(x, y))
++	value, err := stats.Covariance(x, y)
++	if err != nil {
++		return fmt.Errorf("failed to compute covariance: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -99,7 +103,11 @@ func runSkewnessCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Skewness(dl))
++	value, err := stats.Skewness(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute skewness: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+@@ -111,7 +119,11 @@ func runKurtosisCommand(ctx *ExecContext, args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, _ = fmt.Fprintf(ctx.Output, "%v\n", stats.Kurtosis(dl))
++	value, err := stats.Kurtosis(dl)
++	if err != nil {
++		return fmt.Errorf("failed to compute kurtosis: %w", err)
++	}
++	_, _ = fmt.Fprintf(ctx.Output, "%v\n", value)
+ 	return nil
+ }
+ 
+
+===== P167 | repo aleris/woti | PR #2: add sub-hour navigation interval (60/30/15 min) | capacidade: day-label-selection-extension
+--- SPEC VIVA
+### Requirement: Selection highlight extends across full day label
+When the selected hour falls on a day boundary (midnight, `hour_in_day == 0`), the selection highlight in the day row SHALL extend across all character positions belonging to that day label, not just the single cell at the selected hour.
+
+#### Scenario: Selected hour at midnight with short label
+- **WHEN** the selected hour is midnight and the day label is "WED 19" (6 characters spanning 3 cells)
+- **THEN** all 6 label characters receive the selected highlight style (SELECTED_FG on SELECTED_BG, bold)
+
+#### Scenario: Selected hour at midnight with month suffix
+- **WHEN** the selected hour is midnight crossing into a different month and the day label is "WED 1, April" (13 characters)
+- **THEN** all 13 label characters receive the selected highlight style across however many cells the label spans
+
+#### Scenario: Selected hour at midnight with year suffix
+- **WHEN** the selected hour is midnight crossing into a different year and the day label is "THU 1, January, 2027"
+- **THEN** all label characters receive the selected highlight style
+
+#### Scenario: Selected hour NOT at midnight
+- **WHEN** the selected hour is not a day boundary (e.g., 14:00)
+- **THEN** the day row highlight remains limited to the single selected cell (existing behavior unchanged)
+
+#### Scenario: Label truncated at timeline edge
+- **WHEN** the selected hour is at midnight and the day label extends beyond the visible timeline
+- **THEN** only the visible portion of the label receives the selected highlight style
+
+### Requirement: Local-hour highlight extends across full day label
+When the local hour (current time) falls on a day boundary (midnight) and the user has scrolled away (`hour_offset != 0`), the local-hour highlight in the day row SHALL extend across all character positions belonging to that day label.
+
+#### Scenario: Local hour at midnight
+- **WHEN** the local hour is midnight and hour_offset is non-zero
+- **THEN** all characters of that midnight's day label receive the local-hour highlight style (LOCAL_BG with DAY_LABEL foreground, bold)
+
+#### Scenario: Local hour not at midnight
+- **WHEN** the local hour is not a day boundary
+- **THEN** the day row local highlight remains limited to the single local-hour cell (existing behavior unchanged)
+
+### Requirement: Gap spaces between label characters remain unhighlighted
+Character positions that are not part of the day label text (gap spaces at `pos_in_cell == 0` that are not overwritten by label text) SHALL NOT receive the extended highlight, preserving visual separation between cells.
+
+#### Scenario: Leading space not overwritten by label
+- **WHEN** a gap space at `pos_in_cell == 0` is not part of the day label text (`day_is_label[pos] == false`)
+- **THEN** that position does not receive selection or local highlight background
+
+--- ARQUIVOS DO PR (26)
+modified  +1     -1     Cargo.lock
+modified  +1     -1     Cargo.toml
+modified  +26    -3     README.md
+added     +2     -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/.openspec.yaml
+added     +198   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/design.md
+added     +82    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/proposal.md
+added     +79    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/accelerated-nav/spec.md
+added     +55    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/half-hour-timeline-indicator/spec.md
+added     +63    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/hour-offset-indicator/spec.md
+added     +268   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/sub-hour-nav-interval/spec.md
+added     +77    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/tasks.md
+added     +50    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/view.md
+modified  +45    -18    openspec/specs/accelerated-nav/spec.md
+modified  +34    -18    openspec/specs/half-hour-timeline-indicator/spec.md
+modified  +39    -17    openspec/specs/hour-offset-indicator/spec.md
+added     +266   -0     openspec/specs/sub-hour-nav-interval/spec.md
+modified  +6     -0     src/cli.rs
+modified  +90    -8     src/config.rs
+modified  +19    -5     src/main.rs
+modified  +14    -4     src/tui/app.rs
+modified  +112   -45    src/tui/copy.rs
+modified  +18    -10    src/tui/event.rs
+modified  +85    -0     src/tui/mod.rs
+added     +185   -0     src/tui/nav_interval.rs
+modified  +635   -161   src/tui/render.rs   <== código ligado à spec
+modified  +266   -1     src/tz_data.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/tui/render.rs
+@@ -12,15 +12,52 @@ use crate::config::{TimeFormat, WorkingHoursConfig};
+ 
+ use super::app::App;
+ use super::theme;
+-use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, TIMELINE_GAP};
++use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, NavInterval, TIMELINE_GAP};
+ 
+-pub fn compute_datetime_for_hour(
+-    _tz: Tz,
++/// Compute the datetime for a cell whose offset from "now" is given in minutes.
++/// Used by the sub-hour interval rendering pipeline (and equivalent to the
++/// legacy hour-based helper when `offset_minutes` is a multiple of 60).
++pub fn compute_datetime_for_minutes(
+     now_tz: chrono::DateTime<Tz>,
+-    offset_from_current: i32,
++    offset_minutes: i32,
+ ) -> chrono::DateTime<Tz> {
+-    let duration = chrono::Duration::hours(offset_from_current as i64);
+-    now_tz + duration
++    now_tz + chrono::Duration::minutes(offset_minutes as i64)
++}
++
++/// Floor `now_tz` to the most recent boundary of `interval_minutes`. For the
++/// 60-minute interval we intentionally return `now_tz` unchanged so the H1
++/// rendering path stays byte-for-byte identical to the legacy behavior
++/// (which preserved `now_tz`'s wall-clock minutes inside each hour cell).
++fn floor_to_interval(now_tz: chrono::DateTime<Tz>, interval_minutes: i32) -> chrono::DateTime<Tz> {
++    if interval_minutes >= 60 {
++        return now_tz;
++    }
++    let minute = now_tz.minute() as i32;
++    let floored_minute = (minute / interval_minutes) * interval_minutes;
++    let drop_minutes = minute - floored_minute;
++    now_tz
++        - chrono::Duration::minutes(drop_minutes as i64)
++        - chrono::Duration::seconds(now_tz.second() as i64)
++        - chrono::Duration::nanoseconds(now_tz.nanosecond() as i64)
++}
++
++/// `true` when the cell at `dt` is an "hour cell" (rendered with the wall-hour
++/// digit + the timezone's existing sub-row glyph). Intermediate cells in
++/// sub-hour intervals fail this check and render `·` + a wall-clock minute
++/// superscript instead.
++///
++/// In sub-hour intervals the cell stride may not divide a timezone's
++/// `offset_m` evenly (e.g. Nepal `+5:45` at M30: cells land on `:00`/`:30`
++/// but the natural hour change is at `:45`). To keep one hour digit per
++/// hour aligned visually with other timezones, we pick the cell whose
++/// `[start, start + interval)` window *contains* the natural hour boundary,
++/// i.e. `dt.minute() == floor(offset_m / interval_minutes) * interval_minutes`.
++/// At H1 callers short-circuit; this helper is only meaningful for
++/// `interval_minutes < 60`.
++fn is_hour_cell(dt: chrono::DateTime<Tz>, offset_m: i32, interval_minutes: i32) -> bool {
++    let cell_minute = dt.minute() as i32;
++    let target = (offset_m / interval_minutes) * interval_minutes;
++    cell_minute == target
+ }
+ 
+ impl App {
+@@ -72,15 +109,20 @@ impl App {
+         let label_on = Style::default().fg(theme::LABEL_FG);
+         let label_off = Style::default().fg(theme::LABEL_DISABLED_FG);
+ 
++        let nav_label = match self.interval {
++            NavInterval::H1 => " Hour ",
++            NavInterval::M30 => " 30m ",
++            NavInterval::M15 => " 15m ",
++        };
+         let shortcuts = vec![
+             Span::styled(" ↑ ", if can_up { key_on } else { key_off }),
+             Span::styled(" Up ", if can_up { label_on } else { label_off }),
+             Span::styled(" ↓ ", if can_down { key_on } else { key_off }),
+             Span::styled(" Down ", if can_down { label_on } else { label_off }),
+             Span::styled(" ← ", key_on),
+-            Span::styled(" Prev Hour ", label_on),
++            Span::styled(format!(" Prev{nav_label}"), label_on),
+             Span::styled(" → ", key_on),
+-            Span::styled(" Next Hour ", label_on),
++            Span::styled(format!(" Next{nav_label}"), label_on),
+             Span::styled(" c ", key_on),
+             Span::styled(" Copy ", label_on),
+             Span::styled(" q ", key_on),
+@@ -100,6 +142,26 @@ impl App {
+             Style::default().fg(theme::HOUR_FG_TRANSITION)
+         };
+ 
++        let interval_switcher: Vec<Span> = vec![
++            Span::styled(" i ", key_on),
++            Span::raw(" "),
++            Span::styled(
++                " 60 ",
++                if self.interval == NavInterval::H1 { sel } else { dim },
++            ),
++            Span::styled("│", sep),
++            Span::styled(
++                " 30 ",
++                if self.interval == NavInterval::M30 { sel } else { dim },
++            ),
++            Span::styled("│", sep),
++            Span::styled(
++                " 15 ",
++                if self.interval == NavInterval::M15 { sel } else { dim },
++            ),
++            Span::raw(" "),
++        ];
++
+         let fmt_switcher: Vec<Span> = vec![
+             Span::styled(" w ", key_on),
+             Span::styled(" Shade ", shade_label_style),
+@@ -135,11 +197,13 @@ impl App {
+         ];
+ 
+         let left_w: usize = shortcuts.iter().map(|s| s.width()).sum();
+-        let right_w: usize = fmt_switcher.iter().map(|s| s.width()).sum();
++        let right_w: usize = interval_switcher.iter().map(|s| s.width()).sum::<usize>()
++            + fmt_switcher.iter().map(|s| s.width()).sum::<usize>();
+         let spacer = (area.width as usize).saturating_sub(left_w + right_w);
+ 
+         let mut spans = shortcuts;
+         spans.push(Span::raw(" ".repeat(spacer)));
++        spans.extend(interval_switcher);
+         spans.extend(fmt_switcher);
+ 
+         let line = Line::from(spans);
+@@ -164,8 +228,9 @@ impl App {
+             y += BLOCK_HEIGHT;
+         }
+ 
+-        if self.hour_offset != 0 && y < y_end {
+-            let label = format_hour_offset(self.hour_offset);
++        if self.cell_offset != 0 && y < y_end {
++            let selected_minutes = self.cell_offset * self.interval.minutes() as i32;
++            let label = format_offset(selected_minutes);
+             let inner_width = area.width.saturating_sub(2);
+             let info_w = (INFO_COL_WIDTH.min(inner_width)) as usize;
+             let left_pad = info_w + TIMELINE_GAP as usize;
+@@ -194,17 +259,27 @@ impl App {
+ 
+         let now_utc = self.reference_time();
+         let now_tz = now_utc.with_timezone(&tz);
+-        let current_hour = now_tz.hour() as i32;
++        let interval_minutes = self.interval.minutes() as i32;
++        let anchor_dt = floor_to_interval(now_tz, interval_minutes);
++        let selected_offset_minutes = self.cell_offset * interval_minutes;
++        // Cell-aligned anchor for the timeline (snaps to interval grid so
++        // hour digits land on the right column and `is_hour_cell` works).
++        let cell_anchor_dt = compute_datetime_for_minutes(anchor_dt, selected_offset_minutes);
++        // Left-info datetime preserves the actual wall-clock minute (e.g.
++        // `:37` instead of the floored `:30`/`:15`). Mirrors the H1 path
++        // where `floor_to_interval` is a no-op and the displayed time is
++        // simply `now_tz + cell_offset * 60` — i.e. the user's original
++        // minute is carried through navigation.
++        let display_dt = compute_datetime_for_minutes(now_tz, selected_offset_minutes);
+ 
+         let use_24h = self.use_24h_for_tz(&entry.iana_id);
+-        let selected_dt = compute_datetime_for_hour(tz, now_tz, self.hour_offset);
+-        let tz_abbr = selected_dt.format("%Z").to_string();
++        let tz_abbr = crate::tz_data::display_abbreviation(&display_dt);
+         let time_str = if use_24h {
+-            selected_dt.format("%H:%M").to_string()
++            display_dt.format("%H:%M").to_string()
+         } else {
+-            selected_dt.format("%-I:%M %p").to_string()
++            display_dt.format("%-I:%M %p").to_string()
+         };
+-        let date_str = selected_dt.format("%a, %b %d").to_string();
++        let date_str = display_dt.format("%a, %b %d").to_string();
+ 
+         let block = Block::default().padding(Padding::new(1, 1, 0, 0));
+         let inner = block.inner(area);
+@@ -221,12 +296,12 @@ impl App {
+         let left_pad = info_w + TIMELINE_GAP as usize;
+         let timeline_avail = inner.width.saturating_sub(left_pad as u16);
+         let num_cells = (timeline_avail / CELL_WIDTH) as i32;
+-
+-        let base_hour = current_hour + self.hour_offset;
+-        let start_hour = base_hour - num_cells / 2;
+         let cell_w = CELL_WIDTH as usize;
+ 
+-        let utc_secs = selected_dt.offset().fix().local_minus_utc();
++        let selected_idx = num_cells / 2;
++        let current_idx = selected_idx - self.cell_offset;
++
++        let utc_secs = cell_anchor_dt.offset().fix().local_minus_utc();
+         let offset_m = (utc_secs.abs() % 3600) / 60;
+ 
+         let shading = if self.shading_enabled {
+@@ -236,15 +311,15 @@ impl App {
+         };
+ 
+         let tl = TimelineParams {
+-            start_hour,
+-            base_hour,
+-            current_hour,
+-            hour_offset: self.hour_offset,
++            base_dt: cell_anchor_dt,
++            cell_offset: self.cell_offset,
+             num_cells,
++            selected_idx,
++            current_idx,
++            interval_minutes,
+             cell_w,
+             use_24h,
+             offset_m,
+-            tz,
+             now_tz,
+             shading,
+         };
+@@ -257,7 +332,7 @@ impl App {
+         line1.extend(day_spans);
+         frame.render_widget(Paragraph::new(Line::from(line1)), rows[0]);
+ 
+-        let mut line2 = build_info_line(entry, &tz_abbr, &time_str, selected_dt, info_w);
++        let mut line2 = build_info_line(entry, &tz_abbr, &time_str, display_dt, info_w);
+         line2.extend(hour_spans);
+         frame.render_widget(Paragraph::new(Line::from(line2)), rows[1]);
+ 
+@@ -275,19 +350,45 @@ impl App {
+ }
+ 
+ struct TimelineParams {
+-    start_hour: i32,
+-    base_hour: i32,
+-    current_hour: i32,
+-    hour_offset: i32,
++    /// Absolute datetime of the selected (center) cell.
++    base_dt: chrono::DateTime<Tz>,
++    /// Selected cell offset (in cells, signed) relative to the "now" cell.
++    cell_offset: i32,
+     num_cells: i32,
++    /// Index of the selected cell in the visible row (always `num_cells / 2`).
++    selected_idx: i32,
++    /// Index of the cell holding the floored "now" boundary
++    /// (`selected_idx - cell_offset`).
++    current_idx: i32,
++    /// Minutes per cell. `60` reproduces the legacy hourly view byte-for-byte.
++    interval_minutes: i32,
+     cell_w: usize,
+     use_24h: bool,
++    /// Timezone's sub-hour minute offset from UTC (e.g. `30` for IST, `45` for
++    /// Nepal). Used to pick which cells are "hour cells" in sub-hour modes.
+     offset_m: i32,
+-    tz: Tz,
+     now_tz: chrono::DateTime<Tz>,
+     shading: Option<WorkingHoursConfig>,
+ }
+ 
++impl TimelineParams {
++    /// Datetime for the cell at visible index `i`.
++    fn dt_for_cell(&self, i: i32) -> chrono::DateTime<Tz> {
++        let delta = (i - self.selected_idx) as i64 * self.interval_minutes as i64;
++        self.base_dt + chrono::Duration::minutes(delta)
++    }
++
++    /// True at H1 (every cell is conceptually an hour cell) or when the cell
++    /// is the sub-hour cell whose window contains the timezone's natural
++    /// hour boundary.
++    fn is_hour_cell_at(&self, i: i32) -> bool {
++        if self.interval_minutes >= 60 {
++            return true;
++        }
++        is_hour_cell(self.dt_for_cell(i), self.offset_m, self.interval_minutes)
++    }
++}
++
+ fn selected_style() -> Style {
+     Style::default()
+         .fg(theme::SELECTED_FG)
+@@ -324,20 +425,14 @@ fn ampm_fg_color(hour_in_day: i32, wh: &WorkingHoursConfig) -> Color {
+ fn build_hour_spans(p: &TimelineParams) -> Vec<Span<'static>> {
+     let mut spans = Vec::new();
+     for i in 0..p.num_cells {
+-        let h = p.start_hour + i;
+-        let dt = compute_datetime_for_hour(p.tz, p.now_tz, h - p.current_hour);
++        let dt = p.dt_for_cell(i);
+         let hour_in_day = dt.hour() as i32;
+-        let is_selected = h == p.base_hour;
+-        let is_local = h == p.current_hour && p.hour_offset != 0;
+-
+-        let h_num = if p.use_24h {
+-            format!("{:>2}", hour_in_day)
+-        } else {
+-            let h12 = hour_in_day % 12;
+-            let h12 = if h12 == 0 { 12 } else { h12 };
+-            format!("{:>2}", h12)
+-        };
++        let is_selected = i == p.selected_idx;
++        let is_local = i == p.current_idx && p.cell_offset != 0;
++        let is_hour = p.is_hour_cell_at(i);
+ 
++        // Shading is computed against the wall hour, even on intermediate
++        // cells, so that 14:15 / 14:30 / 14:45 inherit the same band as 14:00.
+         let fg = match &p.shading {
+             Some(wh) => hour_fg_color(hour_in_day, wh),
+             None => theme::HOUR_FG,
+@@ -351,14 +446,38 @@ fn build_hour_spans(p: &TimelineParams) -> Vec<Span<'static>> {
+             Style::default().fg(fg)
+         };
+ 
++        let text = if is_hour {
+
+===== P168 | repo opencom-org/opencom | PR #36: update to main | capacidade: web-articles-admin-modularity
+--- SPEC VIVA
+# web-articles-admin-modularity Specification
+
+## Purpose
+TBD - created by archiving change decompose-web-articles-admin-page. Update Purpose after archive.
+## Requirements
+### Requirement: Articles admin render sections MUST be implemented as dedicated modules
+
+The articles admin route SHALL implement import/export/history workflows, article list filtering/table rendering, and delete confirmation rendering through dedicated local modules instead of a single monolithic page file.
+
+#### Scenario: Updating markdown import UI
+
+- **WHEN** a contributor changes markdown import controls or preview rendering
+- **THEN** changes SHALL be isolated to dedicated import/export section modules
+- **AND** article table and delete dialog modules SHALL not require unrelated edits
+
+### Requirement: Articles admin decomposition MUST preserve existing workflow behavior
+
+Extraction SHALL preserve current article CRUD operations, markdown import/export flow, and existing import/export test selectors used by automation.
+
+#### Scenario: Agent applies markdown import after preview
+
+- **WHEN** an agent previews markdown folder changes and applies import
+- **THEN** the same mutation flow and status/error notices SHALL be invoked
+- **AND** existing import/export UI selectors SHALL remain functionally equivalent
+
+
+--- ARQUIVOS DO PR (77)
+modified  +9     -0     AGENTS.md
+added     +7     -0     CLAUDE.md
+modified  +3     -1     ROADMAP.md
+modified  +1     -1     apps/landing/package.json
+modified  +1     -1     apps/mobile/package.json
+modified  +1     -1     apps/web/e2e/global-teardown.ts
+modified  +5     -1     apps/web/e2e/helpers/test-data.ts
+modified  +2     -0     apps/web/e2e/helpers/widget-helpers.ts
+modified  +0     -12    apps/web/next.config.js
+modified  +2     -2     apps/web/package.json
+modified  +20    -8     apps/web/src/app/articles/hooks/useArticlesAdminConvex.ts
+modified  +64    -19    apps/web/src/app/articles/page.tsx   <== código ligado à spec
+added     +46    -0     apps/web/src/app/inbox/InboxAiReviewPanel.test.tsx
+modified  +6     -0     apps/web/src/app/inbox/InboxAiReviewPanel.tsx
+modified  +385   -387   apps/web/src/app/inbox/InboxThreadPane.tsx
+modified  +38    -11    apps/web/src/app/inbox/hooks/useInboxConvex.ts
+modified  +2     -0     apps/web/src/app/inbox/inboxRenderTypes.ts
+modified  +13    -10    apps/web/src/app/inbox/page.tsx
+added     +87    -0     apps/web/src/app/settings/AIAgentSection.test.tsx
+modified  +45    -24    apps/web/src/app/settings/AIAgentSection.tsx
+modified  +140   -39    apps/web/src/app/settings/hooks/useSettingsSectionsConvex.ts
+added     +95    -0     apps/web/src/components/SuggestionsPanel.test.tsx
+modified  +14    -0     apps/web/src/components/SuggestionsPanel.tsx
+modified  +3     -1     apps/web/src/components/hooks/useSuggestionsPanelConvex.ts
+modified  +1     -1     apps/widget/package.json
+modified  +6     -5     apps/widget/src/components/Home.tsx
+modified  +31    -3     apps/widget/src/components/conversationView/MessageList.tsx
+modified  +184   -47    apps/widget/src/styles.css
+added     +13    -0     convex/_generated/ai/ai-files.state.json
+added     +365   -0     convex/_generated/ai/guidelines.md
+modified  +53    -2     docs/api-reference.md
+added     +2     -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/.openspec.yaml
+added     +79    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/design.md
+added     +30    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/proposal.md
+added     +11    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/ai-help-center-linked-sources/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-insertion/spec.md
+added     +27    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-vector-search/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/shared-markdown-rendering-sanitization/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/tasks.md
+modified  +11    -0     openspec/specs/ai-help-center-linked-sources/spec.md
+modified  +23    -5     openspec/specs/inbox-knowledge-insertion/spec.md
+added     +33    -0     openspec/specs/inbox-knowledge-vector-search/spec.md
+modified  +18    -0     openspec/specs/shared-markdown-rendering-sanitization/spec.md
+modified  +10    -1     package.json
+modified  +2     -0     packages/convex/convex/_generated/api.d.ts
+modified  +201   -40    packages/convex/convex/aiAgent.ts
+modified  +40    -26    packages/convex/convex/aiAgentActions.ts
+modified  +4     -2     packages/convex/convex/aiAgentActionsKnowledge.ts
+modified  +5     -3     packages/convex/convex/embeddings.ts
+modified  +137   -3     packages/convex/convex/knowledge.ts
+modified  +63    -6     packages/convex/convex/lib/aiGateway.ts
+added     +45    -0     packages/convex/convex/lib/embeddingModels.ts
+modified  +1     -0     packages/convex/convex/schema/inboxConversationTables.ts
+modified  +3     -1     packages/convex/convex/schema/operationsAiTables.ts
+modified  +2     -1     packages/convex/convex/schema/operationsReportingTables.ts
+modified  +36    -14    packages/convex/convex/suggestions.ts
+modified  +22    -3     packages/convex/convex/testAdmin.ts
+modified  +2     -0     packages/convex/convex/testing/helpers.ts
+modified  +14    -0     packages/convex/convex/testing/helpers/ai.ts
+modified  +1     -1     packages/convex/package.json
+modified  +15    -1     packages/convex/tests/aiAgent.test.ts
+modified  +20    -1     packages/convex/tests/aiAgentAuthorizationSemantics.test.ts
+modified  +116   -12    packages/convex/tests/aiAgentRuntimeSafety.test.ts
+added     +42    -0     packages/convex/tests/embeddingModels.test.ts
+modified  +1     -1     packages/convex/tests/helpers/testHelpers.ts
+modified  +14    -0     packages/convex/tests/runtimeTypeHardeningGuard.test.ts
+modified  +1     -1     packages/convex/tests/setupTestAdminFallback.ts
+modified  +14    -0     packages/convex/tests/suggestions.test.ts
+added     +117   -0     packages/convex/tests/suggestionsMetadataSemantics.test.ts
+modified  +1     -1     packages/react-native-sdk/package.json
+modified  +1     -1     packages/sdk-core/package.json
+modified  +25    -0     packages/web-shared/src/markdown.test.ts
+modified  +38    -10    packages/web-shared/src/markdown.ts
+modified  +150   -145   pnpm-lock.yaml
+modified  +1     -1     scripts/screenshots/seed.ts
+modified  +1     -13    security/convex-v-any-arg-exceptions.json
+modified  +48    -0     security/dependency-audit-allowlist.json
+--- DIFF DO CÓDIGO LIGADO
+### apps/web/src/app/articles/page.tsx
+@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
+ import { useAuth } from "@/contexts/AuthContext";
+ import { AppLayout } from "@/components/AppLayout";
+ import { Button } from "@opencom/ui";
+-import { Plus } from "lucide-react";
++import { Plus, RefreshCw } from "lucide-react";
+ import Link from "next/link";
+ import type { Id } from "@opencom/convex/dataModel";
+ import { strToU8, zipSync } from "fflate";
+@@ -39,12 +39,8 @@ function ArticlesContent() {
+   const searchParams = useSearchParams();
+   const { activeWorkspace } = useAuth();
+   const [searchQuery, setSearchQuery] = useState("");
+-  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(
+-    ALL_COLLECTION_FILTER
+-  );
+-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(
+-    ALL_VISIBILITY_FILTER
+-  );
++  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(ALL_COLLECTION_FILTER);
++  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(ALL_VISIBILITY_FILTER);
+   const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUS_FILTER);
+   const [importSourceName, setImportSourceName] = useState("");
+   const [importTargetCollectionId, setImportTargetCollectionId] = useState<
+@@ -68,6 +64,9 @@ function ArticlesContent() {
+   const [deleteTarget, setDeleteTarget] = useState<DeleteArticleTarget | null>(null);
+   const [deleteError, setDeleteError] = useState<string | null>(null);
+   const [isDeletingArticle, setIsDeletingArticle] = useState(false);
++  const [isBackfillingEmbeddings, setIsBackfillingEmbeddings] = useState(false);
++  const [backfillNotice, setBackfillNotice] = useState<string | null>(null);
++  const [backfillError, setBackfillError] = useState<string | null>(null);
+   const folderInputRef = useRef<HTMLInputElement | null>(null);
+   const createQueryHandledRef = useRef(false);
+   const {
+@@ -84,6 +83,7 @@ function ArticlesContent() {
+     restoreImportRun,
+     syncMarkdownFolder,
+     unpublishArticle,
++    backfillEmbeddings,
+   } = useArticlesAdminConvex({
+     workspaceId: activeWorkspace?._id,
+     isExporting,
+@@ -159,6 +159,31 @@ function ArticlesContent() {
+     }
+   };
+ 
++  const handleBackfillEmbeddings = async () => {
++    if (!activeWorkspace?._id) {
++      return;
++    }
++
++    setIsBackfillingEmbeddings(true);
++    setBackfillError(null);
++    setBackfillNotice(null);
++
++    try {
++      const result = await backfillEmbeddings({
++        workspaceId: activeWorkspace._id,
++        contentTypes: ["article", "internalArticle"],
++      });
++      setBackfillNotice(
++        `Embeddings backfilled: ${result.processed} processed, ${result.skipped} skipped (already existed)`
++      );
++    } catch (error) {
++      console.error("Failed to backfill embeddings:", error);
++      setBackfillError(error instanceof Error ? error.message : "Failed to backfill embeddings.");
++    } finally {
++      setIsBackfillingEmbeddings(false);
++    }
++  };
++
+   const buildImportPayload = async () =>
+     Promise.all(
+       selectedImportItems.map(async (item) => ({
+@@ -517,18 +542,38 @@ function ArticlesContent() {
+           <h1 className="text-2xl font-bold">Articles</h1>
+           <p className="text-gray-500">Manage public and internal knowledge articles</p>
+         </div>
+-        <div className="flex gap-2">
+-          <Link href="/articles/collections">
+-            <Button variant="outline">Manage Collections</Button>
+-          </Link>
+-          <Button variant="outline" onClick={() => void handleCreateArticle("internal")}>
+-            <Plus className="h-4 w-4 mr-2" />
+-            New Internal Article
+-          </Button>
+-          <Button onClick={() => void handleCreateArticle("public")}>
+-            <Plus className="h-4 w-4 mr-2" />
+-            New Article
+-          </Button>
++        <div className="flex flex-col gap-2 items-end">
++          <div className="flex gap-2">
++            <Button
++              variant="outline"
++              onClick={() => void handleBackfillEmbeddings()}
++              disabled={
++                isBackfillingEmbeddings ||
++                !activeWorkspace?._id ||
++                (activeWorkspace.role !== "owner" && activeWorkspace.role !== "admin")
++              }
++            >
++              <RefreshCw
++                className={`h-4 w-4 mr-2 ${isBackfillingEmbeddings ? "animate-spin" : ""}`}
++              />
++              {isBackfillingEmbeddings ? "Refreshing..." : "Refresh Embeddings"}
++            </Button>
++            <Link href="/articles/collections">
++              <Button variant="outline">Manage Collections</Button>
++            </Link>
++          </div>
++          <div className="flex gap-2">
++            <Button variant="outline" onClick={() => void handleCreateArticle("internal")}>
++              <Plus className="h-4 w-4 mr-2" />
++              New Internal Article
++            </Button>
++            <Button onClick={() => void handleCreateArticle("public")}>
++              <Plus className="h-4 w-4 mr-2" />
++              New Article
++            </Button>
++          </div>
++          {backfillNotice && <p className="text-sm text-green-600">{backfillNotice}</p>}
++          {backfillError && <p className="text-sm text-red-600">{backfillError}</p>}
+         </div>
+       </div>
+ 
+
+===== P169 | repo KouShenhai/KCloud-Platform-IoT | PR #6465: Dev | capacidade: tenant-management
+--- SPEC VIVA
+# Tenant Management Spec
+
+## Purpose
+
+本规范定义租户管理能力，包括租户基础信息的增删改查、参数校验与删除保护、前端管理页面、导入导出契约，以及菜单权限与初始化数据要求。
+
+## Requirements
+
+### Requirement: 租户基础信息管理
+系统 SHALL 提供租户基础信息管理能力，管理员可以通过管理端和 REST API 对租户进行分页查询、详情查看、新增、修改和删除。租户 API MUST 使用现有路径：`POST /api/v1/tenants/page`、`GET /api/v1/tenants/{id}`、`POST /api/v1/tenants`、`PUT /api/v1/tenants`、`DELETE /api/v1/tenants`。租户数据 MUST 至少包含 `id`、`name`、`code`、`sourceId`、`packageId` 字段。
+
+#### Scenario: 分页查询租户
+- **GIVEN** 当前用户拥有 `read` scope 和 `sys:tenant:page` 权限
+- **WHEN** 用户提交包含 `pageNum`、`pageSize`、`name`、`code` 或时间范围参数的分页查询
+- **THEN** 系统 SHALL 返回统一 `Result<Page<TenantCO>>` 响应，结果仅包含未删除租户
+
+#### Scenario: 查看租户详情
+- **GIVEN** 当前用户拥有 `read` scope 和 `sys:tenant:detail` 权限
+- **WHEN** 用户访问 `GET /api/v1/tenants/{id}`
+- **THEN** 系统 SHALL 返回对应租户详情
+
+#### Scenario: 新增租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:save` 权限
+- **WHEN** 用户提交合法的 `name`、`code`、`sourceId`、`packageId`
+- **THEN** 系统 SHALL 创建新的租户，并返回成功响应
+
+#### Scenario: 修改租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:modify` 权限，且租户存在
+- **WHEN** 用户提交合法的 `id`、`name`、`code`、`sourceId`、`packageId`
+- **THEN** 系统 SHALL 更新租户基础信息，并刷新对应租户缓存
+
+### Requirement: 租户编码唯一性与参数校验
+系统 MUST 校验租户请求参数。租户名称不能为空且长度不得超过 100 个字符，租户编码不能为空且长度不得超过 30 个字符，数据源 ID 和套餐 ID MUST 为非负数，未删除租户中的 `code` MUST 全局唯一。
+
+#### Scenario: 拒绝重复租户编码
+- **GIVEN** 已存在未删除租户使用编码 `tenant1`
+- **WHEN** 用户新增租户或将其他租户编码修改为 `tenant1`
+- **THEN** 系统 MUST 拒绝请求并返回业务错误，不得产生重复编码租户
+
+#### Scenario: 拒绝非法租户参数
+- **GIVEN** 当前用户拥有对应写权限
+- **WHEN** 用户提交空名称、空编码、超长名称、超长编码、负数数据源 ID 或负数套餐 ID
+- **THEN** 系统 MUST 拒绝请求并返回明确业务错误
+
+#### Scenario: 拒绝修改不存在租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:modify` 权限
+- **WHEN** 用户提交不存在或已删除租户的 ID
+- **THEN** 系统 MUST 拒绝请求并返回租户不存在错误
+
+### Requirement: 租户删除保护
+系统 SHALL 支持删除未删除且存在的租户，但 MUST 保护平台默认租户。默认租户包括 ID 为 `1` 的租户和编码为 `laokouyun` 的租户。
+
+#### Scenario: 删除普通租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:remove` 权限，且删除列表只包含普通租户
+- **WHEN** 用户提交 `DELETE /api/v1/tenants`
+- **THEN** 系统 SHALL 删除指定租户并返回成功响应
+
+#### Scenario: 拒绝删除默认租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:remove` 权限
+- **WHEN** 用户提交的删除列表包含 ID 为 `1` 或编码为 `laokouyun` 的默认租户
+- **THEN** 系统 MUST 拒绝整个删除请求，并保留所有租户数据不变
+
+#### Scenario: 拒绝删除不存在租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:remove` 权限
+- **WHEN** 用户提交空 ID 列表、非法 ID 或不存在租户 ID
+- **THEN** 系统 MUST 拒绝请求并返回明确业务错误
+
+### Requirement: 租户前端管理页面
+系统 SHALL 在 Umi Max 前端提供租户管理页面，并挂载到 `系统管理 / 租户管理 / 租户`，路由为 `/sys/tenant/index`。页面 MUST 使用 React 函数组件、TypeScript、Ant Design Pro 组件，复用 `ui/src/services/admin/tenant.ts`，并遵循项目现有 `ProTable`、`DrawerForm`、`useAccess`、`useIntl` 模式。
+
+#### Scenario: 打开租户管理页面
+- **GIVEN** 当前用户可访问系统管理租户菜单
+- **WHEN** 用户进入 `/sys/tenant/index`
+- **THEN** 前端 SHALL 展示租户列表，并提供名称、编码和创建时间筛选
+
+#### Scenario: 页面按权限展示操作
+- **GIVEN** 当前用户仅拥有部分 `sys:tenant:*` 权限
+- **WHEN** 前端渲染租户页面的工具栏及行操作
+- **THEN** 前端 MUST 只展示用户有权执行的新增、查看、修改、删除、导入、导出操作
+
+#### Scenario: 租户表单提交
+- **GIVEN** 用户打开新增或修改租户抽屉
+- **WHEN** 用户提交表单
+- **THEN** 前端 MUST 校验必填字段，新增时携带幂等请求标识，成功后关闭抽屉并刷新列表
+
+### Requirement: 租户导入导出契约
+系统 SHALL 保留租户导入导出 API 契约：`POST /api/v1/tenants/import` 和 `POST /api/v1/tenants/export`。前端上传文件字段名 MUST 与后端 `@RequestPart("files")` 保持一致。
+
+#### Scenario: 导入租户字段匹配
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:import` 权限
+- **WHEN** 用户在前端选择文件并提交导入
+- **THEN** 前端 MUST 使用 multipart 字段 `files` 上传文件，后端 SHALL 接收到 `MultipartFile[] files`
+
+#### Scenario: 导出租户
+- **GIVEN** 当前用户拥有 `write` scope 和 `sys:tenant:export` 权限
+- **WHEN** 用户触发导出租户
+- **THEN** 前端 SHALL 调用 `POST /api/v1/tenants/export`，后端 SHALL 保持现有导出接口契约
+
+### Requirement: 租户菜单权限与初始化数据
+系统 SHALL 保持数据库初始化中的租户菜单、国际化菜单和权限资源与前端路由一致。初始化数据 MUST 包含 `/sys/tenant/index` 菜单、`menu.sys.tenant`、`menu.sys.tenant.tenant` 文案，以及 `sys:tenant:page`、`sys:tenant:detail`、`sys:tenant:save`、`sys:tenant:modify`、`sys:tenant:remove`、`sys:tenant:import`、`sys:tenant:export` 权限。
+
+#### Scenario: 初始化租户菜单和权限
+- **GIVEN** 新环境执行数据库初始化或迁移脚本
+- **WHEN** 迁移完成
+- **THEN** 系统 SHALL 包含租户菜单、国际化文案和租户按钮权限，且前端路由能够匹配 `/sys/tenant/index`
+
+#### Scenario: 权限不足无法维护租户
+- **GIVEN** 当前用户缺少对应 `sys:tenant:*` 权限或缺少所需 scope
+- **WHEN** 用户访问租户查询、详情、新增、修改、删除、导入或导出能力
+- **THEN** 系统 MUST 拒绝后端请求，前端 MUST 隐藏无权限操作入口
+
+--- ARQUIVOS DO PR (57)
+modified  +14    -3     doc/db/kcloud_platform.sql
+modified  +10    -0     laokou-service/laokou-admin/laokou-admin-adapter/src/main/java/org/laokou/admin/web/RolesController.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptPageQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptTreeListQryExe.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/command/query/MenuGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/command/query/MenuPageQryExe.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/SystemMenuTree.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/UserMenuTree.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/validator/ModifyMenuParamValidator.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/validator/SaveMenuParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RoleGetQryExe.java
+added     +48    -0     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RoleListQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RolePageQryExe.java
+modified  +11    -0     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/RolesServiceImpl.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/validator/ModifyRoleParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/validator/SaveRoleParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/command/query/UserGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/command/query/UserPageQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/ModifyUserParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/ResetUserPwdParamValidator.java
+modified  +4     -5     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/SaveUserParamValidator.java
+modified  +11    -11    laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/UserParamValidator.java
+modified  +9     -0     laokou-service/laokou-admin/laokou-admin-client/src/main/java/org/laokou/admin/role/api/RolesServiceI.java
+added     +31    -0     laokou-service/laokou-admin/laokou-admin-client/src/main/java/org/laokou/admin/role/dto/RoleListQry.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/dept/ability/DeptDomainService.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/menu/ability/MenuDomainService.java
+modified  +5     -5     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/role/ability/RoleDomainService.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/user/ability/UserDomainService.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/user/model/entity/UserE.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/dept/gatewayimpl/DeptGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/dept/gatewayimpl/database/DeptMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/menu/gatewayimpl/MenuGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/menu/gatewayimpl/database/MenuMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/role/gatewayimpl/RoleGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/role/gatewayimpl/database/RoleMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/user/gatewayimpl/UserGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/user/gatewayimpl/database/UserMapper.java
+modified  +6     -0     laokou-service/laokou-standalone/laokou-standalone-admin/laokou-standalone-admin-infrastructure/pom.xml
+added     +2     -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/.openspec.yaml
+added     +86    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/design.md
+added     +41    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/proposal.md
+added     +51    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/specs/data-dictionary/spec.md
+added     +23    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/tasks.md
+modified  +30    -3     openspec/specs/data-dictionary/spec.md
+modified  +1     -1     pom.xml
+modified  +0     -2     ui/Dockerfile
+modified  +6     -0     ui/config/routes.ts   <== código ligado à spec
+modified  +1     -1     ui/src/locales/en-US.ts
+modified  +1     -1     ui/src/locales/zh-CN.ts
+added     +406   -0     ui/src/pages/IoT/Device/ThingModelDrawer.tsx
+added     +504   -0     ui/src/pages/IoT/Device/thingModel.tsx
+modified  +2     -2     ui/src/pages/IoT/Network/connection.tsx
+modified  +93    -34    ui/src/pages/Sys/Base/dict.tsx
+modified  +3     -3     ui/src/pages/Sys/Permission/user.tsx
+modified  +15    -0     ui/src/services/admin/role.ts
+modified  +2     -0     ui/src/services/admin/typings.d.ts
+--- DIFF DO CÓDIGO LIGADO
+### ui/config/routes.ts
+@@ -181,6 +181,12 @@ export default [
+ 				title: 'menu.iot.device',
+ 				path: '/iot/device',
+ 				routes: [
++					{
++						name: 'menu.iot.device.thingModel',
++						title: 'menu.iot.device.thingModel',
++						path: '/iot/device/thingModel',
++						component: './IoT/Device/thingModel',
++					},
+ 					{
+ 						name: 'menu.iot.device.productCategory',
+ 						title: 'menu.iot.device.productCategory',
+
+===== P170 | repo atman-33/openspec-for-copilot | PR #3: Add support for custom prompt instructions in GitHub Copilot integration | capacidade: settings-view
+--- SPEC VIVA
+# settings-view Specification
+
+## Purpose
+TBD - created by archiving change update-settings-view-for-copilot. Update Purpose after archive.
+## Requirements
+### Requirement: Settings View Branding
+The Settings view MUST reflect the new "OpenSpec for Copilot" branding.
+
+#### Scenario: View Title
+- **GIVEN** the extension is active
+- **WHEN** the user opens the Settings view
+- **THEN** the view welcome content should display "Configure OpenSpec for Copilot"
+
+### Requirement: MCP Configuration Access
+Users MUST be able to easily access the MCP configuration file.
+
+#### Scenario: Open MCP Config
+- **GIVEN** the extension is active
+- **WHEN** the user invokes the "Open MCP Config (mcp.json)" action (from the Settings view or Command Palette)
+- **THEN** the extension should attempt to open `<User Folder>/AppData/Roaming/Code/User/mcp.json`
+- **AND** if the file exists, it should be opened in the editor
+- **AND** if the file does not exist, a warning should be shown
+
+### Requirement: Help Resource
+Users MUST be directed to the correct documentation.
+
+#### Scenario: Open Help
+- **GIVEN** the extension is active
+- **WHEN** the user invokes the "Help" action
+- **THEN** the browser should open `https://github.com/atman-33/openspec-for-copilot#readme`
+
+
+--- ARQUIVOS DO PR (17)
+modified  +4     -0     README.md
+added     +60    -0     openspec/changes/archive/2025-11-22-add-custom-prompt-instructions/design.md
+added     +16    -0     openspec/changes/archive/2025-11-22-add-custom-prompt-instructions/proposal.md
+added     +27    -0     openspec/changes/archive/2025-11-22-add-custom-prompt-instructions/specs/chat-integration/spec.md
+added     +21    -0     openspec/changes/archive/2025-11-22-add-custom-prompt-instructions/specs/configuration/spec.md
+added     +10    -0     openspec/changes/archive/2025-11-22-add-custom-prompt-instructions/tasks.md
+modified  +24    -0     openspec/specs/chat-integration/spec.md
+modified  +18    -0     openspec/specs/configuration/spec.md
+modified  +34    -3     package.json
+modified  +3     -1     src/extension.ts   <== código ligado à spec
+modified  +4     -2     src/features/spec/create-spec-input-controller.test.ts
+modified  +1     -1     src/features/spec/create-spec-input-controller.ts
+modified  +1     -1     src/features/spec/spec-manager.ts
+modified  +107   -0     src/utils/chat-prompt-runner.test.ts
+modified  +24    -1     src/utils/chat-prompt-runner.ts
+modified  +6     -0     src/utils/config-manager.test.ts
+modified  +34    -0     src/utils/config-manager.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/extension.ts
+@@ -457,7 +457,9 @@ function registerCommands(
+ 
+ 					const fileData = await workspace.fs.readFile(targetUri);
+ 					const promptContent = new TextDecoder().decode(fileData);
+-					await sendPromptToChat(promptContent);
++					await sendPromptToChat(promptContent, {
++						instructionType: "runPrompt",
++					});
+ 				} catch (e) {
+ 					window.showErrorMessage(`Failed to run prompt: ${e}`);
+ 				}
+
+===== P171 | repo Amm1rr/WebAI-to-API | PR #78: fix(auth): robust Gemini webapi client reinitialization and safe lock-protected session updates | capacidade: error-and-lifecycle-hardening
+--- SPEC VIVA
+# error-and-lifecycle-hardening Specification
+
+## Purpose
+TBD - created by archiving change harden-error-handling-and-lifecycle. Update Purpose after archive.
+## Requirements
+### Requirement: Reaper Loop Rollover Safe State Handling
+The ProviderSession reaper loop MUST NOT trigger engine-scoped terminal shutdown upon detecting a browser generation rollover mismatch. The reaper loop MUST ignore the stale generation state, MUST NOT trigger engine shutdown, and MUST yield recovery responsibility exclusively to the authoritative session recovery flow.
+
+#### Scenario: Generation Rollover Detected
+- **WHEN** the reaper loop executes and detects that last_browser_generation does not match engine.browser_generation
+- **THEN** the loop SHALL skip active liveness validation, skip calling the browser disconnected callback, and delegate subsequent recovery handling to the authoritative session recovery flow
+
+### Requirement: Queue Overflow Request Termination
+Queue saturation is a terminal request-scoped failure. Queue saturation MUST terminate the active request deterministically, MUST invalidate the active request stream state, and the callback MUST NOT silently drop events. Whether the underlying tab or page becomes poisoned is implementation-dependent and determined by runtime integrity checks.
+
+#### Scenario: Event Queue Saturation
+- **WHEN** the event buffer reaches saturation limit during enqueuing
+- **THEN** the request stream SHALL deterministically transition to a failed state and terminate, while leaving broader session liveness to be validated by runtime integrity checks
+
+### Requirement: Cancellation-Safe Resource Teardown
+All resource release operations (such as locks, semaphore permits, and callback registries) inside ManagedPage teardown MUST prioritize deterministic cleanup, including lock acquisition waits and resource release operations. Teardown MUST prioritize semaphore and lease release, strongly securing their cleanup under normal task cancellation, while auxiliary Playwright cleanup remains best-effort.
+
+#### Scenario: Request Cancelled During Teardown Lock Entry
+- **WHEN** the task is cancelled while ManagedPage teardown is waiting to acquire its locks
+- **THEN** the release logic SHALL proceed to ensure that the session semaphore permit is returned and the persistent tab lease is released
+
+### Requirement: Mutually Exclusive Tab Status and Closure Mutations
+All modifications to PersistentTab status and page-level closures MUST be serialized through authoritative locking. Un-synchronized status transitions or concurrent closures are strictly forbidden.
+
+#### Scenario: Concurrent Tab Closure and Lease Release
+- **WHEN** tab closure is called concurrently with lease release
+- **THEN** both operations SHALL be serialized by the tab's internal lock, preventing concurrent page close attempts and ensuring a deterministic DEAD status transition
+
+### Requirement: Restrict Recovery Execution to ProviderSession
+Providers detect and escalate failures, but MUST NOT directly manage storage state file deletions or execute context setups on authentication failure. Providers MUST raise a recovery-scoped exception to escalate the condition, leaving ProviderSession as the sole recovery executor. The ProviderSession MUST execute recovery by clearing in-memory contexts, resetting tab leases, and clearing runtime generation state, but MUST NOT delete or purge the persistent `gemini.json` storage state file from disk unless a hard, non-transient authentication expiration is explicitly verified.
+
+#### Scenario: Authentication Failure Recovery Escalation
+- **WHEN** the provider detects authentication loss on a page
+- **THEN** it SHALL raise a recovery-scoped exception and terminate the request, allowing the ProviderSession to catch the error, invalidate the context, and safely attempt context recreation in subsequent requests without deleting the underlying persistent `gemini.json` storage state file
+
+
+--- ARQUIVOS DO PR (57)
+modified  +9     -1     .gitignore
+modified  +2     -0     Docker.md
+modified  +12    -4     config.conf.example
+modified  +1     -1     docker-compose.yml
+modified  +5     -5     docs/docker-deployment.md
+added     +2     -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/.openspec.yaml
+added     +80    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/design.md
+added     +25    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/proposal.md
+added     +20    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/specs/docker-compatible-auth/spec.md
+added     +53    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/specs/on-demand-auth-bootstrap/spec.md
+added     +15    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/specs/robust-auth-recovery/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-30-on-demand-auth-bootstrap/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-30-persistent-conversation-layer/.openspec.yaml
+added     +197   -0     openspec/changes/archive/2026-05-30-persistent-conversation-layer/design.md
+added     +36    -0     openspec/changes/archive/2026-05-30-persistent-conversation-layer/proposal.md
+added     +75    -0     openspec/changes/archive/2026-05-30-persistent-conversation-layer/specs/persistent-conversation-layer/spec.md
+added     +35    -0     openspec/changes/archive/2026-05-30-persistent-conversation-layer/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-30-unified-auth-state/.openspec.yaml
+added     +59    -0     openspec/changes/archive/2026-05-30-unified-auth-state/design.md
+added     +25    -0     openspec/changes/archive/2026-05-30-unified-auth-state/proposal.md
+added     +38    -0     openspec/changes/archive/2026-05-30-unified-auth-state/specs/docker-compatible-auth/spec.md
+added     +22    -0     openspec/changes/archive/2026-05-30-unified-auth-state/specs/unified-auth-state/spec.md
+added     +31    -0     openspec/changes/archive/2026-05-30-unified-auth-state/tasks.md
+modified  +15    -3     openspec/specs/docker-compatible-auth/spec.md
+added     +57    -0     openspec/specs/on-demand-auth-bootstrap/spec.md
+added     +79    -0     openspec/specs/persistent-conversation-layer/spec.md
+modified  +2     -4     openspec/specs/robust-auth-recovery/spec.md
+added     +26    -0     openspec/specs/unified-auth-state/spec.md
+modified  +23    -23    src/app/config.py
+added     +45    -0     src/app/endpoints/auth.py
+modified  +11    -2     src/app/main.py
+modified  +2     -0     src/app/services/base.py
+added     +134   -0     src/app/services/browser/auth_loader.py
+added     +429   -0     src/app/services/browser/auth_manager.py
+modified  +2     -2     src/app/services/browser/engine.py   <== código ligado à spec
+modified  +31    -7     src/app/services/browser/session.py   <== código ligado à spec
+modified  +11    -0     src/app/services/factory.py
+modified  +126   -185   src/app/services/gemini_client.py
+added     +53    -0     src/app/services/providers/base_repository.py
+added     +20    -0     src/app/services/providers/exceptions.py
+modified  +200   -1     src/app/services/providers/gemini.py
+modified  +32    -1     src/app/services/providers/gemini_playwright.py   <== código ligado à spec
+added     +134   -0     src/app/services/providers/sqlite_repository.py
+modified  +140   -6     src/app/services/session_manager.py
+modified  +6     -47    src/models/gemini.py
+modified  +19    -1     tests/conftest.py
+added     +251   -0     tests/test_auth_endpoints.py
+added     +201   -0     tests/test_auth_loader.py
+modified  +19    -0     tests/test_factory.py
+modified  +50    -0     tests/test_gemini_chat_concurrency.py
+modified  +133   -128   tests/test_gemini_client.py
+modified  +202   -4     tests/test_gemini_provider.py
+added     +165   -0     tests/test_gemini_serialization.py
+added     +262   -0     tests/test_persistent_conversation_layer.py
+modified  +79    -2     tests/test_recovery_orchestration.py   <== código ligado à spec
+added     +35    -0     tests/test_runtime_paths.py
+added     +104   -0     tests/test_sqlite_repository.py
+--- DIFF DO CÓDIGO LIGADO
+### src/app/services/browser/engine.py
+@@ -10,7 +10,7 @@
+ from collections import OrderedDict
+ from playwright.async_api import async_playwright, Playwright, BrowserContext, Page, Browser, Error as PlaywrightError
+ from app.logger import logger
+-from app.config import CONFIG
++from app.config import CONFIG, get_default_playwright_cache_dir
+ 
+ from app.services.browser.tab import TabStatus, PersistentTab, ManagedPage
+ 
+@@ -30,7 +30,7 @@ def __init__(self, headless: Optional[bool] = None, is_bootstrap: bool = False):
+         self.sessions: Dict[str, ProviderSession] = {}
+         self.sessions_lock = asyncio.Lock()
+         self.management_lock = asyncio.Lock()
+-        self.user_data_dir = os.path.join(os.getcwd(), ".playwright_data")
++        self.user_data_dir = get_default_playwright_cache_dir()
+         os.makedirs(self.user_data_dir, exist_ok=True)
+         self.is_bootstrap = is_bootstrap
+         if headless is not None:
+
+### src/app/services/browser/session.py
+@@ -8,7 +8,7 @@
+ from playwright.async_api import Page, BrowserContext
+ 
+ from app.logger import logger
+-from app.config import CONFIG
++from app.config import CONFIG, get_default_auth_state_dir
+ from app.services.browser.tab import TabStatus, PersistentTab, ManagedPage
+ from app.services.browser.errors import BrowserShuttingDownError, LeaseInvalidatedError, SessionNotAliveError, ConversationBusyError
+ 
+@@ -53,9 +53,10 @@ def __init__(self, engine: 'BrowserEngine', name: str, enable_persistence: bool
+         self.reaper_task: Optional[asyncio.Task] = None
+         self._orphan_cleanup_tasks = set()
+         self.active_orphans = weakref.WeakSet()
++        self._intentional_context_closes = weakref.WeakValueDictionary()
+         
+         # Persistent state
+-        auth_state_dir = CONFIG["Playwright"].get("auth_state_dir", "auth_state")
++        auth_state_dir = CONFIG["Playwright"].get("auth_state_dir", get_default_auth_state_dir())
+         if auth_state_dir:
+             os.makedirs(auth_state_dir, exist_ok=True)
+         self.state_path = os.path.join(auth_state_dir, f"{name}.json")
+@@ -422,15 +423,21 @@ async def _setup(self):
+             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+         }
+ 
+-        if self._validate_state_file():
+-            context_args["storage_state"] = self.state_path
++        if self.name == "gemini":
++            from app.services.browser.auth_loader import GeminiAuthStateLoader
++            auth_data, is_legacy = GeminiAuthStateLoader.load_auth_state_with_fallback()
++            if auth_data:
++                context_args["storage_state"] = GeminiAuthStateLoader.translate_to_playwright(auth_data)
++        else:
++            if self._validate_state_file():
++                context_args["storage_state"] = self.state_path
+ 
+         try:
+             self.context = await self.engine.browser.new_context(**context_args)
+             
+             def safe_on_context_close(c):
+                 try:
+-                    asyncio.get_running_loop().create_task(self._on_context_closed())
++                    asyncio.get_running_loop().create_task(self._on_context_closed(c))
+                 except RuntimeError as e:
+                     logger.debug(
+                         "ProviderSession(%s): Context close callback scheduling skipped - event loop already closed: %s",
+@@ -681,10 +688,24 @@ async def probe_tab(t):
+                     extra={"generation": self.last_browser_generation}
+                 )
+ 
+-    async def _on_context_closed(self):
++    def _mark_intentional_context_close(self, context: BrowserContext) -> None:
++        self._intentional_context_closes[id(context)] = context
++
++    def _consume_intentional_context_close(self, context: BrowserContext) -> bool:
++        return self._intentional_context_closes.pop(id(context), None) is context
++
++    async def _on_context_closed(self, context: BrowserContext):
+         """Handler for BrowserContext.on('close')."""
+         if self.engine.is_shutting_down:
+             return
++
++        if self._consume_intentional_context_close(context):
++            logger.debug(
++                "ProviderSession(%s): Ignoring intentional browser context close.",
++                self.name,
++                extra={"generation": self.last_browser_generation}
++            )
++            return
+         
+         logger.warning(f"ProviderSession({self.name}): Context closed (Window manually closed or crash).")
+         # Delegate terminal shutdown to engine
+@@ -796,10 +817,13 @@ async def close_resources(self, save_state: bool = True):
+                 self.keepalive_page = None
+     
+             if self.context:
++                context_to_close = self.context
++                self._mark_intentional_context_close(context_to_close)
+                 try: 
+                     logger.info(f"ProviderSession({self.name}): Closing browser context...")
+-                    await self.context.close()
++                    await context_to_close.close()
+                 except Exception as e:
++                    self._consume_intentional_context_close(context_to_close)
+                     logger.warning(
+                         f"ProviderSession({self.name}): Failed to close browser context: {e}",
+                         exc_info=True,
+
+### src/app/services/providers/gemini_playwright.py
+@@ -76,6 +76,18 @@ async def chat_completions(self, request: OpenAIChatRequest) -> Any:
+         backoff_delays = [1.0, 2.0, 4.0]
+         
+         try:
++            from app.services.browser.auth_manager import get_auth_manager, AuthStatus
++            auth_mgr = get_auth_manager()
++            if auth_mgr.coordination_lock.is_locked():
++                raise HTTPException(status_code=503, detail="Authentication in progress.")
++            
++            if auth_mgr.refresh_playwright_status_lightweight() == AuthStatus.EXPIRED_SESSION:
++                raise HTTPException(
++                    status_code=401,
++                    detail="Authentication expired.",
++                    headers={"WWW-Authenticate": "Bearer"}
++                )
++
+             engine = await get_browser_engine()
+             session = await engine.get_session("gemini")
+             adapter = GeminiProviderAdapter()
+@@ -289,7 +301,21 @@ async def bridge_callback(source, payload):
+             raise
+         except Exception as e:
+             req_id = state.request_id if state else request_id
+-            logger.exception("Error in chat_completions", extra={"request_id": req_id})
++            expected_recoverable_errors = (
++                SessionNotAliveError,
++                BrowserGenerationMismatchError,
++                TransientSessionError,
++            )
++            if isinstance(e, expected_recoverable_errors):
++                logger.warning(
++                    "Recoverable chat_completions failure: %s",
++                    e,
++                    extra={"request_id": req_id},
++                )
++            elif isinstance(e, BrowserDisconnectedError):
++                logger.exception("Browser disconnected during chat_completions", extra={"request_id": req_id})
++            else:
++                logger.exception("Error in chat_completions", extra={"request_id": req_id})
+             from playwright.async_api import Error as PlaywrightError
+             
+             poison_session_errors = (
+@@ -301,6 +327,11 @@ async def bridge_callback(source, payload):
+                 await session.handle_session_failure()
+             
+             if isinstance(e, SessionNotAliveError):
++                try:
++                    from app.services.browser.auth_manager import get_auth_manager
++                    get_auth_manager().mark_expired()
++                except Exception:
++                    pass
+                 raise HTTPException(
+                     status_code=401,
+                     detail="Authentication expired.",
+
+### tests/test_recovery_orchestration.py
+@@ -3,6 +3,7 @@
+ from unittest.mock import Mock, AsyncMock, MagicMock
+ from app.services.browser.session import ProviderSession
+ from app.services.browser.errors import TransientSessionError
++from app.services.browser.engine import BrowserEngine
+ from app.services.providers.gemini_playwright import GeminiPlaywrightProvider
+ from app.schemas.request import OpenAIChatRequest
+ from fastapi import HTTPException
+@@ -189,6 +190,78 @@ async def test_transient_failure_preserves_persistent_state_file(tmp_path):
+     assert state_file.read_text() == '{"cookies": [{"name": "mock"}]}'
+ 
+ 
++@pytest.mark.asyncio
++async def test_intentional_provider_context_cleanup_does_not_shutdown_engine(tmp_path):
++    mock_engine = MagicMock()
++    mock_engine.max_pages = 5
++    mock_engine.user_data_dir = str(tmp_path)
++    mock_engine.browser_generation = 1
++    mock_engine.is_shutting_down = False
++    mock_engine._on_browser_disconnected = Mock()
++
++    session = ProviderSession(mock_engine, "test_provider")
++    context = MagicMock()
++    async def close_context():
++        await session._on_context_closed(context)
++    context.close = AsyncMock(side_effect=close_context)
++    session.context = context
++
++    await session.close_resources(save_state=False)
++
++    mock_engine._on_browser_disconnected.assert_not_called()
++    assert session.context is None
++
++
++@pytest.mark.asyncio
++async def test_unexpected_provider_context_close_triggers_engine_shutdown(tmp_path):
++    mock_engine = MagicMock()
++    mock_engine.max_pages = 5
++    mock_engine.user_data_dir = str(tmp_path)
++    mock_engine.browser_generation = 1
++    mock_engine.is_shutting_down = False
++    mock_engine._on_browser_disconnected = Mock()
++
++    session = ProviderSession(mock_engine, "test_provider")
++    context = MagicMock()
++
++    await session._on_context_closed(context)
++
++    mock_engine._on_browser_disconnected.assert_called_once()
++
++
++@pytest.mark.asyncio
++async def test_browser_disconnect_still_schedules_terminal_close():
++    engine = BrowserEngine(headless=True)
++    engine.close = AsyncMock()
++
++    engine._on_browser_disconnected()
++    await asyncio.sleep(0)
++
++    engine.close.assert_awaited_once()
++
++
++@pytest.mark.asyncio
++async def test_keepalive_liveness_loss_still_triggers_terminal_shutdown(tmp_path, monkeypatch):
++    mock_engine = MagicMock()
++    mock_engine.max_pages = 5
++    mock_engine.user_data_dir = str(tmp_path)
++    mock_engine.browser_generation = 1
++    mock_engine.is_shutting_down = False
++    mock_engine._on_browser_disconnected = Mock()
++
++    session = ProviderSession(mock_engine, "test_provider")
++    session.last_browser_generation = 1
++
++    async def no_sleep(_delay):
++        return None
++
++    monkeypatch.setattr("app.services.browser.session.asyncio.sleep", no_sleep)
++
++    await session._reaper_loop()
++
++    mock_engine._on_browser_disconnected.assert_called_once()
++
++
+ @pytest.mark.asyncio
+ async def test_post_submission_no_retry(monkeypatch):
+     """Verify that failures occurring after the submission boundary (prompt submit)
+@@ -381,9 +454,12 @@ async def test_auth_expired_maps_to_401(monkeypatch):
+     """Verify that SessionNotAliveError maps to HTTPException 401."""
+     mock_engine = MagicMock()
+     mock_engine.browser_generation = 1
++    mock_engine.is_shutting_down = False
++    mock_engine._on_browser_disconnected = Mock()
+     mock_session = AsyncMock()
+     mock_session.submit_lock = asyncio.Lock()
+     mock_session._setup_page_bridge = AsyncMock()
++    mock_session.handle_session_failure = AsyncMock()
+     mock_engine.get_session = AsyncMock(return_value=mock_session)
+     
+     async def mock_get_browser_engine():
+@@ -427,6 +503,9 @@ async def mock_check_authentication(*args, **kwargs):
+         
+     assert excinfo.value.status_code == 401
+     assert "Authentication expired." in excinfo.value.detail
++    mock_session.handle_session_failure.assert_awaited_once()
++    mock_engine._on_browser_disconnected.assert_not_called()
++    assert mock_engine.is_shutting_down is False
+ 
+ 
+ @pytest.mark.asyncio
+@@ -755,5 +834,3 @@ async def mock_acquire_lease(conversation_id, request_id):
+     assert excinfo.value.headers is not None
+     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
+ 
+-
+-
+
+===== P172 | repo Splode/pomotroid | PR #406: Feat/remember window position | capacidade: autoupdate
+--- SPEC VIVA
+## Requirements
+
+### Requirement: Update manifest hosted in repository
+
+The system SHALL provide a `latest.json` file at the root of the `main` branch following the Tauri updater manifest format. The manifest SHALL contain the latest release version, per-platform download URLs, and Ed25519 signatures for each platform bundle. CI SHALL generate and commit this file after all platform bundles are successfully uploaded.
+
+#### Scenario: Manifest is present after a release build
+
+- **WHEN** a release CI run completes successfully
+- **THEN** `latest.json` SHALL exist at the repo root on `main` and SHALL contain valid entries for Windows (NSIS), macOS (DMG), and Linux (AppImage)
+
+#### Scenario: Manifest version matches release tag
+
+- **WHEN** the CI run is triggered by a version tag (e.g. `v1.2.0`)
+- **THEN** the `version` field in `latest.json` SHALL equal `1.2.0`
+
+---
+
+### Requirement: Bundles are Ed25519-signed during CI
+
+The system SHALL sign release bundles with an Ed25519 private key stored in GitHub Secrets (`TAURI_SIGNING_PRIVATE_KEY`) during every release CI run. The corresponding public key SHALL be embedded in `tauri.conf.json` under the updater plugin configuration.
+
+#### Scenario: Updater rejects tampered bundle
+
+- **WHEN** the downloaded bundle's signature does not match the public key
+- **THEN** `tauri-plugin-updater` SHALL abort the installation and report an error
+
+#### Scenario: Updater accepts correctly signed bundle
+
+- **WHEN** the downloaded bundle's signature matches the public key
+- **THEN** installation proceeds normally
+
+---
+
+### Requirement: `check_update` Tauri command
+
+The system SHALL expose a `check_update` Tauri command that queries `latest.json` and returns either a serialized update descriptor (version, body, date) or `null` if the current version is already the latest.
+
+#### Scenario: Update available
+
+- **WHEN** `check_update` is called and `latest.json` contains a version higher than the running app version
+- **THEN** the command SHALL return an object with at least `{ version: string, body: string | null, date: string | null }`
+
+#### Scenario: Already up to date
+
+- **WHEN** `check_update` is called and `latest.json` version equals the running app version
+- **THEN** the command SHALL return `null`
+
+#### Scenario: Network unreachable
+
+- **WHEN** `check_update` is called and the manifest URL is unreachable
+- **THEN** the command SHALL return an error that the frontend can catch and display as a non-blocking message
+
+---
+
+### Requirement: `install_update` Tauri command
+
+The system SHALL expose an `install_update` Tauri command that downloads, verifies, and installs the pending update, then relaunches the application.
+
+#### Scenario: Install completes and app relaunches
+
+- **WHEN** `install_update` is called after `check_update` returned an available update
+- **THEN** the bundle is downloaded, signature verified, installed, and the app relaunches to the new version
+
+---
+
+### Requirement: Update check UI in Settings → About
+
+The system SHALL display update status in the Settings → About section. On mount, if `check_for_updates` is enabled, the section SHALL silently call `check_update`. The status SHALL transition through states: idle → checking → up-to-date / update-available. When an update is available, an "Install vX.Y.Z" button SHALL appear. Clicking it SHALL call `install_update`.
+
+#### Scenario: No update available
+
+- **WHEN** the About section mounts and `check_update` returns `null`
+- **THEN** the update row SHALL display "Up to date" (or equivalent) with the current version
+
+#### Scenario: Update available — install button shown
+
+- **WHEN** `check_update` returns an available update version
+- **THEN** the About section SHALL show an "Install vX.Y.Z" button where X.Y.Z is the available version
+
+#### Scenario: Check disabled — no check performed
+
+- **WHEN** `check_for_updates` is `false` and the About section mounts
+- **THEN** `check_update` SHALL NOT be called and the update row SHALL display a static version with no checking indicator
+
+#### Scenario: Check fails gracefully
+
+- **WHEN** `check_update` returns an error (e.g. network failure)
+- **THEN** the update row SHALL display a non-blocking error message and SHALL NOT throw or crash the settings window
+
+---
+
+### Requirement: Updater capability registered
+
+The system SHALL declare the `updater` permission in `src-tauri/capabilities/default.json` so that the settings window can invoke `check_update` and `install_update`.
+
+#### Scenario: Commands callable from settings window
+
+- **WHEN** the settings window invokes `check_update` or `install_update`
+- **THEN** Tauri SHALL not reject the call due to missing capability permissions
+
+--- ARQUIVOS DO PR (11)
+modified  +4     -0     CHANGELOG.md
+added     +2     -0     openspec/changes/archive/2026-04-26-remember-window-position/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-04-26-remember-window-position/design.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/settings/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/window-position/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/tasks.md
+modified  +48    -0     openspec/specs/settings/spec.md
+added     +66    -0     openspec/specs/window-position/spec.md
+modified  +71    -18    src-tauri/src/lib.rs   <== código ligado à spec
+modified  +24    -0     src-tauri/src/settings/mod.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src-tauri/src/lib.rs
+@@ -283,31 +283,84 @@ pub fn run() {
+                 let _ = main_window.set_always_on_top(true);
+             }
+ 
+-            // CloseRequested: hide to tray instead of quitting if min_to_tray_on_close.
+-            // When actually closing (not hiding), also close any child windows so they
+-            // cannot be left orphaned with no way to reopen the main window.
++            // Restore saved window position/size if all four values are present and
++            // the saved rectangle still intersects at least one connected monitor.
++            if let (Some(wx), Some(wy), Some(ww), Some(wh)) = (
++                initial_settings.window_x,
++                initial_settings.window_y,
++                initial_settings.window_width,
++                initial_settings.window_height,
++            ) {
++                let on_screen = app
++                    .available_monitors()
++                    .unwrap_or_default()
++                    .into_iter()
++                    .any(|m| {
++                        let mp = m.position();
++                        let ms = m.size();
++                        let mx0 = mp.x as i64;
++                        let my0 = mp.y as i64;
++                        let mx1 = mx0 + ms.width as i64;
++                        let my1 = my0 + ms.height as i64;
++                        let wx0 = wx as i64;
++                        let wy0 = wy as i64;
++                        let wx1 = wx0 + ww as i64;
++                        let wy1 = wy0 + wh as i64;
++                        wx0 < mx1 && wx1 > mx0 && wy0 < my1 && wy1 > my0
++                    });
++                if on_screen {
++                    let _ = main_window.set_position(tauri::PhysicalPosition::new(wx, wy));
++                    let _ = main_window.set_size(tauri::PhysicalSize::new(ww, wh));
++                }
++            }
++
++            // Persist window position/size on move and resize, and close child windows
++            // when the main window is truly closed (not hidden to tray).
+             let db_for_close = db.clone();
+             let win_for_close = main_window.clone();
+             let app_for_close = app.handle().clone();
++            let db_for_pos = db.clone();
++            let win_for_pos = main_window.clone();
+             main_window.on_window_event(move |event| {
+-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+-                    let hide = db_for_close
+-                        .lock()
+-                        .ok()
+-                        .and_then(|conn| settings::load(&conn).ok())
+-                        .map(|s| s.min_to_tray_on_close)
+-                        .unwrap_or(false);
+-                    if hide {
+-                        api.prevent_close();
+-                        let _ = win_for_close.hide();
+-                    } else {
+-                        // Main window is truly closing — close child windows if open.
+-                        for label in ["settings", "stats"] {
+-                            if let Some(win) = app_for_close.get_webview_window(label) {
+-                                let _ = win.close();
++                match event {
++                    tauri::WindowEvent::CloseRequested { api, .. } => {
++                        let hide = db_for_close
++                            .lock()
++                            .ok()
++                            .and_then(|conn| settings::load(&conn).ok())
++                            .map(|s| s.min_to_tray_on_close)
++                            .unwrap_or(false);
++                        if hide {
++                            api.prevent_close();
++                            let _ = win_for_close.hide();
++                        } else {
++                            // Main window is truly closing — close child windows if open.
++                            for label in ["settings", "stats"] {
++                                if let Some(win) = app_for_close.get_webview_window(label) {
++                                    let _ = win.close();
++                                }
++                            }
++                        }
++                    }
++                    tauri::WindowEvent::Moved(pos) => {
++                        if let Ok(conn) = db_for_pos.lock() {
++                            let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
++                            let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
++                        }
++                    }
++                    tauri::WindowEvent::Resized(size) => {
++                        if let Ok(conn) = db_for_pos.lock() {
++                            let _ = settings::save_setting(&conn, "window_width", &size.width.to_string());
++                            let _ = settings::save_setting(&conn, "window_height", &size.height.to_string());
++                            // Also capture position, since some window managers shift the
++                            // window origin when resizing.
++                            if let Ok(pos) = win_for_pos.outer_position() {
++                                let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
++                                let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                             }
+                         }
+                     }
++                    _ => {}
+                 }
+             });
+ 
+
+### src-tauri/src/settings/mod.rs
+@@ -57,6 +57,14 @@ pub struct Settings {
+     pub local_shortcut_volume_up: String,
+     pub local_shortcut_mute: String,
+     pub local_shortcut_fullscreen: String,
++    /// Last known window X coordinate (physical pixels). `None` = use OS default.
++    pub window_x: Option<i32>,
++    /// Last known window Y coordinate (physical pixels). `None` = use OS default.
++    pub window_y: Option<i32>,
++    /// Last known window width (physical pixels). `None` = use OS default.
++    pub window_width: Option<u32>,
++    /// Last known window height (physical pixels). `None` = use OS default.
++    pub window_height: Option<u32>,
+ }
+ 
+ impl Default for Settings {
+@@ -112,6 +120,10 @@ impl Default for Settings {
+             local_shortcut_volume_up: "ArrowUp".to_string(),
+             local_shortcut_mute: "m".to_string(),
+             local_shortcut_fullscreen: "F11".to_string(),
++            window_x: None,
++            window_y: None,
++            window_width: None,
++            window_height: None,
+         }
+     }
+ }
+@@ -233,6 +245,10 @@ pub fn load(conn: &Connection) -> Result<Settings> {
+         local_shortcut_volume_up: map.get("local_shortcut_volume_up").cloned().unwrap_or(d.local_shortcut_volume_up),
+         local_shortcut_mute: map.get("local_shortcut_mute").cloned().unwrap_or(d.local_shortcut_mute),
+         local_shortcut_fullscreen: map.get("local_shortcut_fullscreen").cloned().unwrap_or(d.local_shortcut_fullscreen),
++        window_x: parse_opt_i32(&map, "window_x"),
++        window_y: parse_opt_i32(&map, "window_y"),
++        window_width: parse_opt_u32(&map, "window_width"),
++        window_height: parse_opt_u32(&map, "window_height"),
+     })
+ }
+ 
+@@ -270,6 +286,14 @@ fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
+         .unwrap_or(default)
+ }
+ 
++fn parse_opt_i32(map: &HashMap<String, String>, key: &str) -> Option<i32> {
++    map.get(key)?.parse().ok()
++}
++
++fn parse_opt_u32(map: &HashMap<String, String>, key: &str) -> Option<u32> {
++    map.get(key)?.parse().ok()
++}
++
+ // ---------------------------------------------------------------------------
+ // Tests (DATA-02 acceptance criteria)
+ // ---------------------------------------------------------------------------
+
+===== P173 | repo shitz/clutch | PR #3: chore: refactor large monolithic modules into smaller submodules | capacidade: credential-encryption
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Encrypted password storage in config
+
+Each `ConnectionProfile` SHALL store an optional `encrypted_password: Option<String>` field in `config.toml`. The field, when present, SHALL contain a packed string `"salt_b64$nonce_b64$ciphertext_b64"` encoded with URL-safe no-padding base64 (`URL_SAFE_NO_PAD`). All three components (16-byte random salt, 12-byte nonce, ciphertext including 16-byte Poly1305 tag) are stored in this single scalar value. The password in plaintext SHALL NOT appear anywhere in the config file.
+
+#### Scenario: Profile saved with password is persisted encrypted
+
+- **WHEN** the user saves a profile with a non-empty password
+- **THEN** `config.toml` contains `encrypted_password` as a packed `"salt$nonce$ciphertext"` string (URL-safe base64, no padding, `$`-delimited) instead of the plaintext password
+
+#### Scenario: Profile saved without password has no encrypted field
+
+- **WHEN** the user saves a profile with an empty password
+- **THEN** `config.toml` contains no `encrypted_password` field for that profile
+
+### Requirement: Master passphrase verification hash
+
+`ProfileStore` SHALL store an optional `master_passphrase_hash` field in `config.toml` containing the Argon2id PHC hash string of the master passphrase. The hash SHALL be produced using `argon2::hash_encoded` with Argon2id variant and OWASP-recommended parameters (m≥19456, t≥2). The cleartext passphrase SHALL NOT appear in the config file.
+
+#### Scenario: Hash written on first passphrase setup
+
+- **WHEN** the user creates a master passphrase for the first time
+- **THEN** `config.toml` contains a non-empty `master_passphrase_hash` field valid for `argon2::verify_encoded`
+
+#### Scenario: Correct passphrase is accepted
+
+- **WHEN** the user enters the correct master passphrase at the unlock dialog
+- **THEN** `argon2::verify_encoded` returns `Ok(true)` and the session is unlocked
+
+#### Scenario: Incorrect passphrase is rejected
+
+- **WHEN** the user enters an incorrect master passphrase at the unlock dialog
+- **THEN** `argon2::verify_encoded` returns `Ok(false)` and the dialog shows an error message
+
+### Requirement: Argon2id key derivation for encryption and decryption
+
+To encrypt or decrypt a profile password, the system SHALL derive a 32-byte key using Argon2id from the master passphrase and the profile-specific 16-byte random salt. Derivation SHALL execute on a blocking thread (`tokio::task::spawn_blocking`) to avoid blocking the iced frame loop.
+
+#### Scenario: Derived key is used for AEAD encryption
+
+- **WHEN** the user saves a profile with a password and the master passphrase is unlocked
+- **THEN** the system derives a 32-byte key via Argon2id and encrypts the password with ChaCha20-Poly1305
+
+#### Scenario: Derived key is used for AEAD decryption
+
+- **WHEN** the app needs to connect using a profile that has an `encrypted_password`
+- **THEN** the system derives the same 32-byte key (same passphrase + stored salt) and decrypts the ciphertext with ChaCha20-Poly1305
+
+### Requirement: Tamper detection via authenticated encryption
+
+ChaCha20-Poly1305 SHALL be used for all encryption/decryption. Any modification to the ciphertext, nonce, or salt stored in `config.toml` SHALL cause decryption to return an error, which the app SHALL surface as a credential-load failure (profile connects without a password, and an error is logged).
+
+#### Scenario: Modified ciphertext causes decryption error
+
+- **WHEN** the ciphertext in `config.toml` has been altered
+- **THEN** ChaCha20-Poly1305 decryption returns an authentication error
+- **THEN** the app logs the error and proceeds without a password for that profile
+
+### Requirement: Session-scoped passphrase zeroized in memory
+
+The master passphrase SHALL be held in `AppState.unlocked_passphrase: Option<secrecy::SecretString>` for the duration of the process lifetime. `SecretString` zeroizes its backing memory on drop, ensuring the passphrase is scrubbed when the app exits or the field is cleared. It SHALL start as `None` on every fresh launch. There SHALL be no explicit lock/logout action.
+
+#### Scenario: Passphrase is None at startup
+
+- **WHEN** the app launches
+- **THEN** `unlocked_passphrase` is `None`
+
+#### Scenario: Passphrase persists within a session
+
+- **WHEN** the user has unlocked the passphrase during a session
+- **THEN** subsequent connections or profile saves within the same session do not prompt for the passphrase again
+
+#### Scenario: Passphrase memory is zeroized on drop
+
+- **WHEN** the app process exits
+- **THEN** the `SecretString` destructor overwrites the passphrase bytes before returning memory to the allocator
+
+### Requirement: Double-submission guard on passphrase dialogs
+
+While a passphrase dialog has a background Argon2 task in flight, the dialog SHALL enter a processing state (`is_processing: true`) that disables all inputs and action buttons. The submit button label SHALL change to "Creating…" or "Verifying…" to communicate progress. A second submit SHALL be a no-op.
+
+#### Scenario: Submit button is disabled while processing
+
+- **WHEN** the user clicks "Create" or "Unlock"
+- **AND** the background KDF task is running
+- **THEN** the submit and cancel buttons have no press handler (visually inert)
+- **THEN** the text inputs have no input handler
+
+#### Scenario: Failed unlock re-enables the dialog
+
+- **WHEN** the passphrase verify task returns `valid: false`
+- **THEN** `is_processing` is reset to `false`
+- **THEN** the error message is shown and inputs are re-enabled
+
+### Requirement: Write-only password indicator in Settings
+
+The password field in the profile editor SHALL display a `"••••••••"` placeholder when the profile has a saved encrypted password and the user has not typed a new one (i.e. `has_saved_password && !password_changed`). Clicking into the field and typing replaces the stored password. Clearing the field and saving removes the password.
+
+#### Scenario: Saved password shows placeholder
+
+- **WHEN** the user opens a profile that has an encrypted password
+- **THEN** the password field shows `"••••••••"` placeholder text (not the decrypted password)
+
+#### Scenario: New profile password shows placeholder immediately after save
+
+- **WHEN** the user saves a new profile with a password
+- **THEN** the password field shows `"••••••••"` placeholder immediately, without waiting for the async encryption to complete
+
+### Requirement: Test Connection uses decrypted credentials when password is unchanged
+
+When the user clicks "Test Connection" on a profile with a saved password and has not entered a new draft password, settings SHALL emit `SettingsResult::TestConnectionWithId { profile_id }`. `app::update` SHALL decrypt the password using `unlocked_passphrase` and fire the RPC probe, routing `TestConnectionResult` back to the settings screen.
+
+#### Scenario: Test Connection uses existing encrypted password
+
+- **WHEN** the user clicks "Test Connection" on a profile with a saved password
+- **AND** the password draft field has not been changed
+- **THEN** the app decrypts the stored password using the session passphrase
+- **THEN** the RPC probe uses the decrypted password
+
+#### Scenario: Test Connection uses draft password when changed
+
+- **WHEN** the user types a new password in the draft field and clicks "Test Connection"
+- **THEN** the RPC probe uses the typed draft password (unencrypted, for immediate testing)
+
+### Requirement: Passphrase setup dialog
+
+When the user attempts to save a profile with a non-empty password and no `master_passphrase_hash` exists, the app SHALL show a modal overlay prompting the user to create a master passphrase. The dialog SHALL include two masked text inputs (passphrase and confirmation) and "Create" and "Cancel" buttons.
+
+#### Scenario: Setup dialog appears on first password-protected save
+
+- **WHEN** the user clicks Save on a profile with a password and no master passphrase has been configured
+- **THEN** a modal overlay is shown with "Create a master passphrase" heading, two masked inputs, and "Create" / "Cancel" buttons
+
+#### Scenario: Mismatched confirmation is rejected
+
+- **WHEN** the user enters different values in the passphrase and confirmation inputs
+- **THEN** the dialog shows an inline error "Passphrases do not match" and the save is not performed
+
+#### Scenario: Successful setup saves hash and encrypts password
+
+- **WHEN** the user enters matching passphrases and clicks "Create"
+- **THEN** `master_passphrase_hash` is written to `config.toml`
+- **THEN** `unlocked_passphrase` is set in session memory
+- **THEN** the profile password is encrypted and saved
+- **THEN** the dialog is dismissed
+
+#### Scenario: Cancelling setup aborts the save
+
+- **WHEN** the user clicks "Cancel" on the setup dialog
+- **THEN** the dialog is dismissed and the profile is saved without an encrypted password
+
+### Requirement: Passphrase unlock dialog
+
+When the app needs to decrypt a profile password (for connecting) and `unlocked_passphrase` is `None`, the app SHALL show a modal overlay prompting the user to enter their master passphrase. The dialog SHALL include one masked text input and "Unlock" and "Cancel" buttons.
+
+#### Scenario: Unlock dialog appears when passphrase is needed
+
+- **WHEN** the user initiates a connection to a profile with an `encrypted_password` and `unlocked_passphrase` is `None`
+- **THEN** a modal overlay is shown with "Enter master passphrase" heading, one masked input, and "Unlock" / "Cancel" buttons
+
+#### Scenario: Successful unlock resumes connection
+
+- **WHEN** the user enters the correct passphrase and clicks "Unlock"
+- **THEN** `unlocked_passphrase` is set in session memory
+- **THEN** the connection attempt proceeds with the decrypted password
+
+#### Scenario: Incorrect passphrase shows error without dismissing
+
+- **WHEN** the user enters an incorrect passphrase and clicks "Unlock"
+- **THEN** the dialog shows an inline error "Incorrect passphrase"
+- **THEN** the dialog remains open
+
+#### Scenario: Cancelling unlock dialog aborts the connection
+
+- **WHEN** the user clicks "Cancel" on the unlock dialog
+- **THEN** the dialog is dismissed and no connection attempt is made
+
+--- ARQUIVOS DO PR (49)
+modified  +40    -14    AGENTS.md
+modified  +6     -0     CHANGELOG.md
+modified  +3     -2     openspec/specs/add-torrent/spec.md
+modified  +1     -1     openspec/specs/connection-screen/spec.md
+modified  +9     -6     openspec/specs/file-selection/spec.md
+modified  +2     -2     openspec/specs/m3-components/spec.md
+modified  +2     -2     openspec/specs/material-theme/spec.md
+modified  +2     -1     openspec/specs/rpc-client/spec.md
+modified  +26    -593   src/app.rs
+added     +95    -0     src/app/keyboard.rs
+added     +343   -0     src/app/routing.rs
+added     +241   -0     src/app/settings_bridge.rs
+renamed   +50    -545   src/auth/mod.rs
+added     +304   -0     src/auth/update.rs
+added     +202   -0     src/auth/view.rs
+modified  +6     -0     src/lib.rs
+modified  +3     -0     src/main.rs
+modified  +3     -3     src/profile.rs   <== código ligado à spec
+modified  +3     -3     src/rpc/api.rs
+modified  +2     -0     src/rpc/error.rs
+modified  +1     -1     src/rpc/transport.rs
+added     +193   -0     src/screens/inspector/mod.rs
+added     +70    -0     src/screens/inspector/state.rs
+added     +91    -0     src/screens/inspector/update.rs
+renamed   +6     -293   src/screens/inspector/view.rs
+modified  +1     -1     src/screens/main_screen.rs
+modified  +2     -0     src/screens/mod.rs
+modified  +5     -0     src/screens/settings/draft.rs
+modified  +1     -1     src/screens/settings/mod.rs
+modified  +8     -0     src/screens/settings/state.rs
+modified  +2     -0     src/screens/settings/update.rs   <== código ligado à spec
+modified  +6     -40    src/screens/settings/view.rs
+modified  +4     -6     src/screens/torrent_list/add_dialog.rs
+added     +278   -0     src/screens/torrent_list/columns.rs
+added     +212   -0     src/screens/torrent_list/dialogs.rs
+added     +165   -0     src/screens/torrent_list/filters.rs
+modified  +44    -56    src/screens/torrent_list/mod.rs
+modified  +13    -13    src/screens/torrent_list/sort.rs
+added     +134   -0     src/screens/torrent_list/toolbar.rs
+modified  +3     -0     src/screens/torrent_list/update.rs
+modified  +28    -651   src/screens/torrent_list/view.rs
+modified  +27    -839   src/theme.rs
+added     +394   -0     src/theme/buttons.rs
+added     +213   -0     src/theme/containers.rs
+added     +99    -0     src/theme/inputs.rs
+added     +72    -0     src/theme/progress.rs
+added     +121   -0     src/theme/segmented.rs
+added     +97    -0     src/theme/selection.rs
+modified  +18    -11    system_architecture.md
+--- DIFF DO CÓDIGO LIGADO
+### src/profile.rs
+@@ -295,7 +295,7 @@ port = 9091
+ "#
+     }
+ 
+-    /// 2.6a – Valid TOML parses correctly.
++    /// Valid TOML parses correctly.
+     #[test]
+     fn load_parses_valid_toml() {
+         let store: ProfileStore = toml::from_str(sample_toml()).unwrap();
+@@ -306,7 +306,7 @@ port = 9091
+         assert!(store.last_connected.is_some());
+     }
+ 
+-    /// 2.6b – Missing file yields empty defaults (simulated by parsing empty string).
++    /// Missing file input yields empty defaults when parsed from an empty string.
+     #[test]
+     fn load_empty_toml_gives_defaults() {
+         let store: ProfileStore = toml::from_str("").unwrap();
+@@ -316,7 +316,7 @@ port = 9091
+         assert!(store.last_connected.is_none());
+     }
+ 
+-    /// 2.6c – Corrupt TOML fails to parse.
++    /// Corrupt TOML fails to parse.
+     #[test]
+     fn load_corrupt_toml_fails() {
+         let result: Result<ProfileStore, _> = toml::from_str("[[not valid toml{{");
+
+### src/screens/settings/update.rs
+@@ -12,6 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++//! Message handling for the settings screen.
++
+ use iced::Task;
+ 
+ use crate::profile::ConnectionProfile;
+

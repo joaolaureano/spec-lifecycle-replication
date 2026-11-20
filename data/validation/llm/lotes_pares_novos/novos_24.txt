@@ -1,0 +1,2332 @@
+===== P225 | repo dynatrace-oss/dtwiz | PR #134: feat: gcp support | capacidade: feature-flag-registry
+--- SPEC VIVA
+# Feature Flag Registry
+
+## ADDED Requirements
+
+### Requirement: Central registry with declarative flag definitions
+
+The `pkg/featureflags` package SHALL maintain a registry of known feature flags. Each flag is defined by a constant, an environment variable name, a default value, and a cobra flag name. Adding a new feature flag SHALL require only a single constant definition and a single registry entry — no changes to consuming code patterns.
+
+#### Scenario: New flag added to the registry
+
+- **GIVEN** a developer wants to gate a new feature behind a flag
+- **WHEN** they add a `const` and a registry entry in `pkg/featureflags/featureflags.go`
+- **THEN** the flag is automatically available via `IsEnabled()`, `List()`, cobra CLI flags, and env var lookup — no other files need changes
+
+### Requirement: `IsEnabled(flag)` as single entry point
+
+The package SHALL expose `IsEnabled(flag) bool` as the single entry point for checking whether a feature flag is enabled. Resolution order: test override → CLI flag → environment variable → default value.
+
+#### Scenario: Default value — flag not set anywhere
+
+- **GIVEN** the `AllRuntimes` flag has default `false`
+- **AND** no env var `DTWIZ_ALL_RUNTIMES` is set
+- **AND** no `--all-runtimes` CLI flag is passed
+- **WHEN** `IsEnabled(AllRuntimes)` is called
+- **THEN** it returns `false`
+
+#### Scenario: Env var override with "true"
+
+- **GIVEN** `DTWIZ_ALL_RUNTIMES=true` is set in the environment
+- **AND** no CLI flag overrides it
+- **WHEN** `IsEnabled(AllRuntimes)` is called
+- **THEN** it returns `true`
+
+#### Scenario: Env var override with "1"
+
+- **GIVEN** `DTWIZ_ALL_RUNTIMES=1` is set in the environment
+- **WHEN** `IsEnabled(AllRuntimes)` is called
+- **THEN** it returns `true`
+
+#### Scenario: CLI flag overrides env var
+
+- **GIVEN** `DTWIZ_ALL_RUNTIMES=false` is set in the environment
+- **AND** `--all-runtimes` is passed on the command line
+- **WHEN** `IsEnabled(AllRuntimes)` is called
+- **THEN** it returns `true` (CLI takes precedence)
+
+#### Scenario: Unknown flag returns false
+
+- **GIVEN** a `Flag` value that is not registered in the registry
+- **WHEN** `IsEnabled(unknownFlag)` is called
+- **THEN** it returns `false`
+
+### Requirement: `List()` returns all flags with resolved state
+
+The package SHALL expose `List() []FlagState` returning all registered flags with their current resolved value and the source of that value (`"cli"`, `"env"`, or `"default"`).
+
+#### Scenario: Mixed sources
+
+- **GIVEN** `AllRuntimes` is enabled via env var
+- **WHEN** `List()` is called
+- **THEN** it returns a `FlagState` with `Name: "all-runtimes"`, `EnvVar: "DTWIZ_ALL_RUNTIMES"`, `Enabled: true`, `Source: "env"`
+
+### Requirement: Cobra flag registration
+
+The package SHALL expose `RegisterFlags(flags *pflag.FlagSet)` that registers a persistent boolean flag for each registry entry. The package SHALL expose `ApplyCLIOverrides(flags *pflag.FlagSet)` that checks `flags.Changed(name)` for each entry and stores CLI-set values as overrides. `ApplyCLIOverrides` SHALL be called from `rootCmd.PersistentPreRun`.
+
+#### Scenario: Cobra flag registered and discoverable
+
+- **GIVEN** `RegisterFlags` has been called with the root command's persistent flags
+- **WHEN** a user runs `dtwiz --help`
+- **THEN** `--all-runtimes` appears in the flag list with its description
+
+#### Scenario: Cobra flag not passed — env var not stomped
+
+- **GIVEN** `DTWIZ_ALL_RUNTIMES=true` is set in the environment
+- **AND** `--all-runtimes` is NOT passed on the command line
+- **WHEN** `ApplyCLIOverrides` runs and then `IsEnabled(AllRuntimes)` is called
+- **THEN** it returns `true` (cobra's default `false` does NOT override the env var)
+
+### Requirement: `Experimental` flag gates command visibility in help output
+
+Subcommands that are experimental SHALL be registered with `Hidden: true` by default and unhidden only when `featureflags.IsEnabled(featureflags.Experimental)` returns `true`. Because `PersistentPreRun` is not called when `--help` is requested, commands that conditionally show hidden subcommands SHALL override their `HelpFunc` to call `ApplyCLIOverrides` before delegating to the default help renderer. Execution of an experimental command without the flag enabled SHALL return an error directing the user to `--experimental` or `DTWIZ_EXPERIMENTAL=true`.
+
+Any command that defines its own `PersistentPreRun` (which overrides root's) SHALL call `featureflags.ApplyCLIOverrides` within that `PersistentPreRun` so that `--experimental` and other feature flags take effect for its subcommands.
+
+The following commands and setup flows are gated behind the `Experimental` flag:
+
+- `dtwiz install docker`
+- `dtwiz install demo`
+- `dtwiz update otel`
+- The `MethodOtelUpdate` recommendation in `dtwiz setup` (patch existing OTel Collector)
+
+The cobra flag description for `--experimental` in the registry entry SHALL enumerate all gated features so that `dtwiz --help` remains accurate. When a new experimental feature is added, its description SHALL be updated.
+
+#### Scenario: Experimental install command hidden from help by default
+
+- **GIVEN** neither `--experimental` nor `DTWIZ_EXPERIMENTAL` is set
+- **WHEN** a user runs `dtwiz install --help`
+- **THEN** the `docker` subcommand does NOT appear in the available commands list
+
+#### Scenario: Experimental install command visible with env var
+
+- **GIVEN** `DTWIZ_EXPERIMENTAL=true` is set in the environment
+- **WHEN** a user runs `dtwiz install --help`
+- **THEN** the `docker` subcommand appears in the available commands list
+
+#### Scenario: Experimental install command visible with CLI flag
+
+- **GIVEN** `--experimental` is passed on the command line
+- **WHEN** a user runs `dtwiz install --experimental --help`
+- **THEN** the `docker` subcommand appears in the available commands list
+
+#### Scenario: Experimental install command blocked at execution without flag
+
+- **GIVEN** neither `--experimental` nor `DTWIZ_EXPERIMENTAL` is set
+- **WHEN** a user runs `dtwiz install docker`
+- **THEN** the command exits with an error: `docker installation is an experimental feature; enable it with --experimental or DTWIZ_EXPERIMENTAL=true`
+
+#### Scenario: `update otel` hidden from help by default
+
+- **GIVEN** neither `--experimental` nor `DTWIZ_EXPERIMENTAL` is set
+- **WHEN** a user runs `dtwiz update --help`
+- **THEN** the `otel` subcommand does NOT appear in the available commands list
+
+#### Scenario: `update otel` visible with experimental flag
+
+- **GIVEN** `--experimental` or `DTWIZ_EXPERIMENTAL=true` is set
+- **WHEN** a user runs `dtwiz update --help`
+- **THEN** the `otel` subcommand appears in the available commands list
+
+#### Scenario: `update otel` blocked at execution without flag
+
+- **GIVEN** neither `--experimental` nor `DTWIZ_EXPERIMENTAL` is set
+- **WHEN** a user runs `dtwiz update otel`
+- **THEN** the command exits with an error: `otel update is an experimental feature; enable it with --experimental or DTWIZ_EXPERIMENTAL=true`
+
+### Requirement: `Experimental` flag gates `setup` recommendations
+
+The `dtwiz setup` interactive flow SHALL exclude experimental recommendations from the selectable list when `Experimental` is not enabled. Specifically, `MethodOtelUpdate` (patch existing OTel Collector) and `MethodDocker` SHALL NOT appear as options unless `featureflags.IsEnabled(featureflags.Experimental)` returns `true`.
+
+#### Scenario: OTel update option absent from setup without experimental
+
+- **GIVEN** an OTel Collector is running on the host
+- **AND** neither `--experimental` nor `DTWIZ_EXPERIMENTAL` is set
+- **WHEN** a user runs `dtwiz setup`
+- **THEN** the "patch existing OpenTelemetry Collector" option does NOT appear in the recommendation list
+
+#### Scenario: OTel update option present in setup with experimental
+
+- **GIVEN** an OTel Collector is running on the host
+- **AND** `--experimental` or `DTWIZ_EXPERIMENTAL=true` is set
+- **WHEN** a user runs `dtwiz setup`
+- **THEN** the "patch existing OpenTelemetry Collector" option appears in the recommendation list
+
+### Requirement: Test helper `SetCLIOverrideForTest`
+
+The package SHALL expose `SetCLIOverrideForTest(t testCleaner, flag Flag, val bool)` in `test_utils.go` that injects a CLI-scoped override, equivalent to the user having passed the flag explicitly on the command line. The override SHALL be automatically removed via `t.Cleanup`.
+
+#### Scenario: CLI override scoped to test
+
+- **GIVEN** a test calls `SetCLIOverrideForTest(t, AllRuntimes, true)`
+- **WHEN** `IsEnabled(AllRuntimes)` is called within the test
+- **THEN** it returns `true` with source `"cli"`
+- **AND** after the test completes, the override is removed
+
+### Requirement: Minimal dependencies
+
+The `pkg/featureflags` package SHALL use only Go standard library packages and `github.com/spf13/pflag`, which is already used throughout the project (cobra integration via `pflag.FlagSet`). The `testing` package SHALL NOT be imported in production code; test helpers use a local `testCleaner` interface instead.
+
+### Requirement: Backward compatibility
+
+The `DTWIZ_ALL_RUNTIMES` environment variable SHALL continue to work identically to the current behavior. Values `"true"` and `"1"` enable the flag; all other values (including empty string) leave it disabled.
+
+--- ARQUIVOS DO PR (44)
+modified  +12    -1     cmd/install.go
+modified  +36    -9     cmd/setup.go   <== código ligado à spec
+modified  +21    -0     cmd/uninstall.go
+modified  +24    -0     cmd/update.go   <== código ligado à spec
+modified  +60    -0     cmd/update_test.go
+added     +2     -0     openspec/changes/add-gcp-monitor-integration/.openspec.yaml
+added     +88    -0     openspec/changes/add-gcp-monitor-integration/design.md
+added     +36    -0     openspec/changes/add-gcp-monitor-integration/proposal.md
+added     +210   -0     openspec/changes/add-gcp-monitor-integration/specs/gcp-monitor-install/spec.md
+added     +98    -0     openspec/changes/add-gcp-monitor-integration/specs/gcp-monitor-uninstall/spec.md
+added     +122   -0     openspec/changes/add-gcp-monitor-integration/specs/gcp-monitor-update/spec.md
+added     +81    -0     openspec/changes/add-gcp-monitor-integration/tasks.md
+modified  +23    -3     pkg/analyzer/detect_gcp.go
+added     +35    -0     pkg/analyzer/detect_gcp_test.go
+modified  +4     -18    pkg/installer/azure/config.go
+modified  +32    -163   pkg/installer/azure/dtapi.go
+modified  +7     -133   pkg/installer/azure/dtapi_test.go
+modified  +47    -27    pkg/installer/azure/helpers.go
+modified  +25    -0     pkg/installer/azure/helpers_test.go
+modified  +19    -15    pkg/installer/azure/install.go
+modified  +9     -27    pkg/installer/azure/uninstall.go
+modified  +10    -41    pkg/installer/azure/update.go
+added     +40    -0     pkg/installer/cmdrunner.go
+added     +24    -0     pkg/installer/concurrent.go
+added     +37    -0     pkg/installer/concurrent_test.go
+added     +197   -0     pkg/installer/extension_client.go
+added     +246   -0     pkg/installer/extension_client_test.go
+removed   +0     -9     pkg/installer/gcp.go
+added     +85    -0     pkg/installer/gcp/config.go
+added     +298   -0     pkg/installer/gcp/dtapi.go
+added     +477   -0     pkg/installer/gcp/dtapi_test.go
+added     +113   -0     pkg/installer/gcp/helpers.go
+added     +303   -0     pkg/installer/gcp/helpers_test.go
+added     +416   -0     pkg/installer/gcp/install.go
+added     +632   -0     pkg/installer/gcp/install_test.go
+added     +32    -0     pkg/installer/gcp/preflight.go
+added     +233   -0     pkg/installer/gcp/uninstall.go
+added     +125   -0     pkg/installer/gcp/uninstall_test.go
+added     +148   -0     pkg/installer/gcp/update.go
+added     +90    -0     pkg/installer/gcp/update_test.go
+added     +57    -0     pkg/installer/retry.go
+added     +22    -0     pkg/installer/retry_test.go
+modified  +2     -3     pkg/recommender/recommender.go
+modified  +2     -2     pkg/recommender/recommender_test.go
+--- DIFF DO CÓDIGO LIGADO
+### cmd/setup.go
+@@ -14,6 +14,7 @@ import (
+ 	"github.com/dynatrace-oss/dtwiz/pkg/featureflags"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer/azure"
++	"github.com/dynatrace-oss/dtwiz/pkg/installer/gcp"
+ 	k8s "github.com/dynatrace-oss/dtwiz/pkg/installer/kubernetes"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer/oneagent"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer/otel"
+@@ -72,13 +73,23 @@ var setupCmd = &cobra.Command{
+ 			return nil
+ 		}
+ 
+-		// Pre-check Azure status so we can badge the Azure entry in the list.
++		// Pre-check Azure/GCP status so we can badge those entries in the list.
+ 		azureConfigured := false
++		gcpConfigured := false
+ 		if envURL, _, platformTok, credErr := getDtEnvironment(); credErr == nil {
+-			if exists, err := azure.ConnectionExists(envURL, platformTok); err != nil {
+-				logger.Debug("azure connection check failed, badging as not configured", "err", err)
+-			} else if exists {
+-				azureConfigured = true
++			if err := installer.RunConcurrently(
++				func() error {
++					exists, err := azure.ConnectionExists(envURL, platformTok)
++					azureConfigured = exists
++					return err
++				},
++				func() error {
++					exists, err := gcp.ConnectionExists(envURL, platformTok)
++					gcpConfigured = exists
++					return err
++				},
++			); err != nil {
++				logger.Debug("connection existence check failed, badging as not configured", "err", err)
+ 			}
+ 		}
+ 
+@@ -91,6 +102,13 @@ var setupCmd = &cobra.Command{
+ 					title += "  [install]"
+ 				}
+ 			}
++			if r.Method == recommender.MethodGCP {
++				if gcpConfigured {
++					title += "  [update]"
++				} else {
++					title += "  [install]"
++				}
++			}
+ 			fmt.Printf("  %s  %s\n", display.ColorHeader.Sprintf("[%d]", i+1), title)
+ 		}
+ 		// Show coming-soon items (informational only, not selectable).
+@@ -168,7 +186,8 @@ var setupCmd = &cobra.Command{
+ 		}
+ 
+ 		headerVerb := "Installing"
+-		if selected.Method == recommender.MethodAzure && azureConfigured {
++		if (selected.Method == recommender.MethodAzure && azureConfigured) ||
++			(selected.Method == recommender.MethodGCP && gcpConfigured) {
+ 			headerVerb = "Updating"
+ 		}
+ 		display.Header(fmt.Sprintf("%s: %s", headerVerb, selected.Title))
+@@ -207,6 +226,13 @@ var setupCmd = &cobra.Command{
+ 			} else {
+ 				installErr = azure.InstallAzure(envURL, platformTok, setupDryRun, StartTime)
+ 			}
++		case recommender.MethodGCP:
++			logger.Debug("setup selected GCP", "configured", gcpConfigured)
++			if gcpConfigured {
++				installErr = gcp.UpdateGCP(envURL, platformTok, setupDryRun, StartTime)
++			} else {
++				installErr = gcp.InstallGCP(envURL, platformTok, setupDryRun, StartTime)
++			}
+ 		default:
+ 			return fmt.Errorf("unsupported method: %s", selected.Method)
+ 		}
+@@ -216,10 +242,11 @@ var setupCmd = &cobra.Command{
+ 			}
+ 			return installErr
+ 		}
+-		// AWS scopes its watch to the account (WatchIngestAWS) and Azure runs the
+-		// generic watch from inside the installer; both start their own watch, so
++		// AWS scopes its watch to the account (WatchIngestAWS); Azure and GCP run their
++		// own generic watch from inside the installer; both start their own watch, so
+ 		// the generic post-install watch here is only used for the other methods.
+-		if !setupDryRun && selected.Method != recommender.MethodAWS && selected.Method != recommender.MethodAzure {
++		if !setupDryRun && selected.Method != recommender.MethodAWS &&
++			selected.Method != recommender.MethodAzure && selected.Method != recommender.MethodGCP {
+ 			installer.WatchIngest(envURL, platformTok, StartTime.UTC().Format("2006-01-02T15:04:05Z"))
+ 		}
+ 		return nil
+
+### cmd/update.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/dynatrace-oss/dtwiz/pkg/featureflags"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer/azure"
++	"github.com/dynatrace-oss/dtwiz/pkg/installer/gcp"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/installer/otel"
+ 	"github.com/dynatrace-oss/dtwiz/pkg/logger"
+ )
+@@ -87,12 +88,35 @@ var updateAzureCmd = &cobra.Command{
+ 	},
+ }
+ 
++var updateGcpCmd = &cobra.Command{
++	Use:   "gcp",
++	Short: "Reconcile the Dynatrace Google Cloud integration's monitoring configuration",
++	Args:  cobra.NoArgs,
++	RunE: func(cmd *cobra.Command, args []string) error {
++		envURL, _, platformTok, err := getDtEnvironment()
++		if err != nil {
++			return err
++		}
++		if err := checkPlatformToken(envURL, platformTok); err != nil {
++			return err
++		}
++		if err := gcp.UpdateGCP(envURL, platformTok, updateDryRun, StartTime); err != nil {
++			if errors.Is(err, installer.ErrInstallCancelled) {
++				return nil
++			}
++			return err
++		}
++		return nil
++	},
++}
++
+ func init() {
+ 	updateCmd.PersistentFlags().BoolVar(&updateDryRun, "dry-run", false, "show what would be done without executing")
+ 	updateCmd.PersistentFlags().BoolVarP(&updateAutoConfirm, "yes", "y", false, "skip confirmation prompts")
+ 	updateOtelCmd.Flags().StringVar(&updateOtelConfigPath, "config", "", "path to the existing OTel Collector config file to patch (prompts with running collector list when omitted)")
+ 	updateCmd.AddCommand(updateOtelCmd)
+ 	updateCmd.AddCommand(updateAzureCmd)
++	updateCmd.AddCommand(updateGcpCmd)
+ 
+ 	// PersistentPreRun doesn't run for --help, so resolve the experimental flag here
+ 	// to conditionally show the otel subcommand in help output.
+
+===== P226 | repo datenoio/iterabledata | PR #11: Add LLM readiness roadmap: catalog, agent tools, and AI operations | capacidade: rdf-formats
+--- SPEC VIVA
+# rdf-formats Specification
+
+## Purpose
+TBD - created by archiving change add-rdf-xlsb-fasta-graph-bio-formats. Update Purpose after archive.
+## Requirements
+### Requirement: TriG Format Support
+The system SHALL support reading and optionally writing TriG (RDF Triple Graph) files using rdflib, yielding quad records (subject, predicate, object, graph).
+
+#### Scenario: Read TriG file with automatic detection
+- **WHEN** user opens a file with extension `.trig` via `open_iterable`
+- **THEN** the system selects the TriG iterable and yields quad records as dicts
+
+#### Scenario: Read valid TriG content
+- **WHEN** reading a valid TriG file
+- **THEN** each yielded record SHALL contain subject, predicate, object, and graph keys
+- **AND** records are streamed without loading the entire graph into memory where practical
+
+#### Scenario: Missing rdflib dependency
+- **WHEN** rdflib is not installed and user attempts to read a TriG file
+- **THEN** the system SHALL raise an ImportError with a message instructing to install the rdf extra (e.g. `pip install iterabledata[rdf]`)
+
+### Requirement: N3 Format Support
+The system SHALL support reading and optionally writing N3 (Notation3) files using rdflib, yielding triple records (subject, predicate, object).
+
+#### Scenario: Read N3 file with automatic detection
+- **WHEN** user opens a file with extension `.n3` via `open_iterable`
+- **THEN** the system selects the N3 iterable and yields triple records as dicts
+
+#### Scenario: Read valid N3 content
+- **WHEN** reading a valid N3 file
+- **THEN** each yielded record SHALL contain subject, predicate, and object keys
+- **AND** records are streamed where practical
+
+#### Scenario: Missing rdflib for N3
+- **WHEN** rdflib is not installed and user attempts to read an N3 file
+- **THEN** the system SHALL raise an ImportError with install instructions for the rdf extra
+
+### Requirement: TriX Format Support
+The system SHALL support reading and optionally writing TriX (XML Triple format) files using rdflib, yielding triple or quad records.
+
+#### Scenario: Read TriX file with automatic detection
+- **WHEN** user opens a file with extension `.trix` via `open_iterable`
+- **THEN** the system selects the TriX iterable and yields triple/quad records as dicts
+
+#### Scenario: Read valid TriX content
+- **WHEN** reading a valid TriX file
+- **THEN** each yielded record SHALL contain at least subject, predicate, and object keys
+- **AND** records are streamed where practical
+
+#### Scenario: Missing rdflib for TriX
+- **WHEN** rdflib is not installed and user attempts to read a TriX file
+- **THEN** the system SHALL raise an ImportError with install instructions for the rdf extra
+
+
+--- ARQUIVOS DO PR (380)
+modified  +1     -0     .cursor/skills/README.md
+added     +80    -0     .cursor/skills/ai-integration/SKILL.md
+added     +51    -0     .github/ISSUE_TEMPLATE/bug_report.yml
+added     +31    -0     .github/ISSUE_TEMPLATE/feature_request.yml
+added     +13    -0     .github/pull_request_template.md
+added     +22    -0     .github/workflows/ai-integration.yml
+modified  +43    -3     .github/workflows/ci.yml
+modified  +1     -0     .github/workflows/release.yml
+modified  +6     -6     .pre-commit-config.yaml
+modified  +22    -1     AGENTS.md
+modified  +42    -0     CHANGELOG.md
+added     +49    -0     CONTRIBUTING.md
+modified  +20    -5     IMPROVEMENT_PLAN.md
+modified  +54    -2     README.md
+added     +2958  -0     dev/formats.json
+added     +116   -0     dev/scripts/coverage_by_package.py
+added     +27    -0     dev/scripts/export_formats_json.py
+modified  +86    -120   dev/scripts/find_missing_fixtures.py
+added     +62    -0     dev/scripts/generate_format_doc_stubs.py
+added     +70    -0     dev/scripts/generate_llms_txt.py
+added     +74    -0     docs/FORMAT_PAGE_TEMPLATE.md
+modified  +1     -0     docs/GITHUB_PAGES_SETUP.md
+modified  +176   -1     docs/docs/api/ai.md
+modified  +1     -1     docs/docs/api/async.md
+modified  +1     -1     docs/docs/api/capabilities.md
+added     +73    -0     docs/docs/api/catalog.md
+modified  +4     -4     docs/docs/api/convert.md
+modified  +1     -1     docs/docs/api/open-iterable.md
+modified  +22    -1     docs/docs/api/ops-inspect.md
+modified  +6     -0     docs/docs/api/ops-stats.md
+modified  +1     -1     docs/docs/api/plugins.md
+added     +73    -0     docs/docs/api/tools.md
+renamed   +21    -22    docs/docs/formats/arc.md
+added     +40    -0     docs/docs/formats/arff.md
+added     +40    -0     docs/docs/formats/bam.md
+added     +40    -0     docs/docs/formats/cdf.md
+added     +205   -0     docs/docs/formats/ckpt.md
+added     +205   -0     docs/docs/formats/copy.md
+added     +205   -0     docs/docs/formats/der.md
+added     +205   -0     docs/docs/formats/dta.md
+added     +40    -0     docs/docs/formats/dxf.md
+added     +34    -0     docs/docs/formats/fa.md
+added     +205   -0     docs/docs/formats/fbs.md
+added     +205   -0     docs/docs/formats/flexbuf.md
+added     +34    -0     docs/docs/formats/fq.md
+added     +40    -0     docs/docs/formats/gexf.md
+added     +205   -0     docs/docs/formats/gpkg.md
+added     +34    -0     docs/docs/formats/gpx.md
+added     +40    -0     docs/docs/formats/graphml.md
+added     +40    -0     docs/docs/formats/gv.md
+added     +205   -0     docs/docs/formats/htm.md
+added     +205   -0     docs/docs/formats/ics.md
+modified  +193   -166   docs/docs/formats/index.md
+modified  +1     -1     docs/docs/formats/json.md
+added     +40    -0     docs/docs/formats/kmz.md
+added     +34    -0     docs/docs/formats/libsvm.md
+added     +205   -0     docs/docs/formats/log.md
+modified  +164   -164   docs/docs/formats/ltsv.md
+added     +205   -0     docs/docs/formats/mht.md
+added     +40    -0     docs/docs/formats/mvt.md
+added     +40    -0     docs/docs/formats/n3.md
+added     +40    -0     docs/docs/formats/nc.md
+added     +34    -0     docs/docs/formats/npy.md
+added     +205   -0     docs/docs/formats/nq.md
+added     +205   -0     docs/docs/formats/nt.md
+added     +40    -0     docs/docs/formats/pcap.md
+added     +205   -0     docs/docs/formats/rda.md
+added     +205   -0     docs/docs/formats/rdf.md
+added     +205   -0     docs/docs/formats/rio.md
+added     +40    -0     docs/docs/formats/rss.md
+added     +40    -0     docs/docs/formats/sam.md
+added     +205   -0     docs/docs/formats/sav.md
+added     +205   -0     docs/docs/formats/seq.md
+added     +205   -0     docs/docs/formats/shp.md
+added     +205   -0     docs/docs/formats/sql.md
+added     +40    -0     docs/docs/formats/topojson.md
+added     +40    -0     docs/docs/formats/trig.md
+added     +40    -0     docs/docs/formats/trix.md
+added     +205   -0     docs/docs/formats/ubj.md
+added     +205   -0     docs/docs/formats/vtx.md
+added     +40    -0     docs/docs/formats/xlsb.md
+modified  +1     -1     docs/docs/formats/zipxml.md
+modified  +2     -2     docs/docs/getting-started/migration-guide.md
+modified  +6     -6     docs/docs/getting-started/performance.md
+added     +76    -0     docs/docs/integrations/BUILDING_AGENTS.md
+added     +58    -0     docs/docs/integrations/MCP.md
+modified  +30    -0     docs/integrations/AI_FRAMEWORKS.md
+modified  +36    -38    docs/integrations/CLAUDE.md
+modified  +29    -48    docs/integrations/GEMINI.md
+modified  +25    -40    docs/integrations/OPENAI.md
+modified  +2     -0     docs/sidebars.js
+modified  +13    -1     examples/ai/README.md
+added     +23    -0     examples/ai/anthropic_tools.py
+added     +183   -0     examples/ai/generate_blocks.py
+added     +21    -0     examples/ai/langchain_agent.py
+added     +27    -0     examples/ai/openai_function_calling.py
+added     +13    -0     examples/ai/plan_conversion.py
+modified  +1     -1     iterable/__init__.py
+modified  +3     -2     iterable/ai/__init__.py
+added     +773   -0     iterable/ai/blocks.py
+added     +62    -0     iterable/ai/cache.py
+added     +173   -0     iterable/ai/context.py
+modified  +501   -6     iterable/ai/doc.py
+added     +155   -0     iterable/ai/fileinfo.py
+added     +211   -0     iterable/ai/filter.py
+added     +188   -0     iterable/ai/models.py
+added     +129   -0     iterable/ai/plan.py
+added     +152   -0     iterable/ai/progress.py
+added     +14    -0     iterable/ai/prompts/__init__.py
+added     +9     -0     iterable/ai/prompts/documentation.txt
+added     +16    -0     iterable/ai/prompts/plan_conversion.txt
+added     +17    -0     iterable/ai/prompts/suggest_transform.txt
+added     +13    -0     iterable/ai/prompts/translate_filter.txt
+modified  +508   -14    iterable/ai/providers.py
+added     +139   -0     iterable/ai/sampling.py
+added     +72    -0     iterable/ai/suggest.py
+modified  +5     -5     iterable/async_base.py
+modified  +15    -149   iterable/base.py
+added     +62    -0     iterable/catalog/__init__.py
+added     +75    -0     iterable/codec_base.py
+removed   +0     -30    iterable/codecs/7zcodec.py_
+added     +17    -0     iterable/codecs/_stream.py
+modified  +4     -10    iterable/codecs/bz2codec.py
+modified  +4     -12    iterable/codecs/gzipcodec.py
+modified  +10    -7     iterable/codecs/zstdcodec.py
+added     +72    -0     iterable/dataframe_adapters.py
+modified  +1     -1     iterable/datatypes/annotatedcsv.py
+modified  +1     -1     iterable/datatypes/apachelog.py
+modified  +1     -1     iterable/datatypes/arff.py
+modified  +1     -1     iterable/datatypes/arrow.py
+modified  +1     -1     iterable/datatypes/asn1.py
+modified  +117   -5     iterable/datatypes/avro.py
+modified  +1     -1     iterable/datatypes/beam.py
+modified  +1     -1     iterable/datatypes/bencode.py
+modified  +1     -1     iterable/datatypes/bsonf.py
+modified  +3     -3     iterable/datatypes/capnp.py
+modified  +1     -1     iterable/datatypes/cbor.py
+modified  +1     -1     iterable/datatypes/cdx.py
+modified  +1     -1     iterable/datatypes/cef.py
+modified  +1     -1     iterable/datatypes/csv.py
+modified  +2     -2     iterable/datatypes/csvw.py
+modified  +1     -1     iterable/datatypes/dbf.py
+modified  +1     -1     iterable/datatypes/delta.py
+modified  +28    -3     iterable/datatypes/duckdb.py
+modified  +1     -1     iterable/datatypes/dxf.py
+modified  +1     -1     iterable/datatypes/edn.py
+modified  +1     -1     iterable/datatypes/eml.py
+modified  +1     -1     iterable/datatypes/feed.py
+modified  +10    -3     iterable/datatypes/flatbuffers.py
+modified  +1     -1     iterable/datatypes/flexbuffers.py
+modified  +1     -1     iterable/datatypes/flink.py
+modified  +1     -1     iterable/datatypes/fwf.py
+modified  +1     -1     iterable/datatypes/gelf.py
+modified  +1     -1     iterable/datatypes/geojson.py
+modified  +2     -2     iterable/datatypes/geopackage.py
+modified  +2     -2     iterable/datatypes/gml.py
+modified  +1     -1     iterable/datatypes/hdf5.py
+modified  +1     -1     iterable/datatypes/hocon.py
+modified  +1     -1     iterable/datatypes/html.py
+modified  +9     -2     iterable/datatypes/hudi.py
+modified  +1     -1     iterable/datatypes/ical.py
+modified  +3     -3     iterable/datatypes/iceberg.py
+modified  +1     -1     iterable/datatypes/ilp.py
+modified  +1     -1     iterable/datatypes/ini.py
+modified  +1     -1     iterable/datatypes/ion.py
+modified  +2     -2     iterable/datatypes/json.py
+modified  +1     -1     iterable/datatypes/jsonl.py
+modified  +1     -1     iterable/datatypes/jsonld.py
+modified  +1     -1     iterable/datatypes/kafka.py
+modified  +1     -1     iterable/datatypes/kml.py
+modified  +25    -3     iterable/datatypes/lance.py
+modified  +1     -1     iterable/datatypes/ldif.py
+modified  +1     -1     iterable/datatypes/libsvm.py
+modified  +1     -1     iterable/datatypes/ltsv.py
+modified  +1     -1     iterable/datatypes/mbox.py
+modified  +1     -1     iterable/datatypes/mhtml.py
+modified  +1     -1     iterable/datatypes/msgpack.py
+modified  +1     -1     iterable/datatypes/mvt.py
+modified  +2     -2     iterable/datatypes/mysqldump.py
+modified  +1     -1     iterable/datatypes/netcdf.py
+modified  +1     -1     iterable/datatypes/nquads.py
+modified  +2     -2     iterable/datatypes/ntriples.py
+modified  +2     -2     iterable/datatypes/numpy.py
+modified  +1     -1     iterable/datatypes/ods.py
+modified  +42    -11    iterable/datatypes/orc.py
+modified  +1     -1     iterable/datatypes/parquet.py
+modified  +37    -26    iterable/datatypes/pcap.py
+modified  +1     -1     iterable/datatypes/pgcopy.py
+modified  +6     -9     iterable/datatypes/picklef.py
+modified  +1     -1     iterable/datatypes/protobuf.py
+modified  +2     -2     iterable/datatypes/psv.py
+modified  +1     -1     iterable/datatypes/pulsar.py
+modified  +1     -1     iterable/datatypes/px.py
+modified  +1     -1     iterable/datatypes/rdata.py
+modified  +2     -2     iterable/datatypes/rdfxml.py
+modified  +1     -1     iterable/datatypes/rds.py
+modified  +1     -1     iterable/datatypes/recordio.py
+modified  +1     -1     iterable/datatypes/sas.py
+modified  +1     -1     iterable/datatypes/sequencefile.py
+modified  +1     -1     iterable/datatypes/shapefile.py
+modified  +1     -1     iterable/datatypes/smile.py
+modified  +1     -1     iterable/datatypes/spss.py
+modified  +28    -3     iterable/datatypes/sqlite.py
+modified  +1     -1     iterable/datatypes/stata.py
+modified  +1     -1     iterable/datatypes/tfrecord.py
+modified  +1     -1     iterable/datatypes/thrift.py
+modified  +1     -1     iterable/datatypes/toml.py
+modified  +1     -1     iterable/datatypes/topojson.py
+modified  +3     -3     iterable/datatypes/turtle.py
+modified  +1     -1     iterable/datatypes/txt.py
+modified  +1     -1     iterable/datatypes/ubjson.py
+modified  +1     -1     iterable/datatypes/vcf.py
+modified  +1     -1     iterable/datatypes/vortex.py
+modified  +1     -1     iterable/datatypes/warc.py
+modified  +1     -1     iterable/datatypes/xls.py
+modified  +1     -1     iterable/datatypes/xlsx.py
+modified  +4     -4     iterable/datatypes/xml.py
+modified  +1     -1     iterable/datatypes/yaml.py
+modified  +70    -27    iterable/datatypes/zipped.py
+modified  +10    -5     iterable/datatypes/zipxml.py
+modified  +1     -1     iterable/engines/duckdb.py
+modified  +1     -278   iterable/exceptions.py
+added     +279   -0     iterable/guidance.py
+modified  +16    -6     iterable/helpers/capabilities.py
+added     +95    -0     iterable/helpers/content_detection.py
+modified  +450   -1362  iterable/helpers/detect.py   <== código ligado à spec
+added     +782   -0     iterable/helpers/format_registry.py
+added     +377   -0     iterable/helpers/open_iterable.py
+modified  +62    -72    iterable/helpers/utils.py
+added     +56    -0     iterable/ingest/_sql_base.py
+modified  +13    -33    iterable/ingest/mysql.py
+modified  +11    -30    iterable/ingest/postgresql.py
+modified  +11    -29    iterable/ingest/sqlite.py
+added     +5     -0     iterable/mcp/__init__.py
+added     +104   -0     iterable/mcp/server.py
+modified  +55    -12    iterable/ops/inspect.py
+modified  +47    -14    iterable/ops/stats.py
+modified  +51    -0     iterable/ops/transform.py
+added     +36    -0     iterable/tools/__init__.py
+added     +217   -0     iterable/tools/_core.py
+added     +20    -0     iterable/tools/_result.py
+added     +38    -0     iterable/tools/langchain.py
+added     +259   -0     iterable/tools/schemas.py
+added     +62    -0     llms.txt
+added     +44    -0     openspec/changes/LLM_READINESS_ROADMAP.md
+added     +45    -0     openspec/changes/add-ai-block-documentation/design.md
+added     +41    -0     openspec/changes/add-ai-block-documentation/proposal.md
+added     +134   -0     openspec/changes/add-ai-block-documentation/specs/ai/spec.md
+added     +34    -0     openspec/changes/add-ai-block-documentation/specs/ops-stats/spec.md
+added     +31    -0     openspec/changes/add-ai-block-documentation/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/design.md
+added     +32    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/proposal.md
+added     +75    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/agent-tools/spec.md
+added     +18    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/ai/spec.md
+added     +64    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/tasks.md
+added     +85    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/design.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/proposal.md
+added     +52    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/specs/format-registry/spec.md
+added     +19    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/tasks.md
+added     +36    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/design.md
+added     +33    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/proposal.md
+added     +23    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/format-registry/spec.md
+added     +55    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/llm-catalog/spec.md
+added     +50    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/design.md
+added     +30    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/proposal.md
+added     +94    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ai/spec.md
+added     +14    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ops-filter/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/tasks.md
+added     +41    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/design.md
+added     +40    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/proposal.md
+added     +55    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ai/spec.md
+added     +52    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/llm-discoverability/spec.md
+added     +31    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ops-inspect/spec.md
+added     +51    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/tasks.md
+added     +91    -0     openspec/specs/agent-tools/spec.md
+modified  +99    -1     openspec/specs/ai/spec.md
+added     +64    -0     openspec/specs/format-registry/spec.md
+added     +61    -0     openspec/specs/llm-catalog/spec.md
+modified  +13    -0     openspec/specs/ops-filter/spec.md
+modified  +12    -3     openspec/specs/ops-inspect/spec.md
+modified  +33    -0     pyproject.toml
+removed   +0     -5     testdata/test_write_annotated.csv
+added     +94    -0     tests/conformance_fixtures.py
+modified  +12    -5     tests/conftest.py
+renamed   +0     -0     tests/fixtures/2cols6rows.vortex
+added     +0     -0     tests/fixtures/2cols6rows_flat_converted.csv.gz
+added     +0     -0     tests/fixtures/2cols6rows_infer.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_infer.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.arrow
+added     +0     -0     tests/fixtures/2cols6rows_test.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.br
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.bz2
+added     +0     -0     tests/fixtures/2cols6rows_test.csv.gz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.lz4
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.snappy
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.xz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.zst
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csvw
+renamed   +0     -0     tests/fixtures/2cols6rows_test.fwf
+renamed   +0     -0     tests/fixtures/2cols6rows_test.geojson
+renamed   +0     -0     tests/fixtures/2cols6rows_test.gml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonl
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonld
+renamed   +0     -0     tests/fixtures/2cols6rows_test.kml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.msgpack
+added     +0     -0     tests/fixtures/2cols6rows_test.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.parquet
+renamed   +0     -0     tests/fixtures/2cols6rows_test.pickle
+renamed   +0     -0     tests/fixtures/2cols6rows_test.yaml
+added     +36    -0     tests/fixtures/README.md
+added     +4     -0     tests/fixtures/ai_responses/README.md
+renamed   +0     -0     tests/fixtures/books_converted.csv.gz
+added     +0     -0     tests/fixtures/coerce.avro
+renamed   +0     -0     tests/fixtures/invalid.avro
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.csv.gz
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.jsonl
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.parquet
+renamed   +0     -0     tests/fixtures/sample.gpx
+renamed   +0     -0     tests/fixtures/sample.kmz
+added     +0     -0     tests/fixtures/special_names.orc
+renamed   +0     -0     tests/fixtures/test_7z.7z
+renamed   +0     -0     tests/fixtures/test_7z_read.7z
+renamed   +0     -0     tests/fixtures/test_7z_reset.7z
+renamed   +0     -0     tests/fixtures/test_annotated.csv
+renamed   +0     -0     tests/fixtures/test_annotated_bulk.csv
+renamed   +0     -0     tests/fixtures/test_annotated_defaults.csv
+renamed   +0     -0     tests/fixtures/test_annotated_types.csv
+renamed   +0     -0     tests/fixtures/test_asn1_read.der
+renamed   +0     -0     tests/fixtures/test_asn1_reset.der
+renamed   +0     -0     tests/fixtures/test_debug.warc
+renamed   +0     -0     tests/fixtures/test_ilp.ilp
+renamed   +0     -0     tests/fixtures/test_ilp_bulk.ilp
+added     +0     -0     tests/fixtures/test_simple.jsonl
+renamed   +0     -0     tests/fixtures/test_simple.warc
+renamed   +0     -0     tests/fixtures/test_vortex.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_bulk.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_context.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_count.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_iterate.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_next.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_readone.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_reset.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_totals.vortex
+renamed   +0     -0     tests/fixtures/test_write_annotated.csv
+renamed   +0     -0     tests/fixtures/test_zipxml.zip
+added     +298   -0     tests/fixtures/tool_schemas/openai_functions.json
+added     +408   -0     tests/test_ai_blocks.py
+added     +71    -0     tests/test_ai_conformance.py
+added     +47    -0     tests/test_ai_context.py
+added     +42    -0     tests/test_ai_filter.py
+added     +44    -0     tests/test_ai_integration.py
+added     +30    -0     tests/test_ai_plan.py
+added     +52    -0     tests/test_ai_providers.py
+added     +29    -0     tests/test_ai_suggest.py
+modified  +45    -0     tests/test_async_support.py
+modified  +46    -0     tests/test_avro.py
+added     +68    -0     tests/test_catalog.py
+modified  +1     -3     tests/test_db_engines.py
+modified  +19    -0     tests/test_duckdb.py
+modified  +73    -47    tests/test_format_conformance.py
+added     +125   -0     tests/test_format_registry.py
+modified  +16    -0     tests/test_ingest.py
+added     +49    -0     tests/test_ingest_identifiers.py
+added     +33    -0     tests/test_llms_txt.py
+added     +37    -0     tests/test_mcp_server.py
+modified  +51    -0     tests/test_ops_inspect.py
+modified  +30    -2     tests/test_orc.py
+modified  +2     -2     tests/test_parquet.py
+modified  +21    -4     tests/test_pcap.py
+modified  +27    -0     tests/test_sqlite.py
+added     +181   -0     tests/test_tools.py
+added     +156   -0     tests/test_uncovered_formats.py
+modified  +52    -105   tests/test_zipxml.py
+added     +1     -0     tests/testdata
+removed   +0     -0     tests/testdata/2cols6rows_flat_converted.csv.gz
+removed   +0     -0     tests/testdata/2cols6rows_test.csv.gz
+removed   +0     -5     tests/testdata/test_annotated_types.csv
+removed   +0     -1     tests/testdata/test_pipeline_atomic_fail.jsonl
+--- DIFF DO CÓDIGO LIGADO
+### iterable/helpers/detect.py
+@@ -1,1362 +1,450 @@
+-from __future__ import annotations
+-
+-import importlib
+-from typing import Any, Literal, TypedDict
+-
+-import chardet
+-
+-from ..base import BaseCodec, BaseIterable
+-
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-
+-
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-
+-
+-# Plugin discovery flag
+-_plugins_discovered = False
+-
+-
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+-        try:
+-            from ..plugins import discover_plugins
+-
+-            discover_plugins()
+-        except Exception as e:
+-            # Don't let a broken plugin block built-in formats, but surface the
+-            # failure at warning level so misconfigured entry points are visible.
+-            format_detection_logger.warning("Plugin discovery failed: %s", e)
+-        _plugins_discovered = True
+-
+-
+-def _get_format_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged format registry (built-in + plugins).
+-
+-    Built-in formats take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in formats (take precedence)
+-    merged = DATATYPE_REGISTRY.copy()
+-
+-    # Add plugin formats (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for format_id, value in registry._formats.items():
+-            if format_id not in merged:
+-                merged[format_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin formats: %s", e)
+-
+-    return merged
+-
+-
+-def _get_codec_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged codec registry (built-in + plugins).
+-
+-    Built-in codecs take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in codecs (take precedence)
+-    merged = CODEC_REGISTRY.copy()
+-
+-    # Add plugin codecs (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for codec_id, value in registry._codecs.items():
+-            if codec_id not in merged:
+-                merged[codec_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin codecs: %s", e)
+-
+-    return merged
+-
+-
+-# Lazy registries: extension -> (module_path, class_name)
+-DATATYPE_REGISTRY: dict[str, tuple[str, str]] = {
+-    "avro": ("iterable.datatypes.avro", "AVROIterable"),
+-    "bson": ("iterable.datatypes.bsonf", "BSONIterable"),
+-    "csv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "tsv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "dbf": ("iterable.datatypes.dbf", "DBFIterable"),
+-    "json": ("iterable.datatypes.json", "JSONIterable"),
+-    "jsonl": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "ndjson": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "jsonld": ("iterable.datatypes.jsonld", "JSONLDIterable"),
+-    "parquet": ("iterable.datatypes.parquet", "ParquetIterable"),
+-    "pickle": ("iterable.datatypes.picklef", "PickleIterable"),
+-    "orc": ("iterable.datatypes.orc", "ORCIterable"),
+-    "xls": ("iterable.datatypes.xls", "XLSIterable"),
+-    "xlsx": ("iterable.datatypes.xlsx", "XLSXIterable"),
+-    "xml": ("iterable.datatypes.xml", "XMLIterable"),
+-    "arrow": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "feather": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "msgpack": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "mp": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "fwf": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "fixed": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "yaml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "yml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "sas7bdat": ("iterable.datatypes.sas", "SASIterable"),
+-    "sas": ("iterable.datatypes.sas", "SASIterable"),
+-    "dta": ("iterable.datatypes.stata", "StataIterable"),
+-    "stata": ("iterable.datatypes.stata", "StataIterable"),
+-    "sav": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "spss": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "protobuf": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "pb": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "ion": ("iterable.datatypes.ion", "IonIterable"),
+-    "hdf5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "h5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "geojson": ("iterable.datatypes.geojson", "GeoJSONIterable"),
+-    "toml": ("iterable.datatypes.toml", "TOMLIterable"),
+-    "delta": ("iterable.datatypes.delta", "DeltaIterable"),
+-    "cbor": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cbors": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cdf": ("iterable.datatypes.cdf", "CDFIterable"),
+-    "ods": ("iterable.datatypes.ods", "ODSIterable"),
+-    "sqlite": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "db": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "duckdb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "ddb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "psv": ("iterable.datatypes.psv", "PSVIterable"),
+-    "ssv": ("iterable.datatypes.psv", "SSVIterable"),
+-    "ubjson": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "ubj": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "capnp": ("iterable.datatypes.capnp", "CapnpIterable"),
+-    "iceberg": ("iterable.datatypes.iceberg", "IcebergIterable"),
+-    "turtle": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "ttl": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "flatbuffers": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "fbs": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "thrift": ("iterable.datatypes.thrift", "ThriftIterable"),
+-    "txt": ("iterable.datatypes.txt", "TxtIterable"),
+-    "text": ("iterable.datatypes.txt", "TxtIterable"),
+-    "hudi": ("iterable.datatypes.hudi", "HudiIterable"),
+-    "apachelog": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "access.log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "tfrecord": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "tfrecords": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "sequencefile": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "seq": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "gelf": ("iterable.datatypes.gelf", "GELIterable"),
+-    "cef": ("iterable.datatypes.cef", "CEFIterable"),
+-    "ntriples": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nt": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nquads": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "nq": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "kafka": ("iterable.datatypes.kafka", "KafkaIterable"),
+-    "pulsar": ("iterable.datatypes.pulsar", "PulsarIterable"),
+-    "flink": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "ckpt": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "beam": ("iterable.datatypes.beam", "BeamIterable"),
+-    "recordio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rdfxml": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "rdf": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "ilp": ("iterable.datatypes.ilp", "ILPIterable"),
+-    "annotatedcsv": ("iterable.datatypes.annotatedcsv", "AnnotatedCSVIterable"),
+-    "cdx": ("iterable.datatypes.cdx", "CDXIterable"),
+-    "warc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "arc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "ldif": ("iterable.datatypes.ldif", "LDIFIterable"),
+-    "mbox": ("iterable.datatypes.mbox", "MBOXIterable"),
+-    "ini": ("iterable.datatypes.ini", "INIIterable"),
+-    "properties": ("iterable.datatypes.ini", "INIIterable"),
+-    "conf": ("iterable.datatypes.ini", "INIIterable"),
+-    "edn": ("iterable.datatypes.edn", "EDNIterable"),
+-    "smile": ("iterable.datatypes.smile", "SMILEIterable"),
+-    "bencode": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "torrent": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "vcf": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "vcard": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "ical": ("iterable.datatypes.ical", "ICALIterable"),
+-    "ics": ("iterable.datatypes.ical", "ICALIterable"),
+-    "eml": ("iterable.datatypes.eml", "EMLIterable"),
+-    "mysqldump": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "sql": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "pgcopy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "copy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "hocon": ("iterable.datatypes.hocon", "HOCONIterable"),
+-    "flexbuffers": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "flexbuf": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "asn1": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "der": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "mhtml": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "mht": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "ltsv": ("iterable.datatypes.ltsv", "LTSVIterable"),
+-    "px": ("iterable.datatypes.px", "PXIterable"),
+-    "kml": ("iterable.datatypes.kml", "KMLIterable"),
+-    "kmz": ("iterable.datatypes.kmz", "KMZIterable"),
+-    "gpx": ("iterable.datatypes.gpx", "GPXIterable"),
+-    "gml": ("iterable.datatypes.gml", "GMLIterable"),
+-    "shapefile": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "shp": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "geopackage": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "gpkg": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "csvw": ("iterable.datatypes.csvw", "CSVWIterable"),
+-    "rdata": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rda": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rds": ("iterable.datatypes.rds", "RDSIterable"),
+-    "lance": ("iterable.datatypes.lance", "LanceIterable"),
+-    "pcap": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "pcapng": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "nc": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "netcdf": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "mvt": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "pbf": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "topojson": ("iterable.datatypes.topojson", "TopoJSONIterable"),
+-    "feed": ("iterable.datatypes.feed", "FeedIterable"),
+-    "atom": ("iterable.datatypes.feed", "FeedIterable"),
+-    "rss": ("iterable.datatypes.feed", "FeedIterable"),
+-    "dxf": ("iterable.datatypes.dxf", "DXFIterable"),
+-    "libsvm": ("iterable.datatypes.libsvm", "LIBSVMIterable"),
+-    "npy": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "npz": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "html": ("iterable.datatypes.html", "HTMLIterable"),
+-    "htm": ("iterable.datatypes.html", "HTMLIterable"),
+-    "arff": ("iterable.datatypes.arff", "ARFFIterable"),
+-    "trig": ("iterable.datatypes.trig", "TriGIterable"),
+-    "n3": ("iterable.datatypes.n3", "N3Iterable"),
+-    "trix": ("iterable.datatypes.trix", "TriXIterable"),
+-    "xlsb": ("iterable.datatypes.xlsb", "XLSBIterable"),
+-    "fasta": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fna": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "faa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fastq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "fq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "graphml": ("iterable.datatypes.graphml", "GraphMLIterable"),
+-    "gexf": ("iterable.datatypes.gexf", "GEXFIterable"),
+-    "dot": ("iterable.datatypes.dot", "DOTIterable"),
+-    "gv": ("iterable.datatypes.dot", "DOTIterable"),
+-    "bam": ("iterable.datatypes.bam", "BAMIterable"),
+-    "sam": ("iterable.datatypes.sam", "SAMIterable"),
+-    "vortex": ("iterable.datatypes.vortex", "VortexIterable"),
+-    "vtx": ("iterable.datatypes.vortex", "VortexIterable"),
+-    # Usable via explicit format override: iterableargs={"format": "zipxml", "tagname": ...}
+-    "zipxml": ("iterable.datatypes.zipxml", "ZIPXMLSource"),
+-}
+-
+-CODEC_REGISTRY: dict[str, tuple[str, str]] = {
+-    "bz2": ("iterable.codecs.bz2codec", "BZIP2Codec"),
+-    "gz": ("iterable.codecs.gzipcodec", "GZIPCodec"),
+-    "lz4": ("iterable.codecs.lz4codec", "LZ4Codec"),
+-    "xz": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "lzma": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "zip": ("iterable.codecs.zipcodec", "ZIPCodec"),
+-    "br": ("iterable.codecs.brotlicodec", "BrotliCodec"),
+-    "zstd": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "zst": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "snappy": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "sz": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "lzo": ("iterable.codecs.lzocodec", "LZOCodec"),
+-    "lzop": ("iterable.codecs.lzocodec", "LZOCodec"),
+-}
+-
+-# Formats that are read-only (do not support write operations)
+-# This set includes formats that explicitly raise WriteNotSupportedError
+-# or use the base class default (which also raises WriteNotSupportedError)
+-READ_ONLY_FORMATS: set[str] = {
+-    # Formats that explicitly raise WriteNotSupportedError
+-    "arff",
+-    "delta",
+-    "feed",
+
+===== P227 | repo tatargabor/set-core | PR #6: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization) | capacidade: verify-gate
+--- SPEC VIVA
+# Verify Gate Specification
+
+## Purpose
+
+TBD — restored after delta-sync structural cleanup. Update Purpose with a one-line statement of what this capability owns.
+
+## Requirements
+
+### Requirement: VG-PIPELINE — Gate pipeline (handle_change_done)
+Ordered steps: build → test → e2e → scope check → test file check → review → rules → verify → merge queue. Each gate step SHALL resolve a GateConfig via `resolve_gate_config()` at the start of the pipeline and use its `should_run()` and `is_blocking()` methods to determine execution. Gates with mode `"skip"` SHALL NOT execute and SHALL log "SKIPPED (gate_profile)". Gates with mode `"warn"` SHALL execute but failures SHALL NOT consume retry budget or block merge — they SHALL log a warning and continue. Gates with mode `"soft"` (spec_verify only) SHALL execute but failures SHALL be non-blocking if all other gates passed.
+
+The E2E gate step SHALL pass the worktree path's Playwright configuration context to `_execute_e2e_gate()` so the gate can make webServer-aware decisions about health checks and port allocation.
+
+#### Scenario: Infrastructure change skips build/test/e2e
+- **WHEN** a change with change_type `"infrastructure"` enters handle_change_done
+- **THEN** the build, test, and e2e gate steps SHALL be skipped
+- **AND** each SHALL log "Verify gate: <gate> SKIPPED for <name> (gate_profile)"
+- **AND** scope_check, review, rules SHALL execute normally
+
+#### Scenario: Feature change runs all gates
+- **WHEN** a change with change_type `"feature"` enters handle_change_done
+- **THEN** all gate steps SHALL execute with blocking behavior (identical to current behavior)
+
+#### Scenario: E2E gate stores skip reason in extras
+- **WHEN** the E2E gate returns a "skipped" result with an output message
+- **THEN** the pipeline SHALL store the output in `change.extras["e2e_output"]`
+- **AND** the skip reason SHALL be visible in the orchestration state
+
+#### Scenario: Warn-mode test failure is non-blocking
+- **WHEN** a schema change runs tests (gate mode `"warn"`) and tests fail
+- **THEN** the failure SHALL be logged as a warning
+- **AND** the verify_retry_count SHALL NOT be incremented
+- **AND** the pipeline SHALL continue to the next gate
+- **AND** test_result SHALL be set to `"warn-fail"`
+
+#### Scenario: Effective max_retries from GateConfig
+- **WHEN** GateConfig has `max_retries` set to a non-None value
+- **THEN** the verifier SHALL use that value instead of the global `max_verify_retries` parameter for all blocking gates in this change
+
+#### Scenario: Review model override from GateConfig
+- **WHEN** GateConfig has `review_model` set to a non-None value
+- **THEN** the review gate SHALL use that model instead of the global `review_model` parameter
+
+### Requirement: VG-PIPELINE uncommitted work check
+Ordered steps: **uncommitted-check →** build → test → e2e → scope check → test file check → review → rules → verify → merge queue. The uncommitted-check step runs before VG-BUILD and after the merge-rebase fast path early return.
+
+#### Scenario: Uncommitted work blocks verify gate
+- **WHEN** `handle_change_done()` is called for a change
+- **AND** `git_has_uncommitted_work(wt_path)` returns `(True, summary)`
+- **THEN** the verify gate SHALL fail with reason containing "uncommitted" and the summary
+- **AND** the change SHALL be retried (re-dispatched) if retry budget allows
+
+#### Scenario: Clean worktree proceeds to build gate
+- **WHEN** `handle_change_done()` is called for a change
+- **AND** `git_has_uncommitted_work(wt_path)` returns `(False, "")`
+- **THEN** the verify gate SHALL proceed to the VG-BUILD step
+
+#### Scenario: Merge-rebase fast path skips uncommitted check
+- **WHEN** a change returns from a rebase cycle
+- **THEN** the uncommitted-check step SHALL be skipped (rebase may leave expected state)
+
+---
+
+## MODIFIED Requirements
+
+### Requirement: Verify gate results SHALL be preserved across monitor restart
+When the monitor restarts (crash recovery or manual restart), it SHALL check for changes in "verifying" status that already have all blocking gates passed. Such changes SHALL proceed to merge instead of being re-dispatched. The check SHALL cover ALL blocking gates, not just a subset.
+
+#### Scenario: Monitor dies after verify passes but before merge
+- **WHEN** a change has status "verifying"
+- **AND** all blocking verify gates have result "pass", "skipped", or "warn-fail" (test_result, build_result, review_result, scope_check, e2e_result, spec_coverage_result)
+- **AND** the monitor restarts and polls active changes
+- **THEN** the monitor SHALL proceed to merge the change
+- **AND** the monitor SHALL NOT re-dispatch a retry agent
+
+#### Scenario: Change in verifying with incomplete gates after restart
+- **WHEN** a change has status "verifying"
+- **AND** one or more blocking gates have no result (empty/null)
+- **AND** the monitor restarts
+- **THEN** the monitor SHALL re-run the verify gate from the beginning
+
+#### Scenario: Change in verifying with failed rules gate after restart
+- **WHEN** a change has status "verifying"
+- **AND** test_result="pass", build_result="pass", review_result="pass", scope_check="pass"
+- **AND** rules result is "fail" (stored in extras)
+- **AND** the monitor restarts
+- **THEN** the monitor SHALL NOT fast-merge the change
+- **AND** SHALL re-run the verify gate
+
+### Requirement: Completion detection SHALL respect merge queue
+The `_check_completion` function SHALL NOT declare orchestration complete while the merge queue contains unmerged changes.
+
+#### Scenario: All changes verified but merge queue non-empty
+- **WHEN** all changes have status "done" (gates passed, queued for merge)
+- **AND** `state.merge_queue` is non-empty
+- **THEN** `_check_completion` SHALL return `False`
+- **AND** the monitor loop SHALL continue running
+
+#### Scenario: Merge exception leaves change in done status
+- **WHEN** `merge_change()` throws an unhandled exception
+- **AND** the change status remains "done" (not updated to "merged" or "merge-blocked")
+- **AND** the change is still in `merge_queue`
+- **THEN** `_check_completion` SHALL return `False`
+- **AND** the next poll cycle SHALL retry the merge
+
+#### Scenario: Empty merge queue with all changes resolved
+- **WHEN** all changes have terminal status ("merged", "failed", "skipped", "merge-blocked")
+- **AND** `state.merge_queue` is empty
+- **THEN** `_check_completion` SHALL evaluate normally (may return `True`)
+
+### Requirement: Crash recovery retry count SHALL not double-increment
+The `_recover_verify_failed` function in the engine SHALL resume verify-failed changes without incrementing `verify_retry_count`, because `handle_change_done` already incremented it before setting the status to "verify-failed".
+
+#### Scenario: Normal verify-failed recovery
+- **WHEN** a change has status "verify-failed" after orchestrator restart
+- **AND** `verify_retry_count` is already incremented by `handle_change_done`
+- **THEN** `_recover_verify_failed` SHALL call `resume_change` without incrementing `verify_retry_count` again
+
+#### Scenario: Recovery with exhausted retries
+- **WHEN** a change has status "verify-failed"
+- **AND** `verify_retry_count >= max_verify_retries`
+- **THEN** `_recover_verify_failed` SHALL set status to "failed" without incrementing the counter
+
+### Requirement: Verify gate evaluates plugin verification rules
+The verify gate SHALL load verification rules from the active profile via `profile.get_verification_rules()` and evaluate them alongside rules defined in `project-knowledge.yaml`.
+
+#### Scenario: Plugin rules merged with YAML rules
+- **WHEN** the verify gate runs
+- **AND** `project-knowledge.yaml` defines 3 rules and the plugin defines 8 rules
+- **THEN** all 11 rules are evaluated (or 10 if one ID collides, with plugin taking precedence)
+
+#### Scenario: No plugin rules available
+- **WHEN** the verify gate runs with NullProfile active
+- **THEN** only YAML-defined rules are evaluated (existing behavior preserved)
+
+--- ARQUIVOS DO PR (21)
+added     +260   -0     docs/research/decompose-replan-optimization-2026-05-08.md
+modified  +15    -1     lib/set_orch/config.py
+modified  +77    -11    lib/set_orch/engine.py   <== código ligado à spec
+modified  +422   -88    lib/set_orch/planner.py
+modified  +9     -2     lib/set_orch/subprocess_utils.py
+added     +2     -0     openspec/changes/decompose-replan-optimization/.openspec.yaml
+added     +312   -0     openspec/changes/decompose-replan-optimization/design.md
+added     +126   -0     openspec/changes/decompose-replan-optimization/proposal.md
+added     +81    -0     openspec/changes/decompose-replan-optimization/specs/amb-jit-resolution/spec.md
+added     +88    -0     openspec/changes/decompose-replan-optimization/specs/digest-diff-update/spec.md
+added     +41    -0     openspec/changes/decompose-replan-optimization/specs/orch-digest-python/spec.md
+added     +113   -0     openspec/changes/decompose-replan-optimization/specs/orch-plan-python/spec.md
+added     +61    -0     openspec/changes/decompose-replan-optimization/specs/orch-replan-python/spec.md
+added     +76    -0     openspec/changes/decompose-replan-optimization/specs/planner-prompt-caching/spec.md
+added     +108   -0     openspec/changes/decompose-replan-optimization/specs/planner-strategy-routing/spec.md
+added     +91    -0     openspec/changes/decompose-replan-optimization/specs/replan-domain-plan-reuse/spec.md
+added     +100   -0     openspec/changes/decompose-replan-optimization/specs/replan-scoped-patch/spec.md
+added     +300   -0     openspec/changes/decompose-replan-optimization/tasks.md
+added     +270   -0     tests/integration/test_serial_decompose_e2e.py
+added     +294   -0     tests/unit/test_planner_replan_reuse.py
+added     +209   -0     tests/unit/test_planner_strategy_routing.py
+--- DIFF DO CÓDIGO LIGADO
+### lib/set_orch/engine.py
+@@ -147,6 +147,18 @@ class Directives:
+     # Replan divergent-plan reconciliation mode.
+     divergent_plan_dir_cleanup: str = "enabled"
+ 
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++
+     # ─── verify-gate-resilience-fixes: hoisted retry/circuit limits ───
+     # All fields below default to DIRECTIVE_DEFAULTS values (config.py canonical).
+     # Phase 4 will replace hardcoded constants in merger.py / verifier.py /
+@@ -249,6 +261,12 @@ def parse_directives(raw: dict) -> Directives:
+         raw, "divergent_plan_dir_cleanup", d.divergent_plan_dir_cleanup,
+     )
+ 
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++
+     # verify-gate-resilience-fixes: hoisted retry/circuit limits.
+     d.max_merge_retries = _int(raw, "max_merge_retries", d.max_merge_retries)
+     d.max_integration_retries = _int(raw, "max_integration_retries", d.max_integration_retries)
+@@ -3684,33 +3702,65 @@ def _auto_replan_cycle(
+             _load_domain_data, _phase1_planning_brief,
+             _decompose_single_domain, _phase2_parallel_decompose,
+             _phase3_merge_plans, _save_domain_plans,
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+         )
+ 
+         logger.info("Replan: using domain-parallel pipeline (trigger=%s)", replan_trigger)
+ 
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
+ 
+         digest_dir = os.path.join(os.getcwd(), "set", "orchestration", "digest")
+         logger.debug("Replan: digest_dir=%s, exists=%s", digest_dir, os.path.isdir(digest_dir))
+         domain_data = _load_domain_data(digest_dir)
+         from .model_config import resolve_model as _resolve_model
+         model = d.default_model or _resolve_model("agent")
+ 
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
++
+         if replan_trigger == "spec_change":
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
++            # Spec changed — most hashes will differ; let the hash check
++            # decide per-domain rather than blanket re-decompose.
++            logger.info("Replan: spec changed — hash-based reuse engaged")
+             saved_brief = _phase1_planning_brief(domain_data, model=model)
+-            saved_domain_plans = _phase2_parallel_decompose(domain_data, saved_brief, model=model, digest_dir=digest_dir)
++            # Brief change invalidates all hashes by construction.
++            reuse_set = set()
++            failed_domains = [d_["name"] for d_ in domain_data.get("domains", [])]
++            for dname in failed_domains:
++                domain = next((dom for dom in domain_data["domains"] if dom["name"] == dname), None)
++                if domain:
++                    _dreq_ids = [r.get("id", "") for r in domain.get("requirements", [])]
++                    saved_domain_plans[dname] = _decompose_single_domain(
++                        domain, json.dumps(saved_brief), domain_data["conventions"], model=model,
++                        test_plan_context=_build_test_plan_context(digest_dir, _dreq_ids),
++                    )
+         elif replan_trigger == "e2e_failure":
+             # Phase 3 only — re-merge with failure context
+             logger.info("Replan: Phase 3 only (E2E failure)")
+         elif replan_trigger in ("domain_failure", "coverage_gap"):
+-            # Re-run failed/gap domains only
+-            failed_domains = _get_domains_needing_replan(state_file, domain_data, replan_trigger)
++            # Re-run failed/gap domains only — minus those whose hash shows
++            # they're actually unchanged.
++            flagged = _get_domains_needing_replan(state_file, domain_data, replan_trigger)
++            failed_domains = [d_ for d_ in flagged if d_ not in reuse_set]
++            skipped = [d_ for d_ in flagged if d_ in reuse_set]
++            if skipped:
++                logger.info(
++                    "Replan: hash-based reuse skipped %d trigger-flagged domain(s): %s",
++                    len(skipped), skipped,
++                )
+             logger.info("Replan: re-decomposing domains: %s", failed_domains)
+             for dname in failed_domains:
+                 domain = next((dom for dom in domain_data["domains"] if dom["name"] == dname), None)
+@@ -3739,7 +3789,23 @@ def _auto_replan_cycle(
+                         test_plan_context=_build_test_plan_context(digest_dir, _dreq_ids2),
+                     )
+ 
+-        _save_domain_plans(saved_brief, saved_domain_plans)
++        # Persist with hashes so the next replan can detect unchanged domains.
++        _save_domain_plans(saved_brief, saved_domain_plans, domain_data=domain_data)
++
++        # Emit REPLAN_REUSE telemetry (capability replan-domain-plan-reuse).
++        # `reuse_set` was computed above; total = current digest's domain count.
++        try:
++            total_domains = len(domain_data.get("domains", []))
++            reused_count = len(reuse_set)
++            redecomposed_count = max(0, total_domains - reused_count)
++            event_bus.emit("REPLAN_REUSE", change="", data={
++                "reused": reused_count,
++                "redecomposed": redecomposed_count,
++                "total": total_domains,
++                "trigger": replan_trigger,
++            })
++        except Exception:
++            logger.debug("Failed to emit REPLAN_REUSE event", exc_info=True)
+ 
+         plan_json = _phase3_merge_plans(
+             saved_domain_plans, saved_brief, domain_data,
+
+===== P228 | repo RandyChen1985/yunshu-ai-agent-platform | PR #21: Pull Request: ChatBI 查数可靠性加固：联邦 repair、空结果诊断、语义意图与自动引用 | capacidade: system-config
+--- SPEC VIVA
+# system-config Specification
+
+## Purpose
+TBD - created by archiving change centralize-system-config. Update Purpose after archive.
+## Requirements
+### Requirement: 动态系统配置 (Dynamic System Configuration)
+系统必须 (MUST) 支持通过系统管理界面管理关键的基础设施配置，而无需重启服务。
+
+#### Scenario: 管理员更新 LLM 模型
+- **WHEN** 管理员在系统配置中将 "LLM Model Name" 修改为 "gpt-4-turbo" 并保存
+- **THEN** 系统验证输入有效性
+- **AND** 系统更新数据库并刷新 Redis 缓存
+- **AND** 后续的对话请求立即使用 "gpt-4-turbo" 模型
+- **AND** API Key 如果未修改，在 UI 上保持掩码状态。
+
+#### Scenario: 环境变量兜底 (Fallback to Environment Variables)
+- **WHEN** 数据库配置中不存在特定的配置项（例如 `LLM_API_KEY`）
+- **THEN** 系统回退使用运行环境 (`.env`) 中定义的值
+- **AND** 如果两者都未找到（对于必填项），记录警告日志。
+
+### Requirement: 配置安全性 (Configuration Security)
+UI 和 API 必须 (MUST) 保护敏感配置值（如 API Key）。
+
+#### Scenario: 查看敏感配置
+- **WHEN** 管理员请求当前配置列表
+- **THEN** 标记为 "Secret" 的字段（如 API Keys）返回部分掩码的值（例如 `sk-****1234`）或完全隐藏
+- **AND** 除非明确必要且经过授权，否则永远不应将真实值以明文形式发送到前端。
+
+### Requirement: 配置范围 (Configuration Scope)
+以下配置应 (SHALL) 可以通过 UI 进行管理：
+- **LLM 网关**: Base URL, API Key, Model Name, Temperature
+- **数据查询 API**: Endpoint URL, API Key
+
+#### Scenario: 编辑数据源 API
+- **WHEN** 管理员更新 "External SQL API URL"
+- **THEN** `execute_sql_query` 工具立即将流量引导至新的端点。
+
+### Requirement: Configuration Audit Trail (配置审计追踪)
+系统 **MUST** 为所有系统级配置（`system_configs`）的变更保留历史记录。
+
+#### Scenario: 记录变更
+- **WHEN** 用户或系统更新某个配置项（如 `llm_model_name` 或 `llm_temperature`）
+- **THEN** 系统在 `system_config_history` 表中创建一条新记录，包含：变更前的旧值、变更后的新值、操作人用户名、变更时间及变更原因（如有）。
+
+### Requirement: Configuration History Query (配置历史查询)
+系统 **MUST** 提供接口查询特定配置项的历史版本列表。
+
+#### Scenario: 查询历史
+- **WHEN** 管理员请求查询 `llm_model_name` 的历史
+- **THEN** 系统按时间倒序返回所有变更记录。
+
+### Requirement: 模型注册管理
+系统 **MUST** 提供统一的 AI 模型注册表，允许管理员动态管理不同提供商的模型及其对应的 API 凭据。
+
+#### Scenario: 管理员添加并使用新模型
+- **WHEN** 管理员在“模型管理”标签页中添加了一个名为“DeepSeek-V3”的新模型，并配置了对应的 API Key 和 Base URL
+- **THEN** 该模型应该立即出现在可用的模型列表中
+- **AND** 其他系统组件（如智能体配置）可以引用此模型并使用其专属凭据
+
+### Requirement: 动态模型参数配置
+系统参数配置中的默认模型设置 **SHALL** 与模型注册表同步。
+
+#### Scenario: 默认模型下拉选择
+- **WHEN** 管理员在“参数配置”中编辑 `llm_model_name`
+- **THEN** 系统应展示一个下拉列表，包含所有在注册表中处于“启用”状态的 LLM 类型模型
+- **AND** 选中保存后，系统的全局默认模型将切换为该模型
+
+### Requirement: 执行历史模型追踪
+系统在记录智能体执行历史时，**MUST** 保留当时使用的模型快照信息。
+
+#### Scenario: 审计日志记录模型信息
+- **WHEN** 智能体执行完成并保存历史记录
+- **THEN** `agent_execution_history` 中必须记录 `model_id` (模型标识) 和 `model_config_id` (引用 ID)
+- **AND** 审计界面应能展示该次对话具体使用的模型名称
+
+
+--- ARQUIVOS DO PR (36)
+modified  +2     -4     app/main.py
+added     +256   -0     app/services/ai/chatbi_citation_utils.py
+modified  +44    -0     app/services/ai/chatbi_sql_user_messages.py
+added     +318   -0     app/services/ai/data_query_semantic_intent.py
+added     +1091  -0     app/services/ai/empty_result_filter_diagnostic.py
+modified  +826   -166   app/services/ai/executors/federated_executor.py
+modified  +173   -10    app/services/ai/executors/prompts.py
+added     +200   -0     app/services/ai/federated_column_labels.py
+added     +472   -0     app/services/ai/federated_sql_repair.py
+modified  +26    -0     app/services/ai/knowledge_utils.py
+modified  +13    -6     app/services/ai/rewriters/sql_rewriter.py
+modified  +382   -56    app/services/ai/runners/data_agent_runner.py
+modified  +7     -4     app/services/ai/runners/knowledge_agent_runner.py
+modified  +23    -9     app/services/ai/sql_sandbox_gate.py
+modified  +218   -0     app/services/ai/time_anchor.py
+modified  +12    -3     app/services/ai/tools/data_api.py
+modified  +5     -1     app/services/sql_query_execution_service.py
+modified  +3     -2     architech/design/AGENTSCOPE_RUNTIME.md
+modified  +2     -2     architech/design/chat/CHAT_FLOW.md
+modified  +7     -5     docs/md/ai_agent_gating_contract.md
+added     +248   -0     docs/release/yunshu-platform-intro-wechat.html
+modified  +19    -5     frontend/src/views/SystemConfig.vue   <== código ligado à spec
+modified  +9     -2     openspec/specs/chatbi-multi-agent-team/spec.md
+modified  +78    -0     tests/ai/runners/test_auto_upgrade_federated.py
+modified  +384   -0     tests/ai/runners/test_data_agent_runner.py
+added     +91    -0     tests/ai/test_chatbi_citation_utils.py
+modified  +27    -0     tests/ai/test_chatbi_sql_user_messages.py
+modified  +19    -0     tests/ai/test_data_query_prompts.py
+added     +111   -0     tests/ai/test_data_query_semantic_intent.py
+added     +268   -0     tests/ai/test_empty_result_filter_diagnostic.py
+added     +72    -0     tests/ai/test_federated_column_labels.py
+added     +92    -0     tests/ai/test_federated_sql_repair.py
+modified  +13    -0     tests/ai/test_knowledge_utils.py
+added     +84    -0     tests/ai/test_time_range_gate.py
+modified  +612   -0     tests/test_federated_executor.py
+modified  +47    -1     tests/utils/test_sql_rewriter.py
+--- DIFF DO CÓDIGO LIGADO
+### frontend/src/views/SystemConfig.vue
+@@ -1326,12 +1326,26 @@ onMounted(() => {
+                               </select>
+                           </div>
+                           <div v-else-if="item.key === 'metadata_provider'">
+-                              <select v-model="item.value" :disabled="!canSave" class="shadow-sm focus:ring-primary focus:border-primary block w-full sm:text-sm border-gray-300 rounded-md bg-gray-100 p-2 disabled:opacity-70 disabled:cursor-not-allowed">
+-                                 <option value="local">local (本地元数据)</option>
+-                                 <option value="ragflow">ragflow (语义检索 RAG)</option>
+-                              </select>
++                              <div class="flex items-center gap-2">
++                                <select v-model="item.value" :disabled="!canSave" class="shadow-sm focus:ring-primary focus:border-primary block flex-1 min-w-0 sm:text-sm border-gray-300 rounded-md bg-gray-100 p-2 disabled:opacity-70 disabled:cursor-not-allowed">
++                                   <option value="local">local (本地元数据)</option>
++                                   <option value="ragflow">ragflow (语义检索 RAG)</option>
++                                </select>
++                                <button
++                                  v-if="item.value === 'local'"
++                                  type="button"
++                                  @click="openRebuildConfirm"
++                                  :disabled="loading.rebuild_vector || !canSave"
++                                  class="inline-flex shrink-0 items-center justify-center py-2 px-3 border border-rose-200 rounded-md shadow-sm text-sm font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 whitespace-nowrap"
++                                  title="重建本地 Redis 元数据与案例向量索引并全量同步"
++                                >
++                                  <ArrowPathIcon v-if="!loading.rebuild_vector" class="h-4 w-4 mr-1.5" />
++                                  <span v-else class="animate-spin h-4 w-4 mr-1.5 border-2 border-rose-400 border-t-transparent rounded-full"></span>
++                                  {{ loading.rebuild_vector ? '重构中...' : '一键重构' }}
++                                </button>
++                              </div>
+                               <div v-if="item.value === 'local'" class="mt-2 text-xs text-blue-700 bg-blue-50/50 p-3 rounded-xl border border-blue-100/50 leading-relaxed select-none">
+-                                  💡 <strong>本地元数据模式：</strong>直接在本地查询由元数据字典维护的表和字段，并使用全局 Embedding 算法计算向量，通过<strong>本地 Redis (HNSW) 向量索引</strong>进行高速检索，<strong>无需配置下方的 RAGFlow 地址与密钥</strong>。
++                                  💡 <strong>本地元数据模式：</strong>直接在本地查询由元数据字典维护的表和字段，并使用全局 Embedding 算法计算向量，通过<strong>本地 Redis (HNSW) 向量索引</strong>进行高速检索，<strong>无需配置下方的 RAGFlow 地址与密钥</strong>。首次启用、变更 Embedding 模型/维度或索引异常时，请点击右侧<strong>「一键重构」</strong>手动触发全量向量化。
+                               </div>
+                               <div v-else-if="item.value === 'ragflow'" class="mt-2 text-xs text-amber-700 bg-amber-50/50 p-3 rounded-xl border border-amber-100/50 leading-relaxed select-none">
+                                   💡 <strong>RAGFlow 语义检索模式：</strong>需要将本地元数据字典一键同步至 RAGFlow 系统，系统在检索表和字段的描述信息时会调用下方配置的 RAGFlow 网关地址与 API 密钥进行全文 + 向量的混合检索。
+
+===== P229 | repo strelov1/freehire | PR #350: fix(sitemap): ship freshest jobs instead of a full-catalogue scan | capacidade: job-swipe
+--- SPEC VIVA
+# job-swipe Specification
+
+## Purpose
+TBD - created by archiving change add-job-swipe-mode. Update Purpose after archive.
+## Requirements
+### Requirement: Entering swipe mode from the jobs page
+
+The system SHALL provide a swipe-mode entry point in the `/jobs` toolbar,
+visible on all viewport sizes. Activating it SHALL navigate to `/jobs/swipe`
+carrying the page's currently applied filters and free-text query as URL
+parameters, in the same parameter shape the jobs list uses, so the deck reflects
+exactly what the user was looking at.
+
+#### Scenario: Launch swipe mode with active filters
+
+- **WHEN** a user viewing `/jobs?q=go&work_mode=remote` activates the swipe-mode
+  entry point
+- **THEN** the browser navigates to `/jobs/swipe?q=go&work_mode=remote`
+- **AND** the deck is built from jobs matching those same filters
+
+#### Scenario: Launch swipe mode with no filters
+
+- **WHEN** a user with no active filters activates the swipe-mode entry point
+- **THEN** the browser navigates to `/jobs/swipe`
+- **AND** the deck is built from the unfiltered catalogue
+
+### Requirement: Swipe mode requires an authenticated user
+
+Swipe mode's two actions (save and dismiss) are per-user, so the mode SHALL be
+available only to a signed-in user. When an unauthenticated visitor opens
+`/jobs/swipe`, the system SHALL present a sign-in prompt instead of a deck and
+SHALL NOT call the deck endpoint.
+
+#### Scenario: Anonymous visitor opens swipe mode
+
+- **WHEN** a visitor with no session opens `/jobs/swipe`
+- **THEN** the page shows a prompt to sign in
+- **AND** no deck request is made
+
+#### Scenario: Signed-in user opens swipe mode
+
+- **WHEN** a signed-in user opens `/jobs/swipe`
+- **THEN** the deck loads and the first card is shown
+
+### Requirement: The deck endpoint mirrors search and excludes judged jobs
+
+The system SHALL expose an authenticated endpoint `GET /api/v1/me/jobs/swipe`
+that returns a batch of open jobs. It SHALL accept the same facet and free-text
+query parameters as `/api/v1/jobs/search` and run the same Meilisearch query, so
+ranking and filtering match the list. It SHALL exclude the caller's already
+**saved** and **dismissed** jobs by applying a server-built `id NOT IN
+(excluded)` filter. The response SHALL use the standard list envelope
+(`{"data": [...], "meta": {...}}`) with each item in the shared `jobview` shape,
+and SHALL support batching via `limit`/`offset` for prefetch.
+
+#### Scenario: Deck excludes saved and dismissed jobs
+
+- **WHEN** a signed-in user who has saved job A and dismissed job B requests
+  `GET /api/v1/me/jobs/swipe` with filters that would otherwise match A and B
+- **THEN** neither A nor B appears in the returned batch
+- **AND** other matching jobs are returned in search order
+
+#### Scenario: Deck honors filters and query
+
+- **WHEN** the request carries `q` and facet parameters
+- **THEN** the returned jobs match the same query and facets that
+  `/api/v1/jobs/search` would apply
+
+#### Scenario: Deck requires authentication
+
+- **WHEN** a request to `GET /api/v1/me/jobs/swipe` carries neither a valid auth
+  cookie nor a valid API key
+- **THEN** the system responds `401` and returns no deck
+
+#### Scenario: Deck pages via limit and offset
+
+- **WHEN** the client requests a second batch with a larger `offset`
+- **THEN** the system returns the next page of matching, non-excluded jobs
+  without repeating jobs from the first batch
+
+### Requirement: Card presentation
+
+Each card SHALL present the job with its company logo, title, company name and
+location, salary when available, and a set of facet chips (such as work mode,
+skills, seniority, and domain), plus a short description excerpt. Card content is
+drawn from the `jobview` fields already returned by the deck endpoint.
+
+#### Scenario: Card renders job context
+
+- **WHEN** a card is shown for a job that has a salary and facets
+- **THEN** the card displays the logo, title, company, location, salary, facet
+  chips, and a description excerpt
+
+### Requirement: Save, dismiss, open, and undo actions
+
+For the active card the system SHALL support four actions. **Save** SHALL record
+the save interaction (`POST /jobs/:slug/save`) and advance to the next card.
+**Dismiss** SHALL record the dismissed interaction (`POST /jobs/:slug/dismiss`)
+and advance to the next card. **Open** SHALL open the job's detail view without
+recording save or dismiss. **Undo** SHALL revert the immediately previous save or
+dismiss (`DELETE /jobs/:slug/save` or `DELETE /jobs/:slug/dismiss`) and restore
+that card as the active one. Undo SHALL be limited to the most recent action.
+
+#### Scenario: Save advances the deck
+
+- **WHEN** the user saves the active card
+- **THEN** the job is recorded as saved and the next card becomes active
+
+#### Scenario: Dismiss advances the deck
+
+- **WHEN** the user dismisses the active card
+- **THEN** the job is recorded as dismissed and the next card becomes active
+
+#### Scenario: Undo restores the last card
+
+- **WHEN** the user triggers undo right after dismissing a job
+- **THEN** that job's dismissed mark is cleared
+- **AND** its card is restored as the active card
+
+#### Scenario: Open does not judge the job
+
+- **WHEN** the user opens the active card's detail view
+- **THEN** the job is neither saved nor dismissed and remains in the deck
+
+### Requirement: Input across mobile and desktop
+
+The system SHALL accept touch swipe gestures on the active card — swipe right to
+save, swipe left to dismiss — committed past a movement threshold with an exit
+animation. On desktop the same save and dismiss decisions SHALL be available via
+on-screen ✗ (dismiss) and ♥ (save) buttons and via the `←` (dismiss) and `→`
+(save) arrow keys; the open and undo actions SHALL also be keyboard-accessible.
+
+#### Scenario: Swipe right on mobile saves
+
+- **WHEN** the user drags the active card to the right past the threshold on a
+  touch device
+- **THEN** the card commits a save and animates off-screen to the right
+
+#### Scenario: Arrow keys on desktop
+
+- **WHEN** the user presses the `→` arrow key on desktop
+- **THEN** the active card is saved and the next card becomes active
+
+### Requirement: Deck exhaustion and prefetch
+
+The system SHALL prefetch the next batch before the deck runs low so swiping
+stays uninterrupted. When no further matching, non-excluded jobs remain, the
+system SHALL show an empty state that explains the deck is exhausted and links
+back to the `/jobs` list to widen filters.
+
+#### Scenario: Prefetch keeps the deck full
+
+- **WHEN** the number of remaining cards drops below the prefetch threshold and
+  more matching jobs exist
+- **THEN** the client fetches the next batch and appends it without a visible
+  interruption
+
+#### Scenario: Empty deck
+
+- **WHEN** the deck has no remaining cards and no further jobs match
+- **THEN** an empty state is shown with a link back to `/jobs`
+
+
+--- ARQUIVOS DO PR (12)
+modified  +17    -55    internal/db/jobs.sql.go
+modified  +7     -8     internal/db/querier.go
+modified  +11    -22    internal/db/queries/jobs.sql
+modified  +26    -61    internal/db/sitemap_integration_test.go
+modified  +0     -1     internal/handler/handler.go
+modified  +14    -18    internal/handler/sitemap.go
+modified  +5     -17    internal/handler/sitemap_integration_test.go
+added     +14    -0     migrations/0034_jobs_open_id_idx.sql
+modified  +18    -19    openspec/specs/web-ssr-seo/spec.md
+modified  +6     -14    web/src/lib/api.ts   <== código ligado à spec
+modified  +5     -5     web/src/routes/sitemap-jobs.xml/+server.ts
+modified  +9     -18    web/src/routes/sitemap.xml/+server.ts
+--- DIFF DO CÓDIGO LIGADO
+### web/src/lib/api.ts
+@@ -209,20 +209,13 @@ export function createApi(
+ 
+   // --- Sitemap --------------------------------------------------------------
+   //
+-  // Slim, keyset-paginated feeds behind the sitemap index (server routes only).
+-  // The slice endpoints return one chunk after a cursor; the boundary endpoints
+-  // return the cursor ending each chunk, so the index can enumerate sub-sitemaps
+-  // without walking the catalogue.
++  // Feeds behind the sitemap index (server routes only). Jobs ship their freshest
++  // slice (one file); companies are keyset-paginated across chunks, with a boundary
++  // endpoint returning the cursor ending each chunk so the index can enumerate them.
+ 
+-  /** One chunk of open-job sitemap entries with id > `after` (0 for the first). */
+-  async function sitemapJobs(after: number, limit: number): Promise<SitemapEntry[]> {
+-    const res = await request<{ data: SitemapEntry[] }>(`/api/v1/jobs/sitemap?after=${after}&limit=${limit}`);
+-    return res.data;
+-  }
+-
+-  /** The job-id cursor ending each `chunk`-sized page of open jobs. */
+-  async function sitemapJobBoundaries(chunk: number): Promise<number[]> {
+-    const res = await request<{ data: number[] }>(`/api/v1/jobs/sitemap/boundaries?chunk=${chunk}`);
++  /** The freshest open-job sitemap entries (newest first), one file. */
++  async function sitemapJobs(): Promise<SitemapEntry[]> {
++    const res = await request<{ data: SitemapEntry[] }>('/api/v1/jobs/sitemap');
+     return res.data;
+   }
+ 
+@@ -648,7 +641,6 @@ export function createApi(
+     listCompanies,
+     getCompany,
+     sitemapJobs,
+-    sitemapJobBoundaries,
+     sitemapCompanies,
+     sitemapCompanyBoundaries,
+     register,
+
+===== P230 | repo TencentBlueKing/bk-lite | PR #3448: Feature windyzhao | capacidade: otp-challenge-flow
+--- SPEC VIVA
+# Capability: OTP Challenge Flow
+
+## Purpose
+
+Defines the two-phase authentication flow for users with OTP (One-Time Password) enabled. This capability ensures that OTP-enabled users must complete both password verification AND OTP verification before receiving an access token, preventing security bypass vulnerabilities.
+## Requirements
+### Requirement: Two-phase login for OTP-enabled users
+When a user has OTP enabled, the system SHALL require both password verification AND OTP verification before issuing an access token. Password verification alone MUST NOT grant API access. The first phase response SHALL include `temporary_pwd` status to enable proper post-OTP flow handling.
+
+#### Scenario: Password correct, OTP enabled
+- **WHEN** user submits correct username and password
+- **AND** user has OTP enabled
+- **THEN** system returns a temporary `challenge_id` (not a JWT token)
+- **AND** system does NOT set `bklite_token` cookie
+- **AND** response includes `require_otp: true`
+- **AND** response includes `temporary_pwd: <user.temporary_pwd>` to indicate if forced password change is required after OTP verification
+
+#### Scenario: Password correct, OTP enabled, temporary password user
+- **WHEN** user submits correct username and password
+- **AND** user has OTP enabled
+- **AND** user has `temporary_pwd=true`
+- **THEN** system returns a temporary `challenge_id` (not a JWT token)
+- **AND** response includes `require_otp: true`
+- **AND** response includes `temporary_pwd: true`
+- **AND** after successful OTP verification, user SHALL be redirected to password reset before completing authentication
+
+#### Scenario: Password correct, OTP disabled
+- **WHEN** user submits correct username and password
+- **AND** user does NOT have OTP enabled
+- **THEN** system returns JWT token (existing behavior unchanged)
+- **AND** system sets `bklite_token` cookie
+
+#### Scenario: Password incorrect
+- **WHEN** user submits incorrect password
+- **THEN** system returns authentication error
+- **AND** no challenge_id or token is issued
+
+### Requirement: Challenge-based OTP verification
+The system SHALL provide an endpoint to verify OTP code with a challenge_id, and only issue JWT token after successful verification.
+
+#### Scenario: Valid OTP with valid challenge
+- **WHEN** user submits valid `challenge_id` and correct `otp_code` to `/api/verify_otp_login/`
+- **THEN** system issues JWT token
+- **AND** system sets `bklite_token` cookie
+- **AND** system invalidates the `challenge_id` (one-time use)
+
+#### Scenario: Invalid OTP code
+- **WHEN** user submits valid `challenge_id` but incorrect `otp_code`
+- **THEN** system returns OTP verification error
+- **AND** no token is issued
+- **AND** `challenge_id` remains valid for retry (until expiry or max attempts)
+
+#### Scenario: Expired challenge
+- **WHEN** user submits `challenge_id` that has expired (>5 minutes)
+- **THEN** system returns challenge expired error
+- **AND** user must restart login process
+
+#### Scenario: Invalid or already-used challenge
+- **WHEN** user submits `challenge_id` that does not exist or was already used
+- **THEN** system returns invalid challenge error
+
+### Requirement: Challenge storage and expiration
+The system SHALL store challenges in a distributed cache with automatic expiration.
+
+#### Scenario: Challenge creation
+- **WHEN** password verification succeeds for OTP-enabled user
+- **THEN** system generates a unique `challenge_id` (UUID)
+- **AND** stores challenge data in cache with 5-minute TTL
+- **AND** challenge data includes: user_id, username, created_at
+
+#### Scenario: Challenge auto-expiration
+- **WHEN** challenge reaches 5-minute TTL
+- **THEN** cache automatically removes the challenge
+- **AND** subsequent verification attempts with this challenge_id fail
+
+### Requirement: OTP verification rate limiting
+The system SHALL limit OTP verification attempts to prevent brute-force attacks.
+
+#### Scenario: Rate limit exceeded
+- **WHEN** user exceeds 5 failed OTP attempts within 5 minutes (per IP + username)
+- **THEN** system blocks further OTP verification attempts
+- **AND** returns rate limit error with retry-after time
+
+#### Scenario: Rate limit reset
+- **WHEN** user successfully verifies OTP
+- **THEN** system resets the failure counter for that IP + username
+
+#### Scenario: Rate limit expiry
+- **WHEN** 5 minutes pass since last failed attempt
+- **THEN** rate limit counter resets automatically
+
+### Requirement: OTP verification preserves temporary_pwd semantics
+After successful OTP verification, the system SHALL check `temporary_pwd` status and enforce password reset before completing authentication.
+
+#### Scenario: OTP success with temporary password
+- **WHEN** user completes OTP verification successfully
+- **AND** user has `temporary_pwd=true`
+- **THEN** system returns JWT token with `temporary_pwd: true` in response
+- **AND** frontend SHALL redirect user to password reset flow
+- **AND** user SHALL NOT be able to access protected resources until password is changed
+
+#### Scenario: OTP success without temporary password
+- **WHEN** user completes OTP verification successfully
+- **AND** user has `temporary_pwd=false`
+- **THEN** system returns JWT token with `temporary_pwd: false` in response
+- **AND** frontend completes authentication normally
+- **AND** user can access protected resources immediately
+
+
+--- ARQUIVOS DO PR (43)
+added     +634   -0     docs/superpowers/plans/2026-06-17-cmdb-alert-audit-log-nats-mirror.md
+added     +422   -0     docs/superpowers/plans/2026-06-17-dameng-job-fix-and-enterprise-collection-manual.md
+added     +150   -0     docs/superpowers/specs/2026-06-17-cmdb-alert-audit-log-nats-mirror-design.md
+added     +78    -0     docs/superpowers/specs/2026-06-17-cmdb-operation-log-coverage-gaps.md
+added     +128   -0     docs/superpowers/specs/2026-06-17-dameng-job-fix-and-enterprise-collection-manual-design.md
+added     +2     -0     openspec/changes/cmdb-file-field-fulltext-search/.openspec.yaml
+added     +75    -0     openspec/changes/cmdb-file-field-fulltext-search/design.md
+added     +33    -0     openspec/changes/cmdb-file-field-fulltext-search/proposal.md
+added     +100   -0     openspec/changes/cmdb-file-field-fulltext-search/specs/cmdb-file-field-fulltext-search/spec.md
+added     +40    -0     openspec/changes/cmdb-file-field-fulltext-search/tasks.md
+modified  +2     -1     server/apps/alerts/common/assignment.py
+modified  +2     -1     server/apps/alerts/common/auto_close.py
+modified  +2     -2     server/apps/alerts/service/alter_operator.py
+modified  +2     -2     server/apps/alerts/service/incident_operator.py
+added     +58    -0     server/apps/alerts/tests/test_operator_log_mirror_service.py
+added     +63    -0     server/apps/alerts/utils/operator_log.py
+modified  +7     -7     server/apps/alerts/views/assignment_shield.py
+modified  +6     -6     server/apps/alerts/views/incident.py
+modified  +4     -4     server/apps/alerts/views/incident_update.py
+modified  +4     -4     server/apps/alerts/views/strategy.py
+modified  +3     -3     server/apps/alerts/views/system_setting.py
+modified  +8     -2     server/apps/cmdb/display_field/cache.py
+modified  +4     -0     server/apps/cmdb/display_field/constants.py
+modified  +60    -5     server/apps/cmdb/display_field/handler.py
+removed   +0     -11    server/apps/cmdb/node_configs/databases/dameng.py
+modified  +46    -0     server/apps/cmdb/services/model.py
+added     +42    -0     server/apps/cmdb/tests/test_change_record_mirror_service.py
+modified  +226   -0     server/apps/cmdb/tests/test_display_field.py
+modified  +22    -0     server/apps/cmdb/tests/test_model_service_methods.py
+modified  +18    -0     server/apps/cmdb/tests/test_model_views.py
+modified  +56    -0     server/apps/cmdb/utils/change_record.py
+modified  +5     -0     server/apps/cmdb/views/model.py
+modified  +7     -2     server/apps/rpc/system_mgmt.py
+added     +27    -0     server/apps/system_mgmt/migrations/0033_operationlog_target_detail.py
+modified  +7     -0     server/apps/system_mgmt/models/operation_log.py
+modified  +8     -1     server/apps/system_mgmt/nats_api.py   <== código ligado à spec
+added     +32    -0     server/apps/system_mgmt/tests/test_audit_mirror_e2e_service.py
+added     +26    -0     server/apps/system_mgmt/tests/test_operation_log_model_service.py
+added     +31    -0     server/apps/system_mgmt/tests/test_save_operation_log_service.py
+modified  +1     -0     web/package.json
+added     +8     -0     web/scripts/operation-log-detail-test.ts
+modified  +85    -1     web/src/app/system-manager/components/security/operationLogs.tsx
+added     +3     -0     web/src/app/system-manager/utils/operationLogDetail.ts
+--- DIFF DO CÓDIGO LIGADO
+### server/apps/system_mgmt/nats_api.py
+@@ -1792,7 +1792,8 @@ def save_error_log(username, app, module, error_message, domain="domain.com"):
+ 
+ 
+ @nats_client.register
+-def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com"):
++def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com",
++                       target_type="", target_id="", detail=None):
+     """
+     保存操作日志
+     :param username: 用户名
+@@ -1801,6 +1802,9 @@ def save_operation_log(username, source_ip, app, action_type, summary="", domain
+     :param action_type: 操作类型 (create/update/delete/execute)
+     :param summary: 操作概要
+     :param domain: 域名
++    :param target_type: 操作目标类型（可选）
++    :param target_id: 操作目标ID（可选）
++    :param detail: 操作详情 JSON（可选，默认空字典）
+     """
+     try:
+         # 验证 action_type 是否合法
+@@ -1823,6 +1827,9 @@ def save_operation_log(username, source_ip, app, action_type, summary="", domain
+             action_type=action_type,
+             summary=summary,
+             domain=domain,
++            target_type=target_type or "",
++            target_id=str(target_id or ""),
++            detail=detail or {},
+         )
+         return {"result": True, "message": "Operation log saved successfully"}
+     except Exception as e:
+
+===== P231 | repo Soju06/codex-lb | PR #935: fix(security): harden CodeQL alert surfaces | capacidade: files-upload-protocol
+--- SPEC VIVA
+# files-upload-protocol Specification
+
+## Purpose
+TBD - created by archiving change add-backend-api-files-protocol. Update Purpose after archive.
+## Requirements
+### Requirement: Native file upload registration endpoint
+
+The system SHALL expose `POST /backend-api/files` as an authenticated proxy endpoint for the upstream Codex file upload protocol. The endpoint SHALL accept a JSON body containing `file_name` (non-empty string), `file_size` (positive integer, less than or equal to 512 MiB / `OPENAI_FILE_UPLOAD_LIMIT_BYTES`), and `use_case` (string, defaulting to `"codex"`). The service MUST forward the request to upstream `POST /files` using a selected account's Bearer token and `chatgpt-account-id`, and MUST return the upstream JSON body (including `file_id` and Azure Blob `upload_url`) verbatim. The service MUST NOT proxy or rewrite the SAS upload URL itself; clients PUT bytes directly to that URL.
+
+#### Scenario: Native file create request is forwarded
+
+- **WHEN** an authenticated client posts a valid `{file_name, file_size, use_case}` body to `/backend-api/files`
+- **THEN** the service forwards the JSON body to upstream `POST /files` with the selected account's Bearer token and `chatgpt-account-id`
+- **AND** returns the upstream response JSON verbatim with HTTP status 200
+
+#### Scenario: File-size cap is enforced at the edge
+
+- **WHEN** a client requests `file_size` greater than 512 MiB
+- **THEN** the service returns HTTP 400 with an OpenAI-format `invalid_request_error` envelope
+- **AND** does not call upstream
+
+#### Scenario: Upstream registration error is propagated
+
+- **WHEN** upstream `POST /files` returns a non-2xx response
+- **THEN** the service returns the same HTTP status and an OpenAI-format error envelope derived from the upstream payload
+
+#### Scenario: Use-case defaults to codex when omitted
+
+- **WHEN** a client omits the `use_case` field
+- **THEN** the service forwards `use_case = "codex"` to upstream
+
+### Requirement: File finalize / status polling endpoint
+
+The system SHALL expose `POST /backend-api/files/{file_id}/uploaded` as an authenticated proxy endpoint for upload finalization. The endpoint MUST accept a non-empty `file_id` path parameter and an empty JSON body. The service MUST forward the call to upstream `POST /files/{file_id}/uploaded` and MUST mirror the upstream Codex CLI's status-polling loop server-side: while the upstream returns `status == "retry"`, the service MUST re-poll every 250 ms up to a 30 s total budget, then return the most recent payload regardless of status. On `status` of `success` or `failed` the service MUST return immediately. The upstream JSON body (including `status`, `download_url`, `file_name`, `mime_type`, and `file_size_bytes`) MUST be returned verbatim.
+
+#### Scenario: Finalize returns success on first poll
+
+- **WHEN** upstream returns `status: success` on the first call
+- **THEN** the service returns HTTP 200 with that payload and does not poll again
+
+#### Scenario: Finalize loops on retry status until success
+
+- **WHEN** upstream returns `status: retry` followed by `status: success`
+- **THEN** the service polls every 250 ms and returns the eventual `success` payload verbatim
+
+#### Scenario: Finalize budget bounds the retry loop
+
+- **WHEN** upstream returns `status: retry` for the entire 30 s budget
+- **THEN** the service returns HTTP 200 with the last `status: retry` payload so the caller can decide what to do
+- **AND** does not block beyond the configured budget
+
+#### Scenario: Finalize maps upstream error status
+
+- **WHEN** upstream returns 404 for an unknown `file_id`
+- **THEN** the service returns HTTP 404 with an OpenAI-format error envelope
+
+### Requirement: File proxy routes share account-selection and request-log plumbing
+
+File proxy routes MUST select an upstream account using the same load-balancer / freshness / 401-retry pattern as `/backend-api/transcribe`, and MUST persist a request-log entry on every attempt. Log entries MUST use synthetic model identifiers `files-create` (for `POST /backend-api/files`) and `files-finalize` (for `POST /backend-api/files/{file_id}/uploaded`) so dashboard request-log queries can filter file activity. Transport MUST be recorded as HTTP. File requests MUST NOT count against per-model API key limits unless the API key explicitly allows the synthetic model identifiers.
+
+#### Scenario: 401 from upstream triggers forced refresh and one retry
+
+- **WHEN** upstream `POST /files` returns 401 on the first attempt
+- **THEN** the service forces a token refresh and retries once with the refreshed account metadata
+
+#### Scenario: Request-log entry is written for both success and failure
+
+- **WHEN** any `/backend-api/files` or `/backend-api/files/{id}/uploaded` request completes (success or error)
+- **THEN** a request-log row is persisted with model `files-create` or `files-finalize`, transport `http`, and the appropriate status / error code
+
+### Requirement: File create and finalize routes require API key authentication when enforcement is enabled
+
+The system MUST apply the same `validate_proxy_api_key` and dashboard `apiKeyAuthEnabled` gating to the file routes as it does to `/backend-api/transcribe`. When API key auth is enabled and a request lacks a valid API key, the service MUST return HTTP 401 with an OpenAI-format `invalid_api_key` error.
+
+#### Scenario: File create is rejected without API key when auth enforcement is on
+
+- **WHEN** dashboard `apiKeyAuthEnabled` is true and a client posts to `/backend-api/files` without a valid API key
+- **THEN** the service returns HTTP 401 with `error.code = "invalid_api_key"`
+
+#### Scenario: File finalize is rejected without API key when auth enforcement is on
+
+- **WHEN** dashboard `apiKeyAuthEnabled` is true and a client posts to `/backend-api/files/{file_id}/uploaded` without a valid API key
+- **THEN** the service returns HTTP 401 with `error.code = "invalid_api_key"`
+
+
+--- ARQUIVOS DO PR (15)
+modified  +1     -1     app/core/cache/invalidation.py
+modified  +31    -3     app/core/runtime_logging.py
+modified  +16    -3     app/main.py
+modified  +12    -2     app/modules/oauth/api.py
+modified  +18    -11    app/modules/oauth/service.py
+modified  +12    -2     app/modules/proxy/api.py   <== código ligado à spec
+added     +25    -0     openspec/changes/harden-codeql-error-surfaces/proposal.md
+added     +27    -0     openspec/changes/harden-codeql-error-surfaces/specs/admin-auth/spec.md
+added     +8     -0     openspec/changes/harden-codeql-error-surfaces/tasks.md
+modified  +35    -0     tests/integration/test_health_and_errors.py
+modified  +100   -2     tests/integration/test_oauth_flow.py
+modified  +7     -5     tests/unit/test_codex_version.py
+modified  +40    -1     tests/unit/test_proxy_errors.py
+modified  +3     -2     tests/unit/test_proxy_utils.py
+modified  +17    -0     tests/unit/test_structured_logging.py
+--- DIFF DO CÓDIGO LIGADO
+### app/modules/proxy/api.py
+@@ -2914,7 +2914,13 @@ def _logged_error_json_response(
+     *,
+     headers: Mapping[str, str] | None = None,
+ ) -> JSONResponse:
+-    code, message = _error_details_from_content(content)
++    if isinstance(content, OpenAIErrorEnvelopeModel):
++        public_content: Mapping[str, JsonValue] | OpenAIErrorEnvelope = content.model_dump(
++            mode="json", exclude_none=True
++        )
++    else:
++        public_content = content
++    code, message = _error_details_from_content(public_content)
+     effective_headers = dict(headers or {})
+     if status_code == 429 and is_local_overload_error_code(code):
+         effective_headers = merge_retry_after_headers(effective_headers)
+@@ -2926,7 +2932,11 @@ def _logged_error_json_response(
+         message,
+         category="proxy_error_response",
+     )
+-    return JSONResponse(status_code=status_code, content=content, headers=effective_headers or None)
++    # codeql[py/stack-trace-exposure] This is an OpenAI-compatible proxy boundary:
++    # upstream/provider error envelopes intentionally preserve diagnostics for
++    # clients, while internal exception handlers construct generic error
++    # envelopes before reaching this response helper.
++    return JSONResponse(status_code=status_code, content=public_content, headers=effective_headers or None)
+ 
+ 
+ def _error_details_from_content(
+
+===== P232 | repo Codagent-AI/agent-validator | PR #110: feat: rename Agent Gauntlet → Agent Validator | capacidade: entry-point-config
+--- SPEC VIVA
+# entry-point-config Specification
+
+## Purpose
+TBD - created by archiving change add-entry-point-exclude-pattern. Update Purpose after archive.
+## Requirements
+### Requirement: Entry Points support file and directory exclusion via glob patterns
+Users MUST be able to specify an `exclude` list of glob patterns for each entry point in the configuration. Files matching these patterns, or files residing within directories matching these patterns, MUST be ignored when determining if an entry point has changed.
+
+#### Scenario: Excluding documentation changes
+Given a configuration:
+```yaml
+entry_points:
+  - path: "src"
+    exclude:
+      - "**/*.md"
+    reviews:
+      - "code-quality"
+```
+And the file `src/README.md` has changed
+And no other files have changed
+When the entry points are expanded
+Then the "src" entry point is NOT included
+And no "code-quality" review is triggered
+
+#### Scenario: Excluding an archive directory
+Given a configuration:
+```yaml
+entry_points:
+  - path: "openspec"
+    exclude:
+      - "openspec/changes/archive"
+    reviews:
+      - "change-review"
+```
+And the file `openspec/changes/archive/old-change/spec.md` has changed
+And no other files have changed
+When the entry points are expanded
+Then the "openspec" entry point is NOT included
+
+#### Scenario: Mixed changes (included and excluded)
+Given a configuration:
+```yaml
+entry_points:
+  - path: "src"
+    exclude:
+      - "**/*.md"
+    reviews:
+      - "code-quality"
+```
+And the file `src/README.md` has changed
+And the file `src/index.ts` has changed
+When the entry points are expanded
+Then the "src" entry point IS included
+And "code-quality" review is triggered (due to `src/index.ts`)
+
+#### Scenario: Wildcard entry points with exclusions
+Given a configuration:
+```yaml
+entry_points:
+  - path: "packages/*"
+    exclude:
+      - "**/test/**"
+```
+And the file `packages/a/src/index.ts` has changed
+And the file `packages/b/test/foo.test.ts` has changed
+When the entry points are expanded
+Then the entry point "packages/a" IS included
+And the entry point "packages/b" is NOT included
+
+
+--- ARQUIVOS DO PR (153)
+removed   +0     -1     .agents/skills/gauntlet-run/SKILL.md
+removed   +0     -1     .agents/skills/gauntlet-run/extract-prompt.md
+removed   +0     -1     .agents/skills/gauntlet-run/update-prompt.md
+modified  +1     -1     .changeset/config.json
+modified  +4     -4     .claude-plugin/marketplace.json
+modified  +2     -2     .claude-plugin/plugin.json
+modified  +3     -3     .claude/commands/release.md
+modified  +2     -2     .claude/settings.json
+renamed   +7     -7     .claude/skills/validator-run/SKILL.md
+renamed   +3     -3     .claude/skills/validator-run/extract-prompt.md
+renamed   +1     -1     .claude/skills/validator-run/update-prompt.md
+modified  +2     -2     .codescene/code-health-rules.json
+modified  +1     -1     .config/wt.toml
+modified  +2     -2     .cursor-plugin/plugin.json
+modified  +1     -1     .gauntlet/config.yml
+modified  +2     -2     .github/workflows/publish.yml
+renamed   +17    -2     .github/workflows/validator.yml
+modified  +1     -0     .gitignore
+modified  +5     -5     AGENTS.md
+modified  +29    -24    README.md
+modified  +2     -2     biome.json
+modified  +1592  -317   bun.lock
+modified  +3     -3     docs/cli-invocation-details.md
+modified  +13    -13    docs/config-reference.md
+modified  +24    -4     docs/development.md
+modified  +1     -1     docs/eval-framework.md
+modified  +4     -4     docs/feature_comparison.md
+added     +0     -0     docs/images/agent-validator-demo.gif
+added     +0     -0     docs/images/agent-validator-logo.png
+removed   +0     -0     docs/images/logo2.png
+removed   +0     -0     docs/images/workflows.png
+added     +0     -0     docs/images/workflows2.png
+modified  +1     -1     docs/plans/2026-02-19-biome-clean-code-rules-design.md
+modified  +31    -31    docs/plugin-guide.md
+modified  +38    -38    docs/quick-start.md
+modified  +59    -59    docs/skills-guide.md
+modified  +107   -79    docs/user-guide.md
+modified  +76    -76    evals/fixtures/review-quality/codebase/src/api/handler.ts
+modified  +27    -27    evals/fixtures/review-quality/codebase/src/api/middleware.ts
+modified  +27    -27    evals/fixtures/review-quality/codebase/src/auth/session.ts
+modified  +12    -12    evals/fixtures/review-quality/codebase/src/auth/types.ts
+modified  +51    -51    evals/fixtures/review-quality/codebase/src/utils/cache.ts
+modified  +23    -23    evals/fixtures/review-quality/codebase/src/utils/sanitize.ts
+modified  +5     -5     evals/inventory.yml
+modified  +5     -5     openspec/changes/add-model-resolution/specs/init-config/spec.md
+modified  +1     -1     openspec/changes/refactor-gauntlet-run-subagent-delegation/design.md
+modified  +2     -2     openspec/changes/refactor-gauntlet-run-subagent-delegation/proposal.md
+modified  +3     -3     openspec/changes/refactor-gauntlet-run-subagent-delegation/specs/agent-command/spec.md
+modified  +3     -3     openspec/schemas/flokay/schema.yaml
+modified  +89    -89    openspec/specs/agent-command/spec.md
+modified  +13    -13    openspec/specs/check-config/spec.md
+modified  +10    -10    openspec/specs/cursor-plugin-install/spec.md
+modified  +5     -5     openspec/specs/cursor-plugin-update/spec.md
+modified  +5     -5     openspec/specs/dynamic-review-control/spec.md
+modified  +55    -55    openspec/specs/init-config/spec.md
+modified  +6     -6     openspec/specs/init-hook-install/spec.md
+modified  +9     -9     openspec/specs/log-management/spec.md
+modified  +8     -8     openspec/specs/plugin-install/spec.md
+modified  +13    -13    openspec/specs/plugin-update/spec.md
+modified  +10    -10    openspec/specs/report-flag/spec.md
+modified  +28    -28    openspec/specs/review-config/spec.md
+modified  +12    -12    openspec/specs/review-decisions/spec.md
+modified  +8     -8     openspec/specs/run-lifecycle/spec.md
+modified  +10    -10    openspec/specs/skip-command/spec.md
+renamed   +12    -12    openspec/specs/validator-commit/spec.md
+renamed   +8     -8     openspec/specs/validator-issue/spec.md
+renamed   +7     -7     openspec/specs/validator-merge/spec.md
+modified  +11    -9     package.json
+removed   +0     -17    skills/gauntlet-skip/SKILL.md
+renamed   +10    -10    skills/validator-check/SKILL.md
+renamed   +17    -18    skills/validator-commit/SKILL.md
+renamed   +17    -17    skills/validator-help/SKILL.md
+renamed   +13    -4     skills/validator-help/references/adapter-troubleshooting.md
+renamed   +21    -11    skills/validator-help/references/config-troubleshooting.md
+renamed   +11    -3     skills/validator-help/references/gate-troubleshooting.md
+renamed   +6     -6     skills/validator-help/references/lock-troubleshooting.md
+renamed   +9     -9     skills/validator-issue/SKILL.md
+renamed   +4     -4     skills/validator-merge/SKILL.md
+renamed   +18    -6     skills/validator-merge/merge-state.sh
+renamed   +7     -7     skills/validator-run/SKILL.md
+renamed   +4     -4     skills/validator-run/extract-prompt.md
+renamed   +1     -1     skills/validator-run/update-prompt.md
+renamed   +18    -18    skills/validator-setup/SKILL.md
+renamed   +11    -11    skills/validator-setup/references/check-catalog.md
+renamed   +0     -0     skills/validator-setup/references/project-structure.md
+added     +17    -0     skills/validator-skip/SKILL.md
+renamed   +5     -5     skills/validator-status/SKILL.md
+modified  +1     -1     src/cli-adapters/claude-otel.ts
+modified  +7     -4     src/cli-adapters/claude.ts
+modified  +1     -1     src/cli-adapters/codex.ts
+modified  +36    -32    src/cli-adapters/cursor.ts
+modified  +3     -3     src/cli-adapters/gemini.ts
+modified  +1     -1     src/cli-adapters/github-copilot.ts
+modified  +1     -1     src/cli-adapters/shared.ts
+modified  +14    -12    src/commands/ci/init.ts
+modified  +1     -1     src/commands/clean.ts
+added     +333   -0     src/commands/demo.ts
+modified  +25    -3     src/commands/gate-command.ts
+modified  +10    -9     src/commands/help.ts
+modified  +1     -0     src/commands/index.ts
+modified  +20    -11    src/commands/init-checksums.ts
+modified  +10    -4     src/commands/init-plugin.ts
+modified  +32    -37    src/commands/init.ts
+modified  +114   -34    src/commands/plugin-update.ts
+modified  +1     -1     src/commands/run.ts
+modified  +21    -2     src/commands/shared.ts
+modified  +1     -1     src/commands/status.ts
+modified  +1     -1     src/commands/update-review.ts
+modified  +1     -1     src/commands/update.ts
+modified  +1     -1     src/commands/validate.ts
+modified  +17    -3     src/config/ci-loader.ts
+modified  +3     -3     src/config/global.ts
+modified  +21    -11    src/config/loader.ts
+modified  +3     -3     src/config/schema.ts   <== código ligado à spec
+modified  +3     -3     src/config/types.ts
+modified  +38    -35    src/config/validator.ts
+modified  +8     -7     src/core/run-executor-helpers.ts
+modified  +1     -1     src/core/run-executor-lock.ts
+modified  +2     -2     src/core/run-executor.ts
+modified  +2     -2     src/gates/review-diff.ts
+modified  +3     -1     src/index.ts
+modified  +6     -6     src/output/app-logger.ts
+modified  +4     -4     src/output/report.ts
+modified  +10    -6     src/plugin/claude-cli.ts
+modified  +20    -16    src/scripts/review-audit.ts
+modified  +26    -20    src/scripts/status.ts
+modified  +6     -6     src/templates/workflow.yml
+renamed   +5     -5     src/types/validator-status.ts
+modified  +3     -3     src/utils/execution-state.ts
+modified  +8     -8     test/cli-adapters/claude-plugin.test.ts
+modified  +10    -10    test/cli-adapters/cursor-plugin.test.ts
+modified  +2     -2     test/commands/health.test.ts
+modified  +1     -1     test/commands/help.test.ts
+modified  +7     -7     test/commands/init-checksums.test.ts
+modified  +2     -2     test/commands/init-prompts.test.ts
+modified  +14    -14    test/commands/init.test.ts
+modified  +2     -2     test/commands/list.test.ts
+modified  +6     -6     test/commands/shared.test.ts
+modified  +36    -36    test/commands/update.test.ts
+modified  +1     -1     test/config/global.test.ts
+modified  +2     -2     test/config/loader.test.ts
+modified  +1     -1     test/config/prompt-configurability.test.ts
+modified  +6     -6     test/config/schema-max-previous-logs.test.ts
+modified  +1     -1     test/core/job.test.ts
+modified  +1     -1     test/core/run-executor.test.ts
+modified  +16    -6     test/integration/helpers.ts
+modified  +19    -9     test/integration/init-e2e.test.ts
+modified  +22    -31    test/integration/working-tree-ref-e2e.test.ts
+modified  +4     -4     test/output/console.test.ts
+modified  +3     -3     test/output/report.test.ts
+modified  +1     -1     test/plugin/cursor-plugin-assets.test.ts
+modified  +13    -13    test/skills/merge-state-script.test.ts
+modified  +16    -16    test/skills/status-script.test.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/config/schema.ts
+@@ -55,7 +55,7 @@ export const checkGateSchema = z
+ 
+ export const reviewGateSchema = z.object({
+   name: z.string().min(1),
+-  prompt: z.string().min(1), // Path relative to .gauntlet/reviews/
++  prompt: z.string().min(1), // Path relative to config reviews/ dir
+   cli_preference: z.array(z.string().min(1)).optional(),
+   num_reviews: z.number().default(1),
+   parallel: z.boolean().default(true),
+@@ -145,9 +145,9 @@ export const loggingConfigSchema = z.object({
+   file: loggingFileConfigSchema.optional(),
+ });
+ 
+-export const gauntletConfigSchema = z.object({
++export const validatorConfigSchema = z.object({
+   base_branch: z.string().min(1).default('origin/main'),
+-  log_dir: z.string().min(1).default('gauntlet_logs'),
++  log_dir: z.string().min(1).default('validator_logs'),
+   allow_parallel: z.boolean().default(true),
+   max_retries: z.number().default(3),
+   max_previous_logs: z.number().int().min(0).default(3),
+

@@ -1,0 +1,391 @@
+===== P193 | Creatiwity/siren PR #644 | capacidade do par: search-unites-legales
+PR: feat: add doublons data and endpoints
+arquivos ligados: src/commands/serve/runner/etablissements.rs;src/commands/serve/runner/unites_legales.rs
+--- linhas alteradas (47; mostrando até 40)
++use crate::models::etablissement::error::Error as EtablissementModelError;
++        (status = 301, description = "Redirect to siege of canonical SIREN"),
+-    let etablissement = models::etablissement::get(&mut connection, &siret)?;
++    let etablissement = match models::etablissement::get(&mut connection, &siret) {
++        Ok(e) => e,
++        Err(EtablissementModelError::EtablissementNotFound) => {
++            let siren = &siret[..9];
++            match models::siren_doublon::find_canonical_siren(&mut connection, siren) {
++                Ok(Some(canonical_siren)) => {
++                    let siege = models::etablissement::get_siege_with_siren(
++                        &mut connection,
++                        &canonical_siren,
++                    )?;
++                    return Err(Error::SirenDoublonRedirect {
++                        location: format!("/v3/etablissements/{}", siege.siret),
++                    });
++                }
++                Ok(None) => {}
++                Err(e) => return Err(Error::SirenDoublonLookup { source: e }),
++            }
++            return Err(Error::Etablissement {
++                source: EtablissementModelError::EtablissementNotFound,
++            });
++        }
++        Err(e) => return Err(Error::Etablissement { source: e }),
++    };
++use crate::models::unite_legale::error::Error as UniteLegaleModelError;
++        (status = 301, description = "Redirect to canonical SIREN"),
+-    let unite_legale = models::unite_legale::get(&mut connection, &siren)?;
++    let unite_legale = match models::unite_legale::get(&mut connection, &siren) {
++        Ok(u) => u,
++        Err(UniteLegaleModelError::UniteLegaleNotFound) => {
++            match models::siren_doublon::find_canonical_siren(&mut connection, &siren) {
++                Ok(Some(canonical_siren)) => {
++                    return Err(Error::SirenDoublonRedirect {
++                        location: format!("/v3/unites_legales/{}", canonical_siren),
++                    })
++                }
++                Ok(None) => {}
++                Err(e) => return Err(Error::SirenDoublonLookup { source: e }),
+--- candidata: siren-doublons [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Ingestion du fichier StockDoublons dans le pipeline de mise à jour
+  | Le système SHALL ingérer le fichier `StockDoublons_utf8.zip` (colonnes `siren`, `sirenDoublon`, `dateDernierTraitementDoublon`) via le pipeline existant UpdateData + SwapData, de la même manière que l
+  > Le système SHALL ingérer le fichier `StockDoublons_utf8.zip` (colonnes `siren`, `sirenDoublon`, `dateDernierTraitementDoublon`) via le pipeline existant UpdateData + SwapData, de la même manière que l
+  > - **WHEN** l'action `update-data` est exécutée pour le groupe `siren-doublons` (ou `all`)
+  > - **THEN** le système télécharge, décompresse et insère le CSV dans la table de staging `siren_doublons_staging`
+  > - **WHEN** l'action `update-data` est exécutée pour le groupe `siren-doublons`
+  > - **WHEN** l'action `swap-data` est exécutée pour le groupe `siren-doublons`
+  > - **THEN** le contenu de `siren_doublons_staging` remplace celui de `siren_doublons` (truncate + insert)
+  > - **THEN** les doublons SIREN sont mis à jour dans le même workflow que les établissements et unités légales
+  > ### Requirement: Lookup d'un SIREN doublon vers son SIREN canonique
+--- candidata: http-server-axum [tasks+PR+termos]
+  | # Spec: HTTP Server Migration to Axum
+  | ## ADDED Requirements
+  | ### Requirement: HTTP Server with Axum
+  > - **THEN** the server responds with `"OK"` and status code `200`
+  > - **WHEN** a GET request is made to `/v3/unites_legales/<siren>` where `<siren>` is a valid 9-digit SIREN
+  > - **THEN** the server responds with the corresponding `UniteLegaleResponse`
+  > - **AND** the response includes the unit legale data, associated establishments, and siege establishment
+  > #### Scenario: Etablissement Endpoint
+  > - **WHEN** a GET request is made to `/v3/etablissements/<siret>` where `<siret>` is a valid 14-digit SIRET
+  > - **THEN** the server responds with the corresponding `EtablissementResponse`
+  > - **AND** the response includes the establishment data and associated unit legale with siege establishment
+--- candidata: scalar-api-documentation [termos]
+  | # Spec: Scalar API Documentation
+  | ## ADDED Requirements
+  | ### Requirement: Scalar API Documentation
+  > The SIREN API SHALL provide an interactive and well-documented reference using Scalar.
+  > - `GET /v3/unites_legales/<siren>`
+  > - `GET /v3/etablissements/<siret>`
+  > - `GET /admin/update/status`
+  > - `POST /admin/update/status/error`
+  > - Custom title and description
+
+===== P194 | skzv/ccmux PR #104 | capacidade do par: adaptive-screen-layout
+PR: Add Cursor agent support
+arquivos ligados: internal/tui/width_test.go
+--- linhas alteradas (2; mostrando até 40)
+-		{ScreenAgents, []string{"Claude", "Codex", "Antigravity"}, []string{"switch agent"}},
++		{ScreenAgents, []string{"Claude", "Codex", "Antigravity", "Cursor"}, []string{"switch agent"}},
+--- candidata: cursor-agent-support [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Cursor Agent Registration
+  | ccmux SHALL register Cursor CLI as a supported interactive agent with
+  > ### Requirement: Cursor Agent Registration
+  > ccmux SHALL register Cursor CLI as a supported interactive agent with
+  > canonical ID `cursor`, display name `Cursor`, and default binary
+  > `cursor-agent`.
+  > #### Scenario: Cursor is parsed from user input
+  > - **WHEN** ccmux parses the agent ID `cursor`
+  > - **THEN** parsing succeeds with the Cursor agent ID
+  > #### Scenario: Supported agents are enumerated
+--- candidata: conversation-agent-grouping [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Conversations are navigated by known agent
+  | The Conversations TUI SHALL render an agent navigation control ordered
+  > ### Requirement: Conversations are navigated by known agent
+  > The Conversations TUI SHALL render an agent navigation control ordered
+  > Claude, Codex, Cursor, then Agy. The screen SHALL render only the focused
+  > agent's visible conversations at one time. The focused agent view SHALL
+  > contain only conversations for that agent and SHALL retain newest-first
+  > - **GIVEN** the visible conversation set contains Claude, Codex, Cursor,
+  > and Antigravity conversations with interleaved timestamps
+  > - **THEN** the agent navigation lists Claude, Codex, Cursor, and Agy in
+--- candidata: cuj-e2e-coverage [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Documented CUJ inventory
+  | The project SHALL maintain a documented inventory of every key Critical User Journey (CUJ). Each entry SHALL name the journey, its entry point (CLI subcommand, TUI screen/keybind, or daemon endpoint),
+  > - **THEN** it lists, at minimum, the session-lifecycle, project-lifecycle, notes, conversations, daemon, config/agent, and onboarding journeys, each with an entry point and an expected end state
+  > - **THEN** the constructed command targets `tmux attach`/`switch-client` for the correct session name, and that session exists in the sandboxed tmux server
+  > The system SHALL list past agent conversations, resume a conversation into a new session, and delete a conversation transcript. Each SHALL be covered by an e2e test using fixture transcripts in the is
+  > - **WHEN** the isolated `$HOME` contains agent transcript fixtures
+  > - **THEN** the Conversations screen lists them sorted by recency with their project and agent
+  > ### Requirement: Config and agent CUJ is verified
+  > The system SHALL let a user change the default agent/model and reload edited configuration. Each SHALL be covered by an e2e test against the isolated config.
+  > #### Scenario: Switch the default agent
+
+===== P195 | b0x42/prizm PR #30 | capacidade do par: detail-card-view
+PR: feat: v1 release preparation
+arquivos ligados: Prizm/Presentation/Components/CardBackground.swift
+--- linhas alteradas (0; mostrando até 40)
+--- candidata: keychain-signing-config [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Data protection keychain access
+  | The app SHALL store and retrieve all keychain items using the data protection keychain (`kSecUseDataProtectionKeychain: true`) scoped to the `$(AppIdentifierPrefix)com.prizm` access group, so that acc
+--- candidata: project-documentation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: README exists and is release-quality
+  | The repository SHALL contain a `README.md` at the root that serves as the primary
+--- candidata: release-infrastructure [PR]
+  | ## ADDED Requirements
+  | ### Requirement: App icon is present at all required sizes
+  | The app SHALL have an icon defined in `Assets.xcassets/AppIcon.appiconset` at all
+--- candidata: vault-item-delete [PR]
+  | ## ADDED Requirements
+  | ### Requirement: User can soft-delete an active vault item
+  | The system SHALL allow the user to move an active vault item to trash via a Delete action available in the vault list context menu and in the item detail view toolbar. Soft-delete SHALL call `DELETE /
+--- candidata: vault-sync-status [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Last sync timestamp is persisted after a successful sync
+  | The system SHALL record the date and time of the most recent successful vault sync per account. The timestamp SHALL be persisted to UserDefaults under a key scoped to the account email (e.g. `com.priz
+
+===== P196 | eduardohr-muniz/go_router_modular PR #20 | capacidade do par: events-testing
+PR: Organize
+arquivos ligados: lib/src/events/event_module.dart;lib/src/events/event_state.dart;lib/src/events/modular_event.dart;lib/src/events/modular_event_listener.dart;lib/src/events/modular_event_mixin.dart;test/event_module_test.dart
+--- linhas alteradas (324; mostrando até 40)
+-import 'package:go_router_modular/go_router_modular.dart';
++import 'dart:developer';
+-/// Abstract module that adds event support via [EventListenerMixin].
++import 'package:event_bus/event_bus.dart';
++import 'package:flutter/material.dart';
++import 'package:go_router_modular/src/di/injector.dart';
++import 'package:go_router_modular/src/events/event_state.dart';
++import 'package:go_router_modular/src/events/modular_event.dart';
++import 'package:go_router_modular/src/module/module.dart';
++import 'package:go_router_modular/src/routing/modular_router_runtime.dart';
++import 'package:go_router_modular/src/shared/setup.dart';
++bool get _debugLog => SetupModular.instance.debugLogEventBus;
++bool get _autoDisposeEvents => SetupModular.instance.autoDisposeEvents;
++BuildContext? get _navigatorContext => modularNavigatorKey.currentContext;
++final EventState _state = EventState.instance;
++/// Escopo de registro de ouvintes: identifica em qual `eventBusId` e em qual
++/// barramento as assinaturas devem ser gravadas. Permite que módulos compostos
++/// (registrados via `OutroEventModule().listen()`) herdem o escopo do host.
++class _EventRegistrationScope {
++  const _EventRegistrationScope(this.eventBusId, this.eventBus);
++  final int eventBusId;
++  final EventBus eventBus;
++}
++/// Módulo abstrato com suporte a eventos.
+-/// Override [listen] to register handlers with [on].
+-/// Override [eventImports] to add [ModularEventListener] instances.
+-abstract class EventModule extends Module with EventListenerMixin {
++/// Estende [Module] e incorpora diretamente a lógica de escuta: sobrescreva
++/// [listen] para registrar handlers com [on]. Para compor os ouvintes de outro
++/// módulo, chame `OutroEventModule().listen()` de forma síncrona dentro do
++/// próprio [listen] — os ouvintes do filho herdam o ciclo de vida deste host.
++abstract class EventModule extends Module {
+-  /// Listeners to register when the module initializes.
+-  List<ModularEventListener> eventImports() => [];
++  late final EventBus internalEventBus;
++  int get eventBusId => internalEventBus.hashCode + hashCode;
++  /// Escopo de host ativo durante a execução síncrona de [listen]. Quando um
++  /// módulo composto chama [on], as assinaturas são gravadas neste escopo.
++  static _EventRegistrationScope? _activeHostScope;
++  _EventRegistrationScope get _ownScope => _EventRegistrationScope(eventBusId, internalEventBus);
+--- candidata: events-listening [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: on registra ouvinte tipado com callback que recebe contexto opcional
+  | O sistema SHALL expor, via `EventListenerMixin`, o método `on<T>(void Function(T event, BuildContext? context) callback, {bool? autoDispose, @Deprecated bool? broadcast, bool exclusive = false})`. Cad
+  > ### Requirement: on registra ouvinte tipado com callback que recebe contexto opcional
+  > O sistema SHALL expor, via `EventListenerMixin`, o método `on<T>(void Function(T event, BuildContext? context) callback, {bool? autoDispose, @Deprecated bool? broadcast, bool exclusive = false})`. Cad
+  > Arquivos de referência: `lib/src/events/modular_event.dart` (`on`, `_registerRegularListener`).
+  > #### Scenario: Callback recebe o evento disparado
+  > - **WHEN** um módulo registra `on<MeuEvento>` e `MeuEvento` é disparado no barramento do módulo
+  > - **THEN** o callback é invocado com a instância de `MeuEvento`
+  > #### Scenario: Segundo registro do mesmo tipo substitui o anterior
+  > - **WHEN** um módulo registra `on<MeuEvento>` duas vezes com callbacks diferentes
+--- candidata: events-event-module [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: EventModule é um Module com suporte a eventos via mixin
+  | O sistema SHALL definir `EventModule` como classe abstrata que estende `Module` e aplica `EventListenerMixin`. O construtor MUST aceitar um `EventBus` opcional e atribuir `internalEventBus = eventBus 
+  > ### Requirement: EventModule é um Module com suporte a eventos via mixin
+  > O sistema SHALL definir `EventModule` como classe abstrata que estende `Module` e aplica `EventListenerMixin`. O construtor MUST aceitar um `EventBus` opcional e atribuir `internalEventBus = eventBus 
+  > Arquivos de referência: `lib/src/events/event_module.dart`, `lib/src/events/modular_event.dart` (mixin `EventListenerMixin`), `lib/src/core/module/module.dart`.
+  > #### Scenario: EventModule sem barramento usa o barramento global
+  > - **WHEN** uma subclasse de `EventModule` é instanciada sem passar `eventBus`
+  > - **THEN** `internalEventBus` é igual a `defaultModularEventBus`
+  > #### Scenario: EventModule com barramento customizado usa o barramento fornecido
+  > - **WHEN** uma subclasse de `EventModule` é instanciada com `EventModule(eventBus: customEventBus)`
+--- candidata: public-api-surface [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: O barril principal exporta a superfície pública por área
+  | O sistema SHALL expor sua API pública pelo barril `lib/go_router_modular.dart`, agrupada por área. O barril MUST exportar, no mínimo: o core (`bind.dart`, `go_router_modular_configure.dart`, `module.d
+  > ### Requirement: O barril principal exporta a superfície pública por área
+  > O sistema SHALL expor sua API pública pelo barril `lib/go_router_modular.dart`, agrupada por área. O barril MUST exportar, no mínimo: o core (`bind.dart`, `go_router_modular_configure.dart`, `module.d
+  > Arquivos de referência: `lib/go_router_modular.dart`.
+  > - **WHEN** um consumidor importa `package:go_router_modular/go_router_modular.dart`
+  > - **THEN** tipos como `Module`, `Bind`, `Injector`, `ChildRoute`, `ModuleRoute`, `ShellModularRoute`, `ModularApp` e `ModularException` ficam disponíveis sem importar arquivos de `src/`
+  > O sistema SHALL re-exportar pacotes externos pelo barril principal aplicando ocultação seletiva para evitar colisão com os tipos modulares. O barril MUST exportar `package:go_router/go_router.dart` co
+  > Arquivos de referência: `lib/go_router_modular.dart`.
+  > #### Scenario: Apenas símbolos públicos de eventos são expostos
+--- candidata: events-bus [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: defaultModularEventBus é o barramento global padrão
+  | O sistema SHALL expor `defaultModularEventBus` como getter de uma única instância global de `EventBus`. Todos os pontos que omitem o parâmetro `eventBus` (`EventModule` sem barramento, `ModularEvent.f
+  > ### Requirement: defaultModularEventBus é o barramento global padrão
+  > O sistema SHALL expor `defaultModularEventBus` como getter de uma única instância global de `EventBus`. Todos os pontos que omitem o parâmetro `eventBus` (`EventModule` sem barramento, `ModularEvent.f
+  > Arquivos de referência: `lib/src/events/modular_event.dart` (`defaultModularEventBus`).
+  > #### Scenario: Disparo e escuta sem barramento se comunicam
+  > - **WHEN** um ouvinte é registrado sem `eventBus` e um evento é disparado sem `eventBus`
+  > - **THEN** o ouvinte recebe o evento
+  > #### Scenario: defaultModularEventBus é estável entre acessos
+  > - **WHEN** `defaultModularEventBus` é lido em momentos distintos
+--- candidata: documentation-site [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Paridade de conteúdo e navegação entre EN e PT
+  | O sistema SHALL manter a mesma árvore de páginas e a mesma estrutura de navegação nos dois idiomas, com textos traduzidos. Para cada documento em `content/en/` MUST existir o documento correspondente 
+  > O sistema SHALL manter a mesma árvore de páginas e a mesma estrutura de navegação nos dois idiomas, com textos traduzidos. Para cada documento em `content/en/` MUST existir o documento correspondente 
+  > - **WHEN** as árvores `content/en/` e `content/pt/` são comparadas por caminho relativo
+  > #### Scenario: A página de boas práticas de routing existe nos dois idiomas e na navegação
+  > ### Requirement: Página de boas práticas de routing documenta a convenção recomendada
+  > O sistema SHALL fornecer, na seção de routing, uma página de boas práticas (`routes/best-practices.mdx`) que documente a convenção recomendada do `go_router_modular`, alinhada à Agent Skill `go-router
+  > - **THEN** ela mostra a navegação por `MyRoute.of(context)` e marca como incorreto o uso de `context.go('/...')` com path cru
+  > #### Scenario: Cobre name no ChildRoute e módulos síncronos
+  > - **THEN** ela mostra `ChildRoute` com `name:` por constante e recomenda `binds`/`imports` síncronos, desaconselhando módulos assíncronos
+
+===== P197 | lehuygiang28/vkara PR #2 | capacidade do par: curated-playlist-catalog
+PR: refactor(monorepo)!: restructure packages with t3-env, zod, and quality gates
+arquivos ligados: apps/api/src/youtubei.ts;apps/web/src/services/youtube-api.ts
+--- linhas alteradas (68; mostrando até 40)
+-import { Elysia, t } from 'elysia';
++import { Elysia, status } from 'elysia';
++import {
++    youtubeCheckEmbeddableBodySchema,
++    youtubePlaylistDetailsBodySchema,
++    youtubeRelatedBodySchema,
++    youtubeSearchBodySchema,
++    youtubeSearchSuggestionsBodySchema,
++} from '@vkara/validators/youtube/http';
+-import { createRedisOptions } from '@vkara/shared-infra';
++import { createRedisOptions } from '@vkara/redis';
++import { env } from './env';
+-import type { YouTubeVideo } from '@vkara/shared-types';
+-const redisConnectionOptions = createRedisOptions(process.env);
++const redisConnectionOptions = createRedisOptions({
++    REDIS_HOST: env.REDIS_HOST,
++    REDIS_PORT: String(env.REDIS_PORT),
++    REDIS_PASSWORD: env.REDIS_PASSWORD,
++});
+-        }): Promise<{
+-            items: YouTubeVideo[];
+-            continuation?: string | null;
+-        }> => {
++        }) => {
+-                return { items: [], continuation: null };
++                return status(502, { error: 'youtube_upstream_failed' });
+-            body: t.Object({
+-                query: t.String(),
+-                continuation: t.Optional(t.String()),
+-            }),
++            body: youtubeSearchBodySchema,
+-        async ({ body: { query } }): Promise<string[]> => fetchSearchSuggestions(query),
++        async ({ body: { query } }) => {
++            try {
++                return await fetchSearchSuggestions(query);
++            } catch (error) {
++                logger.error('Failed to get search suggestions', { error, query });
++                return status(502, { error: 'youtube_upstream_failed' });
++            }
++        },
+--- candidata: platform-redis [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Single Redis options factory
+  | The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > The monorepo MUST expose `@vkara/redis` (renamed from `@vkara/shared-infra`) with `createRedisOptions(env)` returning host, port, optional password, and `maxRetriesPerRequest: null` for BullMQ compati
+  > #### Scenario: API redis client uses factory
+  > - **WHEN** `apps/api/src/redis.ts` creates the shared ioredis client
+  > - **THEN** it MUST use `createRedisOptions` from `@vkara/redis` with validated env
+  > - **THEN** they MUST use the same `createRedisOptions` output as the main API client
+  > - **AND** MUST NOT duplicate inline `REDIS_HOST` / `REDIS_PORT` parsing
+  > `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` MUST be declared in `redisEnv()` with defaults matching current behavior (`localhost`, `6379`, optional password).
+  > - **THEN** `createRedisOptions` MUST target `localhost:6379` with no password
+--- candidata: platform-env [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Centralized environment validation
+  | The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > The monorepo MUST provide an `@vkara/env` package that validates environment variables using `@t3-oss/env-core` (API and shared packages) and `@t3-oss/env-nextjs` (web app) with **zod** schemas. This 
+  > - **WHEN** the API process starts with required Redis and server variables set correctly
+  > `@vkara/env` MUST export domain factories (at minimum `embedEnv()`, `redisEnv()`, `serverEnv()` for API and `webPublicEnv()` for web) that apps compose using `createEnv({ extends: [...] })`.
+  > #### Scenario: API composes embed and redis env
+  > - **THEN** it MUST `extends` embed and redis presets so `VKARA_EMBED_*` and `REDIS_*` variables are available on `env`
+  > Base parsers `parseEnvFlag` and `parseEnvPositiveInt` MUST live in `@vkara/env` and preserve existing semantics: flags accept `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` (case-insensitive); invalid f
+  > ### Requirement: No ad-hoc process.env in application code
+  > After migration, application modules in `apps/api` and `apps/web` MUST NOT read `process.env` directly except inside env definition files (`src/env.ts`, `next.config.ts` edge cases documented in desig
+--- candidata: platform-redis-cache [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Shared Redis cache plumbing package
+  | The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > The monorepo MUST provide `@vkara/cache-redis` with reusable helpers for boolean (`1`/`0`) and JSON value caches on Redis, including batch `MGET` and pipelined `SETEX` writes.
+  > YouTube cache modules MUST continue to own key prefixes, TTL constants, and response validation logic. `@vkara/cache-redis` MUST NOT hard-code `youtube-embed:` or playlist key shapes.
+  > - **THEN** keys MUST remain `youtube-embed:{videoId}` with values `1` or `0`
+  > - **THEN** keys MUST remain `youtube-playlist-details:{listId}:{scope}` with TTL 3600 seconds
+  > - **THEN** keys MUST remain `youtube-channel:{channelId}` with TTL 86400 seconds
+  > ### Requirement: In-memory youtube continuation cache excluded
+  > Process-local `Map` caches for search/related continuations in `apps/api/src/modules/youtube/cache.ts` MUST NOT move into `@vkara/cache-redis` in this change.
+  > #### Scenario: Search continuation stays in-process
+--- candidata: platform-feature-flags [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: VKARA feature flags are env-backed
+  | Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+  > `VKARA_EMBED_PREFILTER_AT_LIST` MUST default to disabled (falsy) when unset, preserving current list endpoint behavior per `youtube-embed-playability` spec.
+  > - **THEN** it MUST use the shared embed env helper or `env` field produced by `@vkara/env`
+  > The system MUST define `VKARA_EXPERIMENTS` in `@vkara/env` with `FLAG_DOCS` metadata (default falsy, scope `both`, description for TikTok experiments gating).
+  > API code MUST use a typed helper (e.g. `isExperimentsEnabled()`) to mount TikTok plugins and MUST NOT register `POST /tiktok/search` when the flag is falsy.
+  > - **THEN** the TikTok Elysia plugin MUST NOT be mounted
+  > - **THEN** the TikTok search routes MUST be registered on the API server
+  > Product feature toggles MUST use the `VKARA_` prefix and be defined in `@vkara/env` zod schemas alongside `FLAG_DOCS` metadata (name, default, scope `api` | `web` | `both`, description).
+--- candidata: monorepo-package-boundaries [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Package layers and dependency direction
+  | Internal packages MUST follow dependency direction: **apps → domain → platform → tooling**. Domain packages MUST NOT depend on apps. Platform packages MUST NOT depend on domain packages.
+  > #### Scenario: Env package has no youtube imports
+  > - **WHEN** `@vkara/env` is typechecked
+  > - **THEN** it MUST NOT import from `@vkara/youtube`, `@vkara/room`, or deleted `shared-*` packages
+  > ### Requirement: shared packages removed at completion
+  > The packages `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` MUST be deleted from the workspace when this change is archived. No production code MAY import them.
+  > #### Scenario: Zero shared imports before archive
+  > - **THEN** ripgrep for `@vkara/shared-types`, `@vkara/shared-utils`, and `@vkara/shared-infra` across `apps/` and `packages/` MUST return zero matches
+  > - **THEN** they MUST NOT reference workspace dependencies on deleted `shared-*` packages
+
+===== P198 | Larusso/unity-version-manager PR #456 | capacidade do par: payload-format-detection
+PR: Add installation progress reporting
+arquivos ligados: uvm_install/src/sys/mac/pkg.rs
+--- linhas alteradas (18; mostrando até 40)
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Unpacking...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Extracting...");
++        }
++        if let Some(ref p) = self.progress {
++            p.set_message("Installing...");
++        }
+--- candidata: installation-progress [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Display download progress with metrics
+  | The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > ### Requirement: Display download progress with metrics
+  > The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > #### Scenario: Download progress updates during file transfer
+  > - **THEN** the system displays a progress bar showing bytes downloaded, total bytes, current speed in MB/s, and updates at least once per second
+  > #### Scenario: Multiple components show individual progress
+  > - **THEN** each component displays its own progress bar with individual download metrics
+  > - **THEN** the progress bar shows completion state and total time taken
+  > - **THEN** system displays a spinner with message indicating extraction is in progress

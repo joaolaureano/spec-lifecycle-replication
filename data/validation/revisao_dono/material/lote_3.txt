@@ -1,0 +1,1672 @@
+===== P061 | licht1stein/brepl PR #13 | capacidade do par: delimiter-validation
+PR: Add Stop hook support for Claude Code integration
+arquivos ligados: lib/installer.clj;test/installer_test.clj
+--- linhas alteradas (340; mostrando até 40)
+-            [cheshire.core :as json]))
++            [cheshire.core :as json]
++            [clojure.string :as str]))
++     :Stop [{:matcher ""
++             :hooks [{:type "command"
++                      :command (str "brepl hook stop" debug-flag)}]}]
++(defn brepl-hook?
++  "Check if a hook entry belongs to brepl."
++  [hook-entry]
++  (some #(str/starts-with? (:command %) "brepl hook")
++        (:hooks hook-entry)))
++(defn merge-hook-event
++  "Merge new brepl entries with existing non-brepl entries for a single event."
++  [existing-entries new-entries]
++  (let [non-brepl (remove brepl-hook? existing-entries)]
++    (into (vec non-brepl) new-entries)))
+-  "Merge new hooks with existing ones, avoiding duplicates."
++  "Merge brepl hooks with existing hooks, preserving non-brepl hooks."
+-  ;; For now, just replace with new hooks
+-  ;; In production, would do smarter merging
+-  new-hooks)
++  (reduce-kv
++   (fn [acc event-name new-entries]
++     (let [existing-entries (get acc event-name [])]
++       (assoc acc event-name (merge-hook-event existing-entries new-entries))))
++   existing-hooks
++   new-hooks))
++(def hooks-template
++  ";; brepl stop hooks configuration
++{:stop
++ [;; Example: Run tests via nREPL after Claude stops
++  ;; {:type :repl
++  ;;  :code (clojure.test/run-tests)
++  ;;  :required? true    ; Must pass - Claude retries until success
++  ;;  :max-retries 10    ; Give up after 10 attempts (0 = infinite)
++  ;;  :timeout 120}
++  ;; Example: Run linter via bash
++  ;; {:type :bash
++  ;;  :command \"clj-kondo --lint src\"
++  ;;  :required? false   ; Optional - inform on failure but don't retry
+--- candidata: stop-hooks [tasks+PR+termos]
+  | # stop-hooks Specification
+  | ## Purpose
+  | Enable user-configurable hooks that execute when Claude Code fires the Stop event, allowing automated test runs, validation checks, and cleanup operations after Claude finishes responding.
+  > # stop-hooks Specification
+  > Enable user-configurable hooks that execute when Claude Code fires the Stop event, allowing automated test runs, validation checks, and cleanup operations after Claude finishes responding.
+  > The system SHALL load stop hook definitions from `.brepl/hooks.edn` in the current working directory.
+  > #### Scenario: Load valid configuration
+  > Given Maya has created .brepl/hooks.edn with valid hook definitions
+  > And the file contains a :stop key with a vector of hook maps
+  > When brepl hook stop executes
+  > Then the hooks are loaded and executed in order
+--- candidata: file-evaluation [tasks+termos]
+  | # File Evaluation
+  | ## ADDED Requirements
+  | ### Requirement: Post-Edit File Evaluation
+  > After successful delimiter validation, the hook SHALL evaluate the entire edited file via nREPL and return warnings (not blocks) for errors by default.
+  > #### Scenario: Successful evaluation
+  > Given file `src/foo.clj` is edited and has valid syntax.
+  > And an nREPL server is running with `.nrepl-port` file present.
+  > 1. Resolve nREPL port (project-aware)
+  > 2. Execute file evaluation via brepl
+  > 4. Return success if no errors
+  > The edit is finalized successfully.
+--- candidata: hook-installation [termos]
+  | # hook-installation Specification
+  | ## Purpose
+  | TBD - created by archiving change add-hook-install. Update Purpose after archive.
+  > # hook-installation Specification
+  > TBD - created by archiving change add-hook-install. Update Purpose after archive.
+  > ### Requirement: Install Claude Code Hooks
+  > The system SHALL provide a command to install Claude Code hooks for automatic Clojure file validation.
+  > #### Scenario: Install basic hooks
+  > $ brepl hook install
+  > Installing Claude Code hooks in .claude/settings.local.json...
+  > Hooks installed successfully.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR adiciona suporte a uma nova operação de hook, conforme esperado para essa outra capacidade.
+
+===== P069 | 0verL1nk/PaperSage PR #28 | capacidade do par: middleware-architecture
+PR: feat: team architecture upgrade
+arquivos ligados: agent/runtime_agent.py
+--- linhas alteradas (4; mostrando até 40)
++    profile: Any | None = None,
++    deps: Any | None = None,
++        profile=profile,
++        deps=deps,
+--- candidata: a2a-task-execution [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified task execution backend contract
+  | The system SHALL execute teammate todos through a backend abstraction that normalizes local and A2A-backed task execution results.
+--- candidata: leader-teammate-orchestration [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Leader-managed team planning
+  | The system SHALL support a structured Leader-teammate orchestration flow that converts a team-mode request into an explicit team plan before teammate execution begins.
+--- candidata: orchestration-middleware [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Context Analysis
+  | The middleware SHALL analyze the conversation context to determine task complexity.
+--- candidata: team-state-machine [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Team runs use explicit workflow states
+  | The system SHALL track structured workflow state for each team run.
+--- candidata: todolist-middleware [PR]
+  | ## ADDED Requirements
+  | ### Requirement: LangChain TodoListMiddleware Integration
+  | The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Não identifiquei a spec responsável. O PR parece alterar o fluxo de agentes de IA, fora do escopo do middleware de arquitetura.
+
+===== P076 | aleris/woti PR #2 | capacidade do par: dynamic-tz-abbrev-year
+PR: add sub-hour navigation interval (60/30/15 min)
+arquivos ligados: src/tz_data.rs
+--- linhas alteradas (240; mostrando até 40)
+-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
++use chrono::{Datelike, NaiveDate, Offset, TimeZone, Utc};
++    // Curated fallback: insert canonical abbreviations for zones whose IANA
++    // tzdata format string is numeric (so chrono-tz exposes no named
++    // abbreviation, e.g. NPT for Asia/Kathmandu, MMT for Asia/Yangon).
++    // Walk modern IANA ids first so legacy aliases (e.g. Asia/Rangoon,
++    // NZ-CHAT) don't claim the slot through non-deterministic iteration.
++    let mut canonical_insert = |tz: Tz| {
++        for nd in [winter, summer] {
++            if let Some(dt) = tz.from_local_datetime(&nd).earliest() {
++                if dt.offset().abbreviation().is_some() {
++                    continue;
++                }
++                let utc_offset_minutes = dt.offset().fix().local_minus_utc() / 60;
++                if let Some(abbr) = canonical_abbreviation(tz.name(), utc_offset_minutes) {
++                    map.entry(abbr.to_uppercase()).or_insert(tz);
++                }
++            }
++        }
++    };
++    for &tz in CANONICAL_FALLBACK_PREFERRED {
++        canonical_insert(tz);
++    }
++    for &tz in &TZ_VARIANTS {
++        canonical_insert(tz);
++    }
++/// Modern IANA zones to consider first when registering the curated
++/// `canonical_abbreviation` fallback. Ensures the modern name wins over a
++/// legacy alias (e.g. `Asia/Yangon` over `Asia/Rangoon`).
++const CANONICAL_FALLBACK_PREFERRED: &[Tz] = &[
++    Tz::Asia__Kathmandu,
++    Tz::Asia__Yangon,
++    Tz::Asia__Tehran,
++    Tz::Asia__Kabul,
++    Tz::Asia__Yerevan,
++    Tz::Asia__Singapore,
++    Tz::Asia__Almaty,
++    Tz::Indian__Mahe,
++    Tz::Indian__Mauritius,
++    Tz::Indian__Reunion,
+--- candidata: cldr-hour-cycle [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Zone-to-country lookup table
+  | The system SHALL maintain a static `ZONE_COUNTRY` table mapping IANA timezone identifiers to ISO 3166-1 alpha-2 country codes, sourced from the IANA `zone1970.tab` file. The table MUST be sorted alpha
+  > The system SHALL maintain a static `ZONE_COUNTRY` table mapping IANA timezone identifiers to ISO 3166-1 alpha-2 country codes, sourced from the IANA `zone1970.tab` file. The table MUST be sorted alpha
+  > #### Scenario: Known zone resolves to country code
+  > - **WHEN** `uses_12h_clock` is called with `"America/New_York"`
+  > - **THEN** the zone resolves to country code `"US"` and the hour cycle for `US` is used
+  > #### Scenario: Known zone in multi-country entry
+  > - **THEN** the zone resolves to the first-listed country code `"AE"`
+  > The system SHALL maintain a static `TWELVE_HOUR_COUNTRIES` table listing ISO 3166-1 alpha-2 country codes whose preferred hour cycle is 12-hour, sourced from Unicode CLDR `supplemental/timeData` where
+  > #### Scenario: US timezone detected as 12h
+--- candidata: sub-hour-nav-interval [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  | The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > ### Requirement: Interval CLI flag accepts 60, 30, or 15 minutes
+  > The CLI SHALL accept an optional `--interval <minutes>` flag whose value is one of `60`, `30`, or `15`. The flag SHALL only be accepted when no subcommand is given (TUI launch path). Any other value S
+  > #### Scenario: Default interval is 60 minutes when nothing is configured
+  > - **THEN** the TUI launches with the navigation interval set to 60 minutes and renders identically to today (no tick glyphs, no minute markers)
+  > - **THEN** the TUI launches with the navigation interval set to 30 minutes
+  > - **THEN** the TUI launches with the navigation interval set to 15 minutes
+  > The TUI SHALL respond to the `i` key by cycling the active interval through the sequence `60 → 30 → 15 → 60`. The cycle SHALL re-render immediately on each press. The selected absolute time SHALL be p
+  > - **WHEN** the active interval is 60 minutes and the user presses `i`
+--- candidata: half-hour-timeline-indicator [PR]
+  | ## ADDED Requirements
+  | ### Requirement: TimelineParams carries timezone minute offset
+  | The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > ### Requirement: TimelineParams carries timezone minute offset
+  > The `TimelineParams` struct SHALL include an `offset_m` field representing the minute component (0, 30, or 45) of the timezone's UTC offset. It SHALL be computed from `now_tz.offset().fix().local_minu
+  > #### Scenario: Whole-hour timezone
+  > - **WHEN** a timezone has offset +5:00 (offset_m = 0)
+  > - **THEN** `TimelineParams.offset_m` is 0
+  > #### Scenario: Half-hour timezone
+  > - **WHEN** a timezone has offset +5:30 (offset_m = 30)
+  > - **THEN** `TimelineParams.offset_m` is 30
+--- candidata: hour-offset-indicator [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Relative offset label is displayed when selection is not current hour
+  | The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > ### Requirement: Relative offset label is displayed when selection is not current hour
+  > The system SHALL render a single indicator row below all timezone blocks that displays a human-readable string
+  > describing how many hours the selection is from the current time. The row SHALL only be visible when `hour_offset != 0`.
+  > - **WHEN** the user navigates 2 hours to the right (`hour_offset == 2`)
+  > - **THEN** the indicator row displays "in 2 hours"
+  > - **WHEN** the user navigates 3 hours to the left (`hour_offset == -3`)
+  > - **THEN** the indicator row displays "3 hours ago"
+  > - **WHEN** `hour_offset == 1`
+--- candidata: accelerated-nav [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Single-tap navigation unchanged
+  | A single left or right arrow key press SHALL move the timeline by exactly 1 hour in the corresponding direction, regardless of acceleration state.
+  > - **THEN** `hour_offset` decreases by 1
+  > - **THEN** `hour_offset` increases by 1
+  > When the user holds a left or right arrow key, the step size SHALL increase based on elapsed time since the first press in the current direction.
+  > - **AND** less than 400 ms has elapsed since the first press
+  > - **THEN** the first left step SHALL move 1 hour (acceleration restarts from zero)
+  > The acceleration state SHALL reset when the user releases the navigation key, detected by a poll timeout with no pending offset.
+  > When the user holds a left or right arrow key, the step size SHALL increase linearly based on elapsed time since the first press in the current direction.
+  > A single left or right arrow key press SHALL move the timeline by exactly 1 cell in the corresponding direction, regardless of acceleration state. A cell represents the active navigation interval (60,
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Não identifiquei a spec responsável. A mudança trata do fracionamento de tempo e pode ser classificada como omite ou como outra capacidade, conforme a delimitação do escopo.
+
+===== P083 | lueluelue12138/sharp-gui PR #16 | capacidade do par: local-photo-album-gallery
+PR: feat(video): 添加视频 3DGS 重建能力
+arquivos ligados: backend/paths.py;backend/security/access_control.py
+--- linhas alteradas (18; mostrando até 40)
++    video_reconstruction_folder: str
++    video_reconstruction_jobs_folder: str
++    video_reconstruction_folder = os.path.join(workspace_folder, ".video-reconstruction")
++    video_reconstruction_jobs_folder = os.path.join(video_reconstruction_folder, "jobs")
++        video_reconstruction_folder=video_reconstruction_folder,
++        video_reconstruction_jobs_folder=video_reconstruction_jobs_folder,
++    os.makedirs(paths.video_reconstruction_jobs_folder, exist_ok=True)
++    app.config["VIDEO_RECONSTRUCTION_FOLDER"] = paths.video_reconstruction_folder
++    app.config["VIDEO_RECONSTRUCTION_JOBS_FOLDER"] = paths.video_reconstruction_jobs_folder
+-    if path in {"/api/generate", "/api/photo-conversions"}:
++    if path == "/api/video-reconstructions/status":
++        return ACCESS_UNLOCKED
++    if path in {
++        "/api/generate",
++        "/api/photo-conversions",
++        "/api/video-reconstructions",
++        "/api/video-reconstructions/upload",
++    }:
+--- candidata: local-video-gallery-preview [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: The system SHALL discover supported local video files
+  | The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > ### Requirement: The system SHALL discover supported local video files
+  > The system SHALL discover supported video files inside configured local album roots and expose them as stable media items without revealing absolute filesystem paths.
+  > #### Scenario: Album contains supported video files
+  > - **WHEN** a configured album contains supported video files
+  > - **THEN** the album media listing SHALL include those videos with stable IDs, names, timestamps, sizes, media type, preview URL, download URL, and playback URL
+  > #### Scenario: Video playback URL is generated
+  > - **WHEN** the system returns a playback URL for a video item
+  > - **THEN** the URL SHALL use a path-style route with the video ID, a short-lived signed token, and a safe filename suffix
+--- candidata: backend-modular-architecture [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 后端 SHALL 保持现有入口兼容
+  | 后端模块化重构后，系统 SHALL 保持现有启动入口和 Flask 应用导入方式可用。
+  > - **WHEN** 远程已认证客户端提交 `/api/generate` 或 `/api/photo-conversions`
+  > - **WHEN** 远程客户端向 `POST /api/photo-albums/<album_id>/uploads` 上传照片
+  > - **WHEN** 系统扫描相册、解析 photo id、生成照片缩略图或更新照片元数据
+  > #### Scenario: 照片图库解析 photo id
+  > - **WHEN** 系统根据 photo id 提供照片列表、缩略图、原图、下载或转换
+  > - **WHEN** 系统接收 `POST /api/photo-albums/<album_id>/uploads` 的 multipart/form-data 文件
+  > - **AND** 系统 SHALL 保持现有批量上传上限和 `success`、`uploaded`、`failed`、`album`、`error` 响应字段语义
+  > - **THEN** 文档 SHALL 描述后端包结构、app factory、routes/services/security/config/paths 的职责
+--- candidata: video-3dgs-reconstruction [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 系统 SHALL 从本地视频创建重建任务
+  | 系统 SHALL 允许具备生成权限的用户从已配置本地相册中的受支持视频创建静态 3DGS 重建任务，并且不得向前端暴露源视频的绝对文件系统路径。
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+  > # video-3dgs-reconstruction Specification
+  > Define the local-video-to-3DGS reconstruction workflow, including task creation, runtime pipeline behavior, dependency diagnostics, output compatibility, and UI requirements.
+  > - **AND** 如果源视频来自拖入上传缓存且没有成功模型引用，系统 SHALL 删除 `.video-reconstruction/uploads` 下对应源视频副本
+--- candidata: windows-portable-release-packages [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Windows Release 必须提供按 GPU 目标区分的完整便携 ZIP 包
+  | Windows Release 必须提供 Windows x64 GPU 完整便携 ZIP 包的外部下载链接，并按支持的 NVIDIA 运行时目标拆分；便携包路径不得要求普通用户再运行在线依赖安装脚本。
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+  > - **WHEN** 用户在解压后的 `cu128-rtx50-video-recon` 包目录运行 `portable-run.bat`
+  > - **THEN** 启动器必须优先把包内 `.video-reconstruction-env\Scripts`、`.video-reconstruction-env\colmap\bin` 和包内 `ffmpeg/ffprobe` 目录加入 `PATH`
+  > - **WHEN** 用户把解压后的 `cu128-rtx50-video-recon` 包目录移动到另一个 Windows 路径或另一个 Windows 用户目录
+  > - **WHEN** 打包流程校验 `cu128-rtx50-video-recon` 包
+  > - **THEN** Release 必须在该包可用时链接到 `cu128-rtx50-video-recon` 完整便携 ZIP
+  > - **THEN** 脚本必须生成 `cu128-rtx50-video-recon` 完整 ZIP
+--- candidata: feedforward-reconstruction-engine [PR]
+  | > **状态：已废弃（2026-06-24）**
+  | >
+  | > 本规格仅作为探索记录保留，不再作为当前实现要求。废弃原因：在目标 Windows + RTX 5070 Ti Laptop 12GB 环境验证中，Pi3/Pi3X 路线对多帧一次性推理的显存压力过高并出现 OOM；降低帧数后的 smoke 产物质量异常，无法达到稳定路线的可验收效果；长视频场景需要覆盖足够视角，当前方案的帧预算与质量目标矛盾；同时权重许可/分发要求不适合作为默认能力。当前分支回
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR adiciona uma capacidade de reconstrução 3D a partir de vídeo.
+
+===== P094 | aehrc/pathling PR #2551 | capacidade do par: r-search-to-column
+PR: v9.4.0
+arquivos ligados: lib/R/R/context.R;lib/R/tests/testthat/test-context.R
+--- linhas alteradas (174; mostrando até 40)
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
+--- candidata: r-evaluate-fhirpath [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  | The R library SHALL provide an exported function
+  > ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  > `pathling_evaluate_fhirpath(pc, resource_type, resource_json, fhirpath_expression, context_expression, variables)`
+  > that invokes the Java `PathlingContext.evaluateFhirPath()` method via sparklyr's
+  > `j_invoke` and returns an R list containing the typed results and the expected
+  > The `context_expression` and `variables` parameters SHALL be optional, defaulting
+  > #### Scenario: Simple string expression
+  > - **WHEN** `pathling_evaluate_fhirpath(pc, "Patient", patient_json, "name.family")` is called with a Patient JSON containing family name "Smith"
+  > - **THEN** the returned list contains `results` with one entry having `type = "string"` and `value = "Smith"`, and `expectedReturnType = "string"`
+--- candidata: fhirpath-evaluation-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Evaluate FHIRPath expression against a single resource
+  | The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > ### Requirement: Evaluate FHIRPath expression against a single resource
+  > The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > string), a FHIRPath expression string, an optional context expression string,
+  > and optional variables, and returns a list of typed result values.
+  > The method SHALL use the existing Pathling FHIRPath engine (Spark-based) to
+  > evaluate the expression, encoding the resource into a one-row Dataset
+  > internally.
+  > #### Scenario: Simple expression evaluation
+--- candidata: fhirpath-lab-server [PR]
+  | ## ADDED Requirements
+  | ### Requirement: POST /$fhirpath-r4 endpoint
+  | The server SHALL expose a `POST /$fhirpath-r4` endpoint that accepts a FHIR
+  > Parameters resource as the request body (Content-Type: `application/json`) and
+  > returns a FHIR Parameters resource as the response.
+  > #### Scenario: Successful expression evaluation
+  > resource containing an `expression` and a `resource` parameter
+  > - **THEN** the server returns HTTP 200 with a FHIR Parameters resource
+  > containing the evaluation results
+  > #### Scenario: Missing required expression parameter
+  > - **WHEN** a POST request is sent without an `expression` parameter
+--- candidata: r-fhirpath-helpers [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  | The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  > The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > #### Scenario: Filter patients by gender using FHIRPath
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows where gender equals male
+  > #### Scenario: Filter with combined boolean expression
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male' and birthDate > @1970-01-01")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows matching both conditions
+--- candidata: fhirpath-to-column-r [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pc_fhirpath_to_column function
+  | The R library SHALL provide an exported function `pc_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_inv
+  > The R library SHALL provide an exported function `pc_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_inv
+  > #### Scenario: Boolean expression returns a Column for filtering
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to filter Patient rows
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "name.given.first()")` is called
+  > - **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to extract values
+  > #### Scenario: Invalid expression raises an error
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "!!invalid!!")` is called
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de operações colunares em Spark; o PR adiciona operações em outra camada de domínio, fora do escopo de search-to-column.
+
+===== P114 | kalbasit/ncps PR #1406 | capacidade do par: narinfo-concurrent-fetch
+PR: feat(server): add Bearer token auth for GET/HEAD routes
+arquivos ligados: pkg/server/server.go
+--- linhas alteradas (49; mostrando até 40)
++	"crypto/sha256"
++	"crypto/subtle"
++	getToken        string
++// SetGetToken configures a Bearer token required to access GET and HEAD routes.
++// When non-empty, requests without a matching Authorization: Bearer <token> header
++// are rejected with 401 Unauthorized. The /healthz and /metrics routes are always
++// exempt.
++func (s *Server) SetGetToken(token string) { s.getToken = token }
++	s.router.Use(s.requireGetToken)
++// requireGetToken is a middleware that enforces Bearer token authentication for
++// GET and HEAD requests when s.getToken is non-empty. Infrastructure endpoints
++// (/healthz and /metrics) are always exempt regardless of configuration.
++func (s *Server) requireGetToken(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if s.getToken == "" {
++			next.ServeHTTP(w, r)
++			return
++		}
++		// Only apply to GET and HEAD; other methods have their own guards.
++		if r.Method != http.MethodGet && r.Method != http.MethodHead {
++			next.ServeHTTP(w, r)
++			return
++		}
++		// Infrastructure routes are always exempt.
++		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
++			next.ServeHTTP(w, r)
++			return
++		}
++		authHeader := r.Header.Get("Authorization")
++		const bearerPrefix = "Bearer "
++		// Hash both tokens to a fixed length before the constant-time compare.
++		// subtle.ConstantTimeCompare returns early when the slice lengths differ,
++		// so comparing the raw variable-length tokens directly would leak the
++		// secret's length via a timing side-channel. SHA-256 digests are always
++		// 32 bytes, so the comparison time is independent of both token contents
++		// and length.
++		presented := strings.TrimPrefix(authHeader, bearerPrefix)
++		presentedHash := sha256.Sum256([]byte(presented))
++		expectedHash := sha256.Sum256([]byte(s.getToken))
++		if !strings.HasPrefix(authHeader, bearerPrefix) ||
+--- candidata: read-path-auth [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Optional Bearer token for read paths
+  | The server SHALL support an optional read-path authentication token, configured
+  > ### Requirement: Optional Bearer token for read paths
+  > The server SHALL support an optional read-path authentication token, configured
+  > via the `--cache-get-token` flag (env `CACHE_GET_TOKEN`). When the token is
+  > non-empty, the server SHALL require an `Authorization: Bearer <token>` header
+  > that matches the configured token on every `GET` and `HEAD` request, and SHALL
+  > reject non-matching requests with `401 Unauthorized`. When the token is empty
+  > (the default), the server SHALL serve read paths without authentication,
+  > #### Scenario: No token configured allows anonymous reads
+--- candidata: api-surface [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: `HEAD /build-trace-v2/{drvName}/{outputName}.doi` endpoint
+  | The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > The system SHALL expose a HEAD endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns `200 OK` if the entry exists or `404 Not Found` if it does not. No body is returned.
+  > The system SHALL expose a GET endpoint at `/build-trace-v2/{drvName}/{outputName}.doi` that returns the stored build trace entry as JSON.
+  > - `500 Internal Server Error` — database error.
+  > The system SHALL expose a PUT endpoint under the `/upload` prefix for storing build trace entries. Authorization follows the same `putPermitted` boolean gate used by narinfo and NAR uploads.
+  > **Request:** `Content-Type: application/json`, body is a build trace v3 JSON object.
+  > **Authorization:** `putPermitted == false` (the default) causes an immediate `405 Method Not Allowed` response before any body is read. No per-request authentication. (Consistent with existing narinfo
+  > - `400 Bad Request` — malformed JSON or URL/body mismatch.
+  > - `405 Method Not Allowed` — PUT not permitted.
+--- candidata: cdc-chunking [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: CDC ingestion MUST validate total byte count before committing
+  | When CDC chunking completes (the chunker signals end-of-stream by closing `chunksChan`),
+  > ### Requirement: CDC ingestion MUST validate total byte count before committing
+  > the system SHALL compare the total accumulated uncompressed bytes (`totalSize`) against
+  > #### Scenario: Early-EOF truncation is rejected at commit
+  > - **WHEN** the decompressed NAR stream ends before `fileSize` bytes are consumed (e.g., upstream HTTP/2 stream drops with GOAWAY)
+  > - **THEN** `storeNarWithCDCFromReader` returns a non-nil error
+  > - **WHEN** the decompressed NAR stream produces exactly `fileSize` uncompressed bytes before EOF
+  > - **AND** `UpdateNarFileTotalChunks` is called regardless of how many bytes were chunked
+  > - **WHEN** `storeNarWithCDCFromReader` returns a non-nil error inside the CDC goroutine
+--- candidata: nar-concurrent-streaming [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Concurrent NAR streaming goroutines MUST terminate within a bounded time
+  | When multiple clients concurrently request the same NAR hash and one client's context is
+  > (without waiting for the next `cond.Broadcast()`) and the streaming goroutines for all
+  > - **THEN** client A's streaming goroutine MUST exit within a bounded time (≤ a few milliseconds after cancellation), without requiring a broadcast from the download goroutine
+  > #### Scenario: Non-cancelled client receives all bytes after sibling cancellation
+  > - **THEN** client B's reader SHALL receive all bytes of the NAR content
+  > - **AND** `io.ReadAll` on client B's reader SHALL complete without hanging
+  > - **AND** the streaming goroutine has finished forwarding all bytes to the client pipe
+  > - **AND** the storage goroutine SHALL continue to completion independently
+  > #### Scenario: Context-cancelled client exits loop without broadcast
+--- candidata: data-model [tasks]
+  | # Data Model Specification (Delta)
+  | ## MODIFIED Requirements
+  | ### Requirement: Engine selection by URL scheme
+  > #### Scenario: Schema parity at apply time
+  > - **THEN** the diff SHALL be empty for SQLite, PostgreSQL, and MySQL — proving the Ent schemas reproduce the documented shape exactly
+  > **Reason**: sqlc is replaced by Ent. Per-engine Querier interfaces (`sqlitedb.Querier`, `postgresdb.Querier`, `mysqldb.Querier`) and the `sqlc.yaml` configuration are removed in favour of a single Ent
+  > **Reason**: Type overrides previously declared in `sqlc.yaml` (`nar_files.file_size → uint64`, `chunks.size → uint32`, `chunks.compressed_size → uint32`, `nar_files.chunking_started_at → database/sql.
+  > **Migration**: Apply each type override on the corresponding Ent field declaration in `ent/schema/<entity>.go`. Ent's default field naming already produces `NarInfoID` and `URL` for the snake_case col
+  > **Reason**: The `sqlc generate` + `go generate ./pkg/database` workflow is replaced by `task ent:generate` (or `go generate ./ent/...` directly), which runs `go tool ent generate` to refresh the commi
+  > **Migration**: No code change required. The rule is removed from `CLAUDE.md` and replaced with a note that Atlas controls quoting in generated migrations and that SQL-only stubs follow per-dialect con
+  > **Migration**: `db/migrations/{sqlite,postgres,mysql}/*` are translated mechanically to `migrations/<dialect>/*` with preserved timestamps and Goose-format header directives. The `nix/dbmate-wrapper/`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de concorrência; a mudança trata de tokens e possivelmente pertence à autenticação.
+
+===== P124 | HiroyukiFuruno/KatanA PR #279 | capacidade do par: font-settings
+PR: release: v0.22.9
+arquivos ligados: crates/katana-core/src/update/installer.rs
+--- linhas alteradas (2; mostrando até 40)
++            let parent_pid = std::process::id().to_string();
++                .arg(&parent_pid)
+--- candidata: diagram-block-preview [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: ダイアグラムプレビューは現在のテーマスナップショットを使用する
+  | システムは、アプリ起動時点のスナップショットや dark/light 切り替えだけに依存するのではなく、現在のテーマスナップショットに基づいてダイアグラムプレビューを描画しなければならない（SHALL）。
+--- candidata: auto-update [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Update download URL must use the asset name actually published by the release pipeline
+  | システムは、自動アップデート時のアセットダウンロード URL を、`.github/workflows/build-and-release.yml` が GitHub Release に publish しているアセット名と完全に一致させなければならない（MUST）。
+--- candidata: desktop-platform-support [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: KatanA は対応 desktop OS で主要フローを起動できる
+  | システムは、macOS、Windows x86_64、Linux x86_64 の各 OS で、workspace、editor、preview を含む主要フローを起動できなければならない（MUST）。
+--- candidata: desktop-release-distribution [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Release は対応 OS ごとの artifact を生成する
+  | システムは、対応 desktop OS ごとに配布可能な release artifact を生成しなければならない（MUST）。
+--- candidata: diagnostic-fix-preview [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Preview Diagnostic Fixes before applying
+  | The system SHALL provide a file-level diff review flow before applying manual or automated fixes that modify file content.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de configurações de fontes; o PR altera instalação e atualização no Windows.
+
+===== P136 | denisfl/inbox PR #62 | capacidade do par: wiki-links
+PR: Add tests for foreign key enforcement and backup service
+arquivos ligados: config/routes.rb
+--- linhas alteradas (2; mostrando até 40)
++    # Health check (no auth required)
++    get "health", to: "health#show"
+--- candidata: health-check-api [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Health check endpoint
+  | The system SHALL provide a `GET /api/health` endpoint that returns the status of each external integration.
+  > ### Requirement: Health check endpoint
+  > The system SHALL provide a `GET /api/health` endpoint that returns the status of each external integration.
+  > #### Scenario: All services healthy
+  > - **WHEN** a client requests `GET /api/health` and all services are reachable
+  > - **WHEN** a client requests `GET /api/health` and the Transcriber is unreachable
+  > - **WHEN** a client requests `GET /api/health` and the database is unreachable
+  > #### Scenario: Health check timeout
+  > - **WHEN** a health check probe to any service exceeds 5 seconds
+--- candidata: external-service-client [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable timeouts for all external HTTP calls
+  | The system SHALL enforce explicit timeouts on every HTTP call to external services.
+--- candidata: backup-health-check [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Backup status in health check
+  | The system SHALL expose the last backup status through the health-check endpoint.
+  > ### Requirement: Backup status in health check
+  > The system SHALL expose the last backup status through the health-check endpoint.
+  > - **WHEN** a client requests `GET /api/health`
+  > ### Requirement: Backup status in health check
+  > The system SHALL expose the last backup status through the health-check endpoint.
+  > - **WHEN** a client requests `GET /api/health`
+--- candidata: data-model-docs [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AGENTS.md constraints
+  | `AGENTS.md` SHALL document project constraints that AI agents must follow.
+  > - **THEN** it SHALL include: version constraints (no downgrades), forbidden patterns (no emoji, no silent fallbacks), required patterns (explicit error handling, ENV-based config), testing requirement
+--- candidata: document-services [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Document creation service
+  | Document creation logic SHALL be encapsulated in `Documents::CreateService`, callable from controllers, Telegram handler, and API.
+  > - **WHEN** `Documents::CreateService.call(title: "")` is called with missing required fields
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff cria a rota pública GET /health, fora do escopo dos wiki-links.
+
+===== P152 | mckinsey/agents-at-scale-ark PR #2066 | capacidade do par: query-extension-docs
+PR: feat(api): implement K8s user impersonation for SSO-authenticated requests
+arquivos ligados: lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/client.py
+--- linhas alteradas (20; mostrando até 40)
++from ark_sdk.impersonation import ImpersonationConfig
+-def get_client(namespace: Optional[str], version: str):
+-    # If namespace is None, get it from context
++def _build_headers(impersonation: Optional[ImpersonationConfig] = None) -> Optional[dict]:
++    if impersonation is None:
++        return None
++    headers = {"Impersonate-User": impersonation.username}
++    if impersonation.groups:
++        headers["Impersonate-Group"] = ",".join(impersonation.groups)
++    return headers
++def get_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
+-    return clazz(namespace)
++    return clazz(namespace, default_headers=_build_headers(impersonation))
+-async def with_ark_client(namespace: Optional[str], version: str):
++async def with_ark_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
++        impersonation: Optional impersonation config for K8s user identity
+-    ark_client = get_client(namespace, version)
+-    yield ark_client
++    ark_client = get_client(namespace, version, impersonation)
++    yield ark_client
+--- candidata: api-impersonation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: JWT claim extraction and request state propagation
+  | The auth middleware SHALL capture the decoded JWT payload returned by `TokenValidator.validate_token()` and store user identity on `request.state.user_identity` as a structured object containing `user
+  > The auth middleware SHALL capture the decoded JWT payload returned by `TokenValidator.validate_token()` and store user identity on `request.state.user_identity` as a structured object containing `user
+  > The username SHALL be extracted from the claim specified by `IMPERSONATION_USERNAME_CLAIM` (default: `email`). The groups SHALL be extracted from the claim specified by `IMPERSONATION_GROUPS_CLAIM` (d
+  > Claims SHALL be extracted regardless of whether impersonation is enabled, to support future authorization features.
+  > #### Scenario: JWT with email and groups claims
+  > - **WHEN** a request arrives with a valid JWT containing `{"email": "jane@acme.com", "groups": ["team-a", "admins"]}`
+  > - **AND** `IMPERSONATION_USERNAME_CLAIM=email` and `IMPERSONATION_GROUPS_CLAIM=groups`
+  > - **THEN** `request.state.user_identity.username` is `"jane@acme.com"`
+  > - **AND** `request.state.user_identity.groups` is `["team-a", "admins"]`
+--- candidata: ark-api-rbac [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: ark-api chart RBAC configuration
+  | The ark-api Helm chart SHALL create only namespace-scoped RBAC resources (`Role` + `RoleBinding`). The chart SHALL NOT include any `ClusterRole`, `ClusterRoleBinding`, or toggle for cluster-wide permi
+  > The ark-api Helm chart SHALL create only namespace-scoped RBAC resources (`Role` + `RoleBinding`). The chart SHALL NOT include any `ClusterRole`, `ClusterRoleBinding`, or toggle for cluster-wide permi
+  > - **THEN** only a namespace-scoped `Role` and `RoleBinding` are created
+  > The `GET /api/v1/namespaces` endpoint SHALL return a list of namespaces the service account can see. When the service account lacks cluster-level permission to list namespaces, the endpoint SHALL retu
+  > #### Scenario: Service account with namespace list permission
+  > - **WHEN** the service account has a ClusterRole granting `list` on `namespaces`
+  > - **AND** a client calls `GET /api/v1/namespaces`
+  > - **THEN** the endpoint returns all namespaces the service account can list
+  > #### Scenario: Service account without namespace list permission
+--- candidata: mcp-server-resolution [tasks]
+  | # MCP Server Resolution for Named Executors
+  | ## ADDED Requirements
+  | ### Requirement: MCPServerConfig type on ExecutionEngineRequest
+  > Each `MCPServerConfig` SHALL contain `name`, `url`, `transport`, `timeout`, `headers`, and `tools` fields. All values SHALL be fully resolved — no secret references, configmap references, or service r
+  > #### Scenario: MCPServer with secret-based headers
+  > - **WHEN** an MCPServer CRD has headers referencing Kubernetes secrets
+  > - **THEN** the `MCPServerConfig.headers` SHALL contain the resolved plaintext values
+  > If an MCPServer CRD cannot be found or its address/headers cannot be resolved, the server SHALL be skipped with a warning log. Other servers SHALL still be included.
+  > Each `MCPServerConfig` SHALL contain `name`, `url`, `transport`, `timeout`, `headers`, and `tools` fields. All values SHALL be fully resolved — no secret references, configmap references, or service r
+  > #### Scenario: MCPServer with secret-based headers
+  > - **WHEN** an MCPServer CRD has headers referencing Kubernetes secrets
+--- candidata: mcp-auth-ark-api-orchestration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: ark-api exposes POST /auth/start to initiate an authorization flow
+  | ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > | 404 | MCPServer not found in the resolved namespace | this requirement (scenario below) |
+  > - **WHEN** `POST /api/v1/mcp-servers/{name}/auth/start` is called with `{name}` referencing a non-existent MCPServer in the resolved namespace
+  > The four auth endpoints (`auth/start`, `auth/callback`, `auth/status`, `auth/logout`) SHALL NOT introduce a new inbound-authentication contract. They inherit the same trust boundary as every other rou
+  > - ark-api SHALL create the Secret in the resolved namespace with `type: Opaque`, an empty `data` block, and the label `ark.mckinsey.com/mcpserver: <mcp-server-name>`. If a Secret with the default name
+  > - **THEN** ark-api SHALL create a Secret named `<name>-oauth` in the same namespace with `type: Opaque`, the `ark.mckinsey.com/mcpserver: <name>` label, and an empty `data` block
+  > - **AND** a Secret named `<name>-oauth` already exists in the same namespace with the `ark.mckinsey.com/mcpserver: <name>` label (possibly empty `data`, possibly partial DCR credentials from a prior f
+  > - **AND** a Secret named `cloudflare-oauth` exists in the same namespace WITHOUT the `ark.mckinsey.com/mcpserver: cloudflare` label (used in the namespace for an unrelated purpose)
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de documentação; o PR implementa autenticação e recursos de Kubernetes.
+
+===== P180 | aserowy/yeet PR #297 | capacidade do par: devops
+PR: directory icon plugin
+arquivos ligados: yeet-lua/src/hook.rs
+--- linhas alteradas (79; mostrando até 40)
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    if let Err(err) =
+-        try_invoke_on_window_change(lua, viewport_paths, viewports, preview_is_directory)
+-    {
++    if let Err(err) = try_invoke_on_window_change(lua, viewport_paths, viewports, buffer_types) {
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    ctx.set("preview_is_directory", preview_is_directory)?;
+-    for (key, path) in viewport_keys.iter().zip(viewport_paths.iter()) {
+-        if let Some(p) = path {
+-            if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++    for (i, (key, path)) in viewport_keys.iter().zip(viewport_paths.iter()).enumerate() {
++        if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++            if let Some(p) = path {
++            if let Some(bt) = buffer_types[i] {
++                subtable.set("buffer_type", bt)?;
++            }
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-    fn on_window_change_preview_is_directory_true() {
++    fn on_window_change_preview_buffer_type_directory() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            "prefix_column_width should be 2 when preview_is_directory is true"
++            "prefix_column_width should be 2 when preview buffer_type is directory"
+-    fn on_window_change_preview_is_directory_false() {
++    fn on_window_change_preview_buffer_type_content() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            false,
++            [Some("directory"), Some("directory"), Some("content")],
+-            "prefix_column_width should be 0 when preview_is_directory is false"
++            "prefix_column_width should be 0 when preview buffer_type is content"
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+--- candidata: lua [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Global y table is exposed to Lua
+  | The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > #### Scenario: y.plugin subtable is accessible in init.lua
+  > The system SHALL expose a `y.hook` table in the Lua environment. Each hook name (`on_window_create`, `on_window_change`, `on_bufferline_mutate`) SHALL be a Lua table with an `:add()` method for regist
+  > - **THEN** `y.hook` SHALL be a table with `on_window_create`, `on_window_change`, and `on_bufferline_mutate` as hook objects supporting `:add()`
+  > #### Scenario: User registers on_window_change callback
+--- candidata: plugins/directory-icons [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Plugin sets prefix column width to 2
+  | The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > #### Scenario: Plugin sets prefix width on parent and current at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is set to `2` on parent and current panes only
+  > #### Scenario: Plugin does not set preview prefix width at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is NOT set on the preview pane by `on_window_create`
+  > #### Scenario: Plugin sets preview prefix width for directory preview via on_window_change
+--- candidata: on-window-change-hook [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  | The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  > The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > #### Scenario: Preview changes from directory to file
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a directory to a file
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == false`
+  > #### Scenario: Preview changes from file to directory
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a file to a directory
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == true`
+--- candidata: buffer [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Line wrapping
+  | Buffers SHALL support a word wrapping mode that breaks long lines at word boundaries to fit within the viewport width.
+  > - Indent continuation lines to align with the content column of the first line
+  > - **WHEN** a window is created before any directory-icons hook updates width
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook
+  > #### Scenario: Non-directory buffer can represent icon segment
+  > - **WHEN** a non-directory buffer line is represented through `@yeet-buffer`
+  > The directory window SHALL use shared `@yeet-buffer` icon-column rendering across all three of its buffer instances rather than window-specific icon drawing logic.
+  > #### Scenario: Three directory buffers share icon-column path
+  > - **WHEN** a directory window renders its three `@yeet-buffer` instances
+--- candidata: directory-icons-plugin [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin owns all icon identification and text color logic
+  | The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The plugin SHALL check the buffer type via the `ctx.buffer.type` field (from the read-only `buffer` metadata object, populated from the `BufferType` enum's string representation) provided in each `on_
+  > #### Scenario: Plugin processes directory buffer entries
+  > - **WHEN** the hook fires with `ctx.buffer.type` equal to `"directory"`
+  > The plugin SHALL determine whether an entry is a directory by checking if the content string ends with a trailing slash (`/`). No separate `is_directory` flag is needed.
+  > #### Scenario: Plugin identifies directory by trailing slash
+  > - **WHEN** the hook receives a bufferline whose content ends with `/`
+  > - **THEN** the plugin treats the entry as a directory and uses directory icon resolution
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec é técnica; o PR altera a UI.
+
+===== P192 | huytdps13400/react-native-ssl-manager PR #5 | capacidade do par: android-pinned-client-api
+PR: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI
+arquivos ligados: scripts/postinstall.js
+--- linhas alteradas (36; mostrando até 40)
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+--- candidata: expo-plugin [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Expo Plugin Registration
+  | The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > - **THEN** the plugin uses `ssl_config.json` from the project root
+  > - **WHEN** the plugin is added as `["react-native-ssl-manager", { "sslConfigPath": "./custom/path.json" }]`
+  > The Expo plugin SHALL automatically add the `ssl_config.json` file to the iOS Xcode project bundle resources during prebuild.
+  > The Expo plugin SHALL automatically copy the `ssl_config.json` file to the Android `assets` directory and ensure the INTERNET permission is present in `AndroidManifest.xml` during prebuild.
+  > The Expo config plugin and build scripts SHALL allow the Network Security Config
+  > - **WHEN** the plugin is configured with `pinExpiration: "2027-12-31"`
+  > - **THEN** the generated `network_security_config.xml` uses that expiration date
+--- candidata: ssl-pinning-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Set SSL Pinning State
+  | The library SHALL export a `setUseSSLPinning(usePinning: boolean): Promise<void>` function that enables or disables SSL certificate pinning at runtime by persisting the state to native storage (UserDe
+  > #### Scenario: App restart required
+  > - `SslPinningConfig`: an interface with a `sha256Keys` property mapping domain strings to arrays of SHA-256 pin strings
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > ### Requirement: TrustKit initialized at most once per process
+  > The iOS implementation SHALL initialize TrustKit at most once per process and
+  > optional `enforcePinning` flag so pinning can degrade gracefully and avoid a
+  > - **WHEN** `enforcePinning` is `false`
+--- candidata: android-network-security-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: XML Generation from SSL Config
+  | The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > #### Scenario: Generate XML from valid ssl_config.json
+  > - **WHEN** `ssl_config.json` contains domains with SHA-256 pins
+  > - **THEN** the library generates `res/xml/network_security_config.xml` with corresponding `<domain-config>` and `<pin-set>` entries
+  > - **WHEN** `ssl_config.json` contains `api.example.com` with 2 pins and `api.dev.example.com` with 1 pin
+  > - **THEN** the generated XML contains two `<domain-config>` blocks, one for each domain
+  > - **WHEN** XML is generated
+  > #### Scenario: ssl_config.json not found
+--- candidata: ios-urlsession-documentation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: iOS Networking Stack Coverage Documentation
+  | The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff altera a geração do XML Android, fora do escopo da API do cliente OkHttp.
+
+===== P206 | langoai/lango PR #41 | capacidade do par: p2p-owner-shield
+PR: buyer-side auto-payment, trust-based post-pay, and settlement service
+arquivos ligados: internal/p2p/paygate/gate.go
+--- linhas alteradas (97; mostrando até 40)
++	// StatusPostPayApproved means the peer has high enough trust to defer
++	// payment until after tool execution (post-pay).
++	StatusPostPayApproved ResultStatus = "postpay_approved"
+-	Status     ResultStatus            `json:"status"`
+-	Auth       *eip3009.Authorization  `json:"auth,omitempty"`
+-	PriceQuote *PriceQuote             `json:"priceQuote,omitempty"`
+-	Reason     string                  `json:"reason,omitempty"`
++	Status       ResultStatus           `json:"status"`
++	Auth         *eip3009.Authorization `json:"auth,omitempty"`
++	PriceQuote   *PriceQuote            `json:"priceQuote,omitempty"`
++	Reason       string                 `json:"reason,omitempty"`
++	SettlementID string                 `json:"settlementId,omitempty"`
+-	PricingFn PricingFunc
+-	LocalAddr string
+-	ChainID   int64
+-	USDCAddr  common.Address
+-	RPCClient *ethclient.Client
+-	Logger    *zap.SugaredLogger
++	PricingFn    PricingFunc
++	ReputationFn ReputationFunc
++	TrustCfg     TrustConfig
++	LocalAddr    string
++	ChainID      int64
++	USDCAddr     common.Address
++	RPCClient    *ethclient.Client
++	Logger       *zap.SugaredLogger
+-	pricingFn PricingFunc
+-	localAddr string
+-	chainID   int64
+-	usdcAddr  common.Address
+-	rpcClient *ethclient.Client
+-	logger    *zap.SugaredLogger
++	pricingFn    PricingFunc
++	reputationFn ReputationFunc
++	trustCfg     TrustConfig
++	ledger       *DeferredLedger
++	localAddr    string
++	chainID      int64
++	usdcAddr     common.Address
++	rpcClient    *ethclient.Client
+--- candidata: trust-payment-tiers [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Post-pay for high-trust peers
+  | The payment gate SHALL grant post-pay status to peers whose reputation score is strictly greater than the configured `PostPayMinScore` threshold (default: 0.8). Post-pay means the tool executes first 
+  > ### Requirement: Post-pay for high-trust peers
+  > The payment gate SHALL grant post-pay status to peers whose reputation score is strictly greater than the configured `PostPayMinScore` threshold (default: 0.8). Post-pay means the tool executes first 
+  > #### Scenario: High-trust peer gets post-pay
+  > - **WHEN** a peer with trust score 0.9 invokes a paid tool
+  > - **THEN** the gate returns `StatusPostPayApproved` with a non-empty `SettlementID`
+  > #### Scenario: Score exactly at threshold stays prepay
+  > - **WHEN** a peer with trust score exactly 0.8 invokes a paid tool
+  > - **THEN** the gate returns `StatusPaymentRequired` (prepay path)
+--- candidata: p2p-settlement [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Event-driven settlement trigger
+  | The settlement service SHALL subscribe to `ToolExecutionPaidEvent` from the event bus and process settlements asynchronously in a separate goroutine.
+  > ### Requirement: Event-driven settlement trigger
+  > The settlement service SHALL subscribe to `ToolExecutionPaidEvent` from the event bus and process settlements asynchronously in a separate goroutine.
+  > #### Scenario: Paid tool execution triggers settlement
+  > - **WHEN** a `ToolExecutionPaidEvent` is published with a valid `*eip3009.Authorization`
+  > - **THEN** the settlement service initiates the on-chain settlement lifecycle
+  > - **THEN** the settlement service logs a warning and takes no action
+  > - **THEN** the settlement service logs a warning and takes no action
+  > The settlement service SHALL execute the full lifecycle: create DB record → build EIP-1559 transaction with `transferWithAuthorization` calldata → sign via wallet → submit with retry → wait for confir
+--- candidata: p2p-buyer-auto-payment [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: EIP-3009 authorization signing
+  | The tool SHALL create and sign an EIP-3009 `transferWithAuthorization` using the buyer's wallet, the seller's address from the price quote, and the canonical USDC contract for the chain. If unsigned a
+  > ### Requirement: EIP-3009 authorization signing
+  > The tool SHALL create and sign an EIP-3009 `transferWithAuthorization` using the buyer's wallet, the seller's address from the price quote, and the canonical USDC contract for the chain. If unsigned a
+  > #### Scenario: Successful authorization signing
+  > - **THEN** the tool SHALL call `eip3009.NewUnsigned()` with the buyer address, seller address, amount, and a 10-minute deadline, then sign it with `eip3009.Sign()`
+  > #### Scenario: Nonce generation failure aborts payment
+  > - **WHEN** unsigned EIP-3009 authorization creation fails while generating the nonce
+  > - **THEN** the paid invocation tool SHALL return an error identifying authorization creation
+  > - **AND** it SHALL NOT call `eip3009.Sign()`
+--- candidata: p2p-pricing [PR]
+  | ## ADDED Requirements
+  | ### Requirement: TrustThresholds config field
+  | `P2PPricingConfig` SHALL include a `TrustThresholds` field with `PostPayMinScore` (float64, default 0.8).
+  > ### Requirement: TrustThresholds config field
+  > `P2PPricingConfig` SHALL include a `TrustThresholds` field with `PostPayMinScore` (float64, default 0.8).
+  > #### Scenario: Default trust threshold
+  > - **WHEN** `TrustThresholds.PostPayMinScore` is zero or unset
+  > - **THEN** the payment gate uses 0.8 as the default threshold
+  > #### Scenario: Default settlement config
+  > - **THEN** the settlement service uses 2 minutes as the default timeout
+  > ### Requirement: Gate.SubmitOnChain method
+--- candidata: p2p-payment-gate [tasks]
+  | ## Purpose
+  | Payment gate that sits between the P2P firewall and tool executor, enforcing USDC payment requirements for paid tool invocations using EIP-3009 pre-signed authorizations.
+  | ## Requirements
+  > Payment gate that sits between the P2P firewall and tool executor, enforcing USDC payment requirements for paid tool invocations using EIP-3009 pre-signed authorizations.
+  > The system SHALL allow remote peers to query tool pricing before invocation.
+  > - **WHEN** a peer queries the price of a tool with no configured price
+  > - **THEN** the system returns isFree=true
+  > - **WHEN** a peer queries the price of a tool with configured pricing
+  > - **THEN** the system returns a PriceQuote containing toolName, price, currency, USDC contract, chainId, sellerAddr, and quoteExpiry
+  > The system SHALL verify EIP-3009 payment authorizations before executing paid tools.
+  > #### Scenario: Valid authorization
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O gate passa a aprovar pagamento posterior para pares confiáveis; a spec trata da proteção de dados pessoais.
+
+===== P212 | tencentcloudstack/terraform-provider-tencentcloud PR #4153 | capacidade do par: cfw-nat-fw-cluster-region-status-datasource
+PR: feat(ga2): [132980201] add new resource
+arquivos ligados: tencentcloud/provider.go
+--- linhas alteradas (4; mostrando até 40)
++			"tencentcloud_ga2_global_accelerator":                                                   ga2.ResourceTencentCloudGa2GlobalAccelerator(),
++			"tencentcloud_ga2_accelerate_area":                                                      ga2.ResourceTencentCloudGa2AccelerateArea(),
++			"tencentcloud_ga2_listener":                                                             ga2.ResourceTencentCloudGa2Listener(),
++			"tencentcloud_ga2_forwarding_rule":                                                      ga2.ResourceTencentCloudGa2ForwardingRule(),
+--- candidata: ga2-accelerate-area-resource [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Resource registration
+  | The provider SHALL expose a resource type named `tencentcloud_ga2_accelerate_area` that manages a single Tencent Cloud Global Accelerator V2 acceleration region per resource block. The resource MUST b
+  > The provider SHALL expose a resource type named `tencentcloud_ga2_accelerate_area` that manages a single Tencent Cloud Global Accelerator V2 acceleration region per resource block. The resource MUST b
+  > - **WHEN** an operator runs `terraform plan` against a configuration that references `resource "tencentcloud_ga2_accelerate_area" "<name>"`
+  > - **WHEN** an operator runs `terraform import tencentcloud_ga2_accelerate_area.x ga-xxxxxxxx#area-yyyyyyy`
+  > - `defer tccommon.LogElapsed("resource.tencentcloud_ga2_accelerate_area.<op>")()` at the top of every CRUD function.
+  > - A markdown document at `tencentcloud/services/ga2/resource_tc_ga2_accelerate_area.md` containing a self-contained `resource "tencentcloud_ga2_accelerate_area" "..." { ... }` example and a `terraform
+--- candidata: ga2-forwarding-rule-resource [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Resource registration
+  | The provider SHALL expose a resource type named `tencentcloud_ga2_forwarding_rule` that manages a single Tencent Cloud Global Accelerator V2 layer-7 forwarding rule per resource block. The resource MU
+  > The provider SHALL expose a resource type named `tencentcloud_ga2_forwarding_rule` that manages a single Tencent Cloud Global Accelerator V2 layer-7 forwarding rule per resource block. The resource MU
+  > - **WHEN** an operator runs `terraform plan` against a configuration that references `resource "tencentcloud_ga2_forwarding_rule" "<name>"`
+  > - **WHEN** an operator runs `terraform import tencentcloud_ga2_forwarding_rule.x ga-xxx#lsr-yyy#fpcy-zzz#frule-www`
+  > - `defer tccommon.LogElapsed("resource.tencentcloud_ga2_forwarding_rule.<op>")()` at the top of every CRUD function.
+  > - A markdown document at `tencentcloud/services/ga2/resource_tc_ga2_forwarding_rule.md` containing a self-contained `terraform { ... } resource "tencentcloud_ga2_forwarding_rule" "..." { ... }` exampl
+--- candidata: ga2-global-accelerator-resource [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Resource registration
+  | The provider SHALL expose a resource type named `tencentcloud_ga2_global_accelerator` that manages a single Tencent Cloud Global Accelerator V2 instance per resource block. The resource MUST be regist
+  > The provider SHALL expose a resource type named `tencentcloud_ga2_global_accelerator` that manages a single Tencent Cloud Global Accelerator V2 instance per resource block. The resource MUST be regist
+  > - **WHEN** an operator runs `terraform plan` against a configuration that references `resource "tencentcloud_ga2_global_accelerator" "<name>"`
+  > - **WHEN** an operator runs `terraform import tencentcloud_ga2_global_accelerator.x ga-xxxxxxxx`
+  > - `defer tccommon.LogElapsed("resource.tencentcloud_ga2_global_accelerator.<op>")()` at the top of every CRUD function.
+  > - A markdown document at `tencentcloud/services/ga2/resource_tc_ga2_global_accelerator.md` containing a self-contained `terraform { ... } resource "tencentcloud_ga2_global_accelerator" "..." { ... }` 
+--- candidata: bh-bind-device-account-kubeconfig-resource [tasks]
+  | # bh-bind-device-account-kubeconfig-resource Specification
+  | ## ADDED Requirements
+  | ### Requirement: Resource MUST be registered as `tencentcloud_bh_bind_device_account_kubeconfig`
+--- candidata: bh-bind-device-resource [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Resource schema definition
+  | The `tencentcloud_bh_bind_device_resource` resource SHALL define the following schema fields:
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O provider passa a registrar recursos GA2; a spec trata de um data source de firewall NAT. A lista do PR contém quatro specs GA2.
+
+===== P220 | inventage-ai/asylum PR #25 | capacidade do par: github-kit-credentials
+PR: Fix kit skill mount failure with shared config
+arquivos ligados: internal/container/container.go;internal/container/container_test.go;internal/kit/kit.go
+--- linhas alteradas (95; mostrando até 40)
++	// ~/.agents — shared agent registry (only in shared mode)
++	if opts.Config.AgentIsolation(opts.Agent.Name()) == "shared" {
++		agentsDir := filepath.Join(home, ".agents")
++		if dirExists(agentsDir) {
++			vol(agentsDir, agentsDir, "")
++		}
++	}
++	Kits          []*kit.Kit
+-	return opts.Agent.Command(resume, opts.ExtraArgs)
++	cmdOpts := agent.CmdOpts{}
++	if kit.AnyProvidesSkills(opts.Kits) {
++		cmdOpts.KitSkillsDir = "/opt/asylum-skills"
++	}
++	return opts.Agent.Command(resume, opts.ExtraArgs, cmdOpts)
++	"github.com/inventage-ai/asylum/internal/agent"
+-func (s stubAgent) Name() string    { return "stub" }
+-func (s stubAgent) Binary() string  { return "stub-bin" }
++func (s stubAgent) Name() string   { return "stub" }
++func (s stubAgent) Binary() string { return "stub-bin" }
+-func (s stubAgent) EnvVars() map[string]string            { return s.envVars }
+-func (s stubAgent) HasSession(_, _ string) bool            { return s.hasSession }
+-func (s stubAgent) Command(resume bool, extra []string) []string {
++func (s stubAgent) EnvVars() map[string]string  { return s.envVars }
++func (s stubAgent) HasSession(_, _ string) bool { return s.hasSession }
++func (s stubAgent) Command(resume bool, extra []string, opts agent.CmdOpts) []string {
++	prefix := "stub"
+-		return append([]string{"stub-resume"}, extra...)
++		prefix = "stub-resume"
+-	return append([]string{"stub"}, extra...)
++	out := []string{prefix}
++	if opts.KitSkillsDir != "" {
++		out = append(out, "--add-dir", opts.KitSkillsDir)
++	}
++	return append(out, extra...)
+-	Isolation     string         // kit-specific isolation level from config
++	Isolation     string // kit-specific isolation level from config
+-	Name              string
+-	Description       string
+-	DockerSnippet     string
+-	EntrypointSnippet string
+--- candidata: browser-kit [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: browser kit registration
+  | The system SHALL register a `browser` kit via `init()` in `internal/kit/browser.go` with name `"browser"`, TierOptIn, and a dependency on the `node` kit.
+  > The system SHALL register a `browser` kit via `init()` in `internal/kit/browser.go` with name `"browser"`, TierOptIn, and a dependency on the `node` kit.
+  > - **THEN** the kit registry contains a `"browser"` entry with Tier set to TierOptIn and Deps containing `"node"`
+  > The kit SHALL provide a DockerSnippet that installs the Playwright npm package and then runs `npx playwright install --with-deps chromium` to install Chromium along with all required system libraries.
+  > #### Scenario: Chromium installed in image
+  > - **WHEN** the browser kit is active and the Docker image is built
+  > - **THEN** Chromium is installed and launchable via Playwright inside the container
+  > - **WHEN** the DockerSnippet executes the Playwright install command with `--with-deps`
+  > The kit SHALL declare a CacheDirs entry mapping `"playwright"` to `/home/claude/.cache/ms-playwright` so the Chromium binary is persisted in a named Docker volume.
+--- candidata: ast-grep-kit [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: ast-grep kit registration
+  | The system SHALL register an `ast-grep` kit via `init()` in `internal/kit/astgrep.go` with name `"ast-grep"`, TierOptIn, and a dependency on the `node` kit.
+  > The system SHALL register an `ast-grep` kit via `init()` in `internal/kit/astgrep.go` with name `"ast-grep"`, TierOptIn, and a dependency on the `node` kit.
+  > - **THEN** the kit registry contains an `"ast-grep"` entry with Tier set to TierOptIn and Deps containing `"node"`
+  > ### Requirement: ast-grep installation via Docker snippet
+  > The kit SHALL provide a DockerSnippet that installs `@ast-grep/cli` globally via npm, making the `sg` command available in the container.
+  > #### Scenario: ast-grep installed in image
+  > - **WHEN** the ast-grep kit is active and the Docker image is built
+  > - **THEN** the `sg` command is available on PATH inside the container
+  > - **WHEN** the DockerSnippet executes
+--- candidata: agent-interface [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Agent interface
+  | The agent package SHALL define an Agent interface with methods: Name, Binary, NativeConfigDir, ContainerConfigDir, AsylumConfigDir, EnvVars, HasSession, Command — matching PLAN.md section 8.
+  > ### Requirement: Agent interface
+  > The agent package SHALL define an Agent interface with methods: Name, Binary, NativeConfigDir, ContainerConfigDir, AsylumConfigDir, EnvVars, HasSession, Command — matching PLAN.md section 8.
+  > - **WHEN** an Agent implementation is used
+  > - **THEN** all interface methods return correct values per the agent profile table in PLAN.md section 3.1
+  > ### Requirement: Agent registry
+  > The agent package SHALL provide a Get function that returns an Agent by name ("claude", "gemini", "codex") or an error for unknown names.
+  > #### Scenario: Valid agent lookup
+  > - **THEN** it returns the Gemini agent implementation with no error
+--- candidata: kit-skills-delivery [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: ProvidesSkills kit field
+  | The `kit.Kit` struct SHALL expose a `ProvidesSkills bool` field. Kits that stage one or more Claude Code skills for runtime use SHALL set this field to `true`.
+  > ### Requirement: ProvidesSkills kit field
+  > The `kit.Kit` struct SHALL expose a `ProvidesSkills bool` field. Kits that stage one or more Claude Code skills for runtime use SHALL set this field to `true`.
+  > #### Scenario: Skill-providing kit declares ProvidesSkills
+  > - **WHEN** a kit such as `agent-browser` or `ast-grep` is registered
+  > - **THEN** its `ProvidesSkills` field is `true`
+  > #### Scenario: Non-skill kit leaves ProvidesSkills false
+  > - **WHEN** a kit that does not stage a Claude skill is registered (e.g. `docker`, `python`, `cx`, `rtk`)
+  > - **THEN** its `ProvidesSkills` field remains at the zero value `false`
+--- candidata: sandbox-rules [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Kit-provided rules snippets
+  | Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > ### Requirement: Kit-provided rules snippets
+  > Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > #### Scenario: Docker kit snippet
+  > - **WHEN** the docker kit is active
+  > - **THEN** its rules snippet SHALL mention that full Docker engine is available (not just CLI) and the container runs in privileged mode
+  > #### Scenario: cx kit no longer contributes snippet
+  > - **THEN** its `RulesSnippet` SHALL be empty and the assembled `asylum-sandbox.md` SHALL NOT contain a cx-specific section
+  > - **AND** the cx tool SHALL still appear in the "Kit Tools" list via the `Tools` field
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de autenticação; o PR corrige outra skill.
+
+===== P225 | dynatrace-oss/dtwiz PR #134 | capacidade do par: feature-flag-registry
+PR: feat: gcp support
+arquivos ligados: cmd/setup.go;cmd/update.go
+--- linhas alteradas (68; mostrando até 40)
++	"github.com/dynatrace-oss/dtwiz/pkg/installer/gcp"
+-		// Pre-check Azure status so we can badge the Azure entry in the list.
++		// Pre-check Azure/GCP status so we can badge those entries in the list.
++		gcpConfigured := false
+-			if exists, err := azure.ConnectionExists(envURL, platformTok); err != nil {
+-				logger.Debug("azure connection check failed, badging as not configured", "err", err)
+-			} else if exists {
+-				azureConfigured = true
++			if err := installer.RunConcurrently(
++				func() error {
++					exists, err := azure.ConnectionExists(envURL, platformTok)
++					azureConfigured = exists
++					return err
++				},
++				func() error {
++					exists, err := gcp.ConnectionExists(envURL, platformTok)
++					gcpConfigured = exists
++					return err
++				},
++			); err != nil {
++				logger.Debug("connection existence check failed, badging as not configured", "err", err)
++			if r.Method == recommender.MethodGCP {
++				if gcpConfigured {
++					title += "  [update]"
++				} else {
++					title += "  [install]"
++				}
++			}
+-		if selected.Method == recommender.MethodAzure && azureConfigured {
++		if (selected.Method == recommender.MethodAzure && azureConfigured) ||
++			(selected.Method == recommender.MethodGCP && gcpConfigured) {
++		case recommender.MethodGCP:
++			logger.Debug("setup selected GCP", "configured", gcpConfigured)
++			if gcpConfigured {
++				installErr = gcp.UpdateGCP(envURL, platformTok, setupDryRun, StartTime)
++			} else {
++				installErr = gcp.InstallGCP(envURL, platformTok, setupDryRun, StartTime)
++			}
+-		// AWS scopes its watch to the account (WatchIngestAWS) and Azure runs the
+-		// generic watch from inside the installer; both start their own watch, so
+--- candidata: azure-monitor-update [tasks+termos]
+  | # Azure Monitor Update
+  | ## ADDED Requirements
+  | ### Requirement: Update is an in-place monitoring-config reconcile
+  > # Azure Monitor Update
+  > ### Requirement: Update is an in-place monitoring-config reconcile
+  > The system SHALL provide an `UpdateAzure` entry point that refreshes an existing integration in place by reconciling **only** the `da-azure` monitoring configuration to the latest schema-derived defau
+  > - **GIVEN** an Azure connection named `dtwiz-azure` already exists
+  > - **WHEN** the user runs `dtwiz update azure`
+  > - **THEN** it runs the same in-place reconcile as the other entry points
+  > #### Scenario: Setup routes to update when configured
+  > - **GIVEN** an Azure connection named `dtwiz-azure` already exists
+--- candidata: gcp-monitor-install [PR]
+  | # GCP Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install gcp` as the final runnable command for GCP installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Google Cloud integration
+  > - **WHEN** the user runs `dtwiz install gcp`
+  > - **THEN** the GCP installer runs against the resolved environment and platform token
+  > ### Requirement: Service-account impersonation authentication
+  > The system SHALL authenticate Dynatrace to GCP using service-account impersonation and SHALL NOT create, download, or store any service-account key file. The Dynatrace principal SHALL be granted `role
+  > - **GIVEN** the installer creates the GCP service account and grants impersonation
+  > - **THEN** no service-account key is generated, printed, or persisted to disk
+--- candidata: azure-monitor-install [tasks]
+  | # Azure Monitor Install
+  | ## ADDED Requirements
+  | ### Requirement: Install command and entry point
+  > # Azure Monitor Install
+  > ### Requirement: Install command and entry point
+  > The system SHALL expose `dtwiz install azure` as the final runnable command for Azure installation, accepting no extra positional arguments. The command SHALL set up the Dynatrace Azure Monitor integr
+  > - **WHEN** the user runs `dtwiz install azure`
+  > - **THEN** the Azure installer runs against the resolved environment and platform token
+  > The system SHALL authenticate Dynatrace to Azure using a federated identity (workload identity) credential and SHALL NOT create or store any Azure client secret. The Service Principal SHALL be created
+  > - **WHEN** the installer registers the Azure Service Principal
+  > - **GIVEN** the environment apps host `<id>.apps.dynatrace.com`
+--- candidata: gcp-monitor-uninstall [PR]
+  | # GCP Monitor Uninstall
+  | ## ADDED Requirements
+  | ### Requirement: Uninstall command and entry point
+  > # GCP Monitor Uninstall
+  > ### Requirement: Uninstall command and entry point
+  > The system SHALL expose `dtwiz uninstall gcp` as the final runnable command for GCP removal, accepting no extra positional arguments. It SHALL remove the Dynatrace GCP integration created by the insta
+  > #### Scenario: Uninstall command registered
+  > - **WHEN** the user runs `dtwiz uninstall gcp`
+  > - **THEN** the uninstaller discovers and removes dtwiz-created GCP integration resources
+  > ### Requirement: Discover all dtwiz-named resources concurrently
+  > The system SHALL discover every Dynatrace connection and every `da-gcp` monitoring configuration whose name equals `dtwiz-gcp`, returning all matches (not just the first) so leftovers from interrupted
+--- candidata: oneagent-init [tasks]
+  | # OneAgent PoC Scaffolding
+  | > **Note:** The `OneAgentPoC` feature flag and the V1/V2 branching described in this spec were temporary development scaffolding. The flag has since been removed: `InstallOneAgentV2` and `UninstallOne
+  | ## ADDED Requirements
+  > > **Note:** The `OneAgentPoC` feature flag and the V1/V2 branching described in this spec were temporary development scaffolding. The flag has since been removed: `InstallOneAgentV2` and `UninstallOne
+  > ### Requirement: New package pkg/installer/oneagent/ with core installer logic
+  > `pkg/installer/oneagent/` SHALL be created as a standalone Go package (`package oneagent`) with the installer split across three source files:
+  > - `oneagent.go`: types, entry point `InstallOneAgentV2`, `DefaultAgentConfig`, `ResolveAgentConfig`, `detectRuntimeEnvironment`
+  > - `download.go`: `DownloadInstaller`, `readErrorBody`, `installerOSSegment`, `installerExtension`, `humanBytes`
+  > - `verify.go`: `VerifyInstallerSignature`, `fetchDynatraceRootCA`, `runOpensslVerify`
+  > - **GIVEN** `pkg/installer/oneagent/` is created
+  > - **WHEN** test code imports `github.com/dynatrace-oss/dtwiz/pkg/installer/oneagent`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR adiciona instalação e atualização de GCP.
+
+===== P232 | Codagent-AI/agent-validator PR #110 | capacidade do par: entry-point-config
+PR: feat: rename Agent Gauntlet → Agent Validator
+arquivos ligados: src/config/schema.ts
+--- linhas alteradas (6; mostrando até 40)
+-  prompt: z.string().min(1), // Path relative to .gauntlet/reviews/
++  prompt: z.string().min(1), // Path relative to config reviews/ dir
+-export const gauntletConfigSchema = z.object({
++export const validatorConfigSchema = z.object({
+-  log_dir: z.string().min(1).default('gauntlet_logs'),
++  log_dir: z.string().min(1).default('validator_logs'),
+--- candidata: agent-command [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Trust Level Configuration
+  | The `/gauntlet` command template SHALL include configurable trust level guidance that controls the agent's threshold for acting on AI reviewer feedback.
+  > The `/gauntlet` command template SHALL include configurable trust level guidance that controls the agent's threshold for acting on AI reviewer feedback.
+  > - **WHEN** `agent-gauntlet init` creates the command template
+  > - **THEN** the prompt instructs the agent to fix all reported issues unless there is strong disagreement or low confidence that the human wants the change
+  > - **THEN** the prompt instructs the agent to fix issues it reasonably agrees with or believes the human wants fixed
+  > - **THEN** the prompt instructs the agent to fix only issues it strongly agrees with or is confident the human wants fixed
+  > The command template SHALL NOT include a hardcoded retry limit. Instead, the template SHALL instruct the agent to repeat the run/fix cycle until the script reports a terminal status. The termination c
+  > - **AND** the agent SHALL run `agent-gauntlet clean` to archive logs for the session record
+  > - **GIVEN** a user runs `agent-gauntlet init`
+--- candidata: init-config [tasks+PR+termos]
+  | ## REMOVED Requirements
+  | ### Requirement: Interactive Config Prompts
+  | **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Reason**: Config prompts for base branch, source directory, lint command, and test command are removed. Base branch is auto-detected. Lint, test, and other checks are now configured by the `/gauntle
+  > **Migration**: Run `/gauntlet-setup` after `init` to configure checks and reviews.
+  > The `init` command SHALL generate a `.gauntlet/reviews/code-quality.yml` file that references the built-in code-quality review prompt.
+  > - **GIVEN** a user runs `agent-gauntlet init`
+  > - **WHEN** the `.gauntlet/` directory is scaffolded
+  > - **THEN** `.gauntlet/reviews/code-quality.yml` SHALL be created with content referencing `builtin: code-quality`
+  > - **AND** the YAML file SHALL include default settings (`num_reviews: 1`)
+  > - **GIVEN** a user runs `agent-gauntlet init --yes`
+--- candidata: log-management [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: JSON Review Result Files
+  | The review gate MUST write a structured JSON file for each adapter's review result alongside the markdown log file.
+  > - **THEN** entries SHALL be written to `<log_dir>/.debug.log`
+  > - **GIVEN** `.gauntlet/config.yml` contains `debug_log.enabled: true`
+  > - **GIVEN** `~/.config/agent-gauntlet/config.yml` contains `debug_log.enabled: true`
+  > The Logger MUST write log files with a dot-separated run-number suffix. The run number for a given execution SHALL be one greater than the highest run-number suffix found across ALL log files in the l
+  > - **GIVEN** a review gate with `num_reviews: 1` using adapter "claude"
+  > #### Scenario: Multiple reviews from different adapters
+  > - **GIVEN** a review gate with `num_reviews: 2` using adapters "claude" and "gemini"
+  > #### Scenario: Multiple reviews from same adapter (round-robin)
+--- candidata: check-config [tasks+PR]
+  | # Check Configuration
+  | ## ADDED Requirements
+  | ### Requirement: Checks must be defined in YAML files without a name attribute
+  > The system MUST load checks from `.gauntlet/checks/*.yml`. The identification of the check MUST be derived solely from the filename.
+  > Given a file `.gauntlet/checks/my-check.yml` with content:
+  > Given a file `.gauntlet/checks/legacy.yml` with content:
+  > Given a file `.gauntlet/checks/lint-core.yml`
+  > The system MUST load checks from `.gauntlet/checks/*.yml`. The identification of the check MUST be derived solely from the filename.
+  > Given a file `.gauntlet/checks/my-check.yml` with content:
+  > Given a file `.gauntlet/checks/legacy.yml` with content:
+  > Given a file `.gauntlet/checks/lint-core.yml`
+--- candidata: init-hook-install [tasks+PR]
+  | # Init Hook Installation
+  | The `init` command optionally installs the Claude Code stop hook for gauntlet enforcement.
+  | ## ADDED Requirements
+  > The `init` command optionally installs the Claude Code stop hook for gauntlet enforcement.
+  > The init command SHALL prompt the user to install the Claude Code stop hook.
+  > - **GIVEN** the user runs `agent-gauntlet init`
+  > - **AND** the gauntlet config has been created
+  > - **WHEN** prompted "Install Claude Code stop hook? (y/n)"
+  > - **GIVEN** the user runs `agent-gauntlet init`
+  > - **AND** the gauntlet config has been created
+  > - **WHEN** prompted "Install Claude Code stop hook? (y/n)"
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diretório padrão de logs muda de gauntlet_logs para validator_logs.
+
+===== P237 | rozx/Tsukuyomi PR #78 | capacidade do par: single-para-polish
+PR: Memory overhaul
+arquivos ligados: src/composables/book-details/useChapterTranslation.ts;src/services/ai/tasks/utils/context-builder.ts
+--- linhas alteradas (391; mostrando até 40)
+-import type { Chapter, Novel, Paragraph } from 'src/models/novel';
++import type { Chapter, Novel, Paragraph, ScoreBreakdown } from 'src/models/novel';
++    memoryScoreBreakdown?: Record<string, ScoreBreakdown>,
++      ...(memoryScoreBreakdown ? { memoryScoreBreakdown } : {}),
+-    paragraphResults: { id: string; translation: string; referencedMemories?: string[] }[],
++    paragraphResults: {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
++      memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++    }[],
+-      { translation: string; referencedMemories?: string[] }
++      {
++        translation: string;
++        referencedMemories?: string[];
++        memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++      }
++          ...(pt.memoryScoreBreakdown ? { memoryScoreBreakdown: pt.memoryScoreBreakdown } : {}),
+-    paragraphUpdates: Map<string, { translation: string; referencedMemories?: string[] }>,
++    paragraphUpdates: Map<
++      string,
++      {
++        translation: string;
++        referencedMemories?: string[];
++        memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++      }
++    >,
++            update.memoryScoreBreakdown,
+-    paragraphTranslations: { id: string; translation: string; referencedMemories?: string[] }[],
++    paragraphTranslations: {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
++      memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++    }[],
+-    ) as { id: string; translation: string; referencedMemories?: string[] }[];
++    ) as {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
+--- candidata: ai-context-building [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Automatic memory discovery from chunk entities
+  | The system SHALL identify entities present in a chunk and retrieve their attached memories.
+  > ### Requirement: Automatic memory discovery from chunk entities
+  > The system SHALL identify entities present in a chunk and retrieve their attached memories.
+  > #### Scenario: Extract entities from chunk text
+  > - **GIVEN** a chunk of text to be translated
+  > - **WHEN** building the translation context
+  > - **THEN** system extracts all terms present in the chunk
+  > - **AND** system extracts all characters present in the chunk
+  > - **AND** entity extraction uses the same logic as the terminology/character sidebar
+--- candidata: memory-relevance-scoring [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Three-signal memory relevance scoring
+  | The system SHALL compute a relevance score for each candidate memory using a weighted combination of three signals: semantic similarity, keyword hit ratio, and recency decay.
+  > ### Requirement: Three-signal memory relevance scoring
+  > The system SHALL compute a relevance score for each candidate memory using a weighted combination of three signals: semantic similarity, keyword hit ratio, and recency decay.
+  > - **GIVEN** a candidate memory and a chunk of text being translated
+  > - **WHEN** the scoring function is invoked
+  > - **THEN** the score equals `3.0 × semanticSim + 2.0 × keywordHitRatio + 1.0 × recencyFactor`
+  > #### Scenario: Keyword hit ratio counts chunk entity names found in memory text
+  > - **GIVEN** the chunk contains entity names `['田中', '魔法学院']` extracted from the book's terminologies and characterSettings tables
+  > - **AND** a memory's `summary + content` contains the substring `田中` but not `魔法学院`
+--- candidata: semantic-memory-embedding [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Local embedding service using Transformers.js
+  | The system SHALL provide a local text embedding service backed by `@huggingface/transformers` v3 and the `onnx-community/embeddinggemma-300m-ONNX` model, producing 256-dimensional vectors via Matryosh
+  > ### Requirement: Local embedding service using Transformers.js
+  > The system SHALL provide a local text embedding service backed by `@huggingface/transformers` v3 and the `onnx-community/embeddinggemma-300m-ONNX` model, producing 256-dimensional vectors via Matryosh
+  > - **GIVEN** the embedding service has completed initialization
+  > - **WHEN** `embed(text)` is called with a text string
+  > - **THEN** the embedding service initializes successfully from cached weights
+  > - **AND** all embedding operations work without network access
+  > - **WHEN** no code path has yet invoked embedding
+  > - **THEN** the `@huggingface/transformers` library is NOT included in the main JavaScript bundle
+--- candidata: memory-attachments [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Memory attachments support multiple entities
+  | The system SHALL allow a memory to be attached to zero or more entities (characters, terms, chapters, or book).
+  > ### Requirement: Memory attachments support multiple entities
+  > The system SHALL allow a memory to be attached to zero or more entities (characters, terms, chapters, or book).
+  > #### Scenario: Memory attached to single character
+  > - **WHEN** AI creates a memory with `attached_to: [{type: 'character', id: 'char_001'}]`
+  > - **THEN** the memory is stored with the specified attachment
+  > - **AND** querying the character returns this memory in attached_memories
+  > #### Scenario: Memory attached to multiple entities
+  > - **WHEN** AI creates a memory with `attached_to: [{type: 'character', id: 'char_001'}, {type: 'chapter', id: 'chap_005'}]`
+--- candidata: translation-memory-visibility [tasks+PR]
+  | # Capability: Translation Memory Visibility
+  | ## Overview
+  | Show which memories were referenced during AI translation to provide transparency and build user trust.
+  > # Capability: Translation Memory Visibility
+  > Show which memories were referenced during AI translation to provide transparency and build user trust.
+  > - As a user, I want to see which memories the AI used when translating a paragraph
+  > - As a user, I want to understand why a translation turned out a certain way
+  > - As a user, I want to verify that important context was considered by the AI
+  > - As a user, I want to click on a referenced memory to view its details
+  > ### Display in Translation Context
+  > - [ ] Show reference panel below translation result
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff passa a gravar memoryScoreBreakdown nas traduções de parágrafos. A spec trata do fluxo direto de polish/proofreading.
+
+===== P252 | AshkanYarmoradi/go-mink PR #175 | capacidade do par: event-store
+PR: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan
+arquivos ligados: adapters/postgres/subscription.go
+--- linhas alteradas (67; mostrando até 40)
++	"strconv"
++	"strings"
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, er
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++	limit = adapters.DefaultLimit(limit, 1000)
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++	return a.scanEvents(rows)
++}
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
+--- candidata: event-subscriptions [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  | The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  > The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > across a contiguous, stable prefix of `global_position`, bounded by a safe watermark below
+  > which no in-flight transaction can still commit a lower position — covering `SubscribeAll`,
+  > `SubscribeCategory`, async projections (`loadEventsFromPosition`, which also checkpoints),
+  > and the saga manager's event loop. The watermark SHALL be enforced
+  > at the adapter's load-from-position query (returning nothing above it) and SHALL NOT
+  > gap-detection with a staleness timeout). An event whose transaction is assigned a lower
+--- candidata: cli-tooling [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code generation does not overwrite existing files without --force
+  | `mink generate` SHALL refuse to overwrite an existing target file unless a `--force`
+  > - **THEN** the command returns an error and leaves the existing file unchanged
+  > - **THEN** `migrate down` returns an error and exits non-zero rather than reporting success
+  > ### Requirement: `mink events` queries the global feed by indexed axes
+  > The `mink` CLI SHALL provide a top-level `events` command that reads the global event feed through the adapter's `FilteredFeedAdapter.LoadFromPositionFiltered`, filtered by the indexed axes the `FeedF
+  > #### Scenario: A type filter reads only matching events across streams
+  > - **WHEN** `mink events --type OrderPlaced` runs against a feed where `OrderPlaced` spans several streams
+  > - **THEN** only `OrderPlaced` events are printed, across all their streams, in ascending `global_position` order, up to the limit
+  > #### Scenario: Multi-valued and multi-axis filters AND/OR-compose
+--- candidata: retention-policies [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable retention policy
+  | The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > - **WHEN** a policy is defined to shred events older than `MaxAge` for a category
+  > - **THEN** events in that category whose age exceeds `MaxAge` are selected for shredding
+  > - **THEN** each matched event has the action of every policy that matches it applied
+  > A `RetentionManager` SHALL apply the configured policies over the event store on demand via `Apply(ctx)`, SHALL be safe to run on a schedule, and SHALL return a `RetentionReport` (matched, acted-on, s
+  > #### Scenario: Apply enforces matching policies
+  > - **WHEN** `Apply` runs with a shred policy and matching events exist
+  > - **THEN** the matching subjects' keys are revoked and the report counts them
+--- candidata: in-place-stream-re-encryption [PR]
+  | ## ADDED Requirements
+  | ### Requirement: In-place stream re-encryption
+  | `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > ### Requirement: In-place stream re-encryption
+  > `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > string) (reEncrypted int, keyIDs []string, err error)` that brings a stream's
+  > existing events under the current `FieldEncryptionConfig` in place — sealing each
+  > event's configured fields under the current key and rewriting the same row — while
+  > preserving the event's id, type, stream, version, global position, and timestamp
+  > (the payload's at-rest encoding changes, not the event's identity or order). The key
+  > MUST be resolved exactly as the append path would (running the configured
+--- candidata: saga-orchestration [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Saga retry attempts are at least one
+  | `WithSagaRetryAttempts(n)` SHALL clamp the configured attempts to a minimum of 1, so a
+  > saga event is always attempted at least once. A configured value of 0 SHALL NOT cause
+  > the processing loop to skip the event, drop it silently, or advance the position past an
+  > unprocessed event.
+  > #### Scenario: Zero retry attempts still processes the event
+  > - **WHEN** the saga manager is configured with `WithSagaRetryAttempts(0)` and an event arrives
+  > - **THEN** the event is dispatched at least once and the position advances only after a real attempt, not over a silently-dropped event
+  > ### Requirement: Context cancellation during dispatch does not trigger compensation
+  > The saga manager SHALL NOT treat a command-dispatch failure of `context.Canceled` or
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Adiciona LoadFromPositionFiltered ao feed PostgreSQL. A spec trata da cópia de buffers no event store em memória.
+
+===== P257 | exasol/exasol-personal PR #153 | capacidade do par: external-preset-resolution
+PR: feat: Adjust local infra memory defaults
+arquivos ligados: internal/deploy/init.go
+--- linhas alteradas (3; mostrando até 40)
++	if err := validateLocalInitMemory(ctx, infrastructureManifest, infraVars); err != nil {
++		return err
++	}
+--- candidata: exasol-local-deployment [PR]
+  | ## ADDED Requirements
+  | ### Requirement: macOS local VM memory default
+  | The system SHALL default local deployment VM memory on macOS to approximately 50% of total host memory when the user has not configured local VM memory explicitly.
+--- candidata: runtime-artifact-cache [tasks]
+  | # runtime-artifact-cache Specification
+  | ## Purpose
+  | Define how the launcher caches, reuses, reports, and cleans per-user runtime artifacts.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): InitDeployment passa a validar a memória local antes da implantação. A spec trata da resolução de presets externos.
+
+===== P265 | opencom-org/opencom PR #36 | capacidade do par: runtime-type-safety-hardening
+PR: update to main
+arquivos ligados: packages/convex/convex/aiAgent.ts;packages/convex/convex/aiAgentActions.ts;packages/convex/convex/aiAgentActionsKnowledge.ts;packages/convex/convex/embeddings.ts;packages/convex/tests/runtimeTypeHardeningGuard.test.ts
+--- linhas alteradas (309; mostrando até 40)
++import { DEFAULT_CONTENT_EMBEDDING_MODEL, resolveContentEmbeddingModel } from "./lib/embeddingModels";
++import { getAIGatewayApiKey, getAIBaseURL, getAIGatewayProviderLabel } from "./lib/aiGateway";
++type AvailableAIModel = {
++  id: string;
++  name: string;
++  provider: string;
++};
++type OpenAIModelListResponse = {
++  data?: Array<{
++    id?: string;
++    created?: number;
++  }>;
++};
++type StoredAIResponse = Doc<"aiResponses">;
++type StoredAIResponseSource = StoredAIResponse["sources"][number];
++type StoredAIResponseWithMessage = StoredAIResponse & {
++  messageId: Id<"messages">;
++};
++type ConversationResponse = Omit<StoredAIResponse, "messageId"> & {
++  messageId: Id<"messages">;
++  deliveredResponseContext: {
++    response: string;
++    sources: StoredAIResponseSource[];
++    confidence: number | null;
++  };
++  generatedResponseContext:
++    | {
++        response: string;
++        sources: StoredAIResponseSource[];
++        confidence: number;
++      }
++    | null;
++};
+-  embeddingModel: "text-embedding-3-small",
++  embeddingModel: DEFAULT_CONTENT_EMBEDDING_MODEL,
++const AVAILABLE_MODEL_DISCOVERY_TIMEOUT_MS = 5000;
++const NON_GENERATION_MODEL_PREFIXES = [
++  "text-embedding-",
++  "omni-moderation-",
++  "whisper-",
+--- candidata: convex-function-ref-boundaries [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Residual backend hotspots MUST prefer fixed refs over broad object-cast selectors
+  | The system MUST implement covered backend hardening hotspots with explicit fixed function refs or narrow local ref helpers instead of broad `unsafeApi` / `unsafeInternal` object casts that expose mult
+  > ### Requirement: Residual backend hotspots MUST prefer fixed refs over broad object-cast selectors
+  > The system MUST implement covered backend hardening hotspots with explicit fixed function refs or narrow local ref helpers instead of broad `unsafeApi` / `unsafeInternal` object casts that expose mult
+  > - **WHEN** a covered backend module needs several internal or public Convex function refs
+  > - **THEN** it resolves each target through fixed named refs or a dedicated local ref helper
+  > The system MUST keep remaining backend `TS2589` workarounds explicitly inventoried and protected by guard tests so new broad escape hatches do not spread beyond approved hotspots.
+  > #### Scenario: New backend escape hatch is introduced
+  > ### Requirement: Covered backend hotspots MUST keep shallow runner casts smaller than feature logic
+  > The system MUST keep any remaining shallow `ctx.runQuery`, `ctx.runMutation`, or `ctx.runAction` cast boundary smaller than the feature logic it supports.
+--- candidata: ai-help-center-linked-sources [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AI response source records MUST include linkable metadata for article sources
+  | AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > ### Requirement: AI response source records MUST include linkable metadata for article sources
+  > AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > #### Scenario: AI response references published article
+  > - **WHEN** AI response includes a Help Center article source
+  > ### Requirement: Widget AI messages MUST render article sources as clickable links
+  > Widget conversation UI SHALL render article-backed AI sources as clickable elements that open the corresponding article context.
+  > #### Scenario: Visitor taps article source in AI message
+  > - **WHEN** widget displays an AI message with article sources
+--- candidata: inbox-knowledge-vector-search [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox knowledge search MUST use vector search for semantic relevance
+  | The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > ### Requirement: Inbox knowledge search MUST use vector search for semantic relevance
+  > The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > #### Scenario: Agent searches for knowledge with semantic query
+  > - **WHEN** an agent enters a query in the inbox knowledge picker
+  > - **THEN** the search SHALL use vector embeddings to find semantically relevant content
+  > #### Scenario: Vector search returns mixed content types
+  > - **WHEN** vector search finds matching content
+  > - **THEN** results SHALL include articles, internal articles, and snippets
+--- candidata: inbox-knowledge-insertion [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox MUST provide one consolidated knowledge picker
+  | The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > ### Requirement: Inbox MUST provide one consolidated knowledge picker
+  > The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > #### Scenario: Agent searches one picker for mixed knowledge
+  > - **WHEN** an agent opens the inbox knowledge picker and enters a query
+  > - **THEN** the picker SHALL return matching snippets, public articles, and internal articles in one result list
+  > - **WHEN** an agent uses the inbox keyboard shortcut for knowledge lookup
+  > - **THEN** the consolidated knowledge picker SHALL open
+  > ### Requirement: Knowledge picker MUST provide explicit insertion behavior by content type
+--- candidata: cross-surface-convex-ref-boundary-hardening [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Remaining hardening gaps MUST have a single explicit owner
+  | Every remaining Convex ref-boundary gap identified by the repo-wide inventory SHALL be assigned to one owning change or an explicit accepted exception.
+  > - **WHEN** a remaining gap cannot use fixed typed refs because the target function name is intentionally caller-selected
+  > - **AND** the exception documents the narrow allowed scope and the guardrail that prevents it from expanding into a general runtime pattern
+  > Older package-specific changes for web, widget, and React Native SDK boundary architecture SHALL remain the implementation owners when the current codebase still matches their intended migration model
+  > Residual implementation owned by this change SHALL be delivered in small file clusters with package verification after each cluster.
+  > - **WHEN** a residual `packages/convex` cleanup or shared guardrail batch is ready to expand
+  > - **WHEN** a change adds a prohibited broad helper or untyped Convex ref boundary in a covered path
+  > ### Requirement: Active residual-hardening proposals MUST distinguish unfinished work from completed slices
+  > - **AND** already completed slices, such as verified sdk-core route migrations or completed embedding concurrency refactors, SHALL remain out of scope unless new evidence shows a remaining gap
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff altera descoberta e validação de modelos e a configuração de embeddings. A spec trata de contratos de tipos sem mudar comportamento.
+
+===== P271 | localstack/lstk PR #367 | capacidade do par: terraform-proxy
+PR: Add global --json flag to `lstk`, so commands can support JSON output
+arquivos ligados: cmd/terraform.go
+--- linhas alteradas (3; mostrando até 40)
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+--- candidata: cdk-proxy [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CDK CLI proxy command
+  | The system SHALL provide an `lstk cdk` command that forwards all of its arguments to the real AWS CDK CLI (`cdk`) and, before invoking it, configures the subprocess environment to target the running L
+--- candidata: json-flag [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Global --json flag on built-in commands
+  | The root command SHALL register a persistent `--json` boolean flag, alongside `--non-interactive`, whose resolved value SHALL be exposed to every built-in command via `env.Env`.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A flag global --json passa a ser reconhecida antes do subcomando Terraform. A spec trata do proxy Terraform.
+
+===== P284 | koki-develop/Cork PR #33 | capacidade do par: task-delete
+PR: feat(updater): add in-app updater via tauri-plugin-updater
+arquivos ligados: src-tauri/src/lib.rs
+--- linhas alteradas (2; mostrando até 40)
++        .plugin(tauri_plugin_updater::Builder::new().build())
++        .plugin(tauri_plugin_process::init())
+--- candidata: updater [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: アプリは起動時に最新リリースを自動チェックする
+  | Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > `Update available` toast の `Install and Restart` action ボタンが選択された場合、同じ toast id を保持したまま sonner の状態を遷移させ、`tauri-plugin-updater` の `downloadAndInstall` を呼び出さなければならない (MUST)。状態遷移は `available → downloadin
+  > - **WHEN** ダウンロード完了直後（plugin が `Finished` イベントを emit）
+  > CI でビルドされる `Cork.app.tar.gz` は、`TAURI_SIGNING_PRIVATE_KEY` (minisign 秘密鍵) と `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` を環境変数として受け取った `tauri build` が同名の `.sig` ファイル (base64 minisign) を生成し、release アセットとしてアップロ
+  > ビルド時、`tauri.conf.json` の `bundle.macOS.signingIdentity: "-"` によって Tauri が `.app` を ad-hoc 署名しなければならない (MUST)。`tauri-plugin-updater` が新 `.app` を `reqwest` でメモリにダウンロードし、`tar` 展開してから `std::fs::rename` で配
+  > - **AND** `cork --version` が新バージョン番号を返す (`cli/build.rs` が `package.json` の version を埋め込んでいるため)
+  > `tauri-plugin-updater` の endpoint は `https://github.com/koki-develop/Cork/releases/latest/download/latest.json` 単一でなければならない (MUST)。`latest.json` は CI (`release-please.yml` の `release` ジョブ) で生成され、その re
+  > - **THEN** プロセスは aarch64 として振る舞うため、`tauri-plugin-updater` は `darwin-aarch64` プラットフォームエントリを取得し、通常通り更新通知 toast を表示する
+--- candidata: mcp-server [tasks]
+  | # mcp-server
+  | ## ADDED Requirements
+  | ### Requirement: MCP サーバはアプリ起動時に設定に従って起動する
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+--- candidata: per-workspace-statuses [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: statuses 設定は作業ディレクトリ直下の `.cork.json` に保存される
+  | statuses 設定はグローバル `settings.json` ではなく、現在選択中の作業ディレクトリ直下の `.cork.json` ファイルに保存される。`.cork.json` のスキーマは JSON オブジェクト形式で、`statuses` キーに `{ "label": string }` 要素の配列を保持する。Cork は statuses 設定の永続化先として `.cork.js
+  > `tauri_plugin_store` 経由のグローバル `settings.json` に `statuses` を読み書きするコードパスは存在してはならない (MUST NOT)。`get_statuses` / `save_statuses` / `list_tasks` のデフォルトステータス読み出しはすべて `.cork.json` ベースに置き換わる (SHALL)。
+  > `tauri_plugin_store` 経由のグローバル `settings.json` に `statuses` を読み書きするコードパスは存在してはならない (MUST NOT)。`get_statuses` / `save_statuses` / `list_tasks` のデフォルトステータス読み出しはすべて `.cork.json` ベースに置き換わる (SHALL)。
+--- candidata: backend-update-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Update task command
+  | The Tauri backend SHALL provide a `update_task` command that updates a task's frontmatter fields (title, status) and body in a single call, and renames the file when the title changes.
+--- candidata: create-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: User can create a task
+  | The system SHALL allow users to create a new task from the board view.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O app registra os plugins updater e process no Tauri. A spec trata da exclusão de tarefas.

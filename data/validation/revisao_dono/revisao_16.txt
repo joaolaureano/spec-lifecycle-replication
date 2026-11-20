@@ -1,0 +1,477 @@
+===== P094 | aehrc/pathling PR #2551 | capacidade do par: r-search-to-column
+PR: v9.4.0
+arquivos ligados: lib/R/R/context.R;lib/R/tests/testthat/test-context.R
+--- linhas alteradas (174; mostrando até 40)
++#' Evaluate a FHIRPath expression against a single FHIR resource
++#'
++#' Evaluates a FHIRPath expression against a single FHIR resource provided as a JSON string and
++#' returns materialised typed results. The resource is encoded into a one-row Spark Dataset
++#' internally, and the existing FHIRPath engine is used to evaluate the expression.
++#'
++#' @param pc The PathlingContext object.
++#' @param resource_type A string containing the FHIR resource type code (e.g., "Patient",
++#'   "Observation").
++#' @param resource_json A string containing the FHIR resource as JSON.
++#' @param fhirpath_expression A FHIRPath expression to evaluate (e.g., "name.family",
++#'   "gender = 'male'").
++#' @param context_expression An optional context expression string. If provided, the main
++#'   expression is evaluated once for each result of the context expression. Defaults to NULL.
++#' @param variables An optional named list of variables available via \code{\%variable} syntax.
++#'   Defaults to NULL.
++#'
++#' @return A list with two elements:
++#'   \describe{
++#'     \item{\code{results}}{A list of lists, each containing \code{type} (character) and
++#'       \code{value} (the materialised R value or NULL).}
++#'     \item{\code{expectedReturnType}}{A character string indicating the inferred return type.}
++#'   }
++#'
++#' @importFrom sparklyr invoke j_invoke j_invoke_new spark_connection
++#'
++#' @family context functions
++#'
++#' @export
++#'
++#' @examples \dontrun{
++#' pc <- pathling_connect()
++#' patient_json <- '{"resourceType": "Patient", "id": "example", "gender": "male"}'
++#' result <- pathling_evaluate_fhirpath(pc, "Patient", patient_json, "gender")
++#' for (entry in result$results) {
++#'   cat(entry$type, ": ", entry$value, "\n")
++#' }
++#' pathling_disconnect(pc)
++#' }
++pathling_evaluate_fhirpath <- function(pc, resource_type, resource_json,
+--- candidata: r-evaluate-fhirpath [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  | The R library SHALL provide an exported function
+  > ### Requirement: R library exposes pathling_evaluate_fhirpath function
+  > `pathling_evaluate_fhirpath(pc, resource_type, resource_json, fhirpath_expression, context_expression, variables)`
+  > that invokes the Java `PathlingContext.evaluateFhirPath()` method via sparklyr's
+  > `j_invoke` and returns an R list containing the typed results and the expected
+  > The `context_expression` and `variables` parameters SHALL be optional, defaulting
+  > #### Scenario: Simple string expression
+  > - **WHEN** `pathling_evaluate_fhirpath(pc, "Patient", patient_json, "name.family")` is called with a Patient JSON containing family name "Smith"
+  > - **THEN** the returned list contains `results` with one entry having `type = "string"` and `value = "Smith"`, and `expectedReturnType = "string"`
+--- candidata: fhirpath-evaluation-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Evaluate FHIRPath expression against a single resource
+  | The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > ### Requirement: Evaluate FHIRPath expression against a single resource
+  > The library API SHALL provide a method that accepts a FHIR resource (as a JSON
+  > string), a FHIRPath expression string, an optional context expression string,
+  > and optional variables, and returns a list of typed result values.
+  > The method SHALL use the existing Pathling FHIRPath engine (Spark-based) to
+  > evaluate the expression, encoding the resource into a one-row Dataset
+  > internally.
+  > #### Scenario: Simple expression evaluation
+--- candidata: fhirpath-lab-server [PR]
+  | ## ADDED Requirements
+  | ### Requirement: POST /$fhirpath-r4 endpoint
+  | The server SHALL expose a `POST /$fhirpath-r4` endpoint that accepts a FHIR
+  > Parameters resource as the request body (Content-Type: `application/json`) and
+  > returns a FHIR Parameters resource as the response.
+  > #### Scenario: Successful expression evaluation
+  > resource containing an `expression` and a `resource` parameter
+  > - **THEN** the server returns HTTP 200 with a FHIR Parameters resource
+  > containing the evaluation results
+  > #### Scenario: Missing required expression parameter
+  > - **WHEN** a POST request is sent without an `expression` parameter
+--- candidata: r-fhirpath-helpers [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  | The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > ### Requirement: pathling_filter filters a DataFrame using a FHIRPath expression
+  > The R library SHALL provide an exported function `pathling_filter(df, pc, resource_type, expression, type = "fhirpath")` that filters a `tbl_spark` using a FHIRPath boolean expression and returns a `t
+  > #### Scenario: Filter patients by gender using FHIRPath
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows where gender equals male
+  > #### Scenario: Filter with combined boolean expression
+  > - **WHEN** `patients %>% pathling_filter(pc, "Patient", "gender = 'male' and birthDate > @1970-01-01")` is called
+  > - **THEN** the returned `tbl_spark` SHALL contain only Patient rows matching both conditions
+--- candidata: fhirpath-to-column-r [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: R library exposes pc_fhirpath_to_column function
+  | The R library SHALL provide an exported function `pc_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_inv
+  > The R library SHALL provide an exported function `pc_fhirpath_to_column(pc, resource_type, fhirpath_expression)` that invokes the Java `PathlingContext.fhirPathToColumn()` method via sparklyr's `j_inv
+  > #### Scenario: Boolean expression returns a Column for filtering
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "gender = 'male'")` is called
+  > - **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to filter Patient rows
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "name.given.first()")` is called
+  > - **THEN** the returned `spark_jobj` Column can be used with sparklyr operations to extract values
+  > #### Scenario: Invalid expression raises an error
+  > - **WHEN** `pc %>% pc_fhirpath_to_column("Patient", "!!invalid!!")` is called
+
+===== P095 | Yourdaylight/stock_datasource PR #59 | capacidade do par: data-management
+PR: 新增港股财务指标数据
+arquivos ligados: src/stock_datasource/modules/datamanage/schemas.py;src/stock_datasource/modules/datamanage/service.py
+--- linhas alteradas (172; mostrando até 40)
++    HK_STOCK = "hk_stock"    # 港股相关
++            "tushare_stock_company",    # dim table - company info
++            "tushare_index_member",     # dim table - index members
++            "tushare_ths_member",       # dim table - THS index members
++            "tushare_etf_index",        # dim table - ETF index info
++            "tushare_report_rc": "report_date",  # report recommendations use report_date
++            # VIP financial statement plugins (use ann_date or end_date)
++            "tushare_balancesheet_vip": "ann_date",
++            "tushare_cashflow_vip": "ann_date",
++            "tushare_income_vip": "ann_date",
++            # Hong Kong financial statement plugins (use end_date)
++            "tushare_hk_balancesheet": "end_date",
++            "tushare_hk_cashflow": "end_date",
++            "tushare_hk_income": "end_date",
++            "tushare_hk_fina_indicator": "end_date",
++    def _batch_get_latest_dates(self, table_date_map: Dict[str, str]) -> Dict[str, Optional[str]]:
++        """Batch query latest dates for multiple tables in a single SQL.
++        Args:
++            table_date_map: {table_name: date_column} for tables that have date columns
++        Returns:
++            {table_name: latest_date_str or None}
++        """
++        if not table_date_map:
++            return {}
++        results: Dict[str, Optional[str]] = {t: None for t in table_date_map}
++        db_name = db_client.primary.database if hasattr(db_client, 'primary') else db_client.database
++        try:
++            # Step 1: Verify which (table, column) pairs actually exist via system.columns
++            table_names = list(table_date_map.keys())
++            placeholders = ", ".join(f"'{t}'" for t in table_names)
++            col_check_query = f"""
++            SELECT table, name
++            FROM system.columns
++            WHERE database = '{db_name}'
++            AND table IN ({placeholders})
++            """
++            col_df = db_client.execute_query(col_check_query)
++            if col_df.empty:
++                return results
++            # Build set of existing (table, column) pairs
+--- candidata: predefined-plugin-groups [tasks]
+  | # predefined-plugin-groups Specification
+  | ## Purpose
+  | 提供预定义的插件组合，基于表依赖关系自动配置，覆盖常见的数据同步场景，用户可直接使用这些组合进行一键同步。
+  > # predefined-plugin-groups Specification
+  > - **WHEN** 调用 `GET /api/datamanage/groups?category=cn_stock`
+  > - **GIVEN** 预定义组合 `predefined_financial_basic` 包含插件：
+  > - **WHEN** 调用 `POST /api/datamanage/groups/predefined_financial_basic/trigger`
+  > - **GIVEN** 预定义组合包含插件 `tushare_income_vip`
+  > - **GIVEN** 预定义组合 `predefined_financial_basic`
+  > - **WHEN** 调用 `GET /api/datamanage/groups/predefined_financial_basic`
+  > - **AND** 包含 `plugin_status` 字段表示各插件状态
+--- candidata: hk-financial-plugins [PR]
+  | # Specification: HK Financial Plugins
+  | ## Capability Overview
+  | 港股财务数据采集和查询能力，支持港股财务指标、资产负债表、利润表和现金流量表数据。
+  > And ods_hk_stock_list 表中有港股列表
+  > Then 返回 report_type='Q4' 且 end_date 为 2024 年末的记录
+  > And 每个财务科目存储为一行（ts_code, end_date, ind_name, ind_value）
+  > And 结果按 end_date 降序排列
+  > | end_date | Date | 报告期 |
+  > | report_type | String | 报告期类型 |
+  > | end_date | Date | 报告期 |
+  > GET /api/hk/financial/indicator
+--- candidata: news-datasources [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Tushare News Flash Integration
+  | The system SHALL fetch short news flashes from 9 financial media sources via the Tushare `news` API, supporting source filtering by `src` parameter (sina, wallstreetcn, 10jqka, eastmoney, yuncaijing, 
+  > The system SHALL fetch short news flashes from 9 financial media sources via the Tushare `news` API, supporting source filtering by `src` parameter (sina, wallstreetcn, 10jqka, eastmoney, yuncaijing, 
+  > - **WHEN** a request is made with `src=sina`, `start_date=2026-03-06 09:00:00`, `end_date=2026-03-06 18:00:00`
+  > - **THEN** the system returns up to 1500 news items with `datetime`, `content`, `title`, `channels` fields
+  > - **AND** each item is mapped to a `NewsItem` with category `FLASH`
+  > - **WHEN** no specific source is provided for the flash news category
+  > - **THEN** the system fetches sources with grouped concurrency and per-group sequential rate limiting (≥1s interval)
+  > The system SHALL fetch long-form news articles from major financial media via the Tushare `major_news` API, supporting source filtering (新华网, 凤凰财经, 同花顺, 新浪财经, 华尔街见闻, 中证网, 财新网, 第一财经, 财联社).
+  > - **THEN** the system returns news items with `title`, `content`, `pub_time`, `src` fields
+--- candidata: qmt-market-data [termos]
+  | ## ADDED Requirements
+  | ### Requirement: QMT gateway configuration
+  | The system SHALL support QMT market data access through a configurable gateway endpoint rather than requiring `xtquant` inside the main service process.
+  > The system SHALL support QMT market data access through a configurable gateway endpoint rather than requiring `xtquant` inside the main service process.
+  > - **WHEN** the system initializes QMT market data access
+  > - **THEN** the system fails gracefully with an actionable error message
+  > The system SHALL support QMT as a selectable provider for historical market data in logical行情 plugins.
+  > - **GIVEN** a historical行情 plugin has `data_source = "tushare"` as its default
+  > - **WHEN** the user runs the plugin without a per-sync data-source override
+  > - **THEN** the plugin uses the default TuShare provider
+  > - **GIVEN** a historical行情 plugin supports providers `tushare` and `qmt`
+--- candidata: open-api-gateway [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Open API Scope Restriction (CRITICAL)
+  | The Open API Gateway SHALL only expose interfaces generated by `ServiceGenerator` from plugin services (`src/stock_datasource/plugins/*/service.py`). The system SHALL obtain the list of exposable inte
+  > The Open API Gateway SHALL only expose interfaces generated by `ServiceGenerator` from plugin services (`src/stock_datasource/plugins/*/service.py`). The system SHALL obtain the list of exposable inte
+  > - **WHEN** an external user requests `/api/open/v1/stock_daily/query` and `stock_daily` is a registered plugin
+  > - **WHEN** an external user attempts to access `/api/open/v1/market/kline` or any module-based path
+  > - **THEN** the system returns HTTP 404 (the route does not exist in Open API namespace)
+  > - **THEN** the system returns HTTP 404 (the route does not exist in Open API namespace)
+  > - **WHEN** an external user attempts to access `/api/open/v1/auth/login` or similar system paths
+  > - **THEN** the system returns HTTP 404 (the route does not exist in Open API namespace)
+  > #### Scenario: Unknown plugin is rejected
+
+===== P096 | daemonicai/dmon-core PR #28 | capacidade do par: ollama-provider
+PR: feat(providers): honour custom baseUrl in OpenAI model listing
+arquivos ligados: src/Dmon.Providers.Ollama/OllamaProviderFactory.cs
+--- linhas alteradas (4; mostrando até 40)
+-        string? apiKey, CancellationToken cancellationToken = default)
++        string? apiKey, string? baseUrl = null, CancellationToken cancellationToken = default)
+-            IReadOnlyList<DmonModelInfo> models = await GetAvailableModelsAsync(baseUrl, cancellationToken).ConfigureAwait(false);
++            IReadOnlyList<DmonModelInfo> models = await GetAvailableModelsAsync(baseUrl, cancellationToken: cancellationToken).ConfigureAwait(false);
+--- candidata: provider-model-listing [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: ModelModelsCommand requests live model list for a named provider
+  | The protocol SHALL include a `ModelModelsCommand` with a required `provider` string property. The core SHALL route this command to `ModelModelsHandler`.
+  > The protocol SHALL include a `ModelModelsResultEvent` with properties `Provider` (string), `Models` (IReadOnlyList<string>), and `ActiveModelId` (string?). This event is emitted in response to `ModelM
+  > - **THEN** `ModelModelsResultEvent` is emitted with `Models = []` (empty list, falling back to factory default via `GetAvailableModelsAsync`)
+  > `ModelModelsHandler` SHALL apply a 5-second timeout to the `GetAvailableModelsAsync` call. On timeout it SHALL return a `ModelModelsResultEvent` with an empty `Models` list (factory fallback behaviour
+  > The protocol SHALL include a `ModelModelsResultEvent` with properties `Id` (string, the originating command id, serialized as `id`), `Provider` (string), `Models` (IReadOnlyList<string>), and `ActiveM
+  > - **THEN** `ModelModelsResultEvent` is emitted with `Models = []` (empty list, falling back to factory default via `GetAvailableModelsAsync`)
+  > `IProviderFactory` SHALL declare `ValueTask<IReadOnlyList<ModelInfo>> GetAvailableModelsAsync(string? apiKey, string? baseUrl = null, CancellationToken cancellationToken = default)`. The `baseUrl` par
+  > - **THEN** it has a `GetAvailableModelsAsync` member matching the signature above, with `baseUrl` preceding `cancellationToken`
+  > - **WHEN** `GetAvailableModelsAsync` is called on an implementor that uses the default
+--- candidata: provider-factories [termos]
+  | ## ADDED Requirements
+  | ### Requirement: IProviderFactory interface for pluggable client construction
+  | The system SHALL define `IProviderFactory` in `Daemon.Core` with three members: `string AdapterName`, `ChatClientCapabilities GetCapabilities(string modelId)`, and `ValueTask<IChatClient> CreateAsync(
+  > The system SHALL define `IProviderFactory` in `Daemon.Core` with three members: `string AdapterName`, `ChatClientCapabilities GetCapabilities(string modelId)`, and `ValueTask<IChatClient> CreateAsync(
+  > The system SHALL define `IProviderFactory` in `Dmon.Abstractions` with four members: `string AdapterName`, `ChatClientCapabilities GetCapabilities(string modelId)`, `ValueTask<IChatClient> CreateAsync
+  > - **WHEN** an external type implements `IProviderFactory` without defining `GetAvailableModelsAsync`
+  > The `Dmon.Providers` project SHALL contain `OpenAiProviderFactory`, `AnthropicProviderFactory`, and `GeminiProviderFactory`, each implementing `IProviderFactory` including `GetAvailableModelsAsync`. `
+  > - **WHEN** `GetAvailableModelsAsync(null, CancellationToken.None)` is called on any built-in factory
+  > The system SHALL define `IProviderFactory` in `Dmon.Abstractions` with four members: `string AdapterName`, `ChatClientCapabilities GetCapabilities(string modelId)`, `ValueTask<IChatClient> CreateAsync
+  > - **WHEN** an external type implements `IProviderFactory` without defining `GetAvailableModelsAsync`
+  > The `Dmon.Providers` project SHALL contain `OpenAiProviderFactory`, `AnthropicProviderFactory`, and `GeminiProviderFactory`, each implementing `IProviderFactory` including `GetAvailableModelsAsync`. `
+--- candidata: provider-registry [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Config-driven provider registry
+  | The system SHALL maintain a registry of named LLM providers, each resolved to an `IChatClient` instance from configuration. Providers are defined in `.daemon/config.yaml` (project) or `~/.daemon/confi
+  > - `openai` — OpenAI .NET SDK; supports custom `baseUrl` for Ollama, llama.cpp, oMLX
+  > - **WHEN** a provider is configured with adapter `openai` and a `baseUrl` of `http://localhost:11434/v1`
+  > - **WHEN** a provider is configured with adapter `anthropic` and a `baseUrl` pointing to an oMLX instance
+  > **Migration**: Replace calls to internal `CreateClientAsync` with `_factories[config.Adapter].CreateAsync(config, apiKey, cancellationToken)`. Existing behaviour is preserved by the three built-in fac
+  > `IProviderRegistry` SHALL expose `void SetModel(string modelId)`. Calling `SetModel` SHALL queue the model ID for application at the next `CommitPendingSwitch` call. If the model ID is not found in th
+  > The `providers` block SHALL be a map keyed by provider name. `ProviderConfigLoader` SHALL validate this shape at load time and throw `InvalidOperationException` with an actionable message when the blo
+  > - **WHEN** the `providers` block is a map keyed by name, each entry carrying `adapter` and optionally `defaultModelId`, `baseUrl`, and an `auth` block
+  > - **WHEN** a factory for adapter `openai` is wired AND `config.yaml` declares a provider with `adapter: openai` and a custom `baseUrl`/`defaultModelId`
+
+===== P097 | localstack/lstk PR #328 | capacidade do par: cdk-proxy
+PR: feat(terraform): redirect S3 backend and remote-state to LocalStack
+arquivos ligados: cmd/terraform.go
+--- linhas alteradas (17; mostrando até 40)
+-			// Unproxied subcommands (fmt/validate/version) never touch the
+-			// endpoint, so they run without requiring a running emulator.
+-			if tfcli.IsUnproxied(tfArgs) {
++			workdir, err := os.Getwd()
++			if err != nil {
++				return fmt.Errorf("resolving working directory: %w", err)
++			}
++			// -chdir switches terraform into another directory, so the S3-backend
++			// detection that decides whether an emulator is required must inspect
++			// that directory too (matching the resolution Run does internally).
++			if chdir != "" {
++				workdir = tfcli.ResolveChdir(workdir, chdir)
++			}
++			// Commands that don't need the emulator (fmt/validate/version, and
++			// init when no S3 backend is declared) run without bringing up or
++			// requiring a running emulator.
++			if !tfcli.RequiresEmulator(tfArgs, workdir, logger) {
+--- candidata: terraform-proxy [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: S3 backend redirection
+  | When the working directory declares a `terraform { backend "s3" {} }` block, the system SHALL redirect the backend to the running LocalStack AWS emulator so that Terraform state is read from and writt
+  > ### Requirement: S3 backend redirection
+  > When the working directory declares a `terraform { backend "s3" {} }` block, the system SHALL redirect the backend to the running LocalStack AWS emulator so that Terraform state is read from and writt
+  > The system SHALL write the backend redirection into the same generated override file used for provider overrides (default `localstack_providers_override.tf`, configurable via `LSTK_TF_OVERRIDE_FILE_NA
+  > The backend endpoint set (`s3`, `dynamodb`, `iam`, `sts`, `sso`) SHALL be fixed and SHALL NOT be derived from the AWS provider schema; backend redirection therefore does not require the provider to be
+  > Backends other than `s3` SHALL NOT be modified; the system SHALL forward such configurations to `terraform` unchanged.
+  > #### Scenario: S3 backend present is redirected to LocalStack
+  > - **WHEN** the working directory contains a `terraform { backend "s3" {} }` block and the user runs `lstk terraform init`
+  > - **THEN** the generated override file contains a backend configuration pointing `s3`/`dynamodb`/`iam`/`sts`/`sso` at the resolved LocalStack endpoint with mock credentials and skip flags
+--- candidata: sam-proxy [termos]
+  | ## ADDED Requirements
+  | ### Requirement: SAM CLI proxy command
+  | The system SHALL provide an `lstk sam` command that forwards all of its arguments to the real AWS SAM CLI (`sam`) and, before invoking it, configures the subprocess environment to target the running L
+  > The system SHALL provide an `lstk sam` command that forwards all of its arguments to the real AWS SAM CLI (`sam`) and, before invoking it, configures the subprocess environment to target the running L
+  > #### Scenario: Inject LocalStack endpoint into the SAM environment
+  > - **THEN** the `sam` subprocess receives `AWS_ENDPOINT_URL` set to the resolved LocalStack endpoint, and lstk does not set `AWS_ENDPOINT_URL_S3` or any S3 path-style configuration (SAM's botocore auto
+  > #### Scenario: Honor an explicit endpoint override
+  > - **THEN** lstk uses that value instead of the auto-resolved endpoint
+  > #### Scenario: Honor an explicit S3 endpoint override
+  > ### Requirement: Minimum SAM CLI version
+  > The system SHALL require AWS SAM CLI version `1.95.0` or newer, the version from which SAM honors `AWS_ENDPOINT_URL`, because lstk points SAM at LocalStack purely through environment variables, which 
+--- candidata: json-flag [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Global --json flag on built-in commands
+  | The root command SHALL register a persistent `--json` boolean flag, alongside `--non-interactive`, whose resolved value SHALL be exposed to every built-in command via `env.Env`.
+  > - **THEN** Cobra accepts the flag without error and `env.Env.JSON` is `true` for that invocation
+  > - **WHEN** `lstk <any built-in command>` is invoked without `--json`
+  > When `--json` is set, `lstk` SHALL NOT launch the interactive Bubble Tea TUI and SHALL NOT block waiting on stdin input, regardless of whether stdout is a TTY.
+  > #### Scenario: --json alone is sufficient, without --non-interactive
+  > - **WHEN** `lstk start --json` is run without also passing `--non-interactive`
+  > For each proxy command (`aws`, `terraform`, `cdk`, `sam`, `az`), `lstk` SHALL recognize `--json`/`--json=<value>` when it appears in the raw invocation before that command's own name/alias, and SHALL 
+  > - **WHEN** `lstk --json aws <args>` (or the `terraform`/`cdk`/`sam`/`az` equivalent) is run
+  > - **THEN** lstk rejects the invocation the same way as any other unsupported command, naming the proxy command, and the wrapped tool is never invoked
+
+===== P098 | Larusso/unity-version-manager PR #456 | capacidade do par: download-modules-json-command
+PR: Add installation progress reporting
+arquivos ligados: uvm/src/commands/mod.rs
+--- linhas alteradas (19; mostrando até 40)
+-pub mod list;
+-pub mod install;
+-pub mod uninstall;
+-pub mod version;
++#[cfg(feature = "dev-commands")]
++pub mod download_modules_json;
+-pub mod presentation;
++pub mod gc;
++pub mod install;
++pub mod list;
+-pub mod gc;
+-#[cfg(feature = "dev-commands")]
+-pub mod download_modules_json;
++pub mod presentation;
++pub mod progress;
++pub mod uninstall;
++pub mod version;
+-}
++}
+--- candidata: installation-progress [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Display download progress with metrics
+  | The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > ### Requirement: Display download progress with metrics
+  > The system SHALL display real-time download progress for each installer component including current size, total size, download speed, and estimated time remaining.
+  > #### Scenario: Download progress updates during file transfer
+  > - **WHEN** a Unity installer package is being downloaded
+  > - **THEN** the system displays a progress bar showing bytes downloaded, total bytes, current speed in MB/s, and updates at least once per second
+  > #### Scenario: Multiple components show individual progress
+  > - **WHEN** installing Unity editor with multiple modules
+  > - **THEN** each component displays its own progress bar with individual download metrics
+--- candidata: cargo-release-skill [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Skill detects changed crates since last release
+  | The skill SHALL detect which workspace crates have changes since their last release by comparing against git tags.
+  > - **AND** crate `uvm_install` has commits since tag `uvm_install-v0.20.0`
+  > - **THEN** the skill reports `uvm_install` as changed
+  > The skill SHALL present a release plan showing changed crates and their proposed release order, allowing user to select version bump level.
+  > - **WHEN** the skill shows changed crates [uvm_install, unity-hub]
+  > - **AND** the skill shows the resulting new versions
+  > The skill SHALL analyze code changes for each crate and suggest an appropriate version bump level based on heuristics.
+  > - **WHEN** analyzing `uvm_install` changes since last tag
+  > #### Scenario: New features detected
+--- candidata: incremental-modules-sync [termos]
+  | ## ADDED Requirements
+  | ### Requirement: System writes modules.json after each module installation
+  | The system SHALL write `modules.json` to disk after each module completes installation, updating the `is_installed` flag for that module.
+  > ### Requirement: System writes modules.json after each module installation
+  > The system SHALL write `modules.json` to disk after each module completes installation, updating the `is_installed` flag for that module.
+  > #### Scenario: Successful module installation updates state
+  > - **WHEN** a module installation completes successfully
+  > - **THEN** the system writes `modules.json` with that module's `is_installed` set to `true`
+  > #### Scenario: Failed module installation updates state
+  > - **WHEN** a module installation fails
+  > - **THEN** the system writes `modules.json` with that module's `is_installed` remaining `false`
+
+===== P099 | spencermarx/open-code-review PR #40 | capacidade do par: reviewer-management
+PR: fix: vendor model enumeration — single-source strategy table, disclosed fallbacks, per-strategy e2e (#39)
+arquivos ligados: packages/cli-e2e/src/agent-sessions.test.ts;packages/cli/src/commands/models.ts;packages/cli/src/lib/__tests__/models.test.ts;packages/cli/src/lib/models.ts;packages/dashboard/src/server/routes/team.ts
+--- linhas alteradas (725; mostrando até 40)
+-describe("ocr models list", () => {
+-  it("emits a JSON array with --json", async () => {
+-    const project = tracked(createInitializedProject());
+-    // --vendor flag bypasses PATH detection so the test runs without
+-    // requiring claude/opencode binaries on the CI runner.
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "claude", "--json"],
+-      { cwd: project.dir },
+-    );
+-    expect(result.exitCode).toBe(0);
+-    const parsed = JSON.parse(result.stdout);
+-    expect(Array.isArray(parsed)).toBe(true);
+-    expect(parsed.length).toBeGreaterThan(0);
+-    // Every entry has at minimum an id string
+-    for (const model of parsed) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
+-    }
+-  });
+-  it("opencode bundled fallback uses provider-prefixed ids", async () => {
+-    const project = tracked(createInitializedProject());
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "opencode", "--json"],
+-      { cwd: project.dir },
+-    );
+-    const parsed = JSON.parse(result.stdout);
+-    // Bundled OpenCode ids include a `provider/` prefix; native enumeration
+-    // (when available) returns whatever opencode emits — we don't assert
+-    // shape there. Either way, ids must be non-empty strings.
+-    for (const model of parsed) {
+-      expect(typeof model.id).toBe("string");
+-      expect(model.id.length).toBeGreaterThan(0);
+-    }
+-  });
+-  it("rejects an unknown vendor", async () => {
+-    const project = tracked(createInitializedProject());
+-    const result = await spawnCli(
+-      ["models", "list", "--vendor", "nonexistent-vendor"],
+-      { cwd: project.dir },
+-    );
+--- candidata: cli [tasks+PR+termos]
+  | # Capability: CLI
+  | ## ADDED Requirements
+  | ### Requirement: CLI Package Distribution
+  > The CLI SHALL be distributed as an npm package (`@open-code-review/cli`) that can be executed via `npx`, `pnpm dlx`, or global installation.
+  > - **WHEN** user runs `npx @open-code-review/cli --help`
+  > - **THEN** the CLI help message is displayed
+  > - **GIVEN** user runs `npm install -g @open-code-review/cli`
+  > - **THEN** the CLI help message is displayed
+  > - **WHEN** user runs `pnpm dlx @open-code-review/cli init`
+  > - **THEN** the init command executes
+  > ### Requirement: Init Command
+--- candidata: dashboard [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Session List
+  | The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > #### Scenario: Sessions exist
+  > - **GIVEN** one or more sessions exist in SQLite
+  > - **WHEN** user opens the dashboard
+  > - **THEN** sessions are listed sorted by `updated_at` descending
+  > - **AND** each session shows: branch name, status badge (active/closed), current phase, workflow type (review/map), start date, elapsed time
+  > - **GIVEN** no sessions exist in SQLite
+  > - **WHEN** user opens the dashboard
+--- candidata: sqlite-state [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: SQLite as Single Source of Truth
+  | The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > - **GIVEN** OCR is initialized in a project
+  > - **AND** the database file SHALL be gitignored
+  > - **THEN** it SHALL contain three distinct layers:
+  > - Workflow state layer (`sessions`, `orchestration_events`) — written by agents via `ocr state` CLI
+  > - Artifact layer (`review_rounds`, `reviewer_outputs`, `review_findings`, `markdown_artifacts`, `map_runs`, `map_sections`, `map_files`) — written by FilesystemSync
+  > - User interaction layer (`user_file_progress`, `user_finding_progress`, `user_notes`, `command_executions`, `schema_version`) — written by dashboard
+  > #### Scenario: Shared consumers
+--- candidata: review-orchestration [tasks]
+  | # Review Orchestration
+  | Core multi-agent code review workflow orchestrated by the Tech Lead.
+  | ## ADDED Requirements
+  > Core multi-agent code review workflow orchestrated by the Tech Lead.
+  > The system SHALL provide a Tech Lead agent that orchestrates the complete code review process, coordinating context discovery, requirements analysis, reviewer assignment, discourse facilitation, and f
+  > #### Scenario: Complete review orchestration
+  > - **GIVEN** user requests a code review
+  > - **WHEN** the Tech Lead receives the request
+  > 1. Context Discovery (including requirements/specs)
+  > 8. Present
+  > - **GIVEN** change context and requirements have been gathered
+--- candidata: config [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Code Review Map Configuration
+  | The system SHALL support a `code-review-map` configuration section in `.ocr/config.yaml` that allows users to customize map generation behavior, including agent redundancy settings.
+  > The system SHALL support a `code-review-map` configuration section in `.ocr/config.yaml` that allows users to customize map generation behavior, including agent redundancy settings.
+  > - **GIVEN** user has not configured `code-review-map` in their config
+  > - **WHEN** map generation runs
+  > - **GIVEN** user configures `code-review-map` with custom redundancy values
+  > - **WHEN** config contains:
+  > code-review-map:
+  > - **THEN** the system SHALL spawn the configured number of each agent type
+  > code-review-map:

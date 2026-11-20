@@ -1,0 +1,3425 @@
+===== P248 | repo jdjingdian/StaticRouteHelper | PR #16:  fix(ui): unify settings entry and align route edit sheets | capacidade: os-conditional-observable
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: RouterService 条件式响应式框架
+`RouterService` SHALL 在 macOS 14.0 及以上使用 `@Observable`（Observation 框架），在 macOS 12–13 使用 `ObservableObject` + `@Published`。两条路径 SHALL 在同一个源文件中通过 `#if canImport(Observation)` + `@available(macOS 14, *)` 条件编译分隔，业务逻辑（XPC 调用、路由操作、socket 监听）不重复。
+
+#### Scenario: 在 macOS 14+ 编译时
+- **WHEN** 构建目标系统为 macOS 14+
+- **THEN** `RouterService` 使用 `@Observable` 宏，`helperStatus`、`systemRoutes`、`lastError` 属性无需 `@Published` 标注，视图通过类型化 `@Environment(RouterService.self)` 接收实例
+
+#### Scenario: 在 macOS 12–13 编译时
+- **WHEN** 构建目标系统为 macOS 12–13
+- **THEN** `RouterService` 遵循 `ObservableObject`，所有需响应的属性标注 `@Published`，视图通过 `@EnvironmentObject var routerService: RouterService` 接收实例
+
+### Requirement: Environment 注入按 OS 版本分支
+应用入口 (`StaticRouteHelperApp`) SHALL 按 OS 版本将 `RouterService` 以正确方式注入 SwiftUI 环境：
+- macOS 14+：`.environment(routerService)`（无 EnvironmentKey，依赖 `@Observable` 协议）
+- macOS 12–13：`.environmentObject(routerService)`
+
+#### Scenario: macOS 14+ 环境注入
+- **WHEN** 应用在 macOS 14 上运行，`routerService` 作为 `@State` 持有
+- **THEN** 视图层通过 `@Environment(RouterService.self)` 正确获取 `routerService`，无运行时崩溃
+
+#### Scenario: macOS 12–13 环境注入
+- **WHEN** 应用在 macOS 13 上运行，`routerService` 作为 `@StateObject` 持有
+- **THEN** 视图层通过 `@EnvironmentObject var routerService: RouterService` 正确获取实例，无运行时崩溃
+
+### Requirement: 两参数 onChange 降级
+`RouteEditSheet.swift` 中所有 `.onChange(of:) { old, new in }` 两参数闭包 SHALL 在 macOS 12–13 路径上替换为 `.onChange(of:perform:)` 单参数形式（macOS 12+ 可用），功能等价。
+
+#### Scenario: macOS 12 上编辑路由时字段联动
+- **WHEN** 用户在 macOS 12 上编辑路由，修改网关类型选择器
+- **THEN** 网关输入字段联动重置，行为与 macOS 14+ 一致
+
+--- ARQUIVOS DO PR (17)
+modified  +10    -6     StaticRouteHelper.xcodeproj/project.pbxproj
+added     +61    -0     StaticRouter/Services/SettingsNavigator.swift
+modified  +2     -2     StaticRouter/View/Customized/StatusBanner.swift
+modified  +56    -20    StaticRouter/View/LegacyRouteListView.swift   <== código ligado à spec
+modified  +6     -8     StaticRouter/View/MainWindow.swift
+modified  +7     -7     StaticRouter/View/RouteEditSheet.swift
+modified  +1     -1     StaticRouter/View/SidebarView.swift
+added     +2     -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/.openspec.yaml
+added     +91    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/design.md
+added     +27    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/proposal.md
+added     +24    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/main-navigation/spec.md
+added     +52    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/route-crud/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/status-banner/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/tasks.md
+modified  +13    -3     openspec/specs/main-navigation/spec.md
+modified  +19    -1     openspec/specs/route-crud/spec.md
+modified  +6     -0     openspec/specs/status-banner/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### StaticRouter/View/LegacyRouteListView.swift
+@@ -305,78 +305,114 @@ struct LegacyRouteEditSheet: View {
+     }
+ 
+     var body: some View {
+-        VStack(alignment: .leading, spacing: 20) {
+-            Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
+-                .font(.headline)
++        VStack(alignment: .leading, spacing: 14) {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
++                    .font(.title2.bold())
++                Text("Network / Gateway")
++                    .font(.footnote)
++                    .foregroundStyle(.secondary)
++            }
+ 
+             // Network + Prefix
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.destination.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.destination.label"), systemImage: "dot.scope")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+                 HStack(spacing: 8) {
+                     TextField("192.168.4.0", text: $network)
+                         .textFieldStyle(.roundedBorder)
+                         .overlay(
+                             RoundedRectangle(cornerRadius: 5)
+-                                .stroke(networkError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(networkError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                         )
+                         .onChange(of: network) { _ in validateNetwork() }
+ 
+                     Text("/").foregroundStyle(.secondary)
+ 
+                     TextField("24", value: $prefixLength, format: .number)
++                        .multilineTextAlignment(.center)
+                         .textFieldStyle(.roundedBorder)
+-                        .frame(width: 50)
++                        .frame(width: 68)
+                         .overlay(
+                             RoundedRectangle(cornerRadius: 5)
+-                                .stroke(prefixLengthError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(prefixLengthError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                         )
+                 }
++
++                Text("= \(subnetMaskPreview)")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++
+                 if let err = networkError {
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++                }
++                if let err = prefixLengthError {
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
+                 }
+             }
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+ 
+             // Gateway Type + Gateway
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.gateway.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.gateway.label"), systemImage: "arrow.triangle.turn.up.right.diamond")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+                 Picker(String(localized: "route.edit.field.gateway.label"), selection: $gatewayTypeStr) {
+                     Text(String(localized: "route.edit.gateway.ip_option")).tag("ipAddress")
+                     Text(String(localized: "route.edit.gateway.interface_option")).tag("interface")
+                 }
+-                .pickerStyle(.radioGroup)
++                .pickerStyle(.segmented)
+                 .onChange(of: gatewayTypeStr) { _ in gateway = ""; validateGateway() }
+ 
+                 TextField(gatewayTypeStr == "ipAddress" ? "10.0.0.1" : "utun3", text: $gateway)
+                     .textFieldStyle(.roundedBorder)
+                     .overlay(
+                         RoundedRectangle(cornerRadius: 5)
+-                            .stroke(gatewayError != nil ? Color.red : Color.clear, lineWidth: 1)
++                            .stroke(gatewayError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                     )
+                     .onChange(of: gateway) { _ in validateGateway() }
+ 
+                 if let err = gatewayError {
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
+                 }
+             }
+-
+-            Divider()
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+ 
+             HStack {
+                 Spacer()
+                 Button(String(localized: "route.edit.button.cancel")) { dismiss() }
+                     .keyboardShortcut(.cancelAction)
++                    .buttonStyle(.bordered)
+                 Button(isEditing ? String(localized: "route.edit.button.save") : String(localized: "route.edit.button.add")) { save() }
+                     .keyboardShortcut(.defaultAction)
++                    .buttonStyle(.borderedProminent)
+                     .disabled(!isFormValid)
+             }
++            .padding(.top, 4)
++            .padding(.horizontal, 2)
+         }
+-        .padding(24)
+-        .frame(width: 360)
++        .padding(20)
++        .frame(width: 460)
+         .onAppear { populate() }
+     }
+ 
++    private var subnetMaskPreview: String {
++        guard prefixLength >= 0, prefixLength <= 32 else { return String(localized: "route.edit.mask_preview.invalid") }
++        let mask: UInt32 = prefixLength == 0 ? 0 : (~UInt32(0) << (32 - prefixLength))
++        return "\((mask>>24)&0xFF).\((mask>>16)&0xFF).\((mask>>8)&0xFF).\(mask&0xFF)"
++    }
++
+     private func populate() {
+         guard let mo = existingMO else { return }
+         network = mo.network
+
+===== P249 | repo Juniper/nita-webapp | PR #62: changes to jenkins integration | capacidade: frontend-skeleton
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: SPA Build Tooling
+The system SHALL provide a `frontend/` directory at the repo root containing a Vite + React 18 + TypeScript project buildable with `npm run build`. The project SHALL use `@vitejs/plugin-react` and emit static assets to `frontend/dist/`.
+
+#### Scenario: Production build succeeds
+- GIVEN Node.js ≥ 20 is installed and `npm install` has been run in `frontend/`
+- WHEN `npm run build` is executed in `frontend/`
+- THEN the build exits with code 0
+- AND `frontend/dist/index.html` exists
+
+#### Scenario: Development server starts
+- GIVEN Node.js ≥ 20 is installed and `npm install` has been run in `frontend/`
+- WHEN `npm run dev` is executed in `frontend/`
+- THEN a local dev server starts (default port 5173)
+- AND requests to `/api/` are proxied to `http://localhost:8000`
+
+### Requirement: Dark Mode Default
+The system SHALL apply Tailwind CSS with `darkMode: 'class'` strategy. The `<html>` element SHALL have the `dark` class set before the React tree renders, making dark mode the default for all users.
+
+#### Scenario: Dark mode active by default
+- GIVEN the SPA is loaded in a browser
+- WHEN no user preference has been explicitly set
+- THEN the `<html>` element has the class `dark`
+- AND Tailwind dark-mode utility classes (e.g., `dark:bg-gray-900`) are applied
+
+### Requirement: Client-Side Routing
+The system SHALL use React Router v6 with two initial routes:
+- `GET /login` — renders `LoginPage` (accessible without authentication).
+- `GET /` — renders the authenticated shell; unauthenticated users are redirected to `/login`.
+
+#### Scenario: Unauthenticated root access redirects to login
+- GIVEN the user is not authenticated (GET /api/v1/auth/me/ returns 403)
+- WHEN the browser navigates to `/`
+- THEN the app redirects to `/login`
+
+#### Scenario: Authenticated root access renders dashboard
+- GIVEN the user is authenticated (GET /api/v1/auth/me/ returns 200)
+- WHEN the browser navigates to `/`
+- THEN `DashboardPage` is rendered showing the logged-in username
+
+#### Scenario: Direct login page access always renders
+- GIVEN any authentication state
+- WHEN the browser navigates to `/login`
+- THEN `LoginPage` is rendered without redirect
+
+### Requirement: Auth Context
+The system SHALL provide an `AuthContext` React context that:
+- Calls `GET /api/v1/auth/me/` on mount to determine session state.
+- Exposes `user: {id, username, is_superuser} | null` and a `logout()` function.
+- The `logout()` function calls `POST /api/v1/auth/logout/` and clears the `user` state.
+
+#### Scenario: Auth context detects existing session
+- GIVEN a Django session cookie is present in the browser
+- WHEN the app mounts and AuthContext initialises
+- THEN `user` is set to the logged-in user's info
+- AND the app renders the authenticated shell
+
+#### Scenario: Auth context detects no session
+- GIVEN no valid session cookie is present
+- WHEN the app mounts and AuthContext initialises
+- THEN `user` is null
+- AND the app redirects to `/login`
+
+### Requirement: CSRF-Aware API Client
+The system SHALL provide `src/api/client.ts` that wraps the browser `fetch` API:
+- For GET requests: forwards the request with `credentials: 'include'`.
+- For POST/PUT/PATCH/DELETE requests: first calls `GET /api/v1/auth/csrf/` (cached after first call) to obtain the CSRF token, then attaches it as the `X-CSRFToken` request header alongside `credentials: 'include'`.
+- The client SHALL default the `Content-Type` to `application/json` only when the request body is NOT a `FormData` instance and no `Content-Type` header has been supplied. For `FormData` bodies the client SHALL NOT set `Content-Type`, so the browser can supply the correct `multipart/form-data` boundary (forcing `application/json` causes the server to reject uploads with HTTP 415).
+
+#### Scenario: GET request is sent without CSRF header
+- GIVEN the API client is used to call a GET endpoint
+- WHEN the request is made
+- THEN no `X-CSRFToken` header is attached
+
+#### Scenario: POST request includes CSRF token
+- GIVEN the API client is used to call a POST endpoint
+- WHEN the request is made
+- THEN `X-CSRFToken` is present in the request headers with a non-empty value
+
+#### Scenario: JSON body gets a JSON content type
+- GIVEN the API client is used to POST a non-FormData body with no explicit Content-Type
+- WHEN the request is made
+- THEN the `Content-Type` header is set to `application/json`
+
+#### Scenario: FormData upload preserves the multipart boundary
+- GIVEN the API client is used to POST a `FormData` body
+- WHEN the request is made
+- THEN the client does NOT set a `Content-Type` header
+- AND the browser sets `Content-Type: multipart/form-data` with a boundary
+
+### Requirement: Login Page
+The system SHALL provide a `LoginPage` component that renders a username/password form. On submission it calls `POST /api/v1/auth/login/` via the API client. On success it updates `AuthContext` and redirects to `/`. On failure it displays an error message.
+
+#### Scenario: Successful login redirects to dashboard
+- GIVEN valid credentials are entered
+- WHEN the login form is submitted
+- THEN the user is redirected to `/`
+- AND the username is visible in the authenticated shell
+
+#### Scenario: Failed login shows error
+- GIVEN invalid credentials are entered
+- WHEN the login form is submitted
+- THEN an error message is displayed on the page
+- AND the user remains on `/login`
+
+### Requirement: Dashboard Shell Placeholder
+The system SHALL provide a `DashboardPage` component that renders when the user is authenticated. It SHALL display the logged-in username and a logout button. Clicking logout calls `AuthContext.logout()` and redirects to `/login`.
+
+#### Scenario: Dashboard shows username
+- GIVEN the user is authenticated
+- WHEN `DashboardPage` is rendered
+- THEN the page displays the user's username
+
+#### Scenario: Logout button redirects to login
+- GIVEN the user is on the dashboard
+- WHEN the logout button is clicked
+- THEN the user is redirected to `/login`
+- AND subsequent navigation to `/` redirects back to `/login`
+
+--- ARQUIVOS DO PR (35)
+modified  +10    -0     build-and-test-webapp/nita-webapp/ngcn_workbench/ngcn/api/serializers.py
+modified  +31    -0     build-and-test-webapp/nita-webapp/ngcn_workbench/ngcn/api/views.py   <== código ligado à spec
+modified  +48    -0     build-and-test-webapp/nita-webapp/ngcn_workbench/ngcn/jenkins_jobs.py
+modified  +8     -4     frontend/src/components/LifecycleConsole.tsx
+modified  +48    -29    frontend/src/components/LifecycleHistoryModal.tsx
+modified  +135   -43    frontend/src/pages/NetworkDetailPage.tsx
+modified  +21    -0     nginx/nginx.conf
+modified  +47    -0     openapi.yaml
+added     +2     -0     openspec/changes/archive/2026-07-06-action-jenkins-link/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-07-06-action-jenkins-link/design.md
+added     +39    -0     openspec/changes/archive/2026-07-06-action-jenkins-link/proposal.md
+added     +13    -0     openspec/changes/archive/2026-07-06-action-jenkins-link/specs/spa-networks/spec.md
+added     +25    -0     openspec/changes/archive/2026-07-06-action-jenkins-link/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-06-history-jenkins-link/.openspec.yaml
+added     +35    -0     openspec/changes/archive/2026-07-06-history-jenkins-link/design.md
+added     +42    -0     openspec/changes/archive/2026-07-06-history-jenkins-link/proposal.md
+added     +20    -0     openspec/changes/archive/2026-07-06-history-jenkins-link/specs/spa-networks/spec.md
+added     +25    -0     openspec/changes/archive/2026-07-06-history-jenkins-link/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-06-history-refresh-on-tab/.openspec.yaml
+added     +27    -0     openspec/changes/archive/2026-07-06-history-refresh-on-tab/proposal.md
+added     +25    -0     openspec/changes/archive/2026-07-06-history-refresh-on-tab/specs/spa-networks/spec.md
+added     +14    -0     openspec/changes/archive/2026-07-06-history-refresh-on-tab/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-06-history-view-live-stream/.openspec.yaml
+added     +68    -0     openspec/changes/archive/2026-07-06-history-view-live-stream/design.md
+added     +65    -0     openspec/changes/archive/2026-07-06-history-view-live-stream/proposal.md
+added     +18    -0     openspec/changes/archive/2026-07-06-history-view-live-stream/specs/spa-network-types/spec.md
+added     +44    -0     openspec/changes/archive/2026-07-06-history-view-live-stream/specs/spa-networks/spec.md
+added     +36    -0     openspec/changes/archive/2026-07-06-history-view-live-stream/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-06-test-robot-summary/.openspec.yaml
+added     +55    -0     openspec/changes/archive/2026-07-06-test-robot-summary/design.md
+added     +39    -0     openspec/changes/archive/2026-07-06-test-robot-summary/proposal.md
+added     +23    -0     openspec/changes/archive/2026-07-06-test-robot-summary/specs/spa-networks/spec.md
+added     +29    -0     openspec/changes/archive/2026-07-06-test-robot-summary/tasks.md
+modified  +6     -7     openspec/specs/spa-network-types/spec.md
+modified  +75    -17    openspec/specs/spa-networks/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### build-and-test-webapp/nita-webapp/ngcn_workbench/ngcn/api/views.py
+@@ -876,6 +876,37 @@ def stream(self, request, pk=None):
+         build_no = history.jenkins_job_build_no
+         return jenkins_jobs.stream_response(job_url, build_no)
+ 
++    @extend_schema(
++        responses={
++            200: {
++                "type": "object",
++                "properties": {
++                    "available": {"type": "boolean"},
++                    "total": {"type": "integer"},
++                    "passed": {"type": "integer"},
++                    "failed": {"type": "integer"},
++                    "skipped": {"type": "integer"},
++                    "pass_percentage": {"type": "number"},
++                },
++            }
++        },
++    )
++    @action(detail=True, methods=["get"], url_path="robot-summary")
++    def robot_summary(self, request, pk=None):
++        """Return the Robot Framework result totals for this run's Jenkins build.
++
++        Relays the Jenkins Robot Framework plugin summary. Returns
++        ``{"available": false}`` when the build has no Robot results.
++        """
++        from ngcn import jenkins_jobs
++
++        history = self.get_object()
++        job_url = history.action_id.jenkins_url + "-" + history.campus_network_id.name
++        summary = jenkins_jobs.robot_summary(job_url, history.jenkins_job_build_no)
++        if summary is None:
++            return Response({"available": False})
++        return Response({"available": True, **summary})
++
+ 
+ class JenkinsJobStreamView(APIView):
+     """Generic authenticated SSE stream of any Jenkins job build's console.
+
+===== P250 | repo opencue/gitguardex | PR #665: chore(openspec): tick verification tasks for multi-agent worktree change | capacidade: split-main-cli-into-subcommands
+--- SPEC VIVA
+# split-main-cli-into-subcommands Specification
+
+## Purpose
+TBD - created by archiving change agent-claude-split-main-cli-into-subcommands-2026-05-17-00-33. Update Purpose after archive.
+## Requirements
+### Requirement: cli main module SHALL be a thin dispatcher
+`src/cli/main.js` SHALL contain only the dispatch table for `gx`, the
+deprecated-alias warning hop, and the no-args default flow
+(cockpit + status + auto-doctor). All subcommand handler bodies SHALL live
+in `src/cli/commands/<verb>.js`, and shared scaffolding/sandbox helpers
+SHALL live in `src/cli/shared/`.
+
+#### Scenario: dispatcher size budget
+- **WHEN** the refactor is complete
+- **THEN** `wc -l src/cli/main.js` reports fewer than 300 lines
+- **AND** `src/cli/commands/` contains one module per dispatched verb (or a
+  small cluster of closely-related verbs)
+- **AND** `src/cli/shared/` exposes the cross-command scaffolding, sandbox,
+  environment, and toolchain-shim helpers as a require()-able surface.
+
+#### Scenario: byte-identical CLI surface
+- **WHEN** `gx --help`, `gx --version`, `gx doctor --help`, and
+  `gx locks --help` are invoked before and after the refactor
+- **THEN** stdout, stderr, and exit codes are byte-identical.
+
+#### Scenario: test suite is regression-free
+- **WHEN** `npm test` is run on the refactored worktree
+- **THEN** the failing test set is identical to the pre-refactor `main`
+  baseline (no new failures introduced; pre-existing flaky/environment-
+  dependent failures still flake unchanged).
+
+
+--- ARQUIVOS DO PR (13)
+modified  +7     -3     .agent/STALLED-WORKTREE-RECOVERY.md
+added     +2     -0     openspec/changes/agent-claude-autofinish-watcher-lock-ttl-orphan-sweep-2026-06-30-02-05/.openspec.yaml
+added     +19    -0     openspec/changes/agent-claude-autofinish-watcher-lock-ttl-orphan-sweep-2026-06-30-02-05/proposal.md
+added     +34    -0     openspec/changes/agent-claude-autofinish-watcher-lock-ttl-orphan-sweep-2026-06-30-02-05/specs/autofinish-watcher-lock-ttl-orphan-sweep-for-multi-agent-worktrees/spec.md
+added     +34    -0     openspec/changes/agent-claude-autofinish-watcher-lock-ttl-orphan-sweep-2026-06-30-02-05/tasks.md
+added     +280   -0     scripts/agent-autofinish-watch.sh
+modified  +12    -0     src/cli/args.js
+modified  +37    -0     src/finish/index.js
+modified  +138   -2     templates/scripts/agent-file-locks.py
+added     +117   -0     test/agent-autofinish-watch.test.js
+added     +101   -0     test/agent-file-locks-reap.test.js
+modified  +9     -0     test/cli-args-dispatch.test.js   <== código ligado à spec
+added     +31    -0     test/finish-orphan-sweep.test.js
+--- DIFF DO CÓDIGO LIGADO
+### test/cli-args-dispatch.test.js
+@@ -300,6 +300,15 @@ test('parseFinishArgs rejects non-agent branches and preserves explicit override
+   assert.equal(options.commitMessage, 'Finish the active lane');
+ });
+ 
++test('parseFinishArgs sweepOrphans defaults on and toggles', () => {
++  assert.equal(parseFinishArgs([]).sweepOrphans, true);
++  assert.equal(parseFinishArgs(['--all']).sweepOrphans, true);
++  assert.equal(parseFinishArgs(['--all', '--no-sweep-orphans']).sweepOrphans, false);
++  assert.equal(parseFinishArgs(['--no-sweep-orphans', '--sweep-orphans']).sweepOrphans, true);
++  // Caller defaults can opt out without a flag.
++  assert.equal(parseFinishArgs([], { sweepOrphans: false }).sweepOrphans, false);
++});
++
+ test('dispatch helpers preserve suggestion, alias, deprecation, and flag extraction behavior', () => {
+   assert.equal(maybeSuggestCommand('docto'), 'doctor');
+ 
+
+===== P251 | repo UseJunior/safe-docx | PR #348: feat(docx-mcp): ODF compare_documents — paragraph-granularity redline for .odt (Slice 1) | capacidade: docx-primitives
+--- SPEC VIVA
+# docx-primitives Specification
+
+## Purpose
+Define behavior guarantees for the docx-primitives-ts library: deterministic text matching with fallback modes, list label extraction, semantic tag handling, OOXML layout mutations, XML round-trip fidelity, and paragraph bookmark identity.
+## Requirements
+### Requirement: Unique Substring Matching with Fallback Modes
+The matching engine SHALL find a unique substring match in paragraph text using a prioritized chain of fallback modes: exact → quote_normalized → flexible_whitespace → quote_optional.
+
+#### Scenario: exact match found for literal substring
+- **GIVEN** paragraph text containing the needle as a literal substring exactly once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `unique` and mode `exact`
+- **AND** `matchedText` SHALL equal the needle verbatim
+
+#### Scenario: not_found when needle is absent
+- **WHEN** `findUniqueSubstringMatch` is called with a needle not present in any fallback mode
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: multiple when needle appears more than once
+- **GIVEN** paragraph text containing the needle more than once
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have status `multiple` with an accurate `matchCount`
+
+#### Scenario: not_found for empty needle
+- **WHEN** `findUniqueSubstringMatch` is called with an empty string needle
+- **THEN** the result SHALL have status `not_found`
+
+#### Scenario: quote_normalized matches curly quotes against straight quotes
+- **GIVEN** paragraph text containing curly double or single quotes
+- **WHEN** the needle uses straight quote equivalents and no exact match exists
+- **THEN** the result SHALL have status `unique` and mode `quote_normalized`
+
+#### Scenario: exact mode preferred over quote_normalized when both match
+- **GIVEN** paragraph text that matches the needle exactly AND via quote normalization
+- **WHEN** `findUniqueSubstringMatch` is called
+- **THEN** the result SHALL have mode `exact`
+
+#### Scenario: flexible_whitespace matches across spacing variance
+- **GIVEN** paragraph text with extra spaces, tabs, or newlines between words
+- **WHEN** the needle uses single-space equivalents and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `flexible_whitespace`
+
+#### Scenario: quote_optional matches quoted and unquoted term references
+- **GIVEN** paragraph text containing quoted terms
+- **WHEN** the needle omits the quotes and no higher-priority mode matches uniquely
+- **THEN** the result SHALL have status `unique` and mode `quote_optional`
+
+### Requirement: List Label Extraction and Stripping
+The list label engine SHALL detect and extract structured list labels from paragraph text, supporting letter, roman, number, section, article, and numbered heading patterns.
+
+#### Scenario: extract parenthesized letter labels
+- **GIVEN** paragraph text starting with a parenthesized letter like `(a)` or `(A)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER` and the full label including parentheses
+
+#### Scenario: single-char roman-like letters classified as LETTER not ROMAN
+- **GIVEN** paragraph text starting with `(i)` or `(v)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `LETTER`
+
+#### Scenario: extract multi-char roman numeral labels
+- **GIVEN** paragraph text starting with a multi-character roman numeral like `(ii)`, `(iv)`, `(xiii)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ROMAN`
+
+#### Scenario: extract section labels with sub-paragraph support
+- **GIVEN** paragraph text starting with `Section 1`, `Section 1.2`, or `Section 3.1(a)`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `SECTION` with the full section reference
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract article labels with roman numeral support
+- **GIVEN** paragraph text starting with `Article 1` or `Article IV`
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `ARTICLE`
+- **AND** matching SHALL be case-insensitive
+
+#### Scenario: extract numbered heading labels
+- **GIVEN** paragraph text starting with `1.`, `1.1`, or `2.3.1` followed by a space
+- **WHEN** `extractListLabel` is called
+- **THEN** the result SHALL have `label_type` of `NUMBERED_HEADING`
+
+#### Scenario: null label for plain text without list patterns
+- **GIVEN** paragraph text without any recognized list label pattern
+- **WHEN** `extractListLabel` is called
+- **THEN** `label` and `label_type` SHALL be `null`
+
+#### Scenario: stripListLabel removes label and leading whitespace
+- **GIVEN** paragraph text with a recognized list label
+- **WHEN** `stripListLabel` is called
+- **THEN** the result SHALL contain `stripped_text` with the label and leading whitespace removed
+- **AND** `result.label` SHALL contain the extracted label
+
+### Requirement: Semantic Tag Emission and Stripping
+The semantic tag engine SHALL emit/strip `<highlighting>` and `<font>` tags for formatting visibility and support `stripAllInlineTags` for removing all known inline tags.
+
+#### Scenario: strip highlight tags leaves content intact
+- **GIVEN** text containing `<highlighting>` tags
+- **WHEN** `stripHighlightTags` is called
+- **THEN** the tag wrappers SHALL be removed and the inner content preserved
+
+### Requirement: OOXML Layout Mutations
+The layout engine SHALL perform deterministic OOXML mutations for paragraph spacing, table row height, and table cell padding, creating missing container elements as needed.
+
+#### Scenario: setParagraphSpacing creates missing pPr and spacing containers
+- **GIVEN** a paragraph element without `w:pPr` or `w:spacing` children
+- **WHEN** `setParagraphSpacing` is called with `beforeTwips`, `afterTwips`, `lineTwips`, and `lineRule`
+- **THEN** the engine SHALL create `w:pPr` and `w:spacing` elements
+- **AND** SHALL set the requested attributes in twip units
+
+#### Scenario: setParagraphSpacing preserves unrelated formatting nodes
+- **GIVEN** a paragraph with existing `w:pPr` children (e.g., `w:jc` for justification)
+- **WHEN** `setParagraphSpacing` is called
+- **THEN** existing `w:pPr` children SHALL be preserved
+- **AND** a `w:spacing` element SHALL be added or updated
+
+#### Scenario: setTableRowHeight reports missing indexes
+- **WHEN** `setTableRowHeight` is called with table or row indexes that do not exist in the document
+- **THEN** the result SHALL report `missingTableIndexes` and `missingRowIndexes`
+- **AND** SHALL only apply mutations to existing rows
+
+#### Scenario: setTableCellPadding creates tcPr and tcMar containers
+- **GIVEN** a table cell without `w:tcPr` or `w:tcMar` children
+- **WHEN** `setTableCellPadding` is called with directional padding values
+- **THEN** the engine SHALL create the container elements and set padding in `dxa` units
+- **AND** untargeted cells SHALL NOT be modified
+
+### Requirement: XML Round-Trip Fidelity
+The XML engine SHALL parse and serialize OOXML without data loss, preserving elements, attributes, namespaces, and text content through round-trips.
+
+#### Scenario: parse and serialize preserves element structure
+- **WHEN** valid XML is parsed and immediately serialized
+- **THEN** the output SHALL contain all original elements, attributes, and text content
+
+#### Scenario: namespaced XML preserved through round-trip
+- **GIVEN** XML using OOXML namespaces (e.g., `w:document`, `w:body`)
+- **WHEN** the XML is parsed and serialized
+- **THEN** namespace prefixes and URIs SHALL be preserved
+
+#### Scenario: textContent returns concatenated text of nested elements
+- **GIVEN** an element containing nested child elements with text
+- **WHEN** `textContent` is called
+- **THEN** the result SHALL be the concatenated text content of all descendants
+
+#### Scenario: textContent returns empty string for null or undefined input
+- **WHEN** `textContent` is called with `null` or `undefined`
+- **THEN** the result SHALL be an empty string
+
+### Requirement: Paragraph Bookmark Identity
+The bookmark engine SHALL mint and persist stable `_bk_*` identifiers for paragraphs, ensuring unique addressability and idempotent allocation.
+
+#### Scenario: insertParagraphBookmarks mints IDs matching expected pattern
+- **WHEN** `insertParagraphBookmarks` is called on a document with paragraphs lacking bookmarks
+- **THEN** each paragraph SHALL receive a `_bk_*` identifier matching the pattern `_bk_[0-9a-f]{12}`
+
+#### Scenario: getParagraphBookmarkId retrieves minted ID
+- **GIVEN** a paragraph with a previously minted `_bk_*` bookmark
+- **WHEN** `getParagraphBookmarkId` is called
+- **THEN** the result SHALL return the stable identifier
+
+### Requirement: Comparator Round-Trip Semantic Invariants
+
+The comparator SHALL enforce semantic round-trip invariants using the package read-text surface and structural diagnostics.
+
+#### Scenario: Accept-all and reject-all preserve semantic read-text parity
+- **GIVEN** a comparison output document with tracked changes
+- **WHEN** `Accept All` is applied to the output
+- **THEN** the read-text output SHALL match the revised input document
+- **AND** when `Reject All` is applied, the read-text output SHALL match the original input document
+
+#### Scenario: Structural diagnostics remain equivalent across round-trip projections
+- **GIVEN** a comparison output document with numbering, notes, and bookmarks
+- **WHEN** `Accept All` and `Reject All` projections are computed
+- **THEN** numbering, footnote/endnote, and bookmark integrity diagnostics SHALL remain equivalent to the revised and original baselines respectively
+
+### Requirement: Inplace Bookmark Safety Uses Semantic Parity
+
+The inplace reconstruction safety gate SHALL compare bookmark semantics rather than strict bookmark ID identity.
+
+#### Scenario: Inplace remains valid when bookmark IDs are remapped but semantics are preserved
+- **GIVEN** a corpus pair where bookmark IDs may differ after reconstruction
+- **WHEN** bookmark names, bookmark-reference targets, unresolved-reference sets, and start/end integrity diagnostics match
+- **THEN** inplace reconstruction SHALL be accepted
+- **AND** the comparator SHALL NOT downgrade to rebuild mode for bookmark-ID mismatch alone
+
+#### Scenario: Inplace downgrades when semantic bookmark parity fails
+- **GIVEN** a corpus pair where round-trip checks fail
+- **WHEN** semantic bookmark parity or other round-trip safety checks do not hold
+- **THEN** the comparator SHALL downgrade from inplace to rebuild mode
+- **AND** the fallback reason SHALL be `round_trip_safety_check_failed`
+
+### Requirement: Inplace Paragraph-Boundary Bookmark Preservation
+
+When inplace reconstruction creates paragraphs for deleted or moved-source atoms, paragraph-boundary bookmark markers SHALL be preserved.
+
+#### Scenario: Created inplace paragraphs retain bookmark boundary markers
+- **GIVEN** source paragraphs that contain boundary `w:bookmarkStart` and `w:bookmarkEnd` markers
+- **WHEN** inplace reconstruction emits created paragraphs for deleted or moved-source content
+- **THEN** leading and trailing bookmark markers SHALL be preserved in the created output paragraphs
+- **AND** bookmark start/end integrity diagnostics SHALL remain valid after reconstruction
+
+### Requirement: Tracked Change Acceptance Engine
+The docx-primitives library SHALL programmatically accept all tracked changes in OOXML document body content, resolving each revision type into its accepted state.
+
+#### Scenario: accept insertions by unwrapping w:ins wrappers
+- **GIVEN** a document body containing `w:ins` elements wrapping inserted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:ins` wrapper elements SHALL be removed
+- **AND** their child content SHALL be promoted to the parent element in place
+
+#### Scenario: accept deletions by removing w:del elements and content
+- **GIVEN** a document body containing `w:del` elements wrapping deleted content
+- **WHEN** the acceptance engine processes the document
+- **THEN** all `w:del` elements and their children SHALL be removed entirely
+
+#### Scenario: accept property changes by removing change records
+- **GIVEN** a document body containing property change records (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** the change record elements SHALL be removed
+- **AND** the current formatting properties SHALL be preserved
+
+#### Scenario: accept moves by keeping destination and removing source
+- **GIVEN** a document body containing `w:moveFrom` and `w:moveTo` pairs
+- **WHEN** the acceptance engine processes the document
+- **THEN** `w:moveFrom` elements and their children SHALL be removed
+- **AND** `w:moveTo` wrapper elements SHALL be removed with child content promoted to the parent
+
+#### Scenario: bottom-up processing resolves nested revisions
+- **GIVEN** nested tracked changes (e.g., a `w:del` inside a `w:ins`)
+- **WHEN** the acceptance engine processes the document
+- **THEN** inner revisions SHALL be resolved before outer revisions
+- **AND** no orphaned elements SHALL remain
+
+#### Scenario: orphaned moves handled with safe fallback
+- **GIVEN** a `w:moveFrom` without a corresponding `w:moveTo` (or vice versa)
+- **WHEN** the acceptance engine processes the document
+- **THEN** orphaned `w:moveFrom` SHALL be treated as `w:del` (removed)
+- **AND** orphaned `w:moveTo` SHALL be treated as `w:ins` (unwrapped)
+
+### Requirement: Run Merging with Safety Barriers
+The docx-primitives library SHALL merge adjacent format-identical runs to reduce XML fragmentation, while enforcing safety barriers that prevent merges across structural boundaries.
+
+#### Scenario: merge adjacent runs with equivalent formatting
+- **GIVEN** a paragraph containing adjacent runs with identical effective run properties
+- **WHEN** `merge_runs` is called
+- **THEN** the adjacent runs SHALL be consolidated into a single run
+- **AND** the merged run SHALL preserve the original visible text and formatting
+
+#### Scenario: never merge across field boundaries
+- **GIVEN** a paragraph containing runs separated by `fldChar` or `instrText` elements
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across the field boundary
+- **AND** field structure SHALL remain intact
+
+#### Scenario: never merge across comment range boundaries
+- **GIVEN** a paragraph containing runs separated by `commentRangeStart` or `commentRangeEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across comment range boundaries
+
+#### Scenario: never merge across bookmark boundaries
+- **GIVEN** a paragraph containing runs separated by `bookmarkStart` or `bookmarkEnd` markers
+- **WHEN** `merge_runs` is called
+- **THEN** the runs SHALL NOT be merged across bookmark boundaries
+
+#### Scenario: never merge across tracked-change wrapper boundaries
+- **GIVEN** a paragraph containing runs inside different tracked-change wrappers (`w:ins`, `w:del`, `w:moveFrom`, `w:moveTo`)
+- **WHEN** `merge_runs` is called
+- **THEN** runs in different tracked-change wrappers SHALL NOT be merged
+
+### Requirement: Redline Simplification with Author Constraint
+The docx-primitives library SHALL consolidate adjacent tracked-change wrappers of the same type and author to reduce XML verbosity, without altering document semantics.
+
+#### Scenario: merge adjacent same-author same-type tracked-change wrappers
+- **GIVEN** adjacent `w:ins` (or `w:del`) wrappers attributed to the same author
+- **WHEN** `simplify_redlines` is called
+- **THEN** the adjacent wrappers SHALL be consolidated into a single wrapper
+- **AND** the merged wrapper SHALL preserve all child content
+
+#### Scenario: never merge wrappers from different authors
+- **GIVEN** adjacent tracked-change wrappers attributed to different authors
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+- **AND** author attribution SHALL be preserved
+
+#### Scenario: never merge across different change types
+- **GIVEN** adjacent tracked-change wrappers of different types (e.g., `w:ins` followed by `w:del`)
+- **WHEN** `simplify_redlines` is called
+- **THEN** the wrappers SHALL NOT be merged
+
+### Requirement: Table Context in Document View
+
+The document view pipeline SHALL derive table structure context for each paragraph inside a body-level table. The `TableContext` type SHALL include: `table_id` (body-level index string like `_tbl_0`), `table_index` (0-based), `row_index`, `col_index` (grid-aware, accounting for `gridSpan`), `col_header` (text from header row), `total_rows`, `total_cols`, `is_header_row` (true for row index 0), `para_in_cell`, and `cell_para_count`.
+
+Table context derivation SHALL use ancestor-based DOM walking from each paragraph to find the enclosing `w:tc`, `w:tr`, and `w:tbl` elements. Only body-level tables (direct children of `w:body`) SHALL be indexed. Paragraphs inside nested tables SHALL receive the context of their enclosing body-level table cell.
+
+The paragraph set and ordering produced by `buildDocumentView()` SHALL remain identical to the existing `getParagraphs()` traversal. Empty table cell paragraphs SHALL be preserved (not skipped) to maintain structural completeness.
+
+#### Scenario: [SDX-TABLE-01] Simple table produces correct table context
+- **WHEN** a document contains a 2-row x 3-column table
+- **THEN** each cell paragraph has `table_context` with correct `row_index`, `col_index`, `total_rows`, `total_cols`, and `is_header_row`
+
+#### Scenario: [SDX-TABLE-02] gridSpan produces grid-aware column indices
+- **WHEN** a table cell has `w:gridSpan val="2"`
+- **THEN** subsequent cells in the row have `col_index` offset by the span value
+
+#### Scenario: [SDX-TABLE-03] Tracked-change wrapped rows are included
+- **WHEN** a `w:tr` element is wrapped in `w:ins`
+- **THEN** paragraphs in the wrapped row receive table context with the correct `row_index`
+
+#### Scenario: [SDX-TABLE-04] Nested table paragraphs get outer cell context
+- **WHEN** a cell contains a nested `w:tbl`
+- **THEN** paragraphs inside the nested table receive the context of the outer body-level table cell
+
+#### Scenario: [SDX-TABLE-05] Empty cells are preserved
+- **WHEN** a table cell contains only an empty `w:p`
+- **THEN** the empty paragraph is included in document view nodes with `table_context` set
+
+### Requirement: Table-Aware Toon Rendering
+
+`renderToon()` SHALL emit `#TABLE` and `#END_TABLE` structural markers around table content. The `#TABLE` marker format SHALL be: `#TABLE {table_id} | {rows} rows × {cols} cols`. Column headers are NOT repeated in the marker — they appear exactly once in the `th(0,N)` data rows which carry editable `_bk_*` IDs. The `#END_TABLE` marker SHALL be emitted when leaving a table.
+
+Table cell paragraphs SHALL use `th(row,col)` (header row) or `td(row,col)` (data rows) in the style column instead of the paragraph style.
+
+`formatToonDataLine()` SHALL be exported as a standalone helper for per-node rendering with table-aware styles.
+
+#### Scenario: [SDX-TABLE-06] Toon output includes table markers
+- **WHEN** `renderToon()` is called with nodes containing `table_context`
+- **THEN** `#TABLE` appears before the first table node and `#END_TABLE` after the last
+
+#### Scenario: [SDX-TABLE-07] Style column uses th/td notation
+- **WHEN** a node has `table_context` with `is_header_row=true`
+- **THEN** the style column shows `th(row_index,col_index)` instead of the paragraph style
+
+### Requirement: Shared DOM Helpers
+
+`isW()` and `getDirectChildrenByName()` SHALL be exported from `dom-helpers.ts` for namespace-aware element checks and direct-child queries across primitives modules.
+
+#### Scenario: [SDX-TABLE-08] isW checks namespace and localName
+- **WHEN** `isW(el, 'tbl')` is called on a WordprocessingML element
+- **THEN** it returns true only if the element has the correct namespace URI and local name
+
+
+--- ARQUIVOS DO PR (24)
+added     +171   -0     openspec/changes/add-odf-compare/design.md
+added     +61    -0     openspec/changes/add-odf-compare/proposal.md
+added     +53    -0     openspec/changes/add-odf-compare/specs/mcp-server/spec.md
+added     +87    -0     openspec/changes/add-odf-compare/specs/odf-core/spec.md
+added     +22    -0     openspec/changes/add-odf-compare/tasks.md
+modified  +1     -1     openspec/changes/add-odf-grep-insert/specs/mcp-server/spec.md
+modified  +6     -6     packages/docx-mcp/docs/tool-reference.generated.md
+modified  +18    -4     packages/docx-mcp/src/server.ts
+modified  +6     -6     packages/docx-mcp/src/tool_catalog.ts   <== código ligado à spec
+added     +119   -0     packages/docx-mcp/src/tools/odf/compare_documents.ts
+added     +232   -0     packages/docx-mcp/src/tools/odf/odf_compare.test.ts
+modified  +7     -5     packages/docx-mcp/src/tools/odf/odf_grep_insert.test.ts
+modified  +2     -2     packages/docx-mcp/src/tools/provider_guard.ts
+modified  +2     -2     packages/docx-mcp/src/tools/session_resolution.ts
+added     +61    -0     packages/odf-core/src/compare/diff.test.ts
+added     +59    -0     packages/odf-core/src/compare/diff.ts
+added     +185   -0     packages/odf-core/src/compare/emit.test.ts
+added     +261   -0     packages/odf-core/src/compare/emit.ts
+added     +88    -0     packages/odf-core/src/compare/index.ts
+modified  +4     -20    packages/odf-core/src/document.ts
+modified  +7     -0     packages/odf-core/src/index.ts
+added     +38    -0     packages/odf-core/src/shared/odf/blocks.ts
+modified  +2     -0     packages/odf-core/src/shared/odf/namespaces.ts
+modified  +12    -0     packages/odf-core/src/shared/odf/text_segments.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/docx-mcp/src/tool_catalog.ts
+@@ -312,14 +312,14 @@ export const SAFE_DOCX_TOOL_CATALOG = [
+   {
+     name: 'compare_documents',
+     description:
+-      'Compare two DOCX documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or file_path to compare session edits against the original.',
++      'Compare two documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or file_path to compare session edits against the original. DOCX supports both modes; ODF (.odt) supports two-file mode at paragraph granularity (a modified paragraph counts as one deletion plus one insertion).',
+     input: z.object({
+-      original_file_path: z.string().optional().describe('Path to the original DOCX file.'),
+-      revised_file_path: z.string().optional().describe('Path to the revised DOCX file.'),
++      original_file_path: z.string().optional().describe('Path to the original DOCX or .odt file.'),
++      revised_file_path: z.string().optional().describe('Path to the revised DOCX or .odt file.'),
+       ...FILE_FIELD_OPTIONAL,
+-      save_to_local_path: z.string().describe('Path to save the tracked-changes DOCX output.'),
+-      author: z.string().optional().describe("Author name for track changes. Default: 'Comparison'."),
+-      engine: z.enum(['auto', 'atomizer']).optional().describe("Comparison engine. Default: 'auto'."),
++      save_to_local_path: z.string().describe('Path to save the tracked-changes output (DOCX or .odt).'),
++      author: z.string().optional().describe("Author name for track changes. Default: 'Comparison' (DOCX) or the configured AI author (ODF)."),
++      engine: z.enum(['auto', 'atomizer']).optional().describe("Comparison engine (DOCX only). Default: 'auto'."),
+     }),
+     annotations: { readOnlyHint: true, destructiveHint: false },
+   },
+
+===== P252 | repo AshkanYarmoradi/go-mink | PR #175: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan | capacidade: event-store
+--- SPEC VIVA
+# event-store Specification
+
+## Purpose
+TBD - created by archiving change fix-review-correctness-bugs. Update Purpose after archive.
+## Requirements
+### Requirement: In-memory append does not alias caller buffers
+The in-memory adapter SHALL deep-copy an event's `Data` bytes and `Metadata.Custom` map
+when appending, so a caller that later mutates or reuses the passed slice/map cannot
+retroactively corrupt stored or loaded events, and a concurrent `Load` with buffer reuse
+is race-free — matching the deep-copy discipline already used for snapshots/outbox and
+the PostgreSQL adapter's freshly-scanned bytes.
+
+#### Scenario: Mutating a reused buffer after Append does not change stored events
+- **WHEN** a caller appends an event and then mutates or reuses the same `Data` buffer or `Custom` map
+- **THEN** a subsequent `Load` returns the originally-appended bytes and metadata, unaffected by the mutation
+
+#### Scenario: Concurrent load and buffer reuse is race-free
+- **WHEN** one goroutine reuses the append buffer while another calls `Load`
+- **THEN** there is no data race and `Load` observes the stored copy
+
+
+--- ARQUIVOS DO PR (46)
+modified  +3     -1     CHANGELOG.md
+modified  +1     -1     README.md
+modified  +88    -0     adapters/adapter.go
+added     +40    -0     adapters/feed_filter_test.go
+added     +84    -0     adapters/memory/filtered_feed_test.go
+modified  +22    -5     adapters/memory/memory.go
+added     +50    -0     adapters/memory/rewrite.go
+added     +113   -0     adapters/postgres/filtered_feed_test.go
+modified  +1     -0     adapters/postgres/postgres.go
+added     +39    -0     adapters/postgres/rewrite.go
+modified  +78    -0     adapters/postgres/subscription.go   <== código ligado à spec
+added     +77    -0     e2e_reencrypt_inplace_test.go
+modified  +9     -0     errors.go
+modified  +4     -2     examples/README.md
+added     +32    -0     examples/feed-filter/README.md
+added     +84    -0     examples/feed-filter/main.go
+added     +87    -0     examples/reencrypt-inplace/main.go
+added     +2     -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/.openspec.yaml
+added     +142   -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/design.md
+added     +86    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/proposal.md
+added     +35    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/specs/retention-policies/spec.md
+added     +21    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/design.md
+added     +103   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/proposal.md
+added     +58    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/in-place-stream-re-encryption/spec.md
+added     +25    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/stored-event-encryption/spec.md
+added     +28    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/tasks.md
+added     +2     -0     openspec/changes/filtered-feed-read/.openspec.yaml
+added     +131   -0     openspec/changes/filtered-feed-read/design.md
+added     +124   -0     openspec/changes/filtered-feed-read/proposal.md
+added     +39    -0     openspec/changes/filtered-feed-read/specs/event-subscriptions/spec.md
+added     +40    -0     openspec/changes/filtered-feed-read/tasks.md
+added     +62    -0     openspec/specs/in-place-stream-re-encryption/spec.md
+modified  +34    -0     openspec/specs/retention-policies/spec.md
+added     +29    -0     openspec/specs/stored-event-encryption/spec.md
+added     +211   -0     reencrypt_inplace_test.go
+modified  +151   -17    retention.go
+added     +253   -0     retention_checkpoint_test.go
+added     +14    -0     retention_errors.go
+modified  +123   -0     store.go
+added     +39    -0     store_filtered_test.go
+modified  +5     -1     website/docs/advanced/security.md
+modified  +34    -0     website/docs/core/event-store.md
+modified  +2     -1     website/docs/roadmap.md
+modified  +42    -0     website/docs/security.md
+--- DIFF DO CÓDIGO LIGADO
+### adapters/postgres/subscription.go
+@@ -6,6 +6,8 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"log"
++	"strconv"
++	"strings"
+ 	"time"
+ 
+ 	"go-mink.dev/adapters"
+@@ -187,6 +189,82 @@ func (a *PostgresAdapter) LoadFromPosition(ctx context.Context, fromPosition uin
+ 	return a.scanEvents(rows)
+ }
+ 
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, error) {
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++
++	limit = adapters.DefaultLimit(limit, 1000)
++
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++
++	return a.scanEvents(rows)
++}
++
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
++		b.WriteString(" AND ")
++		b.WriteString(column)
++		b.WriteString(" IN (")
++		for i, v := range values {
++			if i > 0 {
++				b.WriteByte(',')
++			}
++			b.WriteByte('$')
++			b.WriteString(strconv.Itoa(idx))
++			args = append(args, v)
++			idx++
++		}
++		b.WriteByte(')')
++	}
++
++	writeInClause("event_type", filter.EventTypes)
++	writeInClause("stream_id", filter.StreamIDs)
++
++	if filter.Category != "" {
++		b.WriteString(" AND stream_id LIKE $")
++		b.WriteString(strconv.Itoa(idx))
++		// LIKE '<category>-%': the same "<category>-" prefix FeedFilter.Matches uses (via
++		// adapters.CategoryStreamPrefix), escaped so metacharacters in the category are
++		// matched literally rather than over-matching adjacent categories.
++		args = append(args, escapeLikePattern(adapters.CategoryStreamPrefix(filter.Category))+"%")
++		idx++
++	}
++
++	return b.String(), args, idx
++}
++
+ // SubscribeAll subscribes to all events across all streams.
+ // Events are delivered starting from the specified global position.
+ // This uses polling-based subscription with continuous updates.
+
+===== P253 | repo aleris/woti | PR #2: add sub-hour navigation interval (60/30/15 min) | capacidade: working-hours-shading
+--- SPEC VIVA
+### Requirement: Three-tier hour shading
+The system SHALL render hour-cell foreground colors based on the hour-of-day in the target timezone, using three tiers:
+- **Working**: hours in `[work_start, work_end)` use the standard bright foreground (`HOUR_FG`)
+- **Transition**: hours in `[transition_start, work_start)` or `[work_end, transition_end)` use a dimmer foreground (`HOUR_FG_TRANSITION`)
+- **Night**: all remaining hours use the dimmest foreground (`HOUR_FG_NIGHT`)
+
+The same tier logic SHALL apply to the am/pm sub-line using `AMPM_FG`, `AMPM_FG_TRANSITION`, and `AMPM_FG_NIGHT` respectively.
+
+#### Scenario: Working hour displays bright
+- **WHEN** the hour-of-day for a cell is 10 (within default work range 9–18)
+- **THEN** the hour digit foreground color SHALL be `HOUR_FG` (white)
+
+#### Scenario: Transition hour displays dimmer
+- **WHEN** the hour-of-day for a cell is 7 (within default transition range 7–9)
+- **THEN** the hour digit foreground color SHALL be `HOUR_FG_TRANSITION`
+
+#### Scenario: Night hour displays dimmest
+- **WHEN** the hour-of-day for a cell is 2 (outside both work and transition ranges)
+- **THEN** the hour digit foreground color SHALL be `HOUR_FG_NIGHT`
+
+#### Scenario: Shading applies per-timezone local hour
+- **WHEN** two timezone rows show the same UTC instant but different local hours (e.g., one at 10am, the other at 2am)
+- **THEN** the first row's cell SHALL use working-tier color and the second SHALL use night-tier color
+
+### Requirement: Configurable hour ranges
+The system SHALL read shading hour ranges from `config.toml` under a `[working_hours]` section with the following fields:
+- `work_start` (integer 0–23, default 9)
+- `work_end` (integer 0–23, default 18)
+- `transition_start` (integer 0–23, default 7)
+- `transition_end` (integer 0–23, default 20)
+
+All fields are optional and fall back to their defaults when absent.
+
+#### Scenario: Default ranges when section is missing
+- **WHEN** `config.toml` has no `[working_hours]` section
+- **THEN** the system SHALL use work_start=9, work_end=18, transition_start=7, transition_end=20
+
+#### Scenario: Custom ranges are respected
+- **WHEN** `config.toml` contains `work_start = 8` and `work_end = 17`
+- **THEN** hour 8 SHALL render as working tier and hour 17 SHALL render as transition tier
+
+### Requirement: Shading enabled flag
+The system SHALL support an `enabled` boolean field in the `[working_hours]` config section (default `true`).
+
+#### Scenario: Shading enabled by default
+- **WHEN** `config.toml` has no `[working_hours]` section or no `enabled` field
+- **THEN** hour shading SHALL be active
+
+#### Scenario: Shading disabled in config
+- **WHEN** `config.toml` contains `enabled = false` under `[working_hours]`
+- **THEN** all hours SHALL render with the standard `HOUR_FG` color regardless of hour-of-day
+
+### Requirement: Runtime toggle
+The system SHALL provide a keyboard shortcut (`w`) to toggle working-hours shading on and off at runtime.
+
+#### Scenario: Toggle off
+- **WHEN** shading is enabled and user presses `w`
+- **THEN** shading SHALL be disabled and all hours SHALL render with `HOUR_FG`
+
+#### Scenario: Toggle on
+- **WHEN** shading is disabled and user presses `w`
+- **THEN** shading SHALL be re-enabled using the configured hour ranges
+
+#### Scenario: Toggle persists to config
+- **WHEN** user presses `w` to toggle shading
+- **THEN** the new `enabled` value SHALL be saved to `config.toml`
+
+### Requirement: Selected and local cell styles take precedence
+When a cell is selected (highlighted) or marked as local-hour, its existing highlight/background style SHALL take precedence over the shading foreground color.
+
+#### Scenario: Selected cell ignores shading
+- **WHEN** the selected cell falls on a night hour
+- **THEN** the cell SHALL use the selected style (`SELECTED_FG`/`SELECTED_BG`), not the night foreground
+
+#### Scenario: Local-hour cell ignores shading
+- **WHEN** the local-hour cell falls on a transition hour and hour_offset != 0
+- **THEN** the cell SHALL use the local style (`LOCAL_BG` + `HOUR_FG`), not the transition foreground
+
+--- ARQUIVOS DO PR (26)
+modified  +1     -1     Cargo.lock
+modified  +1     -1     Cargo.toml
+modified  +26    -3     README.md
+added     +2     -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/.openspec.yaml
+added     +198   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/design.md
+added     +82    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/proposal.md
+added     +79    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/accelerated-nav/spec.md
+added     +55    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/half-hour-timeline-indicator/spec.md
+added     +63    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/hour-offset-indicator/spec.md
+added     +268   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/sub-hour-nav-interval/spec.md
+added     +77    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/tasks.md
+added     +50    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/view.md
+modified  +45    -18    openspec/specs/accelerated-nav/spec.md
+modified  +34    -18    openspec/specs/half-hour-timeline-indicator/spec.md
+modified  +39    -17    openspec/specs/hour-offset-indicator/spec.md
+added     +266   -0     openspec/specs/sub-hour-nav-interval/spec.md
+modified  +6     -0     src/cli.rs
+modified  +90    -8     src/config.rs
+modified  +19    -5     src/main.rs
+modified  +14    -4     src/tui/app.rs
+modified  +112   -45    src/tui/copy.rs
+modified  +18    -10    src/tui/event.rs   <== código ligado à spec
+modified  +85    -0     src/tui/mod.rs
+added     +185   -0     src/tui/nav_interval.rs
+modified  +635   -161   src/tui/render.rs   <== código ligado à spec
+modified  +266   -1     src/tz_data.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/tui/event.rs
+@@ -19,15 +19,16 @@ impl App {
+         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+     ) -> io::Result<()> {
+         let mut last_render = Instant::now();
+-        let mut pending_h_offset: i32 = 0;
++        // Counts pending cell steps. One cell == self.interval.minutes() minutes.
++        let mut pending_cell_offset: i32 = 0;
+         let mut nav_start: Option<Instant> = None;
+         let mut nav_dir: i32 = 0;
+ 
+         terminal.draw(|f| self.render(f))?;
+ 
+         loop {
+             let timeout =
+-                Duration::from_millis(if pending_h_offset != 0 { DEBOUNCE_MS } else { 250 });
++                Duration::from_millis(if pending_cell_offset != 0 { DEBOUNCE_MS } else { 250 });
+ 
+             if event::poll(timeout)? {
+                 match event::read()? {
+@@ -51,7 +52,7 @@ impl App {
+                                     nav_dir = dir;
+                                 }
+                                 let step = compute_step(nav_start.unwrap().elapsed());
+-                                pending_h_offset -= step;
++                                pending_cell_offset -= step;
+                             }
+                             (KeyCode::Right, _) => {
+                                 let dir = 1;
+@@ -60,7 +61,7 @@ impl App {
+                                     nav_dir = dir;
+                                 }
+                                 let step = compute_step(nav_start.unwrap().elapsed());
+-                                pending_h_offset += step;
++                                pending_cell_offset += step;
+                             }
+                             (KeyCode::Up, _) => {
+                                 nav_start = None;
+@@ -105,6 +106,13 @@ impl App {
+                                 terminal.draw(|f| self.render(f))?;
+                                 last_render = Instant::now();
+                             }
++                            (KeyCode::Char('i'), KeyModifiers::NONE) => {
++                                nav_start = None;
++                                nav_dir = 0;
++                                self.cycle_interval();
++                                terminal.draw(|f| self.render(f))?;
++                                last_render = Instant::now();
++                            }
+                             _ => {
+                                 nav_start = None;
+                                 nav_dir = 0;
+@@ -127,18 +135,18 @@ impl App {
+                     return Ok(());
+                 }
+ 
+-                if pending_h_offset != 0
++                if pending_cell_offset != 0
+                     && last_render.elapsed() >= Duration::from_millis(DEBOUNCE_MS)
+                 {
+-                    self.hour_offset += pending_h_offset;
+-                    pending_h_offset = 0;
++                    self.cell_offset += pending_cell_offset;
++                    pending_cell_offset = 0;
+                     terminal.draw(|f| self.render(f))?;
+                     last_render = Instant::now();
+                 }
+             } else {
+-                if pending_h_offset != 0 {
+-                    self.hour_offset += pending_h_offset;
+-                    pending_h_offset = 0;
++                if pending_cell_offset != 0 {
++                    self.cell_offset += pending_cell_offset;
++                    pending_cell_offset = 0;
+                 } else {
+                     nav_start = None;
+                     nav_dir = 0;
+
+### src/tui/render.rs
+@@ -12,15 +12,52 @@ use crate::config::{TimeFormat, WorkingHoursConfig};
+ 
+ use super::app::App;
+ use super::theme;
+-use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, TIMELINE_GAP};
++use super::{BLOCK_HEIGHT, CELL_WIDTH, INFO_COL_WIDTH, NavInterval, TIMELINE_GAP};
+ 
+-pub fn compute_datetime_for_hour(
+-    _tz: Tz,
++/// Compute the datetime for a cell whose offset from "now" is given in minutes.
++/// Used by the sub-hour interval rendering pipeline (and equivalent to the
++/// legacy hour-based helper when `offset_minutes` is a multiple of 60).
++pub fn compute_datetime_for_minutes(
+     now_tz: chrono::DateTime<Tz>,
+-    offset_from_current: i32,
++    offset_minutes: i32,
+ ) -> chrono::DateTime<Tz> {
+-    let duration = chrono::Duration::hours(offset_from_current as i64);
+-    now_tz + duration
++    now_tz + chrono::Duration::minutes(offset_minutes as i64)
++}
++
++/// Floor `now_tz` to the most recent boundary of `interval_minutes`. For the
++/// 60-minute interval we intentionally return `now_tz` unchanged so the H1
++/// rendering path stays byte-for-byte identical to the legacy behavior
++/// (which preserved `now_tz`'s wall-clock minutes inside each hour cell).
++fn floor_to_interval(now_tz: chrono::DateTime<Tz>, interval_minutes: i32) -> chrono::DateTime<Tz> {
++    if interval_minutes >= 60 {
++        return now_tz;
++    }
++    let minute = now_tz.minute() as i32;
++    let floored_minute = (minute / interval_minutes) * interval_minutes;
++    let drop_minutes = minute - floored_minute;
++    now_tz
++        - chrono::Duration::minutes(drop_minutes as i64)
++        - chrono::Duration::seconds(now_tz.second() as i64)
++        - chrono::Duration::nanoseconds(now_tz.nanosecond() as i64)
++}
++
++/// `true` when the cell at `dt` is an "hour cell" (rendered with the wall-hour
++/// digit + the timezone's existing sub-row glyph). Intermediate cells in
++/// sub-hour intervals fail this check and render `·` + a wall-clock minute
++/// superscript instead.
++///
++/// In sub-hour intervals the cell stride may not divide a timezone's
++/// `offset_m` evenly (e.g. Nepal `+5:45` at M30: cells land on `:00`/`:30`
++/// but the natural hour change is at `:45`). To keep one hour digit per
++/// hour aligned visually with other timezones, we pick the cell whose
++/// `[start, start + interval)` window *contains* the natural hour boundary,
++/// i.e. `dt.minute() == floor(offset_m / interval_minutes) * interval_minutes`.
++/// At H1 callers short-circuit; this helper is only meaningful for
++/// `interval_minutes < 60`.
++fn is_hour_cell(dt: chrono::DateTime<Tz>, offset_m: i32, interval_minutes: i32) -> bool {
++    let cell_minute = dt.minute() as i32;
++    let target = (offset_m / interval_minutes) * interval_minutes;
++    cell_minute == target
+ }
+ 
+ impl App {
+@@ -72,15 +109,20 @@ impl App {
+         let label_on = Style::default().fg(theme::LABEL_FG);
+         let label_off = Style::default().fg(theme::LABEL_DISABLED_FG);
+ 
++        let nav_label = match self.interval {
++            NavInterval::H1 => " Hour ",
++            NavInterval::M30 => " 30m ",
++            NavInterval::M15 => " 15m ",
++        };
+         let shortcuts = vec![
+             Span::styled(" ↑ ", if can_up { key_on } else { key_off }),
+             Span::styled(" Up ", if can_up { label_on } else { label_off }),
+             Span::styled(" ↓ ", if can_down { key_on } else { key_off }),
+             Span::styled(" Down ", if can_down { label_on } else { label_off }),
+             Span::styled(" ← ", key_on),
+-            Span::styled(" Prev Hour ", label_on),
++            Span::styled(format!(" Prev{nav_label}"), label_on),
+             Span::styled(" → ", key_on),
+-            Span::styled(" Next Hour ", label_on),
++            Span::styled(format!(" Next{nav_label}"), label_on),
+             Span::styled(" c ", key_on),
+             Span::styled(" Copy ", label_on),
+             Span::styled(" q ", key_on),
+@@ -100,6 +142,26 @@ impl App {
+             Style::default().fg(theme::HOUR_FG_TRANSITION)
+         };
+ 
++        let interval_switcher: Vec<Span> = vec![
++            Span::styled(" i ", key_on),
++            Span::raw(" "),
++            Span::styled(
++                " 60 ",
++                if self.interval == NavInterval::H1 { sel } else { dim },
++            ),
++            Span::styled("│", sep),
++            Span::styled(
++                " 30 ",
++                if self.interval == NavInterval::M30 { sel } else { dim },
++            ),
++            Span::styled("│", sep),
++            Span::styled(
++                " 15 ",
++                if self.interval == NavInterval::M15 { sel } else { dim },
++            ),
++            Span::raw(" "),
++        ];
++
+         let fmt_switcher: Vec<Span> = vec![
+             Span::styled(" w ", key_on),
+             Span::styled(" Shade ", shade_label_style),
+@@ -135,11 +197,13 @@ impl App {
+         ];
+ 
+         let left_w: usize = shortcuts.iter().map(|s| s.width()).sum();
+-        let right_w: usize = fmt_switcher.iter().map(|s| s.width()).sum();
++        let right_w: usize = interval_switcher.iter().map(|s| s.width()).sum::<usize>()
++            + fmt_switcher.iter().map(|s| s.width()).sum::<usize>();
+         let spacer = (area.width as usize).saturating_sub(left_w + right_w);
+ 
+         let mut spans = shortcuts;
+         spans.push(Span::raw(" ".repeat(spacer)));
++        spans.extend(interval_switcher);
+         spans.extend(fmt_switcher);
+ 
+         let line = Line::from(spans);
+@@ -164,8 +228,9 @@ impl App {
+             y += BLOCK_HEIGHT;
+         }
+ 
+-        if self.hour_offset != 0 && y < y_end {
+-            let label = format_hour_offset(self.hour_offset);
++        if self.cell_offset != 0 && y < y_end {
++            let selected_minutes = self.cell_offset * self.interval.minutes() as i32;
++            let label = format_offset(selected_minutes);
+             let inner_width = area.width.saturating_sub(2);
+             let info_w = (INFO_COL_WIDTH.min(inner_width)) as usize;
+             let left_pad = info_w + TIMELINE_GAP as usize;
+@@ -194,17 +259,27 @@ impl App {
+ 
+         let now_utc = self.reference_time();
+         let now_tz = now_utc.with_timezone(&tz);
+-        let current_hour = now_tz.hour() as i32;
++        let interval_minutes = self.interval.minutes() as i32;
++        let anchor_dt = floor_to_interval(now_tz, interval_minutes);
++        let selected_offset_minutes = self.cell_offset * interval_minutes;
++        // Cell-aligned anchor for the timeline (snaps to interval grid so
++        // hour digits land on the right column and `is_hour_cell` works).
++        let cell_anchor_dt = compute_datetime_for_minutes(anchor_dt, selected_offset_minutes);
++        // Left-info datetime preserves the actual wall-clock minute (e.g.
++        // `:37` instead of the floored `:30`/`:15`). Mirrors the H1 path
++        // where `floor_to_interval` is a no-op and the displayed time is
++        // simply `now_tz + cell_offset * 60` — i.e. the user's original
++        // minute is carried through navigation.
++        let display_dt = compute_datetime_for_minutes(now_tz, selected_offset_minutes);
+ 
+         let use_24h = self.use_24h_for_tz(&entry.iana_id);
+-        let selected_dt = compute_datetime_for_hour(tz, now_tz, self.hour_offset);
+-        let tz_abbr = selected_dt.format("%Z").to_string();
++        let tz_abbr = crate::tz_data::display_abbreviation(&display_dt);
+         let time_str = if use_24h {
+-            selected_dt.format("%H:%M").to_string()
++            display_dt.format("%H:%M").to_string()
+         } else {
+-            selected_dt.format("%-I:%M %p").to_string()
++            display_dt.format("%-I:%M %p").to_string()
+         };
+-        let date_str = selected_dt.format("%a, %b %d").to_string();
++        let date_str = display_dt.format("%a, %b %d").to_string();
+ 
+         let block = Block::default().padding(Padding::new(1, 1, 0, 0));
+         let inner = block.inner(area);
+@@ -221,12 +296,12 @@ impl App {
+         let left_pad = info_w + TIMELINE_GAP as usize;
+         let timeline_avail = inner.width.saturating_sub(left_pad as u16);
+         let num_cells = (timeline_avail / CELL_WIDTH) as i32;
+-
+-        let base_hour = current_hour + self.hour_offset;
+-        let start_hour = base_hour - num_cells / 2;
+         let cell_w = CELL_WIDTH as usize;
+ 
+-        let utc_secs = selected_dt.offset().fix().local_minus_utc();
++        let selected_idx = num_cells / 2;
++        let current_idx = selected_idx - self.cell_offset;
++
++        let utc_secs = cell_anchor_dt.offset().fix().local_minus_utc();
+         let offset_m = (utc_secs.abs() % 3600) / 60;
+ 
+         let shading = if self.shading_enabled {
+@@ -236,15 +311,15 @@ impl App {
+         };
+ 
+         let tl = TimelineParams {
+-            start_hour,
+-            base_hour,
+-            current_hour,
+-            hour_offset: self.hour_offset,
++            base_dt: cell_anchor_dt,
++            cell_offset: self.cell_offset,
+             num_cells,
++            selected_idx,
++            current_idx,
++            interval_minutes,
+             cell_w,
+             use_24h,
+             offset_m,
+-            tz,
+             now_tz,
+             shading,
+         };
+@@ -257,7 +332,7 @@ impl App {
+         line1.extend(day_spans);
+         frame.render_widget(Paragraph::new(Line::from(line1)), rows[0]);
+ 
+-        let mut line2 = build_info_line(entry, &tz_abbr, &time_str, selected_dt, info_w);
++        let mut line2 = build_info_line(entry, &tz_abbr, &time_str, display_dt, info_w);
+         line2.extend(hour_spans);
+         frame.render_widget(Paragraph::new(Line::from(line2)), rows[1]);
+ 
+@@ -275,19 +350,45 @@ impl App {
+ }
+ 
+ struct TimelineParams {
+-    start_hour: i32,
+-    base_hour: i32,
+-    current_hour: i32,
+-    hour_offset: i32,
++    /// Absolute datetime of the selected (center) cell.
++    base_dt: chrono::DateTime<Tz>,
++    /// Selected cell offset (in cells, signed) relative to the "now" cell.
++    cell_offset: i32,
+     num_cells: i32,
++    /// Index of the selected cell in the visible row (always `num_cells / 2`).
++    selected_idx: i32,
++    /// Index of the cell holding the floored "now" boundary
++    /// (`selected_idx - cell_offset`).
++    current_idx: i32,
++    /// Minutes per cell. `60` reproduces the legacy hourly view byte-for-byte.
++    interval_minutes: i32,
+     cell_w: usize,
+     use_24h: bool,
++    /// Timezone's sub-hour minute offset from UTC (e.g. `30` for IST, `45` for
++    /// Nepal). Used to pick which cells are "hour cells" in sub-hour modes.
+     offset_m: i32,
+-    tz: Tz,
+     now_tz: chrono::DateTime<Tz>,
+     shading: Option<WorkingHoursConfig>,
+ }
+ 
++impl TimelineParams {
++    /// Datetime for the cell at visible index `i`.
++    fn dt_for_cell(&self, i: i32) -> chrono::DateTime<Tz> {
++        let delta = (i - self.selected_idx) as i64 * self.interval_minutes as i64;
++        self.base_dt + chrono::Duration::minutes(delta)
++    }
++
++    /// True at H1 (every cell is conceptually an hour cell) or when the cell
++    /// is the sub-hour cell whose window contains the timezone's natural
++    /// hour boundary.
++    fn is_hour_cell_at(&self, i: i32) -> bool {
++        if self.interval_minutes >= 60 {
++            return true;
++        }
++        is_hour_cell(self.dt_for_cell(i), self.offset_m, self.interval_minutes)
++    }
++}
++
+ fn selected_style() -> Style {
+     Style::default()
+         .fg(theme::SELECTED_FG)
+@@ -324,20 +425,14 @@ fn ampm_fg_color(hour_in_day: i32, wh: &WorkingHoursConfig) -> Color {
+ fn build_hour_spans(p: &TimelineParams) -> Vec<Span<'static>> {
+     let mut spans = Vec::new();
+     for i in 0..p.num_cells {
+-        let h = p.start_hour + i;
+-        let dt = compute_datetime_for_hour(p.tz, p.now_tz, h - p.current_hour);
++        let dt = p.dt_for_cell(i);
+         let hour_in_day = dt.hour() as i32;
+-        let is_selected = h == p.base_hour;
+-        let is_local = h == p.current_hour && p.hour_offset != 0;
+-
+-        let h_num = if p.use_24h {
+-            format!("{:>2}", hour_in_day)
+-        } else {
+-            let h12 = hour_in_day % 12;
+-            let h12 = if h12 == 0 { 12 } else { h12 };
+-            format!("{:>2}", h12)
+-        };
++        let is_selected = i == p.selected_idx;
++        let is_local = i == p.current_idx && p.cell_offset != 0;
++        let is_hour = p.is_hour_cell_at(i);
+ 
++        // Shading is computed against the wall hour, even on intermediate
++        // cells, so that 14:15 / 14:30 / 14:45 inherit the same band as 14:00.
+         let fg = match &p.shading {
+             Some(wh) => hour_fg_color(hour_in_day, wh),
+             None => theme::HOUR_FG,
+@@ -351,14 +446,38 @@ fn build_hour_spans(p: &TimelineParams) -> Vec<Span<'static>> {
+             Style::default().fg(fg)
+         };
+ 
++        let text = if is_hour {
+
+===== P254 | repo KouShenhai/KCloud-Platform-IoT | PR #6465: Dev | capacidade: product-management
+--- SPEC VIVA
+## Purpose
+
+产品（Product）管理能力提供 IoT 平台产品的全生命周期维护——前端控制台页面与后端分页查询过滤，覆盖产品的分页查询、按条件检索、新增、修改、查看详情、删除，并关联产品类别与设备类型。
+
+## Requirements
+
+### Requirement: 产品分页查询与条件检索
+
+系统 SHALL 提供产品分页查询接口 `POST /iot/api/v1/products/page`，支持按产品名称（模糊匹配）、产品类别、设备类型、创建时间范围进行过滤，并返回分页结果（记录列表与总数）。该接口 MUST 要求 `read` 范围权限及 `iot:product:page` 授权。
+
+#### Scenario: 无条件分页查询
+
+- **WHEN** 已授权用户不带任何过滤条件调用 `/products/page`
+- **THEN** 系统返回当前租户下未删除（`del_flag = 0`）的产品列表，按 `id` 倒序分页，并返回总记录数
+
+#### Scenario: 按产品名称模糊检索
+
+- **WHEN** 用户传入 `name` 过滤参数
+- **THEN** 系统对产品名称执行 LIKE 模糊匹配，仅返回名称包含该关键字的产品
+
+#### Scenario: 按产品类别与设备类型检索
+
+- **WHEN** 用户传入 `categoryId` 或 `deviceType`
+- **THEN** 系统按对应字段精确过滤，仅返回匹配的产品
+
+#### Scenario: 按创建时间范围检索
+
+- **WHEN** 用户传入开始日期与结束日期
+- **THEN** 系统仅返回创建时间落在该区间内的产品
+
+#### Scenario: 缺少权限
+
+- **WHEN** 未持有 `iot:product:page` 授权的用户调用该接口
+- **THEN** 系统拒绝请求并返回未授权错误
+
+### Requirement: 产品新增
+
+系统 SHALL 提供新增产品接口 `POST /iot/api/v1/products`，接收产品名称、产品类别、设备类型、产品图片 URL、通讯协议 ID、传输协议 ID、备注等字段。该接口 MUST 要求 `write` 范围权限及 `iot:product:save` 授权，并 MUST 支持基于 `request-id` 头的幂等控制。
+
+#### Scenario: 成功新增产品
+
+- **WHEN** 已授权用户在前端抽屉中填写产品名称与必填项并提交，且携带唯一 `request-id`
+- **THEN** 系统创建产品记录、返回成功结果（`code = OK`），前端提示保存成功并刷新列表
+
+#### Scenario: 重复提交幂等
+
+- **WHEN** 用户以相同 `request-id` 重复提交同一新增请求
+- **THEN** 系统不重复创建记录
+
+#### Scenario: 缺少必填字段
+
+- **WHEN** 用户未填写产品名称等必填字段提交
+- **THEN** 前端表单校验阻止提交并提示对应必填文案
+
+### Requirement: 产品修改
+
+系统 SHALL 提供修改产品接口 `PUT /iot/api/v1/products`，按产品 ID 更新可编辑字段。该接口 MUST 要求 `write` 范围权限及 `iot:product:modify` 授权，并 MUST 通过版本号实现乐观锁，防止并发覆盖。
+
+#### Scenario: 成功修改产品
+
+- **WHEN** 已授权用户打开修改抽屉、变更字段并提交
+- **THEN** 系统按 ID 更新产品记录并递增版本号，返回成功结果，前端提示修改成功并刷新列表
+
+#### Scenario: 查看只读详情
+
+- **WHEN** 用户点击「查看」
+- **THEN** 系统按 `GET /products/{id}` 返回产品详情，前端以只读模式展示且隐藏提交按钮
+
+### Requirement: 产品删除
+
+系统 SHALL 提供删除产品接口 `DELETE /iot/api/v1/products`，接收产品 ID 数组，支持单条与批量逻辑删除。该接口 MUST 要求 `write` 范围权限及 `iot:product:remove` 授权。
+
+#### Scenario: 删除单条产品
+
+- **WHEN** 用户在某行点击「删除」并在确认弹窗中确认
+- **THEN** 系统逻辑删除该产品（置 `del_flag = 1`），前端提示删除成功并刷新列表
+
+#### Scenario: 批量删除
+
+- **WHEN** 用户勾选多条记录后点击工具栏「删除」并确认
+- **THEN** 系统批量逻辑删除选中产品
+
+#### Scenario: 批量删除未选择记录
+
+- **WHEN** 用户未勾选任何记录即点击批量删除
+- **THEN** 前端提示「至少选择一条」且不发起请求
+
+### Requirement: 产品管理控制台页面
+
+系统 SHALL 在 IoT 控制台 `/iot/device/product` 路由下提供产品管理页面，基于 Ant Design Pro `ProTable` 与 `DrawerForm` 实现，支持中英文国际化，并依据用户权限位（`canProductSave/Modify/Remove/GetDetail`）显隐操作入口。
+
+#### Scenario: 进入产品菜单
+
+- **WHEN** 已授权用户从导航进入「产品」菜单
+- **THEN** 系统加载产品列表页，展示产品名称、产品类别、设备类型、创建时间等列及搜索区与操作按钮
+
+#### Scenario: 产品类别下拉选择
+
+- **WHEN** 用户在新增/修改抽屉中选择产品类别
+- **THEN** 系统提供来自产品类别接口的可选项供选择
+
+#### Scenario: 设备类型枚举选择
+
+- **WHEN** 用户选择设备类型
+- **THEN** 系统提供「直连设备 / 网关设备 / 监控设备」枚举项，并在列表中以可读文案展示
+
+#### Scenario: 按权限显隐操作
+
+- **WHEN** 用户不具备某操作授权（如 `iot:product:remove`）
+- **THEN** 前端不渲染对应的操作按钮
+
+--- ARQUIVOS DO PR (57)
+modified  +14    -3     doc/db/kcloud_platform.sql
+modified  +10    -0     laokou-service/laokou-admin/laokou-admin-adapter/src/main/java/org/laokou/admin/web/RolesController.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptPageQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/dept/command/query/DeptTreeListQryExe.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/command/query/MenuGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/command/query/MenuPageQryExe.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/SystemMenuTree.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/UserMenuTree.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/validator/ModifyMenuParamValidator.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/menu/service/validator/SaveMenuParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RoleGetQryExe.java
+added     +48    -0     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RoleListQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/command/query/RolePageQryExe.java
+modified  +11    -0     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/RolesServiceImpl.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/validator/ModifyRoleParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/role/service/validator/SaveRoleParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/command/query/UserGetQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/command/query/UserPageQryExe.java
+modified  +3     -3     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/ModifyUserParamValidator.java
+modified  +2     -2     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/ResetUserPwdParamValidator.java
+modified  +4     -5     laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/SaveUserParamValidator.java
+modified  +11    -11    laokou-service/laokou-admin/laokou-admin-app/src/main/java/org/laokou/admin/user/service/validator/UserParamValidator.java
+modified  +9     -0     laokou-service/laokou-admin/laokou-admin-client/src/main/java/org/laokou/admin/role/api/RolesServiceI.java
+added     +31    -0     laokou-service/laokou-admin/laokou-admin-client/src/main/java/org/laokou/admin/role/dto/RoleListQry.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/dept/ability/DeptDomainService.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/menu/ability/MenuDomainService.java
+modified  +5     -5     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/role/ability/RoleDomainService.java
+modified  +4     -4     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/user/ability/UserDomainService.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-domain/src/main/java/org/laokou/admin/user/model/entity/UserE.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/dept/gatewayimpl/DeptGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/dept/gatewayimpl/database/DeptMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/menu/gatewayimpl/MenuGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/menu/gatewayimpl/database/MenuMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/role/gatewayimpl/RoleGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/role/gatewayimpl/database/RoleMapper.java
+modified  +6     -6     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/user/gatewayimpl/UserGatewayImpl.java
+modified  +1     -1     laokou-service/laokou-admin/laokou-admin-infrastructure/src/main/java/org/laokou/admin/user/gatewayimpl/database/UserMapper.java
+modified  +6     -0     laokou-service/laokou-standalone/laokou-standalone-admin/laokou-standalone-admin-infrastructure/pom.xml
+added     +2     -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/.openspec.yaml
+added     +86    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/design.md
+added     +41    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/proposal.md
+added     +51    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/specs/data-dictionary/spec.md
+added     +23    -0     openspec/changes/archive/2026-06-15-optimize-dict-single-page-management/tasks.md
+modified  +30    -3     openspec/specs/data-dictionary/spec.md
+modified  +1     -1     pom.xml
+modified  +0     -2     ui/Dockerfile
+modified  +6     -0     ui/config/routes.ts   <== código ligado à spec
+modified  +1     -1     ui/src/locales/en-US.ts   <== código ligado à spec
+modified  +1     -1     ui/src/locales/zh-CN.ts   <== código ligado à spec
+added     +406   -0     ui/src/pages/IoT/Device/ThingModelDrawer.tsx
+added     +504   -0     ui/src/pages/IoT/Device/thingModel.tsx
+modified  +2     -2     ui/src/pages/IoT/Network/connection.tsx
+modified  +93    -34    ui/src/pages/Sys/Base/dict.tsx
+modified  +3     -3     ui/src/pages/Sys/Permission/user.tsx
+modified  +15    -0     ui/src/services/admin/role.ts
+modified  +2     -0     ui/src/services/admin/typings.d.ts
+--- DIFF DO CÓDIGO LIGADO
+### ui/config/routes.ts
+@@ -181,6 +181,12 @@ export default [
+ 				title: 'menu.iot.device',
+ 				path: '/iot/device',
+ 				routes: [
++					{
++						name: 'menu.iot.device.thingModel',
++						title: 'menu.iot.device.thingModel',
++						path: '/iot/device/thingModel',
++						component: './IoT/Device/thingModel',
++					},
+ 					{
+ 						name: 'menu.iot.device.productCategory',
+ 						title: 'menu.iot.device.productCategory',
+
+### ui/src/locales/en-US.ts
+@@ -613,7 +613,7 @@ export default {
+ 	'menu.iot.device.productCategory': 'Product Category',
+ 	'menu.iot.device.product': 'Products',
+ 	'menu.iot.device.device': 'Devices',
+-	'menu.iot.network.connection': 'Connections',
++	'menu.iot.network.connection': 'Network Connection',
+ 	'menu.sys.tenant': 'Tenants',
+ 	'menu.sys.tenant.package': 'Packages',
+ 	'menu.sys.tenant.tenant': 'Tenants',
+
+### ui/src/locales/zh-CN.ts
+@@ -613,7 +613,7 @@ export default {
+ 	'menu.iot.device.productCategory': '产品类别',
+ 	'menu.iot.device.product': '产品',
+ 	'menu.iot.device.device': '设备',
+-	'menu.iot.network.connection': '连接管理',
++	'menu.iot.network.connection': '网络连接',
+ 	'menu.sys.tenant': '租户管理',
+ 	'menu.sys.tenant.package': '套餐',
+ 	'menu.sys.tenant.tenant': '租户',
+
+===== P255 | repo Splode/pomotroid | PR #406: Feat/remember window position | capacidade: timer-duration-keyboard-entry
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Timer duration badge is an editable MM:SS input
+
+The Settings → Timer section SHALL replace the static time display badge for Focus, Short Break, and Long Break rows with an editable text input. The input SHALL display the current duration in `MM:SS` format when not focused and SHALL accept user input in `MM:SS` or bare-integer-minutes format. The valid range SHALL be 1:00 (60 seconds) minimum to 90:00 (5400 seconds) maximum.
+
+#### Scenario: Badge displays current value in MM:SS format
+
+- **WHEN** the settings window opens
+- **THEN** each timer badge SHALL display the stored duration as `MM:SS` (e.g. 25:00 for 1500 s, 5:39 for 339 s)
+
+#### Scenario: Clicking the badge activates edit mode
+
+- **WHEN** the user clicks the timer badge
+- **THEN** the input SHALL receive focus and its text SHALL be selected
+
+#### Scenario: Entering a valid MM:SS value and pressing Enter saves it
+
+- **WHEN** the user types `5:39` and presses Enter
+- **THEN** the duration SHALL be saved as 339 seconds and the badge SHALL display `5:39`
+
+#### Scenario: Entering a bare integer is interpreted as whole minutes
+
+- **WHEN** the user types `25` and commits
+- **THEN** the duration SHALL be saved as 1500 seconds and the badge SHALL display `25:00`
+
+#### Scenario: Value below minimum is clamped to 1:00
+
+- **WHEN** the user enters a value that resolves to fewer than 60 seconds (e.g. `0:30`)
+- **THEN** the duration SHALL be clamped to 60 seconds and the badge SHALL display `1:00`
+
+#### Scenario: Value above maximum is clamped to 90:00
+
+- **WHEN** the user enters a value that resolves to more than 5400 seconds (e.g. `91:00`)
+- **THEN** the duration SHALL be clamped to 5400 seconds and the badge SHALL display `90:00`
+
+#### Scenario: Invalid input reverts to previous value
+
+- **WHEN** the user enters text that cannot be parsed (e.g. `abc`, `::`)
+- **THEN** the duration SHALL remain unchanged and the badge SHALL display the previous value
+
+#### Scenario: Blurring the field commits the value
+
+- **WHEN** the user edits the badge and clicks elsewhere without pressing Enter
+- **THEN** the value SHALL be committed (parsed, clamped, saved) identically to pressing Enter
+
+#### Scenario: Pressing Tab commits the value and moves focus
+
+- **WHEN** the user edits the badge and presses Tab
+- **THEN** the value SHALL be committed and focus SHALL move to the next focusable element
+
+### Requirement: Slider and editable badge remain synchronised
+
+The timer duration slider SHALL continue to operate at 1-minute granularity. Moving the slider SHALL update the badge display and save the new whole-minute value in seconds. Editing the badge SHALL update the slider thumb to the nearest whole minute.
+
+#### Scenario: Moving the slider updates the badge
+
+- **WHEN** the user drags the Focus slider to 30
+- **THEN** the badge SHALL display `30:00` and 1800 seconds SHALL be saved
+
+#### Scenario: Entering a sub-minute value updates the slider to nearest minute
+
+- **WHEN** the user enters `5:39` in the Focus badge
+- **THEN** the slider thumb SHALL move to position 6 (nearest whole minute) and 339 seconds SHALL be saved
+
+#### Scenario: Whole-minute badge entry leaves slider aligned
+
+- **WHEN** the user enters `25:00` in the Focus badge
+- **THEN** the slider thumb SHALL sit at position 25 and 1500 seconds SHALL be saved
+
+### Requirement: Timer dial reflects new duration immediately when idle
+
+When a timer duration setting is changed while the timer is idle (not running, no elapsed progress), the main window's timer dial SHALL update to show the new total duration without requiring the user to manually reset the timer. This is achieved by emitting a `timer:reset` event with the updated snapshot after `apply_settings` is called.
+
+#### Scenario: Changing Focus duration while idle updates the dial immediately
+
+- **WHEN** the timer is idle and the user changes the Focus duration from 25:00 to 5:39 in Settings
+- **THEN** the main window dial SHALL update to display a full 5:39 ring without any user action on the main window
+
+#### Scenario: Changing duration while timer is running takes effect next round
+
+- **WHEN** the timer is actively counting down and the user changes the Focus duration
+- **THEN** the current countdown SHALL complete unchanged and the new duration SHALL apply from the next round onward
+
+### Requirement: Statistics focus time rounds to nearest minute
+
+The daily focus time reported in the Statistics view SHALL be rounded to the nearest minute (not truncated). A session of 5:39 (339 s) SHALL count as 6 minutes of focus time, not 5.
+
+#### Scenario: Sub-minute remainder rounds up at 30 seconds
+
+- **WHEN** completed work sessions total 339 seconds (5:39) for the day
+- **THEN** the Statistics view SHALL display `6m` as the focus time
+
+#### Scenario: Sub-minute remainder rounds down below 30 seconds
+
+- **WHEN** completed work sessions total 324 seconds (5:24) for the day
+- **THEN** the Statistics view SHALL display `5m` as the focus time
+
+#### Scenario: Exact minute boundary is unchanged
+
+- **WHEN** completed work sessions total exactly 1500 seconds (25:00) for the day
+- **THEN** the Statistics view SHALL display `25m` as the focus time
+
+--- ARQUIVOS DO PR (11)
+modified  +4     -0     CHANGELOG.md
+added     +2     -0     openspec/changes/archive/2026-04-26-remember-window-position/.openspec.yaml
+added     +52    -0     openspec/changes/archive/2026-04-26-remember-window-position/design.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/settings/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-26-remember-window-position/specs/window-position/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-26-remember-window-position/tasks.md
+modified  +48    -0     openspec/specs/settings/spec.md
+added     +66    -0     openspec/specs/window-position/spec.md
+modified  +71    -18    src-tauri/src/lib.rs
+modified  +24    -0     src-tauri/src/settings/mod.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src-tauri/src/settings/mod.rs
+@@ -57,6 +57,14 @@ pub struct Settings {
+     pub local_shortcut_volume_up: String,
+     pub local_shortcut_mute: String,
+     pub local_shortcut_fullscreen: String,
++    /// Last known window X coordinate (physical pixels). `None` = use OS default.
++    pub window_x: Option<i32>,
++    /// Last known window Y coordinate (physical pixels). `None` = use OS default.
++    pub window_y: Option<i32>,
++    /// Last known window width (physical pixels). `None` = use OS default.
++    pub window_width: Option<u32>,
++    /// Last known window height (physical pixels). `None` = use OS default.
++    pub window_height: Option<u32>,
+ }
+ 
+ impl Default for Settings {
+@@ -112,6 +120,10 @@ impl Default for Settings {
+             local_shortcut_volume_up: "ArrowUp".to_string(),
+             local_shortcut_mute: "m".to_string(),
+             local_shortcut_fullscreen: "F11".to_string(),
++            window_x: None,
++            window_y: None,
++            window_width: None,
++            window_height: None,
+         }
+     }
+ }
+@@ -233,6 +245,10 @@ pub fn load(conn: &Connection) -> Result<Settings> {
+         local_shortcut_volume_up: map.get("local_shortcut_volume_up").cloned().unwrap_or(d.local_shortcut_volume_up),
+         local_shortcut_mute: map.get("local_shortcut_mute").cloned().unwrap_or(d.local_shortcut_mute),
+         local_shortcut_fullscreen: map.get("local_shortcut_fullscreen").cloned().unwrap_or(d.local_shortcut_fullscreen),
++        window_x: parse_opt_i32(&map, "window_x"),
++        window_y: parse_opt_i32(&map, "window_y"),
++        window_width: parse_opt_u32(&map, "window_width"),
++        window_height: parse_opt_u32(&map, "window_height"),
+     })
+ }
+ 
+@@ -270,6 +286,14 @@ fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
+         .unwrap_or(default)
+ }
+ 
++fn parse_opt_i32(map: &HashMap<String, String>, key: &str) -> Option<i32> {
++    map.get(key)?.parse().ok()
++}
++
++fn parse_opt_u32(map: &HashMap<String, String>, key: &str) -> Option<u32> {
++    map.get(key)?.parse().ok()
++}
++
+ // ---------------------------------------------------------------------------
+ // Tests (DATA-02 acceptance criteria)
+ // ---------------------------------------------------------------------------
+
+===== P256 | repo shitz/clutch | PR #3: chore: refactor large monolithic modules into smaller submodules | capacidade: torrent-status-filtering
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Filter chip row
+
+The torrent list SHALL display a horizontal row of M3-styled Filter Chips between the main toolbar
+and the column header row. The chip row SHALL contain one chip for each of the five consolidated
+status buckets: "All", "Downloading", "Seeding", "Paused", "Active", and "Error". Each chip SHALL
+display the bucket label and the current count of torrents belonging to that bucket. Counts SHALL
+be derived from the full un-filtered torrent list so that unselected chips continue to show
+accurate counts.
+
+#### Scenario: Chip row is visible below the toolbar
+
+- **WHEN** the torrent list screen is rendered
+- **THEN** the filter chip row is visible between the toolbar and the column headers
+
+#### Scenario: Chip counts reflect real-time data
+
+- **WHEN** a new poll result arrives from the daemon
+- **THEN** each chip's embedded count updates to reflect the current torrent data without user interaction
+
+#### Scenario: Count shown on unselected chip
+
+- **WHEN** a filter chip is unselected
+- **THEN** its count badge still reflects the number of matching torrents in the full list
+
+### Requirement: M3 filter chip visual states
+
+Each filter chip SHALL implement Material 3 filter chip visual states:
+
+- **Unselected**: Transparent background, 1 px solid border at 30% opacity of the foreground
+  color, standard text color.
+- **Unselected/Hovered**: 5% opacity foreground background fill, 30% opacity border, standard
+  text color.
+- **Selected**: 15% primary color background fill, no border, primary text color, checkmark glyph
+  (`\u{e876}` Material Icons "done") prepended to the label.
+- Border radius SHALL be 8 px (not a full pill shape).
+
+#### Scenario: Unselected chip has outline border
+
+- **WHEN** a filter chip is in the unselected state and not hovered
+- **THEN** the chip renders with a transparent background and a 1 px subtle outline border
+
+#### Scenario: Selected chip has tinted background and checkmark
+
+- **WHEN** a filter chip is in the selected state
+- **THEN** the chip renders with a soft primary-color background fill, no border, and a checkmark
+  glyph prepended to its label
+
+#### Scenario: Hovered unselected chip gains subtle fill
+
+- **WHEN** the user hovers over an unselected filter chip
+- **THEN** a faint background fill appears while the outline border is retained
+
+### Requirement: Multi-select filter behaviour
+
+Multiple filter chips SHALL be selectable simultaneously. The displayed torrent rows SHALL be the
+union of all torrents that match at least one selected status bucket. The "All" chip SHALL act as
+a master toggle.
+
+#### Scenario: Multiple chips can be active at once
+
+- **WHEN** the user selects two or more status chips (e.g., Downloading and Paused)
+- **THEN** the list shows all torrents belonging to either selected bucket
+
+#### Scenario: Clicking All when all chips are selected deselects all
+
+- **WHEN** all five status chips are selected (i.e., the All chip is in selected state) and the
+  user clicks the All chip
+- **THEN** all chips are deselected and the list is empty (showing the empty-state placeholder)
+
+#### Scenario: Clicking All when not all chips are selected selects all
+
+- **WHEN** one or more status chips are deselected and the user clicks the All chip
+- **THEN** all five status chips become selected and all torrents are visible
+
+#### Scenario: Toggling an individual chip
+
+- **WHEN** the user clicks a status chip that is currently selected
+- **THEN** that chip becomes unselected and torrents exclusively in that bucket are removed from
+  the list
+
+#### Scenario: All chips selected on app launch
+
+- **WHEN** the torrent list screen is first loaded
+- **THEN** all five status chips are in the selected state and all torrents are visible
+
+### Requirement: Status consolidation mapping
+
+Transmission's 7 integer status codes SHALL be consolidated into 5 semantic filter buckets as
+follows:
+
+| Bucket      | Transmission statuses / condition                           |
+| ----------- | ----------------------------------------------------------- |
+| Downloading | 3 (download queued), 4 (downloading)                        |
+| Seeding     | 5 (seed queued), 6 (seeding)                                |
+| Paused      | 0 (stopped)                                                 |
+| Active      | `rate_download > 0` OR `rate_upload > 0` (derived state)    |
+| Error       | 1 (check queued), 2 (checking), or `error_string` non-empty |
+
+A torrent is shown if at least one of its matching buckets is present in the active filter set.
+A torrent may match more than one bucket simultaneously (e.g., a fast-downloading torrent matches
+both `Downloading` and `Active`).
+
+#### Scenario: Downloading torrent appears under Downloading chip
+
+- **WHEN** a torrent has Transmission status 4 and only the Downloading chip is selected
+- **THEN** that torrent appears in the filtered list
+
+#### Scenario: Actively transferring torrent appears under Active chip
+
+- **WHEN** a torrent has a non-zero rate_download or rate_upload and only the Active chip is selected
+- **THEN** that torrent appears in the filtered list regardless of its integer status
+
+#### Scenario: Paused torrent hidden when only Downloading is selected
+
+- **WHEN** a torrent has Transmission status 0 and only the Downloading chip is selected
+- **THEN** that torrent does NOT appear in the filtered list
+
+### Requirement: Empty-filter placeholder
+
+When the filter pass produces zero visible torrents (e.g., all chips deselected, or no torrents
+match the current filter), the list area SHALL display centered text: "No torrents match the
+selected filters." This placeholder SHALL only appear after the initial torrent data has been
+loaded; the regular loading indicator takes precedence during the first fetch.
+
+#### Scenario: Placeholder shown when no torrents match
+
+- **WHEN** torrent data has been received and the filtered list is empty
+- **THEN** centered text "No torrents match the selected filters." is shown instead of an empty
+  scroll area
+
+#### Scenario: Normal empty-state shown before first load / when no torrents exist
+
+- **WHEN** the torrent list is empty because the daemon has no torrents (not because of filtering)
+- **THEN** the existing empty state (logo + helper text) is shown, not the filter placeholder
+
+--- ARQUIVOS DO PR (49)
+modified  +40    -14    AGENTS.md
+modified  +6     -0     CHANGELOG.md
+modified  +3     -2     openspec/specs/add-torrent/spec.md
+modified  +1     -1     openspec/specs/connection-screen/spec.md
+modified  +9     -6     openspec/specs/file-selection/spec.md
+modified  +2     -2     openspec/specs/m3-components/spec.md
+modified  +2     -2     openspec/specs/material-theme/spec.md
+modified  +2     -1     openspec/specs/rpc-client/spec.md
+modified  +26    -593   src/app.rs
+added     +95    -0     src/app/keyboard.rs
+added     +343   -0     src/app/routing.rs
+added     +241   -0     src/app/settings_bridge.rs
+renamed   +50    -545   src/auth/mod.rs
+added     +304   -0     src/auth/update.rs
+added     +202   -0     src/auth/view.rs
+modified  +6     -0     src/lib.rs
+modified  +3     -0     src/main.rs
+modified  +3     -3     src/profile.rs
+modified  +3     -3     src/rpc/api.rs
+modified  +2     -0     src/rpc/error.rs
+modified  +1     -1     src/rpc/transport.rs
+added     +193   -0     src/screens/inspector/mod.rs
+added     +70    -0     src/screens/inspector/state.rs
+added     +91    -0     src/screens/inspector/update.rs
+renamed   +6     -293   src/screens/inspector/view.rs
+modified  +1     -1     src/screens/main_screen.rs
+modified  +2     -0     src/screens/mod.rs
+modified  +5     -0     src/screens/settings/draft.rs
+modified  +1     -1     src/screens/settings/mod.rs
+modified  +8     -0     src/screens/settings/state.rs
+modified  +2     -0     src/screens/settings/update.rs
+modified  +6     -40    src/screens/settings/view.rs
+modified  +4     -6     src/screens/torrent_list/add_dialog.rs
+added     +278   -0     src/screens/torrent_list/columns.rs
+added     +212   -0     src/screens/torrent_list/dialogs.rs
+added     +165   -0     src/screens/torrent_list/filters.rs
+modified  +44    -56    src/screens/torrent_list/mod.rs   <== código ligado à spec
+modified  +13    -13    src/screens/torrent_list/sort.rs
+added     +134   -0     src/screens/torrent_list/toolbar.rs
+modified  +3     -0     src/screens/torrent_list/update.rs   <== código ligado à spec
+modified  +28    -651   src/screens/torrent_list/view.rs   <== código ligado à spec
+modified  +27    -839   src/theme.rs   <== código ligado à spec
+added     +394   -0     src/theme/buttons.rs
+added     +213   -0     src/theme/containers.rs
+added     +99    -0     src/theme/inputs.rs
+added     +72    -0     src/theme/progress.rs
+added     +121   -0     src/theme/segmented.rs
+added     +97    -0     src/theme/selection.rs
+modified  +18    -11    system_architecture.md
+--- DIFF DO CÓDIGO LIGADO
+### src/screens/torrent_list/mod.rs
+@@ -17,12 +17,20 @@
+ //!
+ //! - [`sort`] — Pure column-sort logic (no UI dependencies)
+ //! - [`add_dialog`] — Add-torrent modal dialog state and view
+-//! - [`view`] — Widget-tree rendering (toolbar, header, rows)
++//! - [`filters`] — Pure status-bucket counting and visibility helpers
++//! - [`toolbar`] — Torrent-list toolbar rendering
++//! - [`columns`] — Sticky header and sort-indicator rendering
++//! - [`dialogs`] — Context-menu and modal overlay rendering
++//! - [`view`] — Widget-tree rendering orchestration and row rendering
+ //! - [`update`] — Elm update function
+ //! - [`worker`] — Serialized RPC worker subscription stream
+ 
+ pub mod add_dialog;
++mod columns;
++mod dialogs;
++mod filters;
+ pub mod sort;
++mod toolbar;
+ mod update;
+ pub mod view;
+ pub mod worker;
+@@ -38,9 +46,10 @@ use sort::{SortColumn, SortDir};
+ 
+ // Re-export for parent modules.
+ pub use add_dialog::FileReadResult;
++pub use dialogs::view_context_menu_overlay;
++pub use filters::matching_filters;
+ pub use update::update;
+ pub use view::view;
+-pub use view::view_context_menu_overlay;
+ pub use worker::rpc_worker_stream;
+ 
+ // ── SetLocationDialog ───────────────────────────────────────────────────────────────
+@@ -89,27 +98,6 @@ impl StatusFilter {
+     }
+ }
+ 
+-/// Returns all [`StatusFilter`] buckets that apply to `t`.
+-///
+-/// A torrent may match more than one bucket simultaneously; for example, a
+-/// torrent actively downloading at 500 KB/s will be in both `Downloading` and
+-/// `Active`. The caller should use `.iter().any(|f| set.contains(f))` to
+-/// decide visibility.
+-pub fn matching_filters(t: &TorrentData) -> Vec<StatusFilter> {
+-    let mut out = Vec::with_capacity(2);
+-    match t.status {
+-        3 | 4 => out.push(StatusFilter::Downloading),
+-        5 | 6 => out.push(StatusFilter::Seeding),
+-        0 => out.push(StatusFilter::Paused),
+-        1 | 2 => out.push(StatusFilter::Error),
+-        _ => {}
+-    }
+-    if t.rate_download > 0 || t.rate_upload > 0 {
+-        out.push(StatusFilter::Active);
+-    }
+-    out
+-}
+-
+ use iced::Subscription;
+ 
+ // ── Message ───────────────────────────────────────────────────────────────────
+@@ -348,7 +336,7 @@ mod tests {
+         }
+     }
+ 
+-    /// 6.1 – Tick when is_loading=true: no command, state unchanged.
++    /// Tick is ignored when `is_loading` is already true.
+     #[test]
+     fn tick_ignored_when_loading() {
+         let mut screen = make_screen();
+@@ -357,7 +345,7 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 6.2 – Tick when is_loading=false: is_loading becomes true.
++    /// Tick starts a load when the screen is idle.
+     #[test]
+     fn tick_fires_when_not_loading() {
+         let mut screen = make_screen();
+@@ -366,7 +354,7 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 6.3 – TorrentsUpdated(Ok) replaces torrents and clears is_loading.
++    /// `TorrentsUpdated(Ok)` replaces torrents and clears `is_loading`.
+     #[test]
+     fn torrents_updated_ok_replaces_and_clears_loading() {
+         let mut screen = make_screen();
+@@ -378,7 +366,7 @@ mod tests {
+         assert_eq!(screen.torrents[0].name, "Ubuntu ISO");
+     }
+ 
+-    /// 6.4 – TorrentsUpdated(Err) clears is_loading and sets error.
++    /// `TorrentsUpdated(Err)` clears `is_loading` and stores the error.
+     #[test]
+     fn torrents_updated_err_clears_loading_and_sets_error() {
+         let mut screen = make_screen();
+@@ -391,7 +379,7 @@ mod tests {
+         assert_eq!(screen.error.as_deref(), Some("timeout"));
+     }
+ 
+-    /// 6.5 – SessionIdRotated updates the stored session id.
++    /// `SessionIdRotated` updates the stored session ID.
+     #[test]
+     fn session_id_rotated_updates_id() {
+         let mut screen = make_screen();
+@@ -402,7 +390,7 @@ mod tests {
+         assert_eq!(screen.params.session_id, "new-id-xyz");
+     }
+ 
+-    /// 8.1 – TorrentSelected toggles selected_id correctly.
++    /// `TorrentSelected` toggles `selected_id` correctly.
+     #[test]
+     fn torrent_selected_toggles() {
+         let mut screen = make_screen();
+@@ -418,7 +406,7 @@ mod tests {
+         assert_eq!(screen.selected_id, None);
+     }
+ 
+-    /// 12.1 – selected_torrent() returns the matching TorrentData when selected.
++    /// `selected_torrent()` returns the matching torrent when selected.
+     #[test]
+     fn selected_torrent_returns_correct_entry() {
+         let mut screen = make_screen();
+@@ -429,14 +417,14 @@ mod tests {
+         assert_eq!(t.name, "Beta");
+     }
+ 
+-    /// 12.1b – selected_torrent() returns None when nothing is selected.
++    /// `selected_torrent()` returns `None` when nothing is selected.
+     #[test]
+     fn selected_torrent_none_when_no_selection() {
+         let screen = make_screen();
+         assert!(screen.selected_torrent().is_none());
+     }
+ 
+-    /// 8.3 – DeleteClicked sets confirming_delete.
++    /// `DeleteClicked` arms the delete-confirmation state.
+     #[test]
+     fn delete_clicked_sets_confirming() {
+         let mut screen = make_screen();
+@@ -446,15 +434,15 @@ mod tests {
+         assert_eq!(screen.confirming_delete, Some((5, false)));
+     }
+ 
+-    /// 8.3 – DeleteClicked when nothing is selected is a no-op.
++    /// `DeleteClicked` is a no-op when nothing is selected.
+     #[test]
+     fn delete_clicked_no_selection_is_noop() {
+         let mut screen = make_screen();
+         let _ = update(&mut screen, Message::DeleteClicked);
+         assert_eq!(screen.confirming_delete, None);
+     }
+ 
+-    /// 8.4 – DeleteCancelled clears confirming_delete.
++    /// `DeleteCancelled` clears the delete-confirmation state.
+     #[test]
+     fn delete_cancelled_clears_confirming() {
+         let mut screen = make_screen();
+@@ -463,7 +451,7 @@ mod tests {
+         assert_eq!(screen.confirming_delete, None);
+     }
+ 
+-    /// 8.5 – DeleteConfirmed fires a task and clears confirming_delete.
++    /// `DeleteConfirmed` clears the dialog state and starts a delete action.
+     #[test]
+     fn delete_confirmed_clears_confirming_and_loads() {
+         let mut screen = make_screen();
+@@ -473,15 +461,15 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 8.5 – DeleteConfirmed when confirming_delete is None is a no-op.
++    /// `DeleteConfirmed` is a no-op when no delete confirmation is active.
+     #[test]
+     fn delete_confirmed_no_state_is_noop() {
+         let mut screen = make_screen();
+         let _ = update(&mut screen, Message::DeleteConfirmed);
+         assert!(!screen.is_loading);
+     }
+ 
+-    /// 8.6 – DeleteLocalDataToggled updates checkbox state.
++    /// `DeleteLocalDataToggled` updates the checkbox state.
+     #[test]
+     fn delete_local_data_toggled_updates_state() {
+         let mut screen = make_screen();
+@@ -492,7 +480,7 @@ mod tests {
+         assert_eq!(screen.confirming_delete, Some((9, false)));
+     }
+ 
+-    /// 8.7 – ActionCompleted(Ok) keeps is_loading=true and fires a poll task.
++    /// `ActionCompleted(Ok)` keeps loading active and triggers a refresh.
+     #[test]
+     fn action_completed_ok_fires_refresh() {
+         let mut screen = make_screen();
+@@ -501,7 +489,7 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 8.8 – ActionCompleted(Err) clears is_loading and stores error.
++    /// `ActionCompleted(Err)` clears loading and stores the error.
+     #[test]
+     fn action_completed_err_clears_and_stores_error() {
+         let mut screen = make_screen();
+@@ -514,7 +502,7 @@ mod tests {
+         assert_eq!(screen.error.as_deref(), Some("daemon refused"));
+     }
+ 
+-    /// 8.9 – Poll tick is ignored while is_loading is true.
++    /// Poll tick is ignored while an action is still in flight.
+     #[test]
+     fn tick_ignored_while_action_in_flight() {
+         let mut screen = make_screen();
+@@ -524,17 +512,17 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    // ── 9.x  add-torrent dialog tests ─────────────────────────────────────────
++    // ── Add-torrent dialog tests ─────────────────────────────────────────────
+ 
+-    /// 9.1 – AddLinkClicked transitions add_dialog to AddLink.
++    /// `AddLinkClicked` opens the add-link dialog.
+     #[test]
+     fn add_link_clicked_opens_add_link_dialog() {
+         let mut screen = make_screen();
+         let _ = update(&mut screen, Message::AddLinkClicked);
+         assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
+     }
+ 
+-    /// 9.2 – AddConfirmed with empty magnet is a no-op.
++    /// `AddConfirmed` is a no-op when the magnet input is empty.
+     #[test]
+     fn add_confirmed_empty_magnet_is_noop() {
+         let mut screen = make_screen();
+@@ -547,7 +535,7 @@ mod tests {
+         assert!(matches!(screen.add_dialog, AddDialogState::AddLink { .. }));
+     }
+ 
+-    /// 9.3 – AddConfirmed with a valid magnet sets is_loading=true.
++    /// `AddConfirmed` with a valid magnet starts loading.
+     #[test]
+     fn add_confirmed_valid_magnet_emits_task() {
+         let mut screen = make_screen();
+@@ -560,7 +548,7 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 9.4 – AddCancelled resets add_dialog to Hidden.
++    /// `AddCancelled` closes the add dialog.
+     #[test]
+     fn add_cancelled_closes_dialog() {
+         let mut screen = make_screen();
+@@ -573,7 +561,7 @@ mod tests {
+         assert!(matches!(screen.add_dialog, AddDialogState::Hidden));
+     }
+ 
+-    /// 9.5 – TorrentFileRead(Ok) opens AddFile dialog with the correct file list.
++    /// `TorrentFileRead(Ok)` opens the add-file dialog with the parsed files.
+     #[test]
+     fn torrent_file_read_ok_opens_add_file_dialog() {
+         let mut screen = make_screen();
+@@ -594,7 +582,7 @@ mod tests {
+         }
+     }
+ 
+-    /// 9.6 – AddCompleted(Ok) clears the dialog and fires an immediate torrent-get.
++    /// `AddCompleted(Ok)` clears the dialog and triggers an immediate refresh.
+     #[test]
+     fn add_completed_ok_clears_dialog_and_polls() {
+         let mut screen = make_screen();
+@@ -608,7 +596,7 @@ mod tests {
+         assert!(screen.is_loading);
+     }
+ 
+-    /// 9.7 – AddCompleted(Err) stores the error inside the dialog without closing it.
++    /// `AddCompleted(Err)` stores the error inside the dialog without closing it.
+     #[test]
+     fn add_completed_err_stores_error_in_dialog() {
+         let mut screen = make_screen();
+@@ -629,7 +617,7 @@ mod tests {
+         }
+     }
+ 
+-    /// 11.1 – ColumnHeaderClicked cycles Unsorted → Asc → Desc → Unsorted.
++    /// `ColumnHeaderClicked` cycles unsorted, ascending, descending, then unsorted.
+     #[test]
+     fn column_header_clicked_cycles_sort() {
+         let mut screen = make_screen();
+@@ -647,7 +635,7 @@ mod tests {
+         assert_eq!(screen.sort_column, None);
+     }
+ 
+-    /// 11.2 – Clicking a different column starts Asc on the new column.
++    /// Clicking a different column starts ascending order on the new column.
+     #[test]
+     fn column_header_clicked_different_column_resets() {
+         let mut screen = make_screen();
+@@ -783,7 +771,7 @@ mod tests {
+         assert!(!screen.is_loading);
+
+### src/screens/torrent_list/update.rs
+@@ -12,6 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++//! Elm update logic for the torrent list screen.
++
+ use base64::Engine as _;
+ use iced::Task;
+ 
+@@ -21,6 +23,7 @@ use super::add_dialog::{self, AddDialogState, FileReadResult, TorrentFileInfo};
+ use super::sort::SortDir;
+ use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen};
+ 
++/// Apply a single torrent-list message to the screen state and return follow-up work.
+ pub fn update(state: &mut TorrentListScreen, msg: Message) -> Task<Message> {
+     match msg {
+         // ── Polling ───────────────────────────────────────────────────────────
+
+### src/screens/torrent_list/view.rs
+@@ -12,35 +12,27 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++//! Widget-tree orchestration and row rendering for the torrent list screen.
++
+ use iced::widget::rule;
+-use iced::widget::tooltip;
+ use iced::widget::{
+-    Space, button, checkbox, column, container, mouse_area, opaque, progress_bar, row, scrollable,
+-    stack, text,
++    Space, button, column, container, mouse_area, opaque, progress_bar, row, scrollable, stack,
++    text,
+ };
+ use iced::{Alignment, Element, Length};
+ 
+ use crate::format::{format_eta, format_size, format_speed};
+-use crate::rpc::TorrentData;
+-use crate::theme::{
+-    ICON_ADD, ICON_DELETE, ICON_DOWNLOAD, ICON_FOLDER, ICON_LINK, ICON_LOGOUT, ICON_PAUSE,
+-    ICON_PLAY, ICON_SETTINGS, ICON_SPEED, ICON_UPLOAD, MATERIAL_ICONS, icon, m3_filter_chip,
+-    progress_bar_style,
+-};
++use crate::theme::{MATERIAL_ICONS, m3_filter_chip, progress_bar_style};
+ 
+ use super::add_dialog::{AddDialogState, view_add_dialog};
+-use super::sort::{SortColumn, SortDir, sort_torrents};
+-use super::{Message, SetLocationDialog, StatusFilter, TorrentListScreen, matching_filters};
+-
+-// Fixed pixel widths for narrow numeric columns.
+-const W_STATUS: f32 = 90.0;
+-const W_SIZE: f32 = 80.0;
+-const W_SPEED_DOWN: f32 = 90.0;
+-const W_SPEED_UP: f32 = 90.0;
+-const W_ETA: f32 = 80.0;
+-const W_RATIO: f32 = 64.0;
+-const W_PROGRESS: f32 = 130.0;
+-const SCROLLBAR_WIDTH: f32 = 14.0;
++use super::columns::{
++    SCROLLBAR_WIDTH, W_ETA, W_PROGRESS, W_RATIO, W_SIZE, W_SPEED_DOWN, W_SPEED_UP, W_STATUS,
++    view_column_header,
++};
++use super::dialogs::{view_delete_dialog, view_set_location_dialog};
++use super::filters::{count_filters, display_torrents};
++use super::toolbar::view_normal_toolbar;
++use super::{Message, StatusFilter, TorrentListScreen};
+ 
+ fn status_label(status: i32) -> &'static str {
+     match status {
+@@ -95,13 +87,14 @@ fn filter_chip(
+         .into()
+ }
+ 
++/// Render the torrent list screen, including overlays owned by the list itself.
+ pub fn view(
+     state: &TorrentListScreen,
+-    theme_mode: crate::app::ThemeMode,
++    _theme_mode: crate::app::ThemeMode,
+     alt_speed_enabled: bool,
+ ) -> Element<'_, Message> {
+     // ── Toolbar ───────────────────────────────────────────────────────────────
+-    let toolbar = view_normal_toolbar(state, theme_mode, alt_speed_enabled);
++    let toolbar = view_normal_toolbar(state, alt_speed_enabled);
+ 
+     // ── Inline error banner ───────────────────────────────────────────────────
+     let error_row: Element<Message> = if let Some(err) = &state.error {
+@@ -110,23 +103,7 @@ pub fn view(
+         Space::new().into()
+     };
+ 
+-    // ── Count pass: tally per-bucket counts over the full torrent list ────────
+-    let mut count_downloading: u32 = 0;
+-    let mut count_seeding: u32 = 0;
+-    let mut count_paused: u32 = 0;
+-    let mut count_active: u32 = 0;
+-    let mut count_error: u32 = 0;
+-    for t in &state.torrents {
+-        for f in matching_filters(t) {
+-            match f {
+-                StatusFilter::Downloading => count_downloading += 1,
+-                StatusFilter::Seeding => count_seeding += 1,
+-                StatusFilter::Paused => count_paused += 1,
+-                StatusFilter::Active => count_active += 1,
+-                StatusFilter::Error => count_error += 1,
+-            }
+-        }
+-    }
++    let counts = count_filters(&state.torrents);
+ 
+     // ── Filter chips row ──────────────────────────────────────────────────────
+     let is_all_selected = state.filters.len() == StatusFilter::all().len();
+@@ -140,31 +117,31 @@ pub fn view(
+         Space::new().width(Length::Fixed(4.0)),
+         filter_chip(
+             "Downloading",
+-            count_downloading,
++            counts.downloading,
+             state.filters.contains(&StatusFilter::Downloading),
+             Message::FilterToggled(StatusFilter::Downloading),
+         ),
+         filter_chip(
+             "Seeding",
+-            count_seeding,
++            counts.seeding,
+             state.filters.contains(&StatusFilter::Seeding),
+             Message::FilterToggled(StatusFilter::Seeding),
+         ),
+         filter_chip(
+             "Paused",
+-            count_paused,
++            counts.paused,
+             state.filters.contains(&StatusFilter::Paused),
+             Message::FilterToggled(StatusFilter::Paused),
+         ),
+         filter_chip(
+             "Active",
+-            count_active,
++            counts.active,
+             state.filters.contains(&StatusFilter::Active),
+             Message::FilterToggled(StatusFilter::Active),
+         ),
+         filter_chip(
+             "Error",
+-            count_error,
++            counts.error,
+             state.filters.contains(&StatusFilter::Error),
+             Message::FilterToggled(StatusFilter::Error),
+         ),
+@@ -174,20 +151,12 @@ pub fn view(
+ 
+     // ── Sticky header ─────────────────────────────────────────────────────────
+     let header = view_column_header(state);
+-
+-    // ── Data rows (sorted, then filtered against active chips) ────────────────
+-    let sorted: Vec<&TorrentData> = match state.sort_column {
+-        Some(col) => sort_torrents(&state.torrents, col, state.sort_dir),
+-        None => state.torrents.iter().collect(),
+-    };
+-    let display: Vec<&TorrentData> = sorted
+-        .into_iter()
+-        .filter(|t| {
+-            matching_filters(t)
+-                .iter()
+-                .any(|f| state.filters.contains(f))
+-        })
+-        .collect();
++    let display = display_torrents(
++        &state.torrents,
++        state.sort_column,
++        state.sort_dir,
++        &state.filters,
++    );
+ 
+     let is_list_empty = state.initial_load_done && state.torrents.is_empty();
+     let is_filter_empty =
+@@ -363,597 +332,5 @@ pub fn view(
+         after_delete
+     };
+ 
+-    // ── Context menu overlay ──────────────────────────────────────────────────
+-    // Rendered at the main_screen level via `view_context_menu_overlay` so it
+-    // can draw over the inspector panel. Nothing to do here.
+     after_set_location
+ }
+-
+-/// Menu width in logical pixels — used for right-edge mitigation.
+-const MENU_WIDTH: f32 = 220.0;
+-
+-/// Builds a single M3 context-menu row with a fixed-width icon container and
+-/// an edge-to-edge hover highlight. Pass `on_press = None` to render disabled.
+-fn menu_item<'a>(
+-    icon_glyph: char,
+-    label: &'a str,
+-    on_press: Option<Message>,
+-) -> Element<'a, Message> {
+-    // Force every icon glyph into an identical 24-px bounding box so that
+-    // narrow glyphs (play triangle) align with wide ones (trash square).
+-    let icon_widget = text(icon_glyph)
+-        .font(MATERIAL_ICONS)
+-        .size(18)
+-        .width(Length::Fixed(24.0))
+-        .align_x(Alignment::Center);
+-
+-    let content = row![icon_widget, text(label).size(14)]
+-        .spacing(12)
+-        .align_y(Alignment::Center);
+-
+-    let btn = button(content).width(Length::Fill).padding([8, 16]);
+-
+-    if let Some(msg) = on_press {
+-        btn.on_press(msg).style(crate::theme::m3_menu_item).into()
+-    } else {
+-        btn.style(crate::theme::m3_menu_item_disabled).into()
+-    }
+-}
+-
+-/// Builds the context menu overlay element when a context menu is open.
+-///
+-/// Returns `None` when no context menu is active. The returned element must be
+-/// placed on top of the **full** application content (including the inspector)
+-/// so the menu is not clipped by the torrent-list container.
+-pub fn view_context_menu_overlay(state: &TorrentListScreen) -> Option<Element<'_, Message>> {
+-    let (torrent_id, point) = state.context_menu?;
+-
+-    // Bottom-edge mitigation: shift menu up if it would overflow.
+-    let effective_y = if point.y > state.window_height - 150.0 {
+-        point.y - 150.0
+-    } else {
+-        point.y
+-    };
+-
+-    // Right-edge mitigation: anchor to the left of the cursor when there is
+-    // not enough horizontal space to the right.
+-    let effective_x = if point.x + MENU_WIDTH > state.window_width {
+-        (point.x - MENU_WIDTH).max(0.0)
+-    } else {
+-        point.x
+-    };
+-
+-    let torrent_opt = state.torrents.iter().find(|t| t.id == torrent_id);
+-    let can_start = torrent_opt.is_some_and(|t| !matches!(t.status, 3..=6));
+-    let can_pause = torrent_opt.is_some_and(|t| matches!(t.status, 3..=6));
+-
+-    // M3 menu card: 8px vertical padding, zero horizontal padding so buttons
+-    // span edge-to-edge with their own horizontal padding inside.
+-    let menu_card = container(
+-        column![
+-            menu_item(
+-                ICON_PLAY,
+-                "Start",
+-                can_start.then_some(Message::ContextMenuStart(torrent_id))
+-            ),
+-            menu_item(
+-                ICON_PAUSE,
+-                "Pause",
+-                can_pause.then_some(Message::ContextMenuPause(torrent_id))
+-            ),
+-            menu_item(
+-                ICON_DELETE,
+-                "Delete",
+-                Some(Message::ContextMenuDelete(torrent_id))
+-            ),
+-            menu_item(
+-                ICON_FOLDER,
+-                "Set Data Location",
+-                Some(Message::OpenSetLocation(torrent_id))
+-            ),
+-        ]
+-        .spacing(0),
+-    )
+-    .padding(iced::Padding {
+-        top: 8.0,
+-        bottom: 8.0,
+-        left: 0.0,
+-        right: 0.0,
+-    })
+-    .width(Length::Fixed(MENU_WIDTH))
+-    .style(crate::theme::m3_menu_card);
+-
+-    let positioned = container(menu_card)
+-        .padding(iced::Padding {
+-            top: effective_y,
+-            left: effective_x,
+-            right: 0.0,
+-            bottom: 0.0,
+-        })
+-        .width(Length::Fill)
+-        .height(Length::Fill);
+-
+-    let click_away = mouse_area(
+-        container(Space::new())
+-            .width(Length::Fill)
+-            .height(Length::Fill),
+-    )
+-    .on_press(Message::DismissContextMenu);
+-
+-    Some(stack![click_away, positioned].into())
+-}
+-
+-fn view_delete_dialog(name: &str, del_local: bool) -> Element<'_, Message> {
+-    let card = container(
+-        column![
+-            text(format!("Delete \"{}\"?", name)).size(18),
+-            text("This cannot be undone.").size(13),
+-            checkbox(del_local)
+-                .label("Also delete local data")
+-                .on_toggle(Message::DeleteLocalDataToggled),
+-            row![
+-                Space::new().width(Length::Fill),
+-                button("Cancel")
+-                    .on_press(Message::DeleteCancelled)
+-                    .padding([10, 24])
+-                    .style(crate::theme::m3_tonal_button),
+-                button("Confirm Delete")
+-                    .on_press(Message::DeleteConfirmed)
+-                    .padding([10, 24])
+-                    .style(|t: &iced::Theme, s| {
+-                        let p = t.extended_palette();
+-                        let bg = match s {
+-                            button::Status::Hovered | button::Status::Pressed => {
+
+### src/theme.rs
+@@ -12,8 +12,11 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-//! All styling concerns are centralised here so future theme changes require
+-//! edits in exactly one file.
++//! All styling concerns are centralised in `crate::theme`.
++//!
++//! This file is the public facade for the theme layer. Private implementation
++//! details live under `src/theme/`, but callers continue to import everything
++//! from `crate::theme` so the styling API stays stable as the internals evolve.
+ //!
+ //! # Usage
+ //!
+@@ -25,17 +28,32 @@
+ //!
+ //! Apply styles:
+ //! ```ignore
+-//! container(content).style(theme::elevated_surface)
++//! container(content).style(theme::m3_card)
+ //! progress_bar(...).style(theme::progress_bar_style(torrent.status))
+ //! icon('\u{E034}')  // pause glyph
+ //! ```
+ 
+-use iced::widget::button;
+-use iced::widget::container;
+-use iced::widget::progress_bar;
+-use iced::widget::row;
+-use iced::widget::text_input;
+-use iced::{Border, Color, Element, Font, Length, Shadow, Theme, Vector};
++use iced::{Color, Font, Theme};
++
++mod buttons;
++mod containers;
++mod inputs;
++mod progress;
++mod segmented;
++mod selection;
++
++pub use self::buttons::{
++    active_icon_button, danger_pill_button, icon_button, m3_filter_chip, m3_menu_item,
++    m3_menu_item_disabled, m3_primary_button, m3_tonal_button,
++};
++pub use self::containers::{
++    auth_dialog_card, dialog_card, dialog_scrim, inspector_surface, m3_card, m3_menu_card,
++    m3_tooltip, selected_row,
++};
++pub use self::inputs::m3_text_input;
++pub use self::progress::progress_bar_style;
++pub use self::segmented::segmented_control;
++pub use self::selection::{CheckState, m3_checkbox, m3_tristate_checkbox};
+ 
+ // ── Material Icons font ───────────────────────────────────────────────────────
+ 
+@@ -82,93 +100,6 @@ pub const ICON_CB_CHECKED: char = '\u{e834}'; // check_box
+ pub const ICON_CB_UNCHECKED: char = '\u{e835}'; // check_box_outline_blank
+ pub const ICON_CB_MIXED: char = '\u{e909}'; // indeterminate_check_box
+ 
+-// ── Tri-state checkbox ────────────────────────────────────────────────────────
+-
+-/// Three-valued selection state used by the file-list header checkbox.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub enum CheckState {
+-    Checked,
+-    Unchecked,
+-    Mixed,
+-}
+-
+-/// Shared rendering core for both `m3_checkbox` and `m3_tristate_checkbox`.
+-///
+-/// Produces a `mouse_area`-wrapped row of icon + optional label.
+-/// `is_active` controls the icon colour: primary when `true`, muted text when `false`.
+-fn checkbox_widget<'a, Message: Clone + 'a>(
+-    codepoint: char,
+-    is_active: bool,
+-    label: &'a str,
+-    on_press: Message,
+-) -> Element<'a, Message> {
+-    let icon_widget = iced::widget::text(String::from(codepoint))
+-        .font(MATERIAL_ICONS)
+-        .size(20)
+-        .width(20)
+-        .align_x(iced::alignment::Horizontal::Center)
+-        .style(move |theme: &iced::Theme| {
+-            let palette = theme.extended_palette();
+-            iced::widget::text::Style {
+-                color: Some(if is_active {
+-                    palette.primary.base.color
+-                } else {
+-                    palette.background.base.text
+-                }),
+-            }
+-        });
+-
+-    let content: Element<'a, Message> = if label.is_empty() {
+-        icon_widget.into()
+-    } else {
+-        row![icon_widget, iced::widget::text(label).size(14)]
+-            .spacing(8)
+-            .align_y(iced::alignment::Vertical::Center)
+-            .into()
+-    };
+-
+-    iced::widget::mouse_area(content).on_press(on_press).into()
+-}
+-
+-/// Render a two-state checkbox using Material Icons, matching the visual style
+-/// of [`m3_tristate_checkbox`].
+-///
+-/// `on_toggle` receives the new `bool` value after the click.
+-pub fn m3_checkbox<'a, Message: Clone + 'a>(
+-    checked: bool,
+-    label: &'a str,
+-    on_toggle: impl Fn(bool) -> Message + 'a,
+-) -> Element<'a, Message> {
+-    let codepoint = if checked {
+-        ICON_CB_CHECKED
+-    } else {
+-        ICON_CB_UNCHECKED
+-    };
+-    checkbox_widget(codepoint, checked, label, on_toggle(!checked))
+-}
+-
+-/// Render a tri-state "Select All" header checkbox using Material Icons.
+-///
+-/// Clicking `Mixed` or `Unchecked` produces `CheckState::Checked`;
+-/// clicking `Checked` produces `CheckState::Unchecked`.
+-pub fn m3_tristate_checkbox<'a, Message: Clone + 'a>(
+-    state: CheckState,
+-    label: &'a str,
+-    on_toggle: impl Fn(CheckState) -> Message + 'a,
+-) -> Element<'a, Message> {
+-    let (codepoint, next_state) = match state {
+-        CheckState::Mixed => (ICON_CB_MIXED, CheckState::Checked),
+-        CheckState::Checked => (ICON_CB_CHECKED, CheckState::Unchecked),
+-        CheckState::Unchecked => (ICON_CB_UNCHECKED, CheckState::Checked),
+-    };
+-    checkbox_widget(
+-        codepoint,
+-        state != CheckState::Unchecked,
+-        label,
+-        on_toggle(next_state),
+-    )
+-}
+-
+ /// Render a single Material icon glyph at 24 px.
+ pub fn icon(codepoint: char) -> iced::widget::Text<'static> {
+     iced::widget::text(String::from(codepoint))
+@@ -293,746 +224,3 @@ pub fn clutch_theme(is_dark: bool) -> Theme {
+         )
+     }
+ }
+-
+-// ── Container styles ──────────────────────────────────────────────────────────
+-
+-/// Inspector panel background: slightly elevated, rounded top corners.
+-pub fn inspector_surface(theme: &Theme) -> container::Style {
+-    let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+-    let bg = if is_dark {
+-        INSPECTOR_SURFACE_DARK
+-    } else {
+-        INSPECTOR_SURFACE_LIGHT
+-    };
+-    container::Style {
+-        text_color: None,
+-        background: Some(iced::Background::Color(bg)),
+-        border: Border {
+-            radius: iced::border::Radius {
+-                top_left: 12.0,
+-                top_right: 12.0,
+-                bottom_left: 0.0,
+-                bottom_right: 0.0,
+-            },
+-            width: 0.0,
+-            color: Color::TRANSPARENT,
+-        },
+-        shadow: Shadow {
+-            color: Color::from_rgba8(0, 0, 0, 0.0),
+-            offset: Vector::new(0.0, -2.0),
+-            blur_radius: 4.0,
+-        },
+-        snap: false,
+-    }
+-}
+-
+-// ── Progress bar styles ───────────────────────────────────────────────────────
+-
+-/// Return a progress bar style closure based on the torrent's Transmission status code.
+-///
+-/// - Status 4 (Downloading) → green bar
+-/// - Status 6 (Seeding)     → blue bar
+-/// - All other states       → gray bar (paused, checking, queued)
+-pub fn progress_bar_style(status: i32) -> impl Fn(&Theme) -> progress_bar::Style {
+-    move |theme: &Theme| {
+-        let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+-        let (bg, bar) = match status {
+-            4 => (
+-                if is_dark {
+-                    PROGRESS_DOWNLOAD_TRACK_DARK
+-                } else {
+-                    PROGRESS_DOWNLOAD_TRACK_LIGHT
+-                },
+-                PROGRESS_DOWNLOAD_BAR,
+-            ),
+-            6 => (
+-                if is_dark {
+-                    PROGRESS_SEED_TRACK_DARK
+-                } else {
+-                    PROGRESS_SEED_TRACK_LIGHT
+-                },
+-                PROGRESS_SEED_BAR,
+-            ),
+-            _ => (
+-                if is_dark {
+-                    PROGRESS_PAUSED_TRACK_DARK
+-                } else {
+-                    PROGRESS_PAUSED_TRACK_LIGHT
+-                },
+-                if is_dark {
+-                    PROGRESS_PAUSED_BAR_DARK
+-                } else {
+-                    PROGRESS_PAUSED_BAR_LIGHT
+-                },
+-            ),
+-        };
+-        progress_bar::Style {
+-            background: iced::Background::Color(bg),
+-            bar: iced::Background::Color(bar),
+-            border: Border {
+-                radius: 100.0.into(),
+-                width: 0.0,
+-                color: Color::TRANSPARENT,
+-            },
+-        }
+-    }
+-}
+-
+-// ── Button styles ─────────────────────────────────────────────────────────────
+-
+-/// Selected-row highlight: flat color, no border, no shadow.
+-pub fn selected_row(theme: &Theme) -> container::Style {
+-    let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+-    let bg = if is_dark {
+-        // Subtle tint of brand blue at ~18 % opacity blended over the surface
+-        Color {
+-            r: MAGNETIC_BLUE_LIGHT.r,
+-            g: MAGNETIC_BLUE_LIGHT.g,
+-            b: MAGNETIC_BLUE_LIGHT.b,
+-            a: 0.18,
+-        }
+-    } else {
+-        Color {
+-            r: MAGNETIC_BLUE.r,
+-            g: MAGNETIC_BLUE.g,
+-            b: MAGNETIC_BLUE.b,
+-            a: 0.12,
+-        }
+-    };
+-    container::Style {
+-        text_color: None, // inherit from theme
+-        background: Some(iced::Background::Color(bg)),
+-        border: Border {
+-            radius: 6.0.into(),
+-            width: 0.0,
+-            color: Color::TRANSPARENT,
+-        },
+-        shadow: Shadow::default(),
+-        snap: false,
+-    }
+-}
+-
+-/// Icon-only toolbar button: transparent background with a circular primary
+-/// tint on hover/press.
+-///
+-/// The caller must attach `.on_press(message)` to make the button active.
+-pub fn icon_button<'a, Message: Clone + 'a>(
+-    content: impl Into<Element<'a, Message>>,
+-) -> iced::widget::Button<'a, Message> {
+-    iced::widget::button(
+-        iced::widget::container(content)
+-            .width(Length::Fill)
+-            .height(Length::Fill)
+-            .center(Length::Fill),
+-    )
+-    .padding(0)
+-    .width(Length::Fixed(36.0))
+-    .height(Length::Fixed(36.0))
+-    .style(|theme: &Theme, status| {
+-        let primary = theme.palette().primary;
+-        let is_dark = theme.extended_palette().background.base.color.r < 0.5;
+-        let bg = match status {
+-            button::Status::Hovered => Some(iced::Background::Color(Color {
+-                r: primary.r,
+-                g: primary.g,
+-                b: primary.b,
+-                a: 0.12,
+-            })),
+-            button::Status::Pressed => Some(iced::Background::Color(Color {
+-                r: primary.r,
+-                g: primary.g,
+
+===== P257 | repo exasol/exasol-personal | PR #153: feat: Adjust local infra memory defaults | capacidade: external-preset-resolution
+--- SPEC VIVA
+# external-preset-resolution Specification
+
+## Purpose
+TBD - created by syncing change external-preset-sources. Update Purpose after archive.
+## Requirements
+### Requirement: Plain preset name resolves to an embedded preset
+A preset argument that is a plain identifier (no URI scheme, no filesystem path separators) SHALL resolve exclusively against the binary's embedded asset catalog and SHALL NOT trigger any external fetch.
+
+#### Scenario: Known embedded name uses embedded asset
+- **WHEN** the user passes a plain name that matches an embedded preset
+- **THEN** the system SHALL use the embedded asset
+
+#### Scenario: Unknown plain name returns a descriptive error
+- **WHEN** the user passes a plain name that does not match any embedded preset
+- **THEN** the system SHALL return an error that includes the unknown name and the list of available embedded preset names
+
+### Requirement: URI-scheme arguments identify external preset sources
+A preset argument that begins with a recognised URI scheme (`file://`, `https://`, `http://`, `git://`, or `git@`) SHALL be resolved as an external source and SHALL NOT be matched against the embedded asset catalog, regardless of what the path component contains.
+
+#### Scenario: https:// ending in .git resolves as a git repository
+- **WHEN** the user passes an `https://` URL whose path ends with `.git`
+- **THEN** the system SHALL resolve the preset by fetching the git repository at that URL
+
+#### Scenario: git:// URL resolves as a git repository
+- **WHEN** the user passes a `git://` URL
+- **THEN** the system SHALL resolve the preset by fetching the git repository at that URL
+
+#### Scenario: git@ URL resolves as a git repository
+- **WHEN** the user passes a `git@` URL
+- **THEN** the system SHALL resolve the preset by fetching the git repository at that URL
+
+#### Scenario: http:// URL ending in .git resolves as a git repository
+- **WHEN** the user passes an `http://` URL whose path ends with `.git`
+- **THEN** the system SHALL resolve the preset by fetching the git repository at that URL
+
+#### Scenario: file:// URI pointing to a directory resolves directly
+- **WHEN** the user passes a `file://` URI whose path is a directory
+- **THEN** the system SHALL resolve the preset from that directory without copying or caching it
+
+#### Scenario: file:// URI pointing to a supported archive is extracted
+- **WHEN** the user passes a `file://` URI whose path is a `.tar.gz`, `.tgz`, or `.zip` file
+- **THEN** the system SHALL extract the archive into the local cache and resolve the preset from the extracted contents
+
+#### Scenario: file:// URI pointing to an unsupported file is rejected
+- **WHEN** the user passes a `file://` URI whose path is neither a directory nor a supported archive
+- **THEN** the system SHALL return an error stating that the path must be a directory or a supported archive file
+
+#### Scenario: https:// URL with a recognised archive extension resolves as a remote archive
+- **WHEN** the user passes an `https://` URL whose path ends with a recognised archive extension (`.tar.gz`, `.tgz`, or `.zip`)
+- **THEN** the system SHALL resolve the preset by downloading and extracting the archive at that URL
+
+#### Scenario: http:// URL with a recognised archive extension resolves as a remote archive
+- **WHEN** the user passes an `http://` URL whose path ends with a recognised archive extension (`.tar.gz`, `.tgz`, or `.zip`)
+- **THEN** the system SHALL resolve the preset by downloading and extracting the archive at that URL
+
+#### Scenario: URI scheme takes precedence over embedded catalog
+- **WHEN** the user passes a URI whose final path component matches an embedded preset name
+- **THEN** the system SHALL use the external source and SHALL NOT use the embedded asset
+
+#### Scenario: @ref suffix on a non-git source is rejected
+- **WHEN** the user passes a scheme-based URI that contains a `@`-separated suffix, and the URL before that suffix does not end in `.git` and does not use the `git://` scheme
+- **THEN** the system SHALL return an error stating that the `@ref` syntax is only supported for git source URLs
+
+### Requirement: Git repository URLs support an optional revision specifier
+A git repository URL MAY include a revision specifier appended as `@<ref>`, where `<ref>` is a branch name, tag name, or full commit SHA. When a specifier is present, the system SHALL fetch the repository at that revision. When absent, the system SHALL fetch the repository's default branch HEAD.
+
+#### Scenario: URL with branch name fetches that branch
+- **WHEN** the user passes a git URL with an `@<branch>` suffix
+- **THEN** the system SHALL resolve the preset from the tip of that branch
+
+#### Scenario: URL with tag fetches that tag
+- **WHEN** the user passes a git URL with an `@<tag>` suffix
+- **THEN** the system SHALL resolve the preset at that tag
+
+#### Scenario: URL with commit SHA fetches that exact commit
+- **WHEN** the user passes a git URL with an `@<commit-sha>` suffix
+- **THEN** the system SHALL resolve the preset at that exact commit
+
+#### Scenario: URL without revision specifier fetches default branch HEAD
+- **WHEN** the user passes a git URL with no `@<ref>` suffix
+- **THEN** the system SHALL resolve the preset from the repository's default branch HEAD
+
+### Requirement: Filesystem path arguments resolve from the local filesystem
+A preset argument that resembles a filesystem path (contains a path separator, or begins with `.` or `~`) SHALL be resolved from the local filesystem.
+
+#### Scenario: Relative path resolves from local filesystem
+- **WHEN** the user passes `./my-preset`
+- **THEN** the system SHALL resolve the preset from that local directory
+
+#### Scenario: Windows relative path resolves from local filesystem
+- **WHEN** the user passes `.\my-preset`
+- **THEN** the system SHALL resolve the preset from that local directory
+
+#### Scenario: Absolute path resolves from local filesystem
+- **WHEN** the user passes `/opt/presets/custom`
+- **THEN** the system SHALL resolve the preset from that local directory
+
+#### Scenario: Windows absolute path resolves from local filesystem
+- **WHEN** the user passes `C:\presets\custom`
+- **THEN** the system SHALL resolve the preset from that local directory
+
+--- ARQUIVOS DO PR (14)
+modified  +2     -2     README.md
+modified  +0     -1     assets/infrastructure/local/infrastructure.yaml
+modified  +3     -0     internal/deploy/init.go   <== código ligado à spec
+modified  +150   -55    internal/deploy/local_backend.go
+modified  +242   -6     internal/deploy/local_backend_test.go
+added     +25    -0     internal/util/memory_darwin.go
+added     +40    -0     internal/util/memory_test.go
+added     +22    -0     internal/util/memory_unsupported.go
+added     +2     -0     openspec/changes/adjust-local-memory-defaults/.openspec.yaml
+added     +33    -0     openspec/changes/adjust-local-memory-defaults/design.md
+added     +25    -0     openspec/changes/adjust-local-memory-defaults/proposal.md
+added     +26    -0     openspec/changes/adjust-local-memory-defaults/specs/exasol-local-deployment/spec.md
+added     +15    -0     openspec/changes/adjust-local-memory-defaults/tasks.md
+modified  +106   -1     tests/tests/integration/test_install.py
+--- DIFF DO CÓDIGO LIGADO
+### internal/deploy/init.go
+@@ -104,6 +104,9 @@ func InitDeployment(
+ 	if err := backend.ValidateEnvironment(); err != nil {
+ 		return err
+ 	}
++	if err := validateLocalInitMemory(ctx, infrastructureManifest, infraVars); err != nil {
++		return err
++	}
+ 
+ 	// Init only creates fresh deployment state. Existing deployment orchestration
+ 	// belongs to the command layer.
+
+===== P258 | repo qzw881130/AI-NovelFlow | PR #24: feat: add batch chapter import | capacidade: character-voice
+--- SPEC VIVA
+# character-voice Specification
+
+## Purpose
+定义角色音色能力要求，包括音色提示词存储、参考音频生成与存储、角色库音色管理界面，以及分镜台词音频生成时引用角色参考音频的能力。
+## Requirements
+### Requirement: 角色存储音色提示词
+
+系统 SHALL 允许每个角色存储可选的音色提示词，描述音色特征。
+
+#### Scenario: 创建角色时存储音色提示词
+- **WHEN** 创建角色时提供了 voice_prompt 数据
+- **THEN** voice_prompt 字段 SHALL 被存储到数据库
+
+#### Scenario: 音色提示词可更新
+- **WHEN** 用户编辑角色的音色提示词
+- **THEN** 更新后的 voice_prompt SHALL 被保存
+
+#### Scenario: 音色提示词可选
+- **WHEN** 角色没有 voice_prompt
+- **THEN** 角色记录 SHALL 仍有效，voice_prompt 为 null
+
+### Requirement: 角色存储参考音频 URL
+
+系统 SHALL 允许每个角色存储可选的参考音频 URL，指向生成的音色样本。
+
+#### Scenario: 生成后存储参考音频 URL
+- **WHEN** 音色生成成功完成
+- **THEN** reference_audio_url 字段 SHALL 更新为音频文件 URL
+
+#### Scenario: 参考音频可重新生成
+- **WHEN** 用户为已有音频的角色重新生成音色
+- **THEN** 旧音频文件 SHALL 被替换为新音频，URL 更新
+
+### Requirement: 通过 voice_design 工作流生成音色样本
+
+系统 SHALL 提供 API 端点使用 voice_design ComfyUI 工作流生成音色样本。
+
+#### Scenario: 创建音色生成任务
+- **WHEN** 用户为有 voice_prompt 的角色请求生成音色
+- **THEN** 系统 SHALL 创建类型为 "character_voice" 的任务
+- **AND** 任务 SHALL 使用 voice_design 工作流
+
+#### Scenario: 音色生成需要音色提示词
+- **WHEN** 用户为没有 voice_prompt 的角色请求生成音色
+- **THEN** 系统 SHALL 返回错误消息，提示需要 voice_prompt
+
+#### Scenario: 音色生成使用角色音色提示词
+- **WHEN** 音色生成任务执行时
+- **THEN** 角色的 voice_prompt SHALL 被注入到工作流的 voice_prompt_node_id 节点
+
+### Requirement: 角色库显示音色提示词
+
+角色库 UI SHALL 显示每个角色的音色提示词，并支持在编辑模态框中编辑。
+
+#### Scenario: 角色卡片显示音色提示词
+- **WHEN** 角色有 voice_prompt 值
+- **THEN** 角色卡片 SHALL 显示音色提示词文本
+
+#### Scenario: 编辑模态框编辑音色提示词
+- **WHEN** 用户在编辑模态框中编辑角色的音色提示词并保存
+- **THEN** 更新后的 voice_prompt SHALL 保存到数据库
+
+### Requirement: 角色库提供音频播放
+
+角色库 UI SHALL 为有参考音频的角色提供音频播放功能。
+
+#### Scenario: 有音频的角色显示音频播放器
+- **WHEN** 角色有 reference_audio_url
+- **THEN** 角色卡片 SHALL 显示音频播放按钮
+
+#### Scenario: 音频播放器播放参考音频
+- **WHEN** 用户点击音频播放按钮
+- **THEN** 参考音频 SHALL 通过浏览器播放
+
+### Requirement: 生成音色按钮
+
+角色库 UI SHALL 为每个角色提供"生成音色"按钮，与生成人设图按钮并排显示。
+
+#### Scenario: 生成音色按钮触发生成
+- **WHEN** 用户点击生成音色按钮
+- **THEN** 系统 SHALL 调用该角色的音色生成 API
+
+#### Scenario: 生成音色显示生成中状态
+- **WHEN** 音色生成进行中
+- **THEN** 按钮 SHALL 显示加载/生成中状态
+- **AND** 系统 SHALL 轮询追踪任务进度
+
+#### Scenario: 生成音色成功完成
+- **WHEN** 音色生成任务完成
+- **THEN** 角色的 reference_audio_url SHALL 更新
+- **AND** 音频播放按钮 SHALL 显示并可播放新音频
+
+### Requirement: 角色参考音频用于分镜台词生成
+
+系统 SHALL 允许分镜音频生成功能引用角色的参考音频作为语音克隆的音色来源。
+
+#### Scenario: 分镜音频生成引用角色参考音频
+- **WHEN** 为分镜角色台词生成音频
+- **THEN** 系统 SHALL 使用角色的 `reference_audio_url` 作为 ComfyUI 工作流的参考音频输入
+- **AND** 参考音频 SHALL 通过 `LoadAudio` 节点加载
+
+#### Scenario: 角色无参考音频时的错误处理
+- **WHEN** 为分镜台词生成音频时角色没有 `reference_audio_url`
+- **THEN** 系统 SHALL 返回错误信息：`角色 "{name}" 尚未生成音色，请先在角色库中生成`
+- **AND** 任务 SHALL 不被创建
+
+#### Scenario: 参考音频下载到本地
+- **WHEN** 音频生成任务执行时
+- **THEN** 系统 SHALL 先将参考音频下载到本地
+- **AND** 若参考音频是本地路径（`/api/files/` 前缀），系统 SHALL 直接使用
+- **AND** 若参考音频是远程 URL，系统 SHALL 下载到临时目录
+
+### Requirement: 分镜音频生成查询角色信息
+
+系统 SHALL 在分镜音频生成时查询角色的完整信息，包括参考音频 URL。
+
+#### Scenario: 查询角色参考音频
+- **WHEN** 创建分镜音频生成任务
+- **THEN** 系统 SHALL 通过角色名称查询角色的 `reference_audio_url`
+- **AND** 若角色不在角色库中，系统 SHALL 返回警告信息
+
+#### Scenario: 角色不存在时的处理
+- **WHEN** 台词中的角色名称在角色库中找不到
+- **THEN** 系统 SHALL 返回警告：`角色 "{name}" 不存在于角色库中`
+- **AND** 系统 SHALL 不为该台词创建任务
+
+### Requirement: 角色库显示参考音频状态用于分镜生成
+
+角色库 UI SHALL 显示角色的参考音频状态，帮助用户了解该角色是否可用于分镜音频生成。
+
+#### Scenario: 角色无参考音频时提示
+- **WHEN** 角色没有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"未生成音色"提示（灰色标签）
+- **AND** 提示 SHALL 使用 `voiceNotGenerated` 翻译键
+
+#### Scenario: 角色有参考音频时显示可用状态
+- **WHEN** 角色有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"音色已就绪"状态（绿色标签）
+- **AND** 提示 SHALL 使用 `voiceReady` 翻译键
+
+#### Scenario: 角色卡片显示音频播放按钮
+- **WHEN** 角色有 `reference_audio_url`
+- **THEN** 角色卡片 SHALL 显示"播放音频"按钮
+- **AND** 点击按钮 SHALL 播放/停止参考音频
+
+### Requirement: 角色库 i18n 翻译键
+
+系统 SHALL 提供角色音色状态相关的翻译键。
+
+#### Scenario: 翻译键定义
+- **WHEN** 显示角色音色状态
+- **THEN** 系统 SHALL 使用以下翻译键：
+  - `characters.voiceReady`: "音色已就绪"
+  - `characters.voiceNotGenerated`: "未生成音色"
+  - `characters.playAudio`: "播放"
+  - `characters.stopAudio`: "停止"
+  - `characters.regenerateVoice`: "重新生成音色"
+  - `characters.generateVoice`: "生成音色"
+
+### Requirement: 用户可上传本地音频作为参考音频
+
+系统 SHALL 允许用户从本地上传音频文件作为角色的参考音频。
+
+#### Scenario: 上传音频文件成功
+- **WHEN** 用户上传有效的音频文件（MP3/WAV/FLAC/OGG/M4A，≤10MB）
+- **THEN** 系统 SHALL 保存音频到本地存储
+- **AND** 角色 `reference_audio_url` SHALL 更新为新音频路径
+- **AND** 返回成功响应
+
+#### Scenario: 上传不支持的文件格式
+- **WHEN** 用户上传非音频格式的文件
+- **THEN** 系统 SHALL 返回错误消息，提示支持的格式
+- **AND** 不创建任何文件
+
+#### Scenario: 上传文件过大
+- **WHEN** 用户上传超过 10MB 的音频文件
+- **THEN** 系统 SHALL 返回错误消息，提示文件大小限制
+
+### Requirement: 角色库提供上传音频按钮
+
+角色库 UI SHALL 为每个角色提供"上传音频"按钮，用于上传本地音频。
+
+#### Scenario: 显示上传音频按钮
+- **WHEN** 角色卡片渲染时
+- **THEN** 在音色区域 SHALL 显示"上传音频"按钮
+- **AND** 按钮 SHALL 与"生成音色"按钮并列显示
+
+#### Scenario: 点击上传音频按钮触发文件选择
+- **WHEN** 用户点击"上传音频"按钮
+- **THEN** 系统 SHALL 打开文件选择对话框
+- **AND** 文件类型过滤器 SHALL 限制为音频格式
+
+#### Scenario: 上传成功后更新 UI
+- **WHEN** 音频上传成功完成
+- **THEN** 角色卡片 SHALL 显示"音色已就绪"状态
+- **AND** 音频播放按钮 SHALL 显示并可播放新音频
+
+#### Scenario: 上传失败显示错误提示
+- **WHEN** 音频上传失败
+- **THEN** 系统 SHALL 显示错误提示信息
+- **AND** 角色卡片状态 SHALL 保持不变
+
+### Requirement: 上传音频与生成音频可互换
+
+系统 SHALL 允许用户在上传音频和生成音频之间自由切换。
+
+#### Scenario: 上传音频替换生成音频
+- **WHEN** 角色已有通过 ComfyUI 生成的参考音频
+- **AND** 用户上传新音频
+- **THEN** 旧音频 SHALL 被新上传音频替换
+- **AND** `reference_audio_url` SHALL 更新为新音频路径
+
+#### Scenario: 生成音频替换上传音频
+- **WHEN** 角色已有用户上传的参考音频
+- **AND** 用户点击"生成音色"按钮
+- **THEN** 新生成的音频 SHALL 替换已上传音频
+- **AND** `reference_audio_url` SHALL 更新为新音频路径
+
+### Requirement: 角色库 i18n 翻译键扩展
+
+系统 SHALL 提供音频上传相关的翻译键。
+
+#### Scenario: 翻译键定义
+- **WHEN** 显示音频上传相关 UI
+- **THEN** 系统 SHALL 使用以下翻译键：
+  - `characters.uploadAudio`: "上传音频"
+  - `characters.uploadingAudio`: "上传中..."
+  - `characters.uploadAudioSuccess`: "音频上传成功"
+  - `characters.uploadAudioFailed`: "音频上传失败"
+  - `characters.audioFormatError`: "不支持的音频格式，请上传 MP3/WAV/FLAC/OGG/M4A 格式"
+  - `characters.audioSizeError`: "音频文件大小不能超过 10MB"
+
+
+--- ARQUIVOS DO PR (38)
+modified  +150   -2     backend/app/api/chapters.py
+modified  +92    -1     backend/app/repositories/chapter_repository.py
+modified  +2     -2     backend/app/services/character_service.py   <== código ligado à spec
+modified  +1     -1     backend/app/services/comfyui/client.py
+modified  +1     -1     backend/app/services/comfyui_monitor.py
+modified  +1     -1     backend/app/services/prop_image_service.py
+modified  +1     -1     backend/app/services/scene_service.py
+modified  +1     -1     backend/app/services/shot_audio_service.py
+modified  +1     -1     backend/app/services/shot_image_service.py
+modified  +1     -1     backend/app/services/shot_video_service.py
+added     +154   -0     backend/app/utils/text_utils.py
+added     +133   -0     backend/tests/test_text_utils.py
+added     +770   -0     debug/workflows/LTX-2.3_-_I2V_T2V_Basic_GGUF_Frames.json
+modified  +25    -0     frontend/my-app/src/api/chapters.ts
+modified  +26    -0     frontend/my-app/src/i18n/locales/en-US/novels.ts
+modified  +26    -0     frontend/my-app/src/i18n/locales/ja-JP/novels.ts
+modified  +31    -0     frontend/my-app/src/i18n/locales/ko-KR/novels.ts
+modified  +26    -0     frontend/my-app/src/i18n/locales/zh-CN/novels.ts
+modified  +26    -0     frontend/my-app/src/i18n/locales/zh-TW/novels.ts
+added     +315   -0     frontend/my-app/src/pages/NovelDetail/components/BatchImportModal.tsx
+modified  +7     -2     frontend/my-app/src/pages/NovelDetail/hooks/useNovelDetailState.ts
+modified  +18    -4     frontend/my-app/src/pages/NovelDetail/index.tsx
+added     +2     -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/.openspec.yaml
+added     +893   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/design.md
+added     +64    -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/proposal.md
+added     +163   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/audio-reference/spec.md
+added     +246   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/keyframe-control/spec.md
+added     +215   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/narrator-support/spec.md
+added     +141   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/shot-audio-generation/spec.md
+added     +78    -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/shot-dialogue-parse/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/video-gen-status-sync/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/specs/workflow-node-mapping/spec.md
+added     +349   -0     openspec/changes/archive/2026-04-05-add-keyframe-audio-support/tasks.md
+added     +2     -0     openspec/changes/batch-chapter-import/.openspec.yaml
+added     +592   -0     openspec/changes/batch-chapter-import/design.md
+added     +54    -0     openspec/changes/batch-chapter-import/proposal.md
+added     +188   -0     openspec/changes/batch-chapter-import/specs/batch-chapter-import/spec.md
+added     +197   -0     openspec/changes/batch-chapter-import/tasks.md
+--- DIFF DO CÓDIGO LIGADO
+### backend/app/services/character_service.py
+@@ -192,7 +192,7 @@ async def _generate_voice_task(
+                 workflow=submitted_workflow
+             )
+ 
+-            print(f"[VoiceTask] Generation result: {result}")
++            print(f"[VoiceTask] Generation result: {json.dumps(result, ensure_ascii=True)}")
+ 
+             if result.get("success"):
+                 audio_url = result.get("audio_url")
+@@ -451,7 +451,7 @@ async def _generate_portrait_task(
+                 workflow=submitted_workflow  # 传递已构建的工作流，避免重复构建
+             )
+ 
+-            print(f"[Task] Generation result: {result}")
++            print(f"[Task] Generation result: {json.dumps(result, ensure_ascii=True)}")
+ 
+             if result.get("success"):
+                 image_url = result.get("image_url")
+

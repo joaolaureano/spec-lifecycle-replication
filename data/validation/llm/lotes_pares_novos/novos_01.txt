@@ -1,0 +1,3274 @@
+===== P061 | repo licht1stein/brepl | PR #13: Add Stop hook support for Claude Code integration | capacidade: delimiter-validation
+--- SPEC VIVA
+# delimiter-validation Specification
+
+## Purpose
+TBD - created by archiving change add-hook-install. Update Purpose after archive.
+## Requirements
+### Requirement: Pre-Edit Auto-Fix
+
+The hook MUST automatically fix unbalanced or mismatched delimiters in Clojure code before writing to disk, enabling Claude to work with Clojure without manual bracket management.
+
+**Inputs**:
+
+- Clojure source code (may contain delimiter errors)
+- File path for context
+
+**Process**:
+
+1. Detect if file is Clojure source (by extension)
+2. Attempt automatic delimiter correction
+3. Validate corrected code is syntactically valid
+4. Return corrected code or error message
+
+**Outputs**:
+
+- **Success**: Corrected Clojure code with balanced delimiters
+- **Failure**: Block edit with actionable error message
+
+**Constraints**:
+
+- Must handle all Clojure delimiter types: `()`, `[]`, `{}`, `#{}`
+- Must preserve code semantics (correction only adds/removes delimiters)
+- Must complete in < 500ms for typical files (< 1000 lines)
+- Must not require external binary dependencies
+
+#### Scenario: Incomplete expression is auto-corrected
+
+Given Claude edits a Clojure function with missing closing delimiters
+And the function has correct opening delimiters
+When the pre-edit hook processes the file
+Then the hook should add the missing closing delimiters
+And the hook should return the corrected code
+And Claude's edit should proceed with corrected code
+
+#### Scenario: Nested structure delimiters are balanced
+
+Given Claude edits code with nested forms
+And the nested forms have mismatched delimiter counts
+When the pre-edit hook processes the file
+Then the hook should balance all delimiter levels
+And the hook should maintain proper nesting order
+And the hook should return syntactically valid code
+
+#### Scenario: Unfixable syntax errors block the edit
+
+Given Claude edits code with mismatched delimiter types
+And the delimiters cannot be automatically corrected
+When the pre-edit hook attempts correction
+Then the hook should detect the unfixable error
+And the hook should block the edit
+And the hook should provide an error message explaining the issue
+
+### Requirement: Post-Edit Quick Validation
+
+The hook SHALL verify code is syntactically valid after edits are written, as a safety check.
+
+**Inputs**: File path of edited Clojure file
+
+**Process**:
+
+1. Read file contents
+2. Validate syntax (parsing without execution)
+3. Proceed to evaluation if valid, block if invalid
+
+**Outputs**:
+
+- **Valid**: Continue to evaluation
+- **Invalid**: Block with error details
+
+**Constraints**:
+
+- Must complete in < 100ms for typical files
+- Should rarely catch errors (pre-edit auto-fix handles most cases)
+
+#### Scenario: Valid code passes post-edit check
+
+Given a Clojure file was edited by Claude
+And pre-edit auto-fix corrected any delimiter errors
+When the post-edit validation runs
+Then the validation should pass
+And the file should proceed to evaluation
+
+#### Scenario: Invalid code is detected post-edit
+
+Given a Clojure file was edited
+And an error was introduced that pre-edit missed
+When the post-edit validation runs
+Then the validation should detect the error
+And the hook should block evaluation
+And the hook should report the specific error
+
+### Requirement: File Type Filtering
+
+The hook SHALL apply validation only to Clojure and Babashka source files, allowing other file types to edit without validation overhead.
+
+**Inputs**: File path and file contents
+
+**Process**:
+
+1. Check file extension for Clojure/Babashka extensions
+2. If no recognized extension, check file contents for Babashka shebang
+3. If Clojure/Babashka file: apply validation
+4. If other file type: skip validation, return success
+
+**Outputs**: Boolean decision (validate or skip)
+
+**Constraints**:
+
+- Must recognize extensions: `.clj`, `.cljs`, `.cljc`, `.cljx`, `.bb`
+- Must recognize shebangs: `#!/usr/bin/env bb`, `#!/usr/bin/bb`, or any shebang containing `bb`
+- Must complete in < 5ms (extension check + optional first line read)
+
+#### Scenario: Non-Clojure files skip validation
+
+Given Claude edits a markdown file
+When the hook processes the edit
+Then the hook should check the file extension
+And the hook should skip all validation
+And the hook should return immediate success
+
+#### Scenario: All Clojure extensions are validated
+
+Given Claude edits a file with Clojure extension
+When the hook processes the edit
+Then the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+Valid Clojure extensions: `.clj`, `.cljs`, `.cljc`, `.cljx`
+
+#### Scenario: Babashka files with .bb extension are validated
+
+Given Claude edits a file with `.bb` extension
+When the hook processes the edit
+Then the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+#### Scenario: Files with Babashka shebang are validated
+
+Given Claude edits a file without a recognized extension
+And the file starts with a Babashka shebang
+When the hook processes the edit
+Then the hook should detect the Babashka shebang
+And the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+Valid Babashka shebangs include: `#!/usr/bin/env bb`, `#!/usr/bin/bb`, or any shebang line containing `bb`
+
+### Requirement: Clear Error Messages
+
+The hook MUST provide actionable guidance to Claude when delimiter errors cannot be automatically fixed.
+
+**Inputs**: Error details from validation failure
+
+**Outputs**: Human-readable error message with:
+
+- What went wrong
+- Where the error occurred (if known)
+- Suggested action to resolve
+
+**Constraints**:
+
+- Message must be understandable by AI agent
+- Message must suggest specific remediation
+- Message must not include internal implementation details
+
+#### Scenario: Error message guides resolution
+
+Given delimiter correction failed
+And the hook needs to block the edit
+When the hook generates the error message
+Then the message should explain what error was detected
+And the message should suggest how to fix the issue
+And the message should be clear enough for Claude to understand
+
+
+--- ARQUIVOS DO PR (10)
+modified  +67    -11    brepl
+modified  +78    -10    lib/installer.clj   <== código ligado à spec
+added     +333   -0     lib/stop_hooks.clj
+added     +219   -0     openspec/changes/archive/2026-01-04-add-stop-hooks/design.md
+added     +51    -0     openspec/changes/archive/2026-01-04-add-stop-hooks/proposal.md
+added     +420   -0     openspec/changes/archive/2026-01-04-add-stop-hooks/specs/stop-hooks/spec.md
+added     +157   -0     openspec/changes/archive/2026-01-04-add-stop-hooks/tasks.md
+added     +418   -0     openspec/specs/stop-hooks/spec.md
+added     +300   -0     test/installer_test.clj   <== código ligado à spec
+added     +519   -0     test/stop_hooks_test.clj
+--- DIFF DO CÓDIGO LIGADO
+### lib/installer.clj
+@@ -1,7 +1,8 @@
+ (ns brepl.lib.installer
+   "Hook installer for Claude Code integration."
+   (:require [babashka.fs :as fs]
+-            [cheshire.core :as json]))
++            [cheshire.core :as json]
++            [clojure.string :as str]))
+ 
+ (defn settings-local-path []
+   ".claude/settings.local.json")
+@@ -39,16 +40,34 @@
+                     :hooks [{:type "command"
+                              :command (str "brepl hook eval" debug-flag)
+                              :continueOnError (not (:strict-eval opts))}]}]
++     :Stop [{:matcher ""
++             :hooks [{:type "command"
++                      :command (str "brepl hook stop" debug-flag)}]}]
+      :SessionEnd [{:matcher "*"
+                    :hooks [{:type "command"
+                             :command "brepl hook session-end"}]}]}))
+ 
++(defn brepl-hook?
++  "Check if a hook entry belongs to brepl."
++  [hook-entry]
++  (some #(str/starts-with? (:command %) "brepl hook")
++        (:hooks hook-entry)))
++
++(defn merge-hook-event
++  "Merge new brepl entries with existing non-brepl entries for a single event."
++  [existing-entries new-entries]
++  (let [non-brepl (remove brepl-hook? existing-entries)]
++    (into (vec non-brepl) new-entries)))
++
+ (defn merge-hooks
+-  "Merge new hooks with existing ones, avoiding duplicates."
++  "Merge brepl hooks with existing hooks, preserving non-brepl hooks."
+   [existing-hooks new-hooks]
+-  ;; For now, just replace with new hooks
+-  ;; In production, would do smarter merging
+-  new-hooks)
++  (reduce-kv
++   (fn [acc event-name new-entries]
++     (let [existing-entries (get acc event-name [])]
++       (assoc acc event-name (merge-hook-event existing-entries new-entries))))
++   existing-hooks
++   new-hooks))
+ 
+ (defn find-brepl-resources
+   "Find the brepl resources directory."
+@@ -86,17 +105,66 @@
+         {:success true :message "Skill removed from .claude/skills/brepl"})
+       {:success true :message "Skill not found (already uninstalled)"})))
+ 
++(def hooks-template
++  ";; brepl stop hooks configuration
++
++{:stop
++ [;; Example: Run tests via nREPL after Claude stops
++  ;; {:type :repl
++  ;;  :code (clojure.test/run-tests)
++  ;;  :required? true    ; Must pass - Claude retries until success
++  ;;  :max-retries 10    ; Give up after 10 attempts (0 = infinite)
++  ;;  :timeout 120}
++
++  ;; Example: Run linter via bash
++  ;; {:type :bash
++  ;;  :command \"clj-kondo --lint src\"
++  ;;  :required? false   ; Optional - inform on failure but don't retry
++  ;;  :timeout 30}
++  ]}
++
++;; Hook fields:
++;;   :type        - :repl or :bash (required)
++;;   :required?   - if true: must pass, retry on failure (default: false)
++;;   :max-retries - max retry attempts, 0 = infinite (default: 10)
++;;   :timeout     - seconds before timeout (default: 60)
++;;
++;; REPL hooks:
++;;   :code        - Clojure code as s-expression or string (required)
++;;
++;; Bash hooks:
++;;   :command     - shell command to run (required)
++;;   :cwd         - working directory (default: \".\")
++;;   :env         - environment variables map (default: {})
++")
++
++(defn generate-hooks-template
++  "Generate .brepl/hooks.edn template if it doesn't exist."
++  []
++  (let [brepl-dir ".brepl"
++        hooks-file (str brepl-dir "/hooks.edn")]
++    (if (fs/exists? hooks-file)
++      {:created false :message "hooks.edn already exists"}
++      (do
++        (fs/create-dirs brepl-dir)
++        (spit hooks-file hooks-template)
++        {:created true :message "Created .brepl/hooks.edn template"}))))
++
+ (defn install-hooks
+   "Install brepl hooks to .claude/settings.local.json and brepl skill."
+   [opts]
+   (let [settings (read-settings)
++        existing-hooks (get settings :hooks {})
+         new-hooks (brepl-hook-config opts)
+-        updated-settings (assoc settings :hooks new-hooks)]
++        merged-hooks (merge-hooks existing-hooks new-hooks)
++        updated-settings (assoc settings :hooks merged-hooks)]
+     (write-settings updated-settings)
+-    (let [skill-result (install-skill)]
+-      (if (:success skill-result)
+-        {:success true :message "Hooks and skill installed successfully"}
+-        {:success true :message (str "Hooks installed. " (:message skill-result))}))))
++    (let [skill-result (install-skill)
++          template-result (generate-hooks-template)]
++      {:success true
++       :message (str "Hooks installed successfully"
++                     (when (:created template-result)
++                       ". Created .brepl/hooks.edn template"))})))
+ 
+ (defn uninstall-hooks
+   "Remove brepl hooks from .claude/settings.local.json."
+
+### test/installer_test.clj
+@@ -0,0 +1,300 @@
++(ns installer-test
++  "Tests for installer idempotent merge functionality.
++
++  These tests verify that brepl hook install correctly merges hooks
++  with existing Claude settings without destroying non-brepl hooks."
++  (:require [clojure.test :refer [deftest is testing]]
++            [babashka.fs :as fs]
++            [clojure.java.io :as io]
++            [cheshire.core :as json]))
++
++;; Load installer lib
++(load-file "lib/installer.clj")
++(require '[brepl.lib.installer :as sut])
++
++;; =============================================================================
++;; Test Helpers
++;; =============================================================================
++
++(defn with-temp-dir
++  "Create a temp directory, execute function, then cleanup"
++  [f]
++  (let [dir (fs/create-temp-dir {:prefix "installer-test-"})]
++    (try
++      (f (str dir))
++      (finally
++        (fs/delete-tree dir)))))
++
++(defn create-settings-file
++  "Create .claude/settings.local.json with given content"
++  [dir content]
++  (let [claude-dir (io/file dir ".claude")]
++    (.mkdirs claude-dir)
++    (spit (io/file claude-dir "settings.local.json")
++          (json/generate-string content {:pretty true}))))
++
++(defn read-settings-file
++  "Read .claude/settings.local.json as EDN"
++  [dir]
++  (let [settings-file (io/file dir ".claude" "settings.local.json")]
++    (when (.exists settings-file)
++      (json/parse-string (slurp settings-file) true))))
++
++;; =============================================================================
++;; Hook Identification Tests
++;; =============================================================================
++
++(deftest brepl-hook-identification-test
++  (testing "brepl-hook? correctly identifies brepl hooks"
++    (testing "Hook with brepl command is identified as brepl hook"
++      (is (sut/brepl-hook? {:matcher "Edit"
++                            :hooks [{:type "command"
++                                     :command "brepl hook validate"}]})
++          "Should identify brepl hook validate"))
++
++    (testing "Hook with brepl hook eval is identified as brepl hook"
++      (is (sut/brepl-hook? {:matcher "Edit|Write"
++                            :hooks [{:type "command"
++                                     :command "brepl hook eval --debug"}]})
++          "Should identify brepl hook with flags"))
++
++    (testing "Hook with non-brepl command is not identified as brepl hook"
++      (is (not (sut/brepl-hook? {:matcher "Write"
++                                 :hooks [{:type "command"
++                                          :command "prettier --write"}]}))
++          "Should not identify prettier as brepl hook"))
++
++    (testing "Hook with eslint command is not identified as brepl hook"
++      (is (not (sut/brepl-hook? {:matcher "*"
++                                 :hooks [{:type "command"
++                                          :command "eslint --fix"}]}))
++          "Should not identify eslint as brepl hook"))))
++
++;; =============================================================================
++;; Merge Hook Event Tests
++;; =============================================================================
++
++(deftest merge-hook-event-test
++  (testing "merge-hook-event preserves non-brepl hooks and adds new brepl hooks"
++    (let [existing [{:matcher "Write"
++                     :hooks [{:type "command"
++                              :command "prettier --write"}]}
++                    {:matcher "Edit"
++                     :hooks [{:type "command"
++                              :command "brepl hook validate"}]}]
++          new-entries [{:matcher "Edit|Write"
++                        :hooks [{:type "command"
++                                 :command "brepl hook validate"}]}]
++          result (sut/merge-hook-event existing new-entries)]
++
++      (testing "Result contains prettier hook"
++        (is (some #(= "prettier --write" (get-in % [:hooks 0 :command])) result)
++            "Should preserve prettier hook"))
++
++      (testing "Result contains new brepl hook"
++        (is (some #(= "brepl hook validate" (get-in % [:hooks 0 :command])) result)
++            "Should include new brepl hook"))
++
++      (testing "Old brepl hook is removed"
++        (is (= 1 (count (filter #(re-find #"brepl hook" (get-in % [:hooks 0 :command] "")) result)))
++            "Should have exactly one brepl hook after merge")))))
++
++;; =============================================================================
++;; Full Merge Tests
++;; =============================================================================
++
++(deftest merge-hooks-preserves-non-brepl-test
++  (testing "Scenario: Preserve non-brepl hooks during install"
++    (testing "Given settings with a prettier PostToolUse hook"
++      (let [existing-hooks {:PostToolUse [{:matcher "Write"
++                                           :hooks [{:type "command"
++                                                    :command "prettier --write"}]}
++                                          {:matcher "Edit"
++                                           :hooks [{:type "command"
++                                                    :command "brepl hook eval"}]}]}
++            new-hooks {:PreToolUse [{:matcher "Edit|Write"
++                                     :hooks [{:type "command"
++                                              :command "brepl hook validate"}]}]
++                       :PostToolUse [{:matcher "Edit|Write"
++                                      :hooks [{:type "command"
++                                               :command "brepl hook eval"}]}]
++                       :Stop [{:matcher ""
++                               :hooks [{:type "command"
++                                        :command "brepl hook stop"}]}]}
++            result (sut/merge-hooks existing-hooks new-hooks)]
++
++        (testing "When brepl hook install runs"
++          (testing "Then prettier hook is preserved"
++            (is (some #(= "prettier --write" (get-in % [:hooks 0 :command]))
++                      (:PostToolUse result))
++                "Prettier hook should be preserved in PostToolUse"))
++
++          (testing "And brepl hooks are added"
++            (is (some #(= "brepl hook validate" (get-in % [:hooks 0 :command]))
++                      (:PreToolUse result))
++                "PreToolUse should have brepl validate hook")
++            (is (some #(= "brepl hook eval" (get-in % [:hooks 0 :command]))
++                      (:PostToolUse result))
++                "PostToolUse should have brepl eval hook")
++            (is (some #(= "brepl hook stop" (get-in % [:hooks 0 :command]))
++                      (:Stop result))
++                "Stop should have brepl stop hook")))))))
++
++(deftest merge-hooks-replaces-old-brepl-test
++  (testing "Scenario: Replace old brepl hooks"
++    (testing "Given settings with old brepl hook config"
++      (let [existing-hooks {:PostToolUse [{:matcher "Edit"
++                                           :hooks [{:type "command"
++                                                    :command "brepl hook eval --old-flag"}]}]
++                            :PreToolUse [{:matcher "Write"
++                                          :hooks [{:type "command"
++                                                   :command "brepl hook validate --old"}]}]}
++            new-hooks {:PreToolUse [{:matcher "Edit|Write"
++                                     :hooks [{:type "command"
++                                              :command "brepl hook validate --new"}]}]
++                       :PostToolUse [{:matcher "Edit|Write"
++                                      :hooks [{:type "command"
++                                               :command "brepl hook eval --new"}]}]}
++            result (sut/merge-hooks existing-hooks new-hooks)]
++
++        (testing "When brepl hook install runs"
++          (testing "Then old brepl hooks are replaced"
++            (is (not (some #(re-find #"--old" (get-in % [:hooks 0 :command] ""))
++                           (:PreToolUse result)))
++                "Should not have old PreToolUse brepl hook")
++            (is (not (some #(re-find #"--old" (get-in % [:hooks 0 :command] ""))
++                           (:PostToolUse result)))
++                "Should not have old PostToolUse brepl hook"))
++
++          (testing "And new brepl hooks are present"
++            (is (some #(re-find #"--new" (get-in % [:hooks 0 :command] ""))
++                      (:PreToolUse result))
++                "Should have new PreToolUse brepl hook")
++            (is (some #(re-find #"--new" (get-in % [:hooks 0 :command] ""))
++                      (:PostToolUse result))
++                "Should have new PostToolUse brepl hook")))))))
++
++(deftest merge-hooks-idempotent-test
++  (testing "Scenario: Install is idempotent"
++    (testing "Given brepl hooks already installed"
++      (let [brepl-hooks {:PreToolUse [{:matcher "Edit|Write"
++                                       :hooks [{:type "command"
++                                                :command "brepl hook validate"}]}]
++                         :PostToolUse [{:matcher "Edit|Write"
++                                        :hooks [{:type "command"
++                                                 :command "brepl hook eval"}]}]
++                         :Stop [{:matcher ""
++                                 :hooks [{:type "command"
++                                          :command "brepl hook stop"}]}]}
++            result (sut/merge-hooks brepl-hooks brepl-hooks)]
++
++        (testing "When brepl hook install runs again"
++          (testing "Then settings are unchanged"
++            (is (= brepl-hooks result)
++                "Merged hooks should equal original when merging with same hooks"))
++
++          (testing "And no duplicate hooks are created"
++            (is (= 1 (count (:PreToolUse result)))
++                "Should have exactly 1 PreToolUse entry")
++            (is (= 1 (count (:PostToolUse result)))
++                "Should have exactly 1 PostToolUse entry")
++            (is (= 1 (count (:Stop result)))
++                "Should have exactly 1 Stop entry")))))))
++
++;; =============================================================================
++;; Mixed Non-Brepl Hooks Tests
++;; =============================================================================
++
++(deftest preserve-multiple-non-brepl-hooks-test
++  (testing "Preserve multiple non-brepl hooks across different events"
++    (let [existing-hooks {:PreToolUse [{:matcher "*"
++                                        :hooks [{:type "command"
++                                                 :command "custom-validator"}]}]
++                          :PostToolUse [{:matcher "Write"
++                                         :hooks [{:type "command"
++                                                  :command "prettier --write"}]}
++                                        {:matcher "*.js"
++                                         :hooks [{:type "command"
++                                                  :command "eslint --fix"}]}
++                                        {:matcher "Edit"
++                                         :hooks [{:type "command"
++                                                  :command "brepl hook eval"}]}]
++                          :Stop [{:matcher ""
++                                  :hooks [{:type "command"
++                                           :command "cleanup-script"}]}]}
++          new-hooks (sut/brepl-hook-config {})
++          result (sut/merge-hooks existing-hooks new-hooks)]
++
++      (testing "All non-brepl PreToolUse hooks preserved"
++        (is (some #(= "custom-validator" (get-in % [:hooks 0 :command]))
++                  (:PreToolUse result))
++            "Custom validator should be preserved"))
++
++      (testing "All non-brepl PostToolUse hooks preserved"
++        (is (some #(= "prettier --write" (get-in % [:hooks 0 :command]))
++                  (:PostToolUse result))
++            "Prettier should be preserved")
++        (is (some #(= "eslint --fix" (get-in % [:hooks 0 :command]))
++                  (:PostToolUse result))
++            "ESLint should be preserved"))
++
++      (testing "All non-brepl Stop hooks preserved"
++        (is (some #(= "cleanup-script" (get-in % [:hooks 0 :command]))
++                  (:Stop result))
++            "Cleanup script should be preserved"))
++
++      (testing "Brepl hooks are also present"
++        (is (some #(re-find #"brepl hook" (get-in % [:hooks 0 :command] ""))
++                  (:PreToolUse result))
++            "Brepl PreToolUse hook should be present")
++        (is (some #(re-find #"brepl hook" (get-in % [:hooks 0 :command] ""))
++                  (:PostToolUse result))
++            "Brepl PostToolUse hook should be present")
++        (is (some #(re-find #"brepl hook" (get-in % [:hooks 0 :command] ""))
++                  (:Stop result))
++            "Brepl Stop hook should be present")))))
++
++;; =============================================================================
++;; brepl-hook-config Tests
++;; =============================================================================
++
++(deftest brepl-hook-config-includes-stop-test
++  (testing "brepl-hook-config generates Stop hook configuration"
++    (let [config (sut/brepl-hook-config {})]
++      (testing "Stop hook is present"
++        (is (contains? config :Stop)
++            "Should have :Stop key"))
++
++      (testing "Stop hook has correct command"
++        (is (= "brepl hook stop" (get-in config [:Stop 0 :hooks 0 :command]))
++            "Stop hook should have 'brepl hook stop' command"))
++
++      (testing "Stop hook has empty matcher"
++        (is (= "" (get-in config [:Stop 0 :matcher]))
++            "Stop hook should have empty matcher")))))
++
++(deftest brepl-hook-config-includes-session-end-test
++  (testing "brepl-hook-config generates SessionEnd hook configuration"
++    (let [config (sut/brepl-hook-config {})]
++      (testing "SessionEnd hook is present"
++        (is (contains? config :SessionEnd)
++            "Should have :SessionEnd key"))
++
++      (testing "SessionEnd hook has correct command"
++        (is (= "brepl hook session-end" (get-in config [:SessionEnd 0 :hooks 0 :command]))
++            "SessionEnd hook should have 'brepl hook session-end' command")))))
++
++(deftest brepl-hook-config-debug-flag-test
++  (testing "brepl-hook-config adds debug flag when requested"
++    (let [config (sut/brepl-hook-config {:debug true})]
++      (testing "PreToolUse has debug flag"
++        (is (re-find #"--debug" (get-in config [:PreToolUse 0 :hooks 0 :command]))
++            "PreToolUse should have --debug flag"))
++
++      (testing "PostToolUse has debug flag"
++        (is (re-find #"--debug" (get-in config [:PostToolUse 0 :hooks 0 :command]))
++            "PostToolUse should have --debug flag"))
++
++      (testing "Stop has debug flag"
++        (is (re-find #"--debug" (get-in config [:Stop 0 :hooks 0 :command]))
+
+===== P062 | repo VimCommando/kibana-object-manager | PR #11: Implement concurrent API calls for significant speedup | capacidade: agents
+--- SPEC VIVA
+# agents Specification
+
+## Purpose
+TBD - created by archiving change agent-api-support. Update Purpose after archive.
+## Requirements
+### Requirement: Agent API Compliance
+The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates.
+
+#### Scenario: Create Agent
+- **WHEN** creating a new agent
+- **THEN** the system sends a `POST` request to `/api/agent_builder/agents`
+- **AND** the request body includes the `id`
+- **AND** the request body DOES NOT include `readonly` or `schema` fields
+
+#### Scenario: Update Agent
+- **WHEN** updating an existing agent
+- **THEN** the system sends a `PUT` request to `/api/agent_builder/agents/{id}`
+- **AND** the request body DOES NOT include `id`, `readonly`, or `schema` fields
+
+
+--- ARQUIVOS DO PR (20)
+modified  +1     -1     Cargo.toml
+added     +29    -0     openspec/changes/archive/2026-01-21-implement-concurrent-api-calls/design.md
+added     +17    -0     openspec/changes/archive/2026-01-21-implement-concurrent-api-calls/proposal.md
+added     +28    -0     openspec/changes/archive/2026-01-21-implement-concurrent-api-calls/specs/concurrency/spec.md
+added     +22    -0     openspec/changes/archive/2026-01-21-implement-concurrent-api-calls/tasks.md
+added     +30    -0     openspec/specs/concurrency/spec.md
+modified  +145   -89    src/cli.rs   <== código ligado à spec
+modified  +26    -7     src/client/kibana.rs
+modified  +45    -48    src/kibana/agents/extractor.rs
+modified  +114   -177   src/kibana/agents/loader.rs   <== código ligado à spec
+modified  +3     -3     src/kibana/saved_objects/extractor.rs
+modified  +4     -4     src/kibana/saved_objects/loader.rs
+modified  +3     -3     src/kibana/spaces/extractor.rs
+modified  +84    -101   src/kibana/spaces/loader.rs
+modified  +40    -39    src/kibana/tools/extractor.rs
+modified  +90    -161   src/kibana/tools/loader.rs
+modified  +47    -48    src/kibana/workflows/extractor.rs
+modified  +83    -155   src/kibana/workflows/loader.rs
+modified  +13    -1     src/migration.rs
+modified  +3     -3     tests/saved_objects_integration.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/cli.rs
+@@ -18,6 +18,8 @@ use crate::{
+ use eyre::{Context, Result};
+ use owo_colors::OwoColorize;
+ use std::path::Path;
++use std::sync::Arc;
++use tokio::task::JoinSet;
+ use url::Url;
+ 
+ /// Load Kibana client from environment variables
+@@ -27,6 +29,7 @@ use url::Url;
+ /// - KIBANA_USERNAME: Username for basic auth (optional)
+ /// - KIBANA_PASSWORD: Password for basic auth (optional)
+ /// - KIBANA_APIKEY: API key for auth (optional, conflicts with username/password)
++/// - KIBANA_MAX_REQUESTS: Maximum number of concurrent requests (optional, default: 8)
+ ///
+ /// # Arguments
+ /// * `project_dir` - Project directory path containing spaces.yml
+@@ -45,7 +48,13 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
+         Auth::None
+     };
+ 
+-    KibanaClient::try_new(url, auth, project_dir).context("Failed to create Kibana client")
++    let max_requests = std::env::var("KIBANA_MAX_REQUESTS")
++        .ok()
++        .and_then(|s| s.parse().ok())
++        .unwrap_or(8);
++
++    KibanaClient::try_new(url, auth, project_dir, max_requests)
++        .context("Failed to create Kibana client")
+ }
+ 
+ /// Check if an API should be processed based on the filter
+@@ -85,18 +94,18 @@ pub async fn pull_saved_objects(
+     space_filter: Option<&[String]>,
+     api_filter: Option<&[String]>,
+ ) -> Result<usize> {
+-    let project_dir = project_dir.as_ref();
++    let project_dir = Arc::<Path>::from(project_dir.as_ref());
++    let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
+ 
+     log::info!("Connecting to Kibana...");
+-    let client = load_kibana_client(project_dir)?;
++    let client = load_kibana_client(&*project_dir)?;
+ 
+     // Pull space definitions FIRST (before any other operations)
+-    // This ensures space definitions are up-to-date before pulling resources
+-    if should_process_api("spaces", api_filter) {
++    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
+         let spaces_manifest_path = project_dir.join("spaces.yml");
+         if spaces_manifest_path.exists() {
+             log::info!("Pulling space definitions...");
+-            match pull_spaces_internal(project_dir, &client).await {
++            match pull_spaces_internal(&*project_dir, &client).await {
+                 Ok(space_count) => {
+                     log::info!("✓ Pulled {} space definition(s)", space_count);
+                 }
+@@ -113,40 +122,59 @@ pub async fn pull_saved_objects(
+     let target_space_ids = get_target_space_ids(&client, space_filter);
+ 
+     let mut total_count = 0;
+-
+-    // Pull each managed space
+-    for space_id in &target_space_ids {
+-        log::info!("Processing space: {}", space_id.cyan());
+-
+-        // Get space client for this space
+-        let space_client = client.space(space_id)?;
+-
+-        // Pull saved objects for this space
+-        if should_process_api("saved_objects", api_filter) {
+-            if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
+-                total_count += count;
++    let mut set = JoinSet::new();
++
++    // Pull each managed space concurrently
++    for space_id in target_space_ids {
++        let client = client.clone();
++        let project_dir = project_dir.clone();
++        let api_filter = api_filter.clone();
++
++        set.spawn(async move {
++            log::info!("Processing space: {}", space_id.cyan());
++            let mut space_total = 0;
++
++            // Get space client for this space
++            let space_client = client.space(&space_id)?;
++            let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
++
++            // Pull saved objects for this space
++            if should_process_api("saved_objects", api_filter_slice) {
++                if let Ok(count) = pull_space_saved_objects(&*project_dir, &space_client).await {
++                    space_total += count;
++                }
+             }
+-        }
+ 
+-        // Pull workflows for this space
+-        if should_process_api("workflows", api_filter) {
+-            if let Ok(count) = pull_space_workflows(project_dir, &space_client).await {
+-                log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
++            // Pull workflows for this space
++            if should_process_api("workflows", api_filter_slice) {
++                if let Ok(count) = pull_space_workflows(&*project_dir, &space_client).await {
++                    log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
++                }
+             }
+-        }
+ 
+-        // Pull agents for this space
+-        if should_process_api("agents", api_filter) {
+-            if let Ok(count) = pull_space_agents(project_dir, &space_client).await {
+-                log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
++            // Pull agents for this space
++            if should_process_api("agents", api_filter_slice) {
++                if let Ok(count) = pull_space_agents(&*project_dir, &space_client).await {
++                    log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
++                }
+             }
+-        }
+ 
+-        // Pull tools for this space
+-        if should_process_api("tools", api_filter) {
+-            if let Ok(count) = pull_space_tools(project_dir, &space_client).await {
+-                log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
++            // Pull tools for this space
++            if should_process_api("tools", api_filter_slice) {
++                if let Ok(count) = pull_space_tools(&*project_dir, &space_client).await {
++                    log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
++                }
+             }
++
++            Ok::<usize, eyre::Report>(space_total)
++        });
++    }
++
++    while let Some(res) = set.join_next().await {
++        match res {
++            Ok(Ok(count)) => total_count += count,
++            Ok(Err(e)) => log::error!("Space processing failed: {}", e),
++            Err(e) => log::error!("Task panicked: {}", e),
+         }
+     }
+ 
+@@ -173,18 +201,18 @@ pub async fn push_saved_objects(
+     space_filter: Option<&[String]>,
+     api_filter: Option<&[String]>,
+ ) -> Result<usize> {
+-    let project_dir = project_dir.as_ref();
++    let project_dir = Arc::<Path>::from(project_dir.as_ref());
++    let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
+ 
+     log::info!("Connecting to Kibana...");
+-    let client = load_kibana_client(project_dir)?;
++    let client = load_kibana_client(&*project_dir)?;
+ 
+     // Push space definitions FIRST (before any other operations)
+-    // This ensures spaces exist in Kibana before pushing resources to them
+-    if should_process_api("spaces", api_filter) {
++    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
+         let spaces_manifest_path = project_dir.join("spaces.yml");
+         if spaces_manifest_path.exists() {
+             log::info!("Pushing space definitions...");
+-            match push_spaces_internal(project_dir, &client).await {
++            match push_spaces_internal(&*project_dir, &client).await {
+                 Ok(space_count) => {
+                     log::info!("✓ Pushed {} space definition(s)", space_count);
+                 }
+@@ -205,67 +233,95 @@ pub async fn push_saved_objects(
+     let mut total_agents = 0;
+     let mut total_tools = 0;
+ 
+-    // Push each managed space
+-    for space_id in &target_space_ids {
+-        log::info!("Processing space: {}", space_id.cyan());
+-
+-        // Get space client for this space
+-        let space_client = client.space(space_id)?;
+-
+-        // Push saved objects for this space
+-        if should_process_api("saved_objects", api_filter) {
+-            match push_space_saved_objects(project_dir, &space_client, managed).await {
+-                Ok(count) => {
+-                    total_saved_objects += count;
+-                }
+-                Err(e) => {
+-                    log::warn!(
+-                        "Failed to push saved objects for space {}: {}",
+-                        space_id.cyan(),
+-                        e
+-                    );
++    let mut set = JoinSet::new();
++
++    // Push each managed space concurrently
++    for space_id in target_space_ids {
++        let client = client.clone();
++        let project_dir = project_dir.clone();
++        let api_filter = api_filter.clone();
++
++        set.spawn(async move {
++            log::info!("Processing space: {}", space_id.cyan());
++            let mut s_so = 0;
++            let mut s_wf = 0;
++            let mut s_ag = 0;
++            let mut s_tl = 0;
++
++            // Get space client for this space
++            let space_client = client.space(&space_id)?;
++            let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
++
++            // Push saved objects for this space
++            if should_process_api("saved_objects", api_filter_slice) {
++                match push_space_saved_objects(&*project_dir, &space_client, managed).await {
++                    Ok(count) => {
++                        s_so = count;
++                    }
++                    Err(e) => {
++                        log::warn!(
++                            "Failed to push saved objects for space {}: {}",
++                            space_id.cyan(),
++                            e
++                        );
++                    }
+                 }
+             }
+-        }
+ 
+-        // Push workflows for this space
+-        if should_process_api("workflows", api_filter) {
+-            match push_space_workflows(project_dir, &space_client).await {
+-                Ok(count) => {
+-                    total_workflows += count;
+-                }
+-                Err(e) => {
+-                    log::warn!(
+-                        "Failed to push workflows for space {}: {}",
+-                        space_id.cyan(),
+-                        e
+-                    );
++            // Push workflows for this space
++            if should_process_api("workflows", api_filter_slice) {
++                match push_space_workflows(&*project_dir, &space_client).await {
++                    Ok(count) => {
++                        s_wf = count;
++                    }
++                    Err(e) => {
++                        log::warn!(
++                            "Failed to push workflows for space {}: {}",
++                            space_id.cyan(),
++                            e
++                        );
++                    }
+                 }
+             }
+-        }
+ 
+-        // Push agents for this space
+-        if should_process_api("agents", api_filter) {
+-            match push_space_agents(project_dir, &space_client).await {
+-                Ok(count) => {
+-                    total_agents += count;
+-                }
+-                Err(e) => {
+-                    log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
++            // Push agents for this space
++            if should_process_api("agents", api_filter_slice) {
++                match push_space_agents(&*project_dir, &space_client).await {
++                    Ok(count) => {
++                        s_ag = count;
++                    }
++                    Err(e) => {
++                        log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
++                    }
+                 }
+             }
+-        }
+ 
+-        // Push tools for this space
+-        if should_process_api("tools", api_filter) {
+-            match push_space_tools(project_dir, &space_client).await {
+-                Ok(count) => {
+-                    total_tools += count;
+-                }
+-                Err(e) => {
+-                    log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
++            // Push tools for this space
++            if should_process_api("tools", api_filter_slice) {
++                match push_space_tools(&*project_dir, &space_client).await {
++                    Ok(count) => {
++                        s_tl = count;
++                    }
++                    Err(e) => {
++                        log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
++                    }
+                 }
+             }
++
++            Ok::<(usize, usize, usize, usize), eyre::Report>((s_so, s_wf, s_ag, s_tl))
++        });
++    }
++
+
+### src/kibana/agents/loader.rs
+@@ -8,6 +8,7 @@ use crate::etl::Loader;
+ use eyre::Result;
+ use owo_colors::OwoColorize;
+ use serde_json::Value;
++use tokio::task::JoinSet;
+ 
+ /// Loader for Kibana agents
+ ///
+@@ -24,7 +25,7 @@ use serde_json::Value;
+ ///
+ /// # async fn example() -> eyre::Result<()> {
+ /// let url = Url::parse("http://localhost:5601")?;
+-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
++/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
+ /// let space_client = client.space("default")?;
+ /// let loader = AgentsLoader::new(space_client);
+ ///
+@@ -52,180 +53,114 @@ impl AgentsLoader {
+     pub fn new(client: KibanaClient) -> Self {
+         Self { client }
+     }
+-
+-    /// Check if an agent exists by ID using HEAD request
+-    ///
+-    /// Returns true if the agent exists, false if it returns 404
+-    async fn agent_exists(&self, agent_id: &str) -> Result<bool> {
+-        let path = format!("api/agent_builder/agents/{}", agent_id);
+-
+-        log::debug!("{} {}", "HEAD".green(), path);
+-
+-        let response = self.client.head(&path).await?;
+-
+-        match response.status().as_u16() {
+-            200 => {
+-                log::debug!(
+-                    "{} {} - agent exists, will update",
+-                    "200".green(),
+-                    agent_id.cyan()
+-                );
+-                Ok(true)
+-            }
+-            404 => {
+-                log::debug!(
+-                    "{} {} - agent not found, will create",
+-                    "404".yellow(),
+-                    agent_id.cyan()
+-                );
+-                Ok(false)
+-            }
+-            _ => {
+-                let status = response.status();
+-                let body = response.text().await.unwrap_or_default();
+-                eyre::bail!(
+-                    "Failed to check agent {} existence ({}): {}",
+-                    agent_id.cyan(),
+-                    status,
+-                    body
+-                )
+-            }
+-        }
+-    }
+-
+-    /// Create a new agent using POST /api/agent_builder/agents/
+-    async fn create_agent(&self, agent: &Value) -> Result<()> {
+-        let agent_id = agent
+-            .get("id")
+-            .and_then(|v| v.as_str())
+-            .ok_or_else(|| eyre::eyre!("Agent missing 'id' field"))?;
+-
+-        let agent_name = agent
+-            .get("name")
+-            .and_then(|v| v.as_str())
+-            .unwrap_or("unknown");
+-
+-        // Use the collection resource /api/agent_builder/agents
+-        let path = "api/agent_builder/agents";
+-
+-        // Remove 'readonly', 'schema', and 'type' fields if present, as they cannot be sent in creation requests
+-        let mut agent_body = agent.clone();
+-        if let Some(obj) = agent_body.as_object_mut() {
+-            obj.remove("readonly");
+-            obj.remove("schema");
+-            obj.remove("type");
+-        }
+-
+-        // Client logs the full path now, so we don't need to log the relative path here
+-        // log::debug!("{} {}", "POST".green(), path);
+-
+-        let response = self.client.post_json_value(path, &agent_body).await?;
+-
+-        if !response.status().is_success() {
+-            let status = response.status();
+-            let body = response.text().await.unwrap_or_default();
+-            eyre::bail!(
+-                "Failed to create agent {} (id: {}) ({}): {}",
+-                agent_name.cyan(),
+-                agent_id.cyan(),
+-                status,
+-                body
+-            );
+-        }
+-
+-        log::info!(
+-            "Created agent: {} (id: {})",
+-            agent_name.cyan(),
+-            agent_id.cyan()
+-        );
+-
+-        Ok(())
+-    }
+-
+-    /// Update an existing agent using PUT /api/agent_builder/agents/<id>
+-    async fn update_agent(&self, agent_id: &str, agent: &Value) -> Result<()> {
+-        let agent_name = agent
+-            .get("name")
+-            .and_then(|v| v.as_str())
+-            .unwrap_or("unknown");
+-
+-        let path = format!("api/agent_builder/agents/{}", agent_id);
+-
+-        // Remove 'id', 'readonly', 'schema', and 'type' fields as they cannot be sent in update requests
+-        let mut agent_body = agent.clone();
+-        if let Some(obj) = agent_body.as_object_mut() {
+-            obj.remove("id");
+-            obj.remove("readonly");
+-            obj.remove("schema");
+-            obj.remove("type");
+-        }
+-
+-        log::debug!("{} {}", "PUT".green(), path);
+-
+-        let response = self.client.put_json_value(&path, &agent_body).await?;
+-
+-        if !response.status().is_success() {
+-            let status = response.status();
+-            let body = response.text().await.unwrap_or_default();
+-            eyre::bail!(
+-                "Failed to update agent {} (id: {}) ({}): {}",
+-                agent_name.cyan(),
+-                agent_id.cyan(),
+-                status,
+-                body
+-            );
+-        }
+-
+-        log::info!(
+-            "Updated agent: {} (id: {})",
+-            agent_name.cyan(),
+-            agent_id.cyan()
+-        );
+-
+-        Ok(())
+-    }
+-
+-    /// Create or update a single agent
+-    ///
+-    /// Checks if the agent exists first to determine whether to use
+-    /// POST (create) or PUT (update)
+-    ///
+-    /// Skips readonly agents as they cannot be modified
+-    async fn upsert_agent(&self, agent: &Value) -> Result<()> {
+-        let agent_id = agent
+-            .get("id")
+-            .and_then(|v| v.as_str())
+-            .ok_or_else(|| eyre::eyre!("Agent missing 'id' field"))?;
+-
+-        // Skip readonly agents (builtin agents that can't be modified)
+-        if agent
+-            .get("readonly")
+-            .and_then(|v| v.as_bool())
+-            .unwrap_or(false)
+-        {
+-            log::debug!("Skipping readonly agent: {}", agent_id.cyan());
+-            return Ok(());
+-        }
+-
+-        if self.agent_exists(agent_id).await? {
+-            // Agent exists - update it
+-            self.update_agent(agent_id, agent).await
+-        } else {
+-            // Agent doesn't exist - create it
+-            self.create_agent(agent).await
+-        }
+-    }
+ }
+ 
+ impl Loader for AgentsLoader {
+     type Item = Value;
+ 
+     async fn load(&self, items: Vec<Self::Item>) -> Result<usize> {
+         let mut count = 0;
++        let mut set = JoinSet::new();
+ 
+         for agent in items {
+-            self.upsert_agent(&agent).await?;
+-            count += 1;
++            let client = self.client.clone();
++
++            set.spawn(async move {
++                let agent_id = agent
++                    .get("id")
++                    .and_then(|v| v.as_str())
++                    .ok_or_else(|| eyre::eyre!("Agent missing 'id' field"))?;
++
++                let agent_name = agent
++                    .get("name")
++                    .and_then(|v| v.as_str())
++                    .unwrap_or("unknown");
++
++                // Skip readonly agents
++                if agent
++                    .get("readonly")
++                    .and_then(|v| v.as_bool())
++                    .unwrap_or(false)
++                {
++                    log::debug!("Skipping readonly agent: {}", agent_id.cyan());
++                    return Ok::<bool, eyre::Report>(false);
++                }
++
++                // Check existence
++                let path = format!("api/agent_builder/agents/{}", agent_id);
++                let exists = match client.head(&path).await?.status().as_u16() {
++                    200 => true,
++                    404 => false,
++                    status => {
++                        eyre::bail!("Failed to check agent existence ({}): {}", agent_id, status);
++                    }
++                };
++
++                if exists {
++                    // Update
++                    let mut agent_body = agent.clone();
++                    if let Some(obj) = agent_body.as_object_mut() {
++                        obj.remove("id");
++                        obj.remove("readonly");
++                        obj.remove("schema");
++                        obj.remove("type");
++                    }
++                    let path = format!("api/agent_builder/agents/{}", agent_id);
++                    let response = client.put_json_value(&path, &agent_body).await?;
++                    if !response.status().is_success() {
++                        eyre::bail!(
++                            "Failed to update agent {} (id: {}) ({}): {}",
++                            agent_name,
++                            agent_id,
++                            response.status(),
++                            response.text().await.unwrap_or_default()
++                        );
++                    }
++                    log::info!(
++                        "Updated agent: {} (id: {})",
++                        agent_name.cyan(),
++                        agent_id.cyan()
++                    );
++                } else {
++                    // Create
++                    let mut agent_body = agent.clone();
++                    if let Some(obj) = agent_body.as_object_mut() {
++                        obj.remove("readonly");
++                        obj.remove("schema");
++                        obj.remove("type");
++                    }
++                    let path = "api/agent_builder/agents";
++                    let response = client.post_json_value(path, &agent_body).await?;
++                    if !response.status().is_success() {
++                        eyre::bail!(
++                            "Failed to create agent {} (id: {}) ({}): {}",
++                            agent_name,
++                            agent_id,
++                            response.status(),
++                            response.text().await.unwrap_or_default()
++                        );
++                    }
++                    log::info!(
++                        "Created agent: {} (id: {})",
++                        agent_name.cyan(),
++                        agent_id.cyan()
++                    );
++                }
++
++                Ok::<bool, eyre::Report>(true)
++            });
++        }
++
++        while let Some(res) = set.join_next().await {
++            match res {
++                Ok(Ok(loaded)) => {
++                    if loaded {
++                        count += 1;
++                    }
++                }
++                Ok(Err(e)) => log::error!("Failed to load agent: {}", e),
++                Err(e) => log::error!("Task panicked: {}", e),
++            }
+         }
+ 
+         Ok(count)
+@@ -244,7 +179,7 @@ mod tests {
+     fn test_loader_creation() {
+         let temp_dir = TempDir::new().unwrap();
+
+===== P063 | repo skzv/ccmux | PR #114: feat(tui): design-system redesign — tokens, components, dashboard rewrite | capacidade: adaptive-screen-layout
+--- SPEC VIVA
+# adaptive-screen-layout Specification
+
+## Purpose
+TBD - created by archiving change responsive-screen-widths. Update Purpose after archive.
+## Requirements
+### Requirement: Screen width contract
+Every TUI screen SHALL render without any visible line exceeding the terminal width. A "visible line" is a newline-delimited segment measured in display columns (ANSI escape codes excluded). This contract holds for any terminal width in the range [40, ∞).
+
+#### Scenario: No overflow at 50 columns
+- **WHEN** the terminal width is 50 columns
+- **THEN** every line of every screen's rendered output is ≤ 50 display columns wide
+
+#### Scenario: No overflow at 80 columns
+- **WHEN** the terminal width is 80 columns
+- **THEN** every line of every screen's rendered output is ≤ 80 display columns wide
+
+#### Scenario: No overflow at 120 columns
+- **WHEN** the terminal width is 120 columns
+- **THEN** every line of every screen's rendered output is ≤ 120 display columns wide
+
+#### Scenario: No overflow at 200 columns
+- **WHEN** the terminal width is 200 columns
+- **THEN** every line of every screen's rendered output is ≤ 200 display columns wide
+
+### Requirement: Primary content always visible
+Every screen SHALL always display its primary content identifier (session name for Sessions, project name for Projects, note title for Notes, etc.) regardless of terminal width, as long as width ≥ 40.
+
+#### Scenario: Session name visible at 80 columns
+- **WHEN** the Sessions screen renders at 80 columns with at least one session in the list
+- **THEN** the session name is present in the rendered output (possibly truncated with "…" but not absent)
+
+#### Scenario: Project name visible at 80 columns
+- **WHEN** the Projects screen renders at 80 columns with at least one project in the list
+- **THEN** the project name is present in the rendered output
+
+### Requirement: Narrow layout breakpoint
+There SHALL be exactly one layout breakpoint. A screen is "narrow" when `width < 120` and "wide" otherwise. Every screen that adapts to width MUST use this single breakpoint (`isNarrow`); no screen may define its own threshold.
+
+#### Scenario: Single shared breakpoint
+- **WHEN** any screen decides whether to render its narrow or wide layout
+- **THEN** the decision is made by `isNarrow(width)` (`width < 120`)
+- **THEN** no screen uses a different width threshold (e.g. a derived detail-pane width) to make the same decision
+
+#### Scenario: Side-by-side panes collapse below the breakpoint
+- **WHEN** a screen with a list + detail side-by-side layout renders at width < 120
+- **THEN** the panes are stacked or the detail pane is omitted, never rendered side-by-side
+- **THEN** no rendered line exceeds the terminal width
+
+### Requirement: Secondary content omitted below the narrow breakpoint
+Below the narrow breakpoint, each screen SHALL render a curated subset of its content. Elements classified T2 (reference) in the change's design document MUST be omitted entirely; elements classified T1 (useful) MAY be condensed; elements classified T0 (glanceable) MUST remain. Omission means the content is absent — there is no reveal affordance in the TUI.
+
+#### Scenario: Usage panel collapses to one line
+- **WHEN** the Home screen renders at width < 120
+- **THEN** the Claude usage panel renders as a single summary line carrying the prompt count
+- **THEN** the cache breakdown, top-projects list, and Codex/Antigravity blocks are absent
+
+#### Scenario: Inline hint lines are hidden
+- **WHEN** any screen renders at width < 120
+- **THEN** inline hint / cheatsheet lines (e.g. "enter: attach   x: kill") are absent
+
+#### Scenario: Detach instructions survive narrow mode
+- **WHEN** the Sessions detail for a selected session renders at width < 120
+- **THEN** the detach instruction (how to return after attaching) is present, condensed to a short form
+- **THEN** the session path, window count, and full key cheatsheet are absent
+
+#### Scenario: Secondary content returns when wide
+- **WHEN** a screen renders at width ≥ 120
+- **THEN** all T2 elements for that screen are present
+
+### Requirement: Home screen layout adapts to width
+Below the narrow breakpoint the Home screen SHALL render as a single full-width column with the hero omitted entirely, stacked top to bottom: sessions (list + condensed detail) → session summary → devices → usage. At or above the breakpoint the Home screen SHALL render the hero as a full-width banner across the top; beneath the banner it SHALL render two columns — the sessions list on the left, and on the right the session detail pane followed by the session summary, devices, and usage tiles stacked beneath it.
+
+#### Scenario: Hero omitted below the breakpoint
+- **WHEN** the Home screen renders at width < 120
+- **THEN** the "Hello." hero is absent from the output
+- **THEN** the sessions block, session summary, devices, and usage render in one full-width column
+
+#### Scenario: Hero is a full-width banner at or above the breakpoint
+- **WHEN** the Home screen renders at width ≥ 120
+- **THEN** the "Hello." hero spans the top of the screen above both columns
+- **THEN** no rendered line exceeds the terminal width
+
+#### Scenario: Sessions list on the left, detail and tiles on the right
+- **WHEN** the Home screen renders at width ≥ 120
+- **THEN** the sessions list occupies the left column
+- **THEN** the right column stacks the session detail pane on top, then the session summary, devices, and usage tiles
+- **THEN** the session detail pane shows the full key cheatsheet (it is not collapsed to the phone form)
+
+### Requirement: Tab bar always readable
+The tab bar header SHALL always show either the full screen label or the screen number for every screen, regardless of terminal width.
+
+#### Scenario: Wide tab bar shows labels
+- **WHEN** the terminal width is ≥ 120
+- **THEN** each screen's full label is present in the rendered header
+
+#### Scenario: Narrow tab bar shows numbers
+- **WHEN** the terminal width is < 120
+- **THEN** each screen's number is present in the rendered header
+- **THEN** the active screen's initial letter is present in the rendered header
+
+### Requirement: Chrome rows curate then clamp
+The persistent chrome rows — header, status bar, footer — SHALL each render a width-appropriate curated subset of their content using the same T0/T1/T2 model as screen bodies. Single-line truncation (`forceSingleLine`) is a final overflow safety net, not the collapse mechanism: each chrome row MUST compose its curated string for the current width tier before any truncation, and MUST order its content so that if truncation still occurs it removes T2 content before T0 or T1 content.
+
+#### Scenario: Status bar keeps safety and daemon status on narrow
+- **WHEN** the status bar renders at width < 120
+- **THEN** the battery-danger banner (when active) and the daemon online/offline status are present
+
+#### Scenario: Status bar drops reference detail on narrow
+- **WHEN** the status bar renders at width < 120
+- **THEN** the refreshed-at clock and the version chip are absent
+
+#### Scenario: Footer keeps the help gateway on narrow
+- **WHEN** the footer renders at width < 120 with no toast active
+- **THEN** the `? help` hint is present
+- **THEN** the per-screen action hints (`n new`, `x kill`, `r refresh`) are absent
+
+#### Scenario: Truncation removes the least important content first
+- **WHEN** a chrome row's curated string still exceeds the terminal width
+- **THEN** truncation removes T2 content before T0/T1 content, because the row orders its content T0-first
+
+#### Scenario: Error toast takes the footer at every width
+- **WHEN** an error toast is active
+- **THEN** the footer renders the toast in place of the hint line, at every width
+
+### Requirement: Width-sweep test coverage
+The test suite SHALL include a width-sweep test for every screen that renders each screen at widths 50, 80, 100, 120, and 200 and asserts the screen width contract and primary content visibility requirements.
+
+#### Scenario: Test runner covers all screens
+- **WHEN** the width-sweep tests run
+- **THEN** every screen defined in the `Screen` enum is exercised at each canonical width (50, 80, 100, 120, 200)
+- **THEN** any screen that overflows its allocated width causes the test to fail
+
+#### Scenario: Narrow widths assert omission
+- **WHEN** the width-sweep tests run at a narrow width (50, 80, or 100)
+- **THEN** each screen's T2 elements are asserted absent
+- **THEN** each screen's T0 elements are asserted present
+
+
+--- ARQUIVOS DO PR (50)
+modified  +15    -6     CLAUDE.md
+modified  +20    -3     README.md
+modified  +144   -139   docs/01_Specs/01_Feature_Catalog.md
+added     +176   -0     docs/02_Architecture/04_TUI_Design_System.md
+modified  +18    -0     internal/tui/agents.go
+modified  +107   -21    internal/tui/app.go
+modified  +33    -52    internal/tui/app_test.go
+modified  +4     -5     internal/tui/claudeconfig.go
+added     +14    -0     internal/tui/components/doc.go
+added     +101   -0     internal/tui/components/header.go
+added     +82    -0     internal/tui/components/header_test.go
+added     +103   -0     internal/tui/components/helpbar.go
+added     +89    -0     internal/tui/components/helpbar_test.go
+added     +169   -0     internal/tui/components/list.go
+added     +181   -0     internal/tui/components/list_test.go
+modified  +37    -24    internal/tui/conversations.go
+modified  +37    -16    internal/tui/conversations_test.go
+modified  +521   -442   internal/tui/dashboard.go
+modified  +200   -134   internal/tui/dashboard_test.go
+added     +75    -0     internal/tui/golden_test.go
+modified  +1     -3     internal/tui/help.go
+modified  +8     -12    internal/tui/keys.go
+modified  +12    -4     internal/tui/matrix.go
+modified  +16    -0     internal/tui/network.go
+modified  +32    -15    internal/tui/notes.go
+modified  +3     -5     internal/tui/projectmenu.go
+modified  +25    -7     internal/tui/projects.go
+added     +148   -0     internal/tui/screens_golden_test.go
+modified  +18    -4     internal/tui/screens_test.go
+modified  +77    -36    internal/tui/sessions.go
+modified  +22    -7     internal/tui/sessions_test.go
+modified  +31    -1     internal/tui/settings.go
+added     +56    -0     internal/tui/styles/palette.go
+modified  +71    -85    internal/tui/styles/styles.go
+added     +92    -0     internal/tui/styles/tokens.go
+added     +101   -0     internal/tui/styles_lint_test.go
+added     +55    -0     internal/tui/testdata/golden/README.md
+added     +40    -0     internal/tui/testdata/golden/conversations.txt
+added     +40    -0     internal/tui/testdata/golden/dashboard.txt
+added     +40    -0     internal/tui/testdata/golden/notes.txt
+added     +40    -0     internal/tui/testdata/golden/projects.txt
+added     +40    -0     internal/tui/testdata/golden/settings.txt
+modified  +3     -3     internal/tui/toast.go
+modified  +1     -1     internal/tui/width_test.go   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-05-27-redesign-tui-charm/.openspec.yaml
+added     +132   -0     openspec/changes/archive/2026-05-27-redesign-tui-charm/design.md
+added     +39    -0     openspec/changes/archive/2026-05-27-redesign-tui-charm/proposal.md
+added     +178   -0     openspec/changes/archive/2026-05-27-redesign-tui-charm/specs/tui-design-system/spec.md
+added     +61    -0     openspec/changes/archive/2026-05-27-redesign-tui-charm/tasks.md
+added     +182   -0     openspec/specs/tui-design-system/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/tui/width_test.go
+@@ -84,7 +84,7 @@ func TestWidthSweep_AllScreens(t *testing.T) {
+ 		t0     []string // must appear at every width
+ 		t2     []string // must be absent below the 120 breakpoint
+ 	}{
+-		{ScreenSessions, []string{"Sessions", "Claude usage"}, []string{"Hello.", "Welcome to ccmux", "Codex usage"}},
++		{ScreenSessions, []string{"Sessions"}, []string{"Hello.", "Welcome to ccmux", "Codex usage"}},
+ 		{ScreenConversations, []string{"Conversations"}, nil},
+ 		{ScreenProjects, []string{"Projects"}, nil},
+ 		{ScreenNotes, []string{"Notes"}, nil},
+
+===== P064 | repo Gentleman-Programming/engram | PR #282: feat(memory): conflict surfacing Phases 2+3+4 (sync, audit, semantic) | capacidade: cloud-autosync
+--- SPEC VIVA
+# Cloud Autosync Specification
+
+## Change metadata
+
+- Change: cloud-autosync-restoration
+- Capability: cloud-autosync, cloud-mutation-endpoints, cloud-sync-status
+- Kind: ADDITIVE (new capabilities) + MODIFIED (cloud-sync-status)
+- REQ range: REQ-200 through REQ-214
+
+## Purpose
+
+This spec defines the behavioral contract for the background autosync manager, the mutation REST endpoints on the cloud server, and the status adapter that bridges autosync phase to the existing dashboard status pipeline. All requirements are testable via `go test ./...`.
+
+---
+
+## ADDED Requirements
+
+### REQ-200: Mutation push endpoint contract
+
+The cloud server MUST expose `POST /sync/mutations/push` requiring `Authorization: Bearer <token>`. The request body MUST be JSON: `{"target_key": string, "entries": [{"seq": int, "project": string, "sync_id": string, "kind": string, "payload": object, ...}]}`. Batch size MUST NOT exceed 100 entries per request; server MUST reject batches larger than 100 with HTTP 400. On success the server MUST respond HTTP 200 with `{"accepted_seqs": [int, ...]}` listing every sequence number it stored. A missing or invalid token MUST yield HTTP 401. An invalid body MUST yield HTTP 400.
+
+**Scenarios**:
+
+- **Happy path — valid push accepted**: GIVEN a registered token and a batch of 5 mutations, WHEN `POST /sync/mutations/push` is called, THEN the response is HTTP 200 and `accepted_seqs` contains all 5 sequence numbers.
+- **Unauthenticated — missing token**: GIVEN no `Authorization` header, WHEN `POST /sync/mutations/push` is called, THEN the server responds HTTP 401.
+- **Error — batch too large**: GIVEN a request body with 101 mutation entries, WHEN `POST /sync/mutations/push` is called with a valid token, THEN the server responds HTTP 400.
+- **Edge case — empty batch**: GIVEN a valid token and `entries: []`, WHEN `POST /sync/mutations/push` is called, THEN the server responds HTTP 200 with `accepted_seqs: []`.
+
+---
+
+### REQ-201: Mutation pull endpoint contract
+
+The cloud server MUST expose `GET /sync/mutations/pull` requiring `Authorization: Bearer <token>`. The endpoint MUST accept query parameters `since_seq` (int, default 0) and `limit` (int, default 100, max 100). The response MUST be JSON: `{"mutations": [...], "has_more": bool, "latest_seq": int}`. When there are more mutations beyond the requested `limit`, `has_more` MUST be `true`. A missing or invalid token MUST yield HTTP 401.
+
+**Scenarios**:
+
+- **Happy path — pull mutations since seq**: GIVEN 10 mutations stored with seqs 1–10 and a request `since_seq=5&limit=100`, WHEN `GET /sync/mutations/pull` is called with a valid token, THEN the response contains 5 mutations (seqs 6–10), `has_more: false`, and `latest_seq: 10`.
+- **Happy path — has_more pagination**: GIVEN 150 mutations stored and a request `since_seq=0&limit=100`, WHEN `GET /sync/mutations/pull` is called, THEN `has_more: true` and the mutations array contains exactly 100 items.
+- **Unauthenticated**: GIVEN no `Authorization` header, WHEN `GET /sync/mutations/pull` is called, THEN the server responds HTTP 401.
+- **Edge case — since_seq beyond latest**: GIVEN the latest stored seq is 50 and the request sends `since_seq=100`, WHEN `GET /sync/mutations/pull` is called, THEN `mutations: []`, `has_more: false`, and `latest_seq: 50`.
+
+---
+
+### REQ-202: Server-side enrollment filter on pull
+
+The `GET /sync/mutations/pull` handler MUST filter returned mutations to only those belonging to projects enrolled by the authenticated caller. A caller MUST NOT receive mutations for projects they are not enrolled in. The filter MUST be applied server-side before constructing the response; the client MUST NOT be relied upon to discard foreign-project mutations.
+
+**Scenarios**:
+
+- **Happy path — enrolled project mutations returned**: GIVEN caller enrolled in project "alpha" and mutations exist for both "alpha" and "beta", WHEN `GET /sync/mutations/pull` is called, THEN only mutations for "alpha" appear in the response.
+- **Cross-tenant leak guard**: GIVEN two different callers each enrolled in distinct projects, WHEN each calls `GET /sync/mutations/pull`, THEN neither response contains the other's mutations.
+- **No enrollments**: GIVEN a valid token with no enrolled projects, WHEN `GET /sync/mutations/pull` is called, THEN `mutations: []` and `has_more: false`.
+- **Edge case — unenrolled mutation seq skipped**: GIVEN caller enrolled only in "alpha" and a mutation for "beta" has the highest seq, WHEN `GET /sync/mutations/pull` is called, THEN the response seq range excludes the "beta" mutation.
+
+---
+
+### REQ-203: Push enforces project pause
+
+`POST /sync/mutations/push` MUST check whether the target project's sync is paused. If the project is paused (via `cloud_project_controls.sync_enabled = false`), the server MUST respond HTTP 409 with body `{"error": "sync-paused", "project": "<name>"}`. Non-paused projects MUST proceed normally.
+
+**Scenarios**:
+
+- **Happy path — non-paused project accepted**: GIVEN `cloud_project_controls` has no row or `sync_enabled = true` for the project, WHEN `POST /sync/mutations/push` is called, THEN HTTP 200.
+- **Paused project rejected**: GIVEN `cloud_project_controls.sync_enabled = false` for the project, WHEN `POST /sync/mutations/push` is called, THEN HTTP 409 with `error: "sync-paused"`.
+- **Edge case — pause applies per project**: GIVEN project "alpha" is paused and project "beta" is active, WHEN entries for both are pushed in one batch, THEN only "alpha" entries are rejected; "beta" entries are accepted.
+- **Error — admin token still paused**: GIVEN a project is paused, WHEN an admin-authenticated push is attempted, THEN HTTP 409 is still returned (pause is a data policy, not an auth level).
+
+---
+
+### REQ-204: Autosync Manager phases
+
+The `autosync.Manager` MUST implement the following phases: `PhaseIdle`, `PhasePushing`, `PhasePulling`, `PhaseHealthy`, `PhasePushFailed`, `PhasePullFailed`, `PhaseBackoff`, and `PhaseDisabled`. Phase transitions MUST follow: initial state is `PhaseIdle`; successful cycle sets `PhaseHealthy`; failed push sets `PhasePushFailed`; failed pull sets `PhasePullFailed`; exceeding `MaxConsecutiveFailures` sets `PhaseBackoff`; `StopForUpgrade` sets `PhaseDisabled`. `Manager.Status()` MUST return the current phase and last error in a thread-safe manner.
+
+**Scenarios**:
+
+- **Happy path — idle to healthy**: GIVEN a new Manager and a successful push+pull cycle, WHEN `cycle()` completes without error, THEN `Manager.Status().Phase == PhaseHealthy`.
+- **Push failure transition**: GIVEN a transport that returns an error on `PushMutations`, WHEN `cycle()` is called, THEN `Manager.Status().Phase == PhasePushFailed` and `Status().LastError` is non-empty.
+- **Pull failure transition**: GIVEN push succeeds but `PullMutations` returns an error, WHEN `cycle()` is called, THEN `Manager.Status().Phase == PhasePullFailed`.
+- **StopForUpgrade sets Disabled**: GIVEN a running Manager, WHEN `StopForUpgrade()` is called, THEN `Manager.Status().Phase == PhaseDisabled`.
+
+---
+
+### REQ-205: Autosync backoff contract
+
+The Manager MUST use exponential backoff with base 1 second, maximum 5 minutes, multiplier 2x, and ±25% random jitter. After `MaxConsecutiveFailures` (default 10) consecutive failures, the Manager MUST enter `PhaseBackoff` and MUST NOT attempt another cycle until the backoff interval has elapsed.
+
+**Scenarios**:
+
+- **Exponential growth within bounds**: GIVEN consecutive failures, WHEN backoff durations are computed, THEN each successive duration is approximately 2× the previous, and none exceeds 5 minutes (300 seconds).
+- **Jitter within ±25%**: GIVEN a computed base duration of 4 seconds, WHEN jitter is applied, THEN the actual duration falls in [3s, 5s].
+- **Ceiling at 10 failures enters Backoff**: GIVEN 10 consecutive failures, WHEN the 11th cycle is attempted before the backoff interval expires, THEN the cycle is skipped and phase remains `PhaseBackoff`.
+- **Edge case — reset on success**: GIVEN the Manager was in `PhasePushFailed` with 9 consecutive failures, WHEN the next cycle succeeds, THEN `ConsecutiveFailures` resets to 0 and phase becomes `PhaseHealthy`.
+
+---
+
+### REQ-206: Autosync NotifyDirty semantics
+
+`Manager.NotifyDirty()` MUST be a non-blocking call that signals the run loop to start a push+pull cycle after the debounce interval (default 500 ms). Multiple rapid calls to `NotifyDirty` within the debounce window MUST coalesce into a single cycle trigger. `NotifyDirty` MUST NOT block the caller even when the Manager is in `PhaseBackoff`.
+
+**Scenarios**:
+
+- **Single dirty triggers one cycle**: GIVEN a running Manager, WHEN `NotifyDirty()` is called once and 500 ms elapse, THEN exactly one cycle is triggered.
+- **Rapid calls coalesce**: GIVEN `NotifyDirty()` is called 100 times within 10 ms, WHEN 500 ms elapse, THEN exactly one cycle runs (not 100).
+- **Non-blocking during Backoff**: GIVEN the Manager is in `PhaseBackoff`, WHEN `NotifyDirty()` is called, THEN it returns immediately without blocking.
+- **Edge case — NotifyDirty after Stop**: GIVEN `Manager.Stop()` has been called, WHEN `NotifyDirty()` is called, THEN it does not block and does not trigger a cycle.
+
+---
+
+### REQ-207: Autosync Run loop lifecycle
+
+`Manager.Run(ctx context.Context)` MUST start a goroutine that loops until `ctx` is cancelled. The loop MUST respond to: dirty notifications (debounced), a periodic poll ticker (default 30 s), and context cancellation. On context cancellation the loop MUST release its sync lease and return. `Manager.Stop()` MUST cancel the internal context and wait for the goroutine to exit.
+
+**Scenarios**:
+
+- **Context cancel stops loop**: GIVEN a running Manager, WHEN the context is cancelled, THEN `Run` returns within 1 second.
+- **Poll ticker triggers cycle**: GIVEN no dirty notifications for 30 s, WHEN the poll interval elapses, THEN a cycle runs.
+- **Stop waits for goroutine**: GIVEN `Manager.Stop()` is called, WHEN it returns, THEN no goroutine is still running (verified via `goleak` or WaitGroup).
+- **Panic recovery**: GIVEN the run goroutine's `cycle()` call panics, WHEN the panic is caught by a `recover()` wrapper, THEN the goroutine logs the panic, sets `PhaseBackoff` with `reason_code: internal_error`, and continues looping without crashing the process.
+
+---
+
+### REQ-208: StopForUpgrade / ResumeAfterUpgrade contract
+
+`Manager.StopForUpgrade()` MUST set phase to `PhaseDisabled`, drain the run goroutine's pending work, and retain the sync lease so no other worker picks it up during the upgrade window. `Manager.ResumeAfterUpgrade()` MUST set phase back to `PhaseIdle` and re-arm the cycle without requiring a full Manager restart.
+
+**Scenarios**:
+
+- **StopForUpgrade halts cycle**: GIVEN a Manager in `PhaseHealthy`, WHEN `StopForUpgrade()` is called, THEN no further cycles run and phase is `PhaseDisabled`.
+- **Lease retained during upgrade window**: GIVEN `StopForUpgrade()` was called, WHEN the lease expiry check runs, THEN the Manager does NOT release the lease until `Stop()` or a full shutdown.
+- **ResumeAfterUpgrade restarts cycle**: GIVEN `StopForUpgrade()` was called, WHEN `ResumeAfterUpgrade()` is called and 30 s elapse, THEN a cycle runs and phase transitions out of `PhaseDisabled`.
+- **Edge case — Resume without prior Stop is no-op**: GIVEN a Manager in `PhaseHealthy`, WHEN `ResumeAfterUpgrade()` is called, THEN the phase remains `PhaseHealthy` and behavior is unchanged.
+
+---
+
+### REQ-209: Status adapter — Manager phase to SyncStatus
+
+An `autosyncStatusAdapter` MUST implement `server.SyncStatusProvider` (i.e., `Status(project string) server.SyncStatus`). The adapter MUST map autosync phases as follows: `PhaseHealthy` → `{Phase: "healthy"}`; `PhaseBackoff` → `{Phase: "degraded", ReasonCode: "transport_failed"}`; `PhasePushFailed` / `PhasePullFailed` → `{Phase: "degraded", ReasonCode: last_error_reason}`; `PhaseDisabled` → `{Phase: "degraded", ReasonCode: "upgrade_paused"}`; `PhaseIdle` / `PhasePushing` / `PhasePulling` → `{Phase: "running"}`. When the Manager is `nil` (autosync disabled), the adapter MUST fall back to `storeSyncStatusProvider`.
+
+**Scenarios**:
+
+- **Healthy phase maps correctly**: GIVEN Manager in `PhaseHealthy`, WHEN `adapter.Status("proj")` is called, THEN `SyncStatus.Phase == "healthy"`.
+- **Backoff maps to degraded**: GIVEN Manager in `PhaseBackoff`, WHEN `adapter.Status("proj")` is called, THEN `SyncStatus.Phase == "degraded"` and `ReasonCode == "transport_failed"`.
+- **Nil manager falls back**: GIVEN `autosyncStatusAdapter{mgr: nil}`, WHEN `adapter.Status("proj")` is called, THEN the result equals what `storeSyncStatusProvider.Status("proj")` would return.
+- **Disabled maps upgrade_paused**: GIVEN Manager in `PhaseDisabled`, WHEN `adapter.Status("proj")` is called, THEN `SyncStatus.ReasonCode == "upgrade_paused"`.
+
+---
+
+### REQ-210: Explicit opt-in via ENGRAM_CLOUD_AUTOSYNC env var
+
+Autosync MUST only start when `ENGRAM_CLOUD_AUTOSYNC=1` is set in the environment. Setting this env var without a valid token or server URL MUST NOT silently succeed (see REQ-211). Absence of the env var MUST leave autosync disabled with no log output beyond a single debug-level note. The env var MUST NOT auto-enable when only `ENGRAM_CLOUD_TOKEN` and `ENGRAM_CLOUD_SERVER` are set.
+
+**Scenarios**:
+
+- **Opt-in required — env absent**: GIVEN `ENGRAM_CLOUD_AUTOSYNC` is not set but token and server are set, WHEN `cmdServe` runs, THEN autosync does not start.
+- **Opt-in present — autosync starts**: GIVEN `ENGRAM_CLOUD_AUTOSYNC=1`, token, and server URL are all set, WHEN `cmdServe` runs, THEN the Manager starts and a single info log confirms it.
+- **Edge case — env value not "1"**: GIVEN `ENGRAM_CLOUD_AUTOSYNC=true`, WHEN `cmdServe` runs, THEN autosync does not start (only exact `"1"` is accepted).
+- **Previous fatal inverted**: GIVEN `ENGRAM_CLOUD_AUTOSYNC=1` and valid config, WHEN `cmdServe` runs, THEN the process does NOT call `fatal()`; test `TestCmdServeAutosyncLifecycleGating` asserts the new behavior.
+
+---
+
+### REQ-211: Runtime gating — token and server URL required
+
+When `ENGRAM_CLOUD_AUTOSYNC=1` is set but `ENGRAM_CLOUD_TOKEN` or `ENGRAM_CLOUD_SERVER` is missing, the runtime MUST log an error and skip starting autosync; it MUST NOT start the Manager with an empty token. The error MUST be logged at `ERROR` level and include which variable is missing. The `engram serve` process MUST still start successfully (autosync is optional; a missing token is not a fatal condition).
+
+**Scenarios**:
+
+- **Token missing — skip with error log**: GIVEN `ENGRAM_CLOUD_AUTOSYNC=1` and `ENGRAM_CLOUD_SERVER` set but `ENGRAM_CLOUD_TOKEN` empty, WHEN `cmdServe` runs, THEN autosync does not start and the log contains "ENGRAM_CLOUD_TOKEN".
+- **Server URL missing — skip with error log**: GIVEN `ENGRAM_CLOUD_AUTOSYNC=1` and token set but `ENGRAM_CLOUD_SERVER` empty, WHEN `cmdServe` runs, THEN autosync does not start and the log contains "ENGRAM_CLOUD_SERVER".
+- **Both present — starts normally**: GIVEN all three env vars set, WHEN `cmdServe` runs, THEN `tryStartAutosync` returns a non-nil Manager.
+- **Edge case — serve continues without autosync**: GIVEN token is missing, WHEN `cmdServe` runs, THEN the HTTP server starts and handles requests normally.
+
+---
+
+### REQ-212: Local-first invariant
+
+Autosync MUST run entirely in its own goroutine and MUST NOT hold any lock shared with the local write path during network I/O. A local write to the SQLite store MUST succeed and return within its normal latency bounds even when the cloud transport is unreachable or returning 5xx errors. The autosync loop MUST NOT block `store.WriteObservation` or any equivalent write method.
+
+**Scenarios**:
+
+- **Local write succeeds during transport 500**: GIVEN the cloud transport returns HTTP 500 on every call, WHEN a local observation is written, THEN the write returns without error and within the normal latency bound.
+- **Goroutine isolation**: GIVEN the Manager's `cycle()` is sleeping in backoff, WHEN 1000 concurrent local writes are executed, THEN all writes complete without deadlock or timeout.
+- **Transport error does not propagate to caller**: GIVEN `PushMutations` returns a network error, WHEN `Manager.NotifyDirty()` is called from a write hook, THEN the hook returns immediately and does not surface the error to the caller.
+- **Edge case — cloud unreachable at startup**: GIVEN the cloud server is unreachable from process start, WHEN `cmdServe` starts autosync, THEN the server starts, accepts local requests, and the Manager enters `PhasePushFailed` after the first failed cycle.
+
+---
+
+### REQ-213: Goroutine lifecycle — no leaks and panic recovery
+
+`Manager.Stop()` MUST guarantee all goroutines spawned by `Run()` have exited before it returns. The `Run()` goroutine MUST wrap `cycle()` in a `recover()` call; a panic inside `cycle()` MUST set `PhaseBackoff` with `reason_code: "internal_error"`, log the stack trace, and allow the loop to continue. A panic MUST NOT crash the host process.
+
+**Scenarios**:
+
+- **Stop exits cleanly**: GIVEN a running Manager, WHEN `Stop()` returns, THEN all goroutines spawned by `Run()` have exited (verified via `goleak.VerifyNone`).
+- **Panic recovery sets Backoff**: GIVEN `cycle()` panics with a runtime error, WHEN the `recover()` wrapper catches it, THEN `Manager.Status().Phase == PhaseBackoff` and `ReasonCode == "internal_error"`.
+- **Loop continues after panic**: GIVEN a panic on the first cycle, WHEN the backoff interval elapses, THEN the Manager attempts another cycle without needing a restart.
+- **Edge case — Stop called before Run**: GIVEN `Stop()` is called on a Manager that has never started `Run()`, THEN `Stop()` returns immediately without blocking.
+
+---
+
+### REQ-214: Client 404 on mutation endpoints maps to PhaseBackoff
+
+When the autosync transport receives HTTP 404 from `POST /sync/mutations/push` or `GET /sync/mutations/pull`, the Manager MUST treat it as a `PhaseBackoff` condition with `reason_code: "server_unsupported"`. This indicates the server has not yet deployed the mutation endpoints. The Manager MUST log a warning that advises the operator to deploy the server before enabling `ENGRAM_CLOUD_AUTOSYNC=1`.
+
+**Scenarios**:
+
+- **404 on push → server_unsupported**: GIVEN the cloud server returns HTTP 404 on `POST /sync/mutations/push`, WHEN a push cycle runs, THEN `Manager.Status().Phase == PhaseBackoff` and `ReasonCode == "server_unsupported"`.
+- **404 on pull → server_unsupported**: GIVEN the cloud server returns HTTP 404 on `GET /sync/mutations/pull`, WHEN a pull cycle runs, THEN `Manager.Status().Phase == PhaseBackoff` and `ReasonCode == "server_unsupported"`.
+- **Warning logged once**: GIVEN the first 404 is received, WHEN the manager logs the warning, THEN the log message contains "server_unsupported" and advice to deploy the server first.
+- **Edge case — 404 vs 401 distinct codes**: GIVEN the cloud server returns HTTP 401, WHEN a push cycle runs, THEN `ReasonCode == "auth_required"` (not `"server_unsupported"`).
+
+---
+
+## MODIFIED Requirements
+
+### REQ-cloud-sync-status: Autosync phase as authoritative status source
+
+The `server.SyncStatusProvider` implementation wired into `cmdServe` and `cmdMCP` MUST be the `autosyncStatusAdapter` when autosync is enabled. When autosync is disabled (Manager is nil), the provider MUST fall back to `storeSyncStatusProvider`. The dashboard status pill MUST reflect autosync phase transitions without any additional dashboard code changes.
+
+(Previously: `storeSyncStatusProvider` was the sole status source; autosync phase had no representation in the status pipeline.)
+
+**Scenarios**:
+
+- **Autosync enabled — adapter wins**: GIVEN autosync is started, WHEN `/sync/status` is queried, THEN the returned phase reflects the autosync Manager's current phase.
+- **Autosync disabled — store fallback**: GIVEN `ENGRAM_CLOUD_AUTOSYNC` is not set, WHEN `/sync/status` is queried, THEN the result comes from `storeSyncStatusProvider`.
+- **Phase change reflects in status immediately**: GIVEN Manager transitions from `PhaseHealthy` to `PhasePushFailed`, WHEN `adapter.Status("proj")` is called next, THEN the returned phase is `"degraded"`.
+- **Edge case — status per project**: GIVEN multiple projects enrolled, WHEN `adapter.Status("proj-A")` and `adapter.Status("proj-B")` are called, THEN both return the same autosync phase (phase is global to the Manager, not per-project).
+
+---
+
+## Test Seam Summary
+
+| REQ | Test name(s) |
+|-----|-------------|
+| REQ-200 | `TestMutationPushEndpointAccepted`, `TestMutationPushEndpointUnauth`, `TestMutationPushEndpointBatchTooLarge`, `TestMutationPushEndpointEmptyBatch` |
+| REQ-201 | `TestMutationPullEndpointSinceSeq`, `TestMutationPullEndpointHasMore`, `TestMutationPullEndpointUnauth`, `TestMutationPullEndpointBeyondLatest` |
+| REQ-202 | `TestMutationPullEnrollmentFilter`, `TestMutationPullCrossTenantLeak`, `TestMutationPullNoEnrollments`, `TestMutationPullUnenrolledSeqSkipped` |
+| REQ-203 | `TestMutationPushSyncPaused409`, `TestMutationPushNonPausedAccepted`, `TestMutationPushPausePerProject`, `TestMutationPushPauseAdminStillBlocked` |
+| REQ-204 | `TestManagerPhaseTransitions`, `TestManagerPushFailedPhase`, `TestManagerPullFailedPhase`, `TestManagerStopForUpgradeDisabled` |
+| REQ-205 | `TestManagerBackoffExponentialGrowth`, `TestManagerBackoffJitterBounds`, `TestManagerBackoffCeiling`, `TestManagerBackoffResetOnSuccess` |
+| REQ-206 | `TestManagerNotifyDirtyOneCycle`, `TestManagerNotifyDirtyCoalesce`, `TestManagerNotifyDirtyDuringBackoff`, `TestManagerNotifyDirtyAfterStop` |
+| REQ-207 | `TestManagerRunContextCancel`, `TestManagerRunPollTicker`, `TestManagerStopWaitsGoroutine`, `TestManagerRunPanicRecovery` |
+| REQ-208 | `TestManagerStopForUpgradeHaltsCycle`, `TestManagerStopForUpgradeRetainsLease`, `TestManagerResumeAfterUpgrade`, `TestManagerResumeWithoutStop` |
+| REQ-209 | `TestSyncStatusAdapterHealthy`, `TestSyncStatusAdapterBackoff`, `TestSyncStatusAdapterNilFallback`, `TestSyncStatusAdapterDisabled` |
+| REQ-210 | `TestCmdServeAutosyncLifecycleGating` (inverted), `TestAutosyncEnvAbsent`, `TestAutosyncEnvNotOne`, `TestAutosyncOptInRequired` |
+| REQ-211 | `TestAutosyncGatingTokenMissing`, `TestAutosyncGatingServerMissing`, `TestAutosyncGatingBothPresent`, `TestCmdServeStartsWithoutAutosync` |
+| REQ-212 | `TestLocalWriteDuringTransport500`, `TestGoroutineIsolationConcurrentWrites`, `TestNotifyDirtyHookNonBlocking`, `TestLocalWriteCloudUnreachable` |
+| REQ-213 | `TestManagerStopNoGoroutineLeak`, `TestManagerPanicSetsBackoff`, `TestManagerLoopContinuesAfterPanic`, `TestManagerStopBeforeRun` |
+| REQ-214 | `TestTransport404PushServerUnsupported`, `TestTransport404PullServerUnsupported`, `TestTransport404WarningLogged`, `TestTransport401AuthRequired` |
+
+--- ARQUIVOS DO PR (81)
+modified  +217   -4     DOCS.md
+modified  +123   -3     README.md
+modified  +7     -0     cmd/engram/autosync_e2e_test.go   <== código ligado à spec
+modified  +3     -0     cmd/engram/autosync_status.go   <== código ligado à spec
+added     +584   -0     cmd/engram/conflicts.go
+added     +758   -0     cmd/engram/conflicts_test.go
+added     +75    -0     cmd/engram/llm.go
+modified  +19    -0     cmd/engram/main.go
+added     +53    -0     docker-compose.beta.yml
+modified  +14    -5     docs/AGENT-SETUP.md
+modified  +1     -1     docs/ARCHITECTURE.md
+added     +302   -0     docs/BETA_TESTING.md
+modified  +129   -5     docs/PLUGINS.md
+modified  +31    -2     internal/cloud/autosync/manager.go   <== código ligado à spec
+modified  +258   -0     internal/cloud/autosync/manager_test.go   <== código ligado à spec
+modified  +80    -0     internal/cloud/cloudserver/mutations.go   <== código ligado à spec
+modified  +371   -0     internal/cloud/cloudserver/mutations_test.go   <== código ligado à spec
+added     +155   -0     internal/llm/claude.go
+added     +157   -0     internal/llm/claude_test.go
+added     +30    -0     internal/llm/cost.go
+added     +82    -0     internal/llm/cost_test.go
+added     +49    -0     internal/llm/factory.go
+added     +72    -0     internal/llm/factory_test.go
+added     +165   -0     internal/llm/opencode.go
+added     +127   -0     internal/llm/opencode_test.go
+added     +67    -0     internal/llm/prompt.go
+added     +131   -0     internal/llm/prompt_test.go
+added     +73    -0     internal/llm/runner.go
+added     +121   -0     internal/llm/runner_test.go
+modified  +173   -11    internal/mcp/mcp.go
+added     +277   -0     internal/mcp/mcp_compare_test.go
+modified  +495   -12    internal/mcp/mcp_test.go
+modified  +344   -0     internal/server/server.go
+modified  +956   -0     internal/server/server_test.go
+added     +351   -0     internal/store/judge_by_semantic_test.go
+added     +415   -0     internal/store/relation_sync_integration_test.go
+modified  +959   -42    internal/store/relations.go
+modified  +774   -0     internal/store/relations_test.go
+added     +25    -0     internal/store/runner.go
+added     +395   -0     internal/store/scan_semantic_test.go
+modified  +430   -2     internal/store/store.go
+modified  +459   -0     internal/store/store_legacy_ddl_test.go
+modified  +427   -0     internal/store/store_migration_test.go
+modified  +144   -0     internal/store/store_test.go
+added     +580   -0     internal/store/sync_apply_test.go
+added     +467   -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/design.md
+added     +80    -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/exploration.md
+added     +432   -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/proposal.md
+added     +456   -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/spec.md
+added     +199   -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/tasks.md
+added     +132   -0     openspec/changes/archive/2026-04-26-memory-conflict-surfacing-cloud-sync/verify-report.md
+added     +824   -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/design.md
+added     +61    -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/exploration.md
+added     +148   -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/proposal.md
+added     +399   -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/spec.md
+added     +91    -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/tasks.md
+added     +160   -0     openspec/changes/archive/2026-04-27-memory-conflict-audit/verify-report.md
+added     +175   -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/design.md
+added     +50    -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/exploration.md
+added     +214   -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/proposal.md
+added     +329   -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/spec.md
+added     +83    -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/tasks.md
+added     +132   -0     openspec/changes/archive/2026-04-27-memory-conflict-semantic/verify-report.md
+added     +824   -0     openspec/changes/memory-conflict-audit/design.md
+added     +61    -0     openspec/changes/memory-conflict-audit/exploration.md
+added     +148   -0     openspec/changes/memory-conflict-audit/proposal.md
+added     +399   -0     openspec/changes/memory-conflict-audit/spec.md
+added     +91    -0     openspec/changes/memory-conflict-audit/tasks.md
+added     +160   -0     openspec/changes/memory-conflict-audit/verify-report.md
+added     +257   -0     openspec/changes/memory-conflict-semantic/design.md
+added     +50    -0     openspec/changes/memory-conflict-semantic/exploration.md
+added     +214   -0     openspec/changes/memory-conflict-semantic/proposal.md
+added     +329   -0     openspec/changes/memory-conflict-semantic/spec.md
+added     +96    -0     openspec/changes/memory-conflict-semantic/tasks.md
+added     +177   -0     openspec/changes/memory-conflict-semantic/verify-report.md
+added     +467   -0     openspec/changes/memory-conflict-surfacing-cloud-sync/design.md
+added     +0     -0     openspec/changes/memory-conflict-surfacing-cloud-sync/exploration.md
+added     +0     -0     openspec/changes/memory-conflict-surfacing-cloud-sync/proposal.md
+added     +0     -0     openspec/changes/memory-conflict-surfacing-cloud-sync/spec.md
+added     +0     -0     openspec/changes/memory-conflict-surfacing-cloud-sync/tasks.md
+added     +0     -0     openspec/changes/memory-conflict-surfacing-cloud-sync/verify-report.md
+--- DIFF DO CÓDIGO LIGADO
+### cmd/engram/autosync_e2e_test.go
+@@ -342,6 +342,13 @@ func (s *autosyncFakeStore) MarkSyncBlocked(_, _, _ string) error { return nil }
+ 
+ func (s *autosyncFakeStore) MarkSyncHealthy(_ string) error { return nil }
+ 
++// Phase E: deferred replay stubs — no-ops for the E2E fake store.
++func (s *autosyncFakeStore) ReplayDeferred() (store.ReplayDeferredResult, error) {
++	return store.ReplayDeferredResult{}, nil
++}
++
++func (s *autosyncFakeStore) CountDeferredAndDead() (int, int, error) { return 0, 0, nil }
++
+ // httpPushMutations is a helper to push mutations directly to a test server.
+ func httpPushMutations(t *testing.T, serverURL, token string, entries []map[string]any) *http.Response {
+ 	t.Helper()
+
+### cmd/engram/autosync_status.go
+@@ -60,6 +60,9 @@ func (a *autosyncStatusAdapter) mapPhase(st autosync.Status) server.SyncStatus {
+ 		ConsecutiveFailures: st.ConsecutiveFailures,
+ 		BackoffUntil:        st.BackoffUntil,
+ 		LastSyncAt:          st.LastSyncAt,
++		// Phase E: propagate deferred/dead counts from autosync.Status.
++		DeferredCount: st.DeferredCount,
++		DeadCount:     st.DeadCount,
+ 	}
+ 
+ 	switch st.Phase {
+
+### internal/cloud/autosync/manager.go
+@@ -88,6 +88,9 @@ type LocalStore interface {
+ 	MarkSyncFailure(targetKey, message string, backoffUntil time.Time) error
+ 	MarkSyncBlocked(targetKey, reasonCode, message string) error
+ 	MarkSyncHealthy(targetKey string) error
++	// Phase E: deferred relation retry.
++	ReplayDeferred() (store.ReplayDeferredResult, error)
++	CountDeferredAndDead() (deferred, dead int, err error)
+ }
+ 
+ type nonEnrolledPendingError struct {
+@@ -155,6 +158,9 @@ type Status struct {
+ 	LastSyncAt          *time.Time `json:"last_sync_at,omitempty"`
+ 	ReasonCode          string     `json:"reason_code,omitempty"`
+ 	ReasonMessage       string     `json:"reason_message,omitempty"`
++	// Phase E: deferred relation retry counts from sync_apply_deferred.
++	DeferredCount int `json:"deferred_count"`
++	DeadCount     int `json:"dead_count"`
+ }
+ 
+ // ─── Manager ─────────────────────────────────────────────────────────────────
+@@ -224,10 +230,18 @@ func (m *Manager) NotifyDirty() {
+ }
+ 
+ // Status returns the current degraded-state snapshot. Thread-safe.
++// Includes live counts of deferred and dead rows from sync_apply_deferred.
+ func (m *Manager) Status() Status {
+ 	m.mu.RLock()
+-	defer m.mu.RUnlock()
+-	return m.status
++	st := m.status
++	m.mu.RUnlock()
++
++	// Phase E: populate deferred/dead counts from store (live query, best-effort).
++	if deferred, dead, err := m.store.CountDeferredAndDead(); err == nil {
++		st.DeferredCount = deferred
++		st.DeadCount = dead
++	}
++	return st
+ }
+ 
+ // Stop cancels the internal context and waits for all goroutines to exit.
+@@ -529,6 +543,17 @@ func (m *Manager) pull(ctx context.Context) error {
+ 
+ 	m.setPhase(PhasePulling)
+ 
++	// Phase E: replay deferred relation rows before fetching new mutations.
++	// This gives previously-deferred rows a chance to apply now that their
++	// referenced observations may have arrived.
++	if res, err := m.store.ReplayDeferred(); err != nil {
++		log.Printf("[autosync] replayDeferred error: %v", err)
++		// Non-fatal: log and continue — deferred replay failures must not halt pulls.
++	} else if res.Retried > 0 {
++		log.Printf("[autosync] replayDeferred: retried=%d succeeded=%d failed=%d dead=%d",
++			res.Retried, res.Succeeded, res.Failed, res.Dead)
++	}
++
+ 	state, err := m.store.GetSyncState(m.cfg.TargetKey)
+ 	if err != nil {
+ 		return fmt.Errorf("get sync state: %w", err)
+@@ -557,6 +582,10 @@ func (m *Manager) pull(ctx context.Context) error {
+ 				Source:     store.SyncSourceRemote,
+ 				OccurredAt: rm.OccurredAt,
+ 			}
++			// Phase E: per-entity error policy (design §9).
++			// ApplyPulledMutation handles relation FK misses internally by writing
++			// to sync_apply_deferred and returning nil — the cursor advances normally.
++			// All other errors (legacy entities, decode errors) propagate and halt the pull.
+ 			if err := m.store.ApplyPulledMutation(m.cfg.TargetKey, localMut); err != nil {
+ 				return fmt.Errorf("apply pulled mutation seq=%d: %w", rm.Seq, err)
+ 			}
+
+### internal/cloud/autosync/manager_test.go
+@@ -126,6 +126,14 @@ func (s *fakeLocalStore) MarkSyncBlocked(_, reasonCode, message string) error {
+ 
+ func (s *fakeLocalStore) MarkSyncHealthy(_ string) error { return nil }
+ 
++// Phase E: deferred replay stubs — base fakeLocalStore always returns zero counts
++// and no error. Tests that need real replay behavior use fakeLocalStoreWithDeferred.
++func (s *fakeLocalStore) ReplayDeferred() (store.ReplayDeferredResult, error) {
++	return store.ReplayDeferredResult{}, nil
++}
++
++func (s *fakeLocalStore) CountDeferredAndDead() (int, int, error) { return 0, 0, nil }
++
+ // ─── Fake Transport ───────────────────────────────────────────────────────────
+ 
+ type fakeCloudTransport struct {
+@@ -1063,6 +1071,256 @@ func (t *errTransport) PullMutations(_ int64, _ int) (*PullMutationsResponse, er
+ 	return &PullMutationsResponse{Mutations: []PulledMutation{}}, nil
+ }
+ 
++// ─── Phase E: Autosync resilience tests (REQ-007, REQ-008) ──────────────────
++
++// E.1a — ReplayDeferred_RetriesAndApplies:
++// A deferred row exists; when the missing observation arrives and
++// replayDeferred is called, the row is applied and removed from
++// sync_apply_deferred.
++func TestReplayDeferred_RetriesAndApplies(t *testing.T) {
++	ls := &fakeLocalStoreWithDeferred{fakeLocalStore: *newFakeLocalStore()}
++	tr := newFakeTransport()
++	cfg := DefaultConfig()
++	cfg.DebounceDuration = 10 * time.Millisecond
++	cfg.PollInterval = 10 * time.Millisecond
++
++	// Pre-load a deferred row.
++	ls.mu.Lock()
++	ls.deferredRows = []DeferredRow{{
++		SyncID:      "rel-1",
++		Entity:      "relation",
++		Payload:     `{"sync_id":"rel-1"}`,
++		RetryCount:  0,
++		ApplyStatus: "deferred",
++	}}
++	ls.mu.Unlock()
++
++	// ReplayDeferred must be called by pull; simulate it resolving successfully.
++	mgr := New(ls, tr, cfg)
++	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
++	defer cancel()
++	go mgr.Run(ctx)
++
++	deadline := time.Now().Add(400 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		ls.mu.Lock()
++		called := ls.replayDeferredCalled
++		ls.mu.Unlock()
++		if called {
++			return
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	t.Fatal("ReplayDeferred was not called during pull cycle")
++}
++
++// E.1b — ReplayDeferred_DeadAfterFiveRetries:
++// A row at retry_count=4 with dep still missing → after replayDeferred
++// the row must have apply_status='dead'.
++func TestReplayDeferred_DeadAfterFiveRetries(t *testing.T) {
++	ls := &fakeLocalStoreWithDeferred{fakeLocalStore: *newFakeLocalStore()}
++	tr := newFakeTransport()
++	cfg := DefaultConfig()
++	cfg.DebounceDuration = 10 * time.Millisecond
++	cfg.PollInterval = 10 * time.Millisecond
++
++	ls.mu.Lock()
++	ls.deferredRows = []DeferredRow{{
++		SyncID:      "rel-dead",
++		Entity:      "relation",
++		Payload:     `{"sync_id":"rel-dead"}`,
++		RetryCount:  4,
++		ApplyStatus: "deferred",
++	}}
++	// Always return FK-missing for this deferred row.
++	ls.replayErr = store.ErrRelationFKMissing
++	ls.mu.Unlock()
++
++	mgr := New(ls, tr, cfg)
++	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
++	defer cancel()
++	go mgr.Run(ctx)
++
++	deadline := time.Now().Add(400 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		ls.mu.Lock()
++		called := ls.replayDeferredCalled
++		ls.mu.Unlock()
++		if called {
++			// Verify dead count incremented.
++			ls.mu.Lock()
++			deadCalled := ls.markDeadCalled
++			ls.mu.Unlock()
++			if !deadCalled {
++				t.Fatal("MarkApplyDead not called after retry_count reached 5")
++			}
++			return
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	t.Fatal("ReplayDeferred was not called during pull cycle")
++}
++
++// E.1c — ReplayDeferred_DeadRowNotRetried:
++// A dead row must NOT be retried by replayDeferred.
++func TestReplayDeferred_DeadRowNotRetried(t *testing.T) {
++	ls := &fakeLocalStoreWithDeferred{fakeLocalStore: *newFakeLocalStore()}
++	tr := newFakeTransport()
++	cfg := DefaultConfig()
++	cfg.DebounceDuration = 10 * time.Millisecond
++	cfg.PollInterval = 10 * time.Millisecond
++
++	// Dead row — should not be picked up.
++	ls.mu.Lock()
++	ls.deferredRows = []DeferredRow{{
++		SyncID:      "rel-already-dead",
++		Entity:      "relation",
++		Payload:     `{"sync_id":"rel-already-dead"}`,
++		RetryCount:  5,
++		ApplyStatus: "dead",
++	}}
++	ls.mu.Unlock()
++
++	mgr := New(ls, tr, cfg)
++	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
++	defer cancel()
++	go mgr.Run(ctx)
++
++	deadline := time.Now().Add(400 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		ls.mu.Lock()
++		called := ls.replayDeferredCalled
++		ls.mu.Unlock()
++		if called {
++			// Dead row must never have been applied.
++			ls.mu.Lock()
++			appliedCount := len(ls.appliedMuts)
++			ls.mu.Unlock()
++			if appliedCount != 0 {
++				t.Fatalf("dead row should never be applied; got %d applied mutations", appliedCount)
++			}
++			return
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	t.Fatal("ReplayDeferred was not called during pull cycle")
++}
++
++// E.1d — Pull_LegacyEntityNonFKError_StillHalts (REQ-008):
++// A legacy entity (observation) apply error must halt the pull loop;
++// cursor must not advance.
++func TestPull_LegacyEntityNonFKError_StillHalts(t *testing.T) {
++	ls := &fakeLocalStoreWithDeferred{fakeLocalStore: *newFakeLocalStore()}
++	tr := newFakeTransport()
++
++	// Inject a pulled legacy mutation.
++	tr.mu.Lock()
++	tr.pullResult = &PullMutationsResponse{
++		Mutations: []PulledMutation{{
++			Seq:    10,
++			Entity: "observation",
++			Op:     "upsert",
++			Payload: []byte(`{"sync_id":"obs-fail","title":"test"}`),
++		}},
++		HasMore: false,
++	}
++	tr.mu.Unlock()
++
++	// Legacy apply error (non-FK) must halt.
++	ls.mu.Lock()
++	ls.pullErr = errors.New("legacy apply error (non-FK)")
++	ls.mu.Unlock()
++
++	cfg := DefaultConfig()
++	cfg.DebounceDuration = 10 * time.Millisecond
++	cfg.PollInterval = 10 * time.Millisecond
++
++	mgr := New(ls, tr, cfg)
++	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
++	defer cancel()
++	go mgr.Run(ctx)
++
++	deadline := time.Now().Add(400 * time.Millisecond)
++	for time.Now().Before(deadline) {
++		st := mgr.Status()
++		if st.Phase == PhasePullFailed {
++			// Confirm cursor did not advance (SyncState.LastPulledSeq must be 0).
++			ls.mu.Lock()
++			cursorSeq := ls.syncState.LastPulledSeq
++			ls.mu.Unlock()
++			if cursorSeq != 0 {
++				t.Fatalf("cursor advanced to %d despite legacy pull error; expected 0", cursorSeq)
++			}
++			return
++		}
++		time.Sleep(5 * time.Millisecond)
++	}
++	t.Fatalf("expected PhasePullFailed for legacy non-FK error, got %q", mgr.Status().Phase)
++}
++
++// ─── DeferredRow type for fake store ─────────────────────────────────────────
++
++// DeferredRow is a minimal representation of a sync_apply_deferred row used in tests.
++type DeferredRow struct {
++	SyncID      string
++	Entity      string
++	Payload     string
++	RetryCount  int
++	ApplyStatus string
++}
++
++// fakeLocalStoreWithDeferred extends fakeLocalStore with replay support.
++type fakeLocalStoreWithDeferred struct {
++	fakeLocalStore
++	deferredRows        []DeferredRow
++	replayDeferredCalled bool
++	markDeadCalled       bool
++	replayErr           error
++}
++
++func (s *fakeLocalStoreWithDeferred) ReplayDeferred() (store.ReplayDeferredResult, error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.replayDeferredCalled = true
++
++	var res store.ReplayDeferredResult
++	for i := range s.deferredRows {
++		row := &s.deferredRows[i]
++		if row.ApplyStatus == "dead" {
++			continue // Dead rows must not be retried.
++		}
++		res.Retried++
++		if s.replayErr != nil {
++			row.RetryCount++
++			if row.RetryCount >= 5 {
++				row.ApplyStatus = "dead"
++				s.markDeadCalled = true
++				res.Dead++
++			} else {
++				res.Failed++
++			}
++		} else {
++			row.ApplyStatus = "applied"
++			res.Succeeded++
++		}
++	}
++	return res, nil
++}
++
++func (s *fakeLocalStoreWithDeferred) CountDeferredAndDead() (deferred, dead int, err error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	for _, row := range s.deferredRows {
++		switch row.ApplyStatus {
++		case "deferred":
++			deferred++
++		case "dead":
++			dead++
++		}
++	}
++	return deferred, dead, nil
++}
++
+ // ─── Helper types ─────────────────────────────────────────────────────────────
+ 
+ type panicOnceTransport struct {
+
+### internal/cloud/cloudserver/mutations.go
+@@ -169,6 +169,29 @@ func (s *CloudServer) handleMutationPush(w http.ResponseWriter, r *http.Request)
+ 		}
+ 	}
+ 
++	// REQ-006 / REQ-008: Validate each entry's payload before storage.
++	// Relation entries are strictly validated (all 6 required fields).
++	// Legacy entities (session, observation, prompt) use the lenient floor only.
++	// Any failure rejects the ENTIRE batch (atomic — no partial inserts).
++	var invalid []map[string]any
++	for i, entry := range req.Entries {
++		if field, ok := validateMutationEntry(entry); !ok {
++			invalid = append(invalid, map[string]any{
++				"index":  i,
++				"field":  field,
++				"entity": entry.Entity,
++			})
++		}
++	}
++	if len(invalid) > 0 {
++		jsonResponse(w, http.StatusBadRequest, map[string]any{
++			"error":       "invalid relation payload",
++			"reason_code": "validation_error",
++			"invalid":     invalid,
++		})
++		return
++	}
++
+ 	acceptedSeqs, err := ms.InsertMutationBatch(r.Context(), req.Entries)
+ 	if err != nil {
+ 		http.Error(w, fmt.Sprintf("insert mutations: %v", err), http.StatusInternalServerError)
+@@ -264,6 +287,63 @@ func (s *CloudServer) handleMutationPull(w http.ResponseWriter, r *http.Request)
+ 	})
+ }
+ 
++// ─── REQ-006 / REQ-008: Per-entity payload validation ────────────────────────
++
++// relationRequiredFields lists the 6 fields that MUST be present and non-empty
++// in every relation mutation payload (REQ-006). This list is the stable
++// validation contract — Phase 3 MUST NOT remove or rename these fields without
++// a wire-format version bump.
++var relationRequiredFields = []string{
++	"sync_id",
++	"source_id",
++	"target_id",
++	"judgment_status",
++	"marked_by_actor",
++	"marked_by_kind",
++}
++
++// validateRelationPayload checks that all 6 required relation fields are present
++// and non-empty in the decoded payload map.
++// Returns (missingField, false) when any required field is absent or empty,
++// or ("", true) when all required fields are present.
++func validateRelationPayload(payload json.RawMessage) (string, bool) {
++	var fields map[string]any
++	if err := json.Unmarshal(payload, &fields); err != nil {
++		// Malformed JSON: treat sync_id as missing (first required field).
++		return "sync_id", false
++	}
++	for _, field := range relationRequiredFields {
++		v, ok := fields[field]
++		if !ok {
++			return field, false
++		}
++		s, isStr := v.(string)
++		if !isStr || strings.TrimSpace(s) == "" {
++			return field, false
++		}
++	}
++	return "", true
++}
++
++// validateLegacyPayload is a no-op for legacy entities (session, observation,
++// prompt). REQ-008: these entities have no new required payload fields — their
++// push/pull behavior is UNCHANGED from before Phase 2. Any tightening of legacy
++// payload validation is a breaking change and must not be done here.
++func validateLegacyPayload(_ string, _ json.RawMessage) (string, bool) {
++	return "", true
++}
++
++// validateMutationEntry dispatches to the correct validator for the entry's
++// entity type. Returns (missingField, false) on validation failure.
++func validateMutationEntry(entry MutationEntry) (string, bool) {
++	switch entry.Entity {
++	case "relation":
++		return validateRelationPayload(entry.Payload)
++	default:
++		return validateLegacyPayload(entry.Entity, entry.Payload)
++	}
++}
++
+ // ─── Cloudstore mutation queries ──────────────────────────────────────────────
+ // These are implemented directly on CloudStore in cloudstore/cloudstore.go.
+ // The migration adds a cloud_mutations table. See AddMutationMigrations().
+
+### internal/cloud/cloudserver/mutations_test.go
+@@ -1013,6 +1013,244 @@ func (a *simpleProjectAuth) AuthorizeProject(_ string) error {
+ 	return nil // allow all projects for this auth
+ }
+ 
++// ─── REQ-006, REQ-008: Relation payload validation tests (Phase D) ───────────
++
++// TestHandleMutationPush_ValidRelation_Returns200 (D.1a) verifies REQ-006 happy
++// path: a complete relation payload with all 6 required fields returns HTTP 200.
++func TestHandleMutationPush_ValidRelation_Returns200(t *testing.T) {
++	ms := newFakeMutationStore()
++	srv := newMutationTestServer(ms, "secret", []string{"proj-a"})
++
++	payload := json.RawMessage(`{
++		"sync_id":         "rel-001",
++		"source_id":       "obs-src-001",
++		"target_id":       "obs-tgt-001",
++		"judgment_status": "judged",
++		"marked_by_actor": "alice",
++		"marked_by_kind":  "human",
++		"relation":        "conflicts_with",
++		"project":         "proj-a"
++	}`)
++	entries := []MutationEntry{
++		{Project: "proj-a", Entity: "relation", EntityKey: "rel-001", Op: "upsert", Payload: payload},
++	}
++	body := marshalPushRequest(t, entries)
++
++	rec := httptest.NewRecorder()
++	req := httptest.NewRequest(http.MethodPost, "/sync/mutations/push", body)
++	req.Header.Set("Authorization", "Bearer secret")
++	req.Header.Set("Content-Type", "application/json")
++	srv.Handler().ServeHTTP(rec, req)
++
++	if rec.Code != http.StatusOK {
++		t.Fatalf("D.1a: expected 200 for valid relation, got %d body=%q", rec.Code, rec.Body.String())
++	}
++	if len(ms.mutations) != 1 {
++		t.Fatalf("D.1a: expected 1 mutation stored, got %d", len(ms.mutations))
++	}
++}
++
++// TestHandleMutationPush_RelationMissingEachRequiredField (D.1b) verifies
++// REQ-006 negative: each required field individually absent returns HTTP 400
++// with the correct field name in the response body.
++func TestHandleMutationPush_RelationMissingEachRequiredField(t *testing.T) {
++	requiredFields := []struct {
++		name    string
++		payload json.RawMessage
++	}{
++		{
++			name: "sync_id",
++			payload: json.RawMessage(`{
++				"source_id":       "obs-src",
++				"target_id":       "obs-tgt",
++				"judgment_status": "judged",
++				"marked_by_actor": "alice",
++				"marked_by_kind":  "human"
++			}`),
++		},
++		{
++			name: "source_id",
++			payload: json.RawMessage(`{
++				"sync_id":         "rel-001",
++				"target_id":       "obs-tgt",
++				"judgment_status": "judged",
++				"marked_by_actor": "alice",
++				"marked_by_kind":  "human"
++			}`),
++		},
++		{
++			name: "target_id",
++			payload: json.RawMessage(`{
++				"sync_id":         "rel-001",
++				"source_id":       "obs-src",
++				"judgment_status": "judged",
++				"marked_by_actor": "alice",
++				"marked_by_kind":  "human"
++			}`),
++		},
++		{
++			name: "judgment_status",
++			payload: json.RawMessage(`{
++				"sync_id":         "rel-001",
++				"source_id":       "obs-src",
++				"target_id":       "obs-tgt",
++				"marked_by_actor": "alice",
++				"marked_by_kind":  "human"
++			}`),
++		},
++		{
++			name: "marked_by_actor",
++			payload: json.RawMessage(`{
++				"sync_id":         "rel-001",
++				"source_id":       "obs-src",
++				"target_id":       "obs-tgt",
++				"judgment_status": "judged",
++				"marked_by_kind":  "human"
++			}`),
++		},
++		{
++			name: "marked_by_kind",
++			payload: json.RawMessage(`{
++				"sync_id":         "rel-001",
++				"source_id":       "obs-src",
++				"target_id":       "obs-tgt",
++				"judgment_status": "judged",
++				"marked_by_actor": "alice"
++			}`),
++		},
++	}
++
++	for _, tc := range requiredFields {
++		t.Run("missing_"+tc.name, func(t *testing.T) {
++			ms := newFakeMutationStore()
++			srv := newMutationTestServer(ms, "secret", []string{"proj-a"})
++
++			entries := []MutationEntry{
++				{Project: "proj-a", Entity: "relation", EntityKey: "rel-001", Op: "upsert", Payload: tc.payload},
++			}
++			body := marshalPushRequest(t, entries)
++
++			rec := httptest.NewRecorder()
++			req := httptest.NewRequest(http.MethodPost, "/sync/mutations/push", body)
++			req.Header.Set("Authorization", "Bearer secret")
++			req.Header.Set("Content-Type", "application/json")
++			srv.Handler().ServeHTTP(rec, req)
++
++			if rec.Code != http.StatusBadRequest {
++				t.Fatalf("D.1b missing %q: expected 400, got %d body=%q", tc.name, rec.Code, rec.Body.String())
++			}
++			// Verify no entry was stored (atomic batch)
++			if len(ms.mutations) != 0 {
++				t.Fatalf("D.1b missing %q: expected 0 mutations stored, got %d", tc.name, len(ms.mutations))
++			}
++			// Verify the missing field name appears in the response
++			var resp struct {
++				Error   string       `json:"error"`
++				Invalid []struct {
++					Field  string `json:"field"`
++					Index  int    `json:"index"`
++					Entity string `json:"entity"`
++				} `json:"invalid"`
++			}
++			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
++				t.Fatalf("D.1b missing %q: decode 400 body: %v; body=%q", tc.name, err, rec.Body.String())
++			}
++			if len(resp.Invalid) == 0 {
++				t.Fatalf("D.1b missing %q: expected invalid list in 400 body, got none; body=%q", tc.name, rec.Body.String())
++			}
++			if resp.Invalid[0].Field != tc.name {
++				t.Errorf("D.1b missing %q: expected field=%q in invalid[0], got %q", tc.name, tc.name, resp.Invalid[0].Field)
++			}
++		})
++	}
++}
++
++// TestHandleMutationPush_PartialBatch_Atomic (D.1c) verifies REQ-006 edge case:
++// a 2-entry batch with one valid and one invalid relation → 400, neither stored.
++func TestHandleMutationPush_PartialBatch_Atomic(t *testing.T) {
++	ms := newFakeMutationStore()
++	srv := newMutationTestServer(ms, "secret", []string{"proj-a"})
++
++	validPayload := json.RawMessage(`{
++		"sync_id":         "rel-001",
++		"source_id":       "obs-src-001",
++		"target_id":       "obs-tgt-001",
++		"judgment_status": "judged",
++		"marked_by_actor": "alice",
++		"marked_by_kind":  "human"
++	}`)
++	// Invalid: missing target_id
++	invalidPayload := json.RawMessage(`{
++		"sync_id":         "rel-002",
++		"source_id":       "obs-src-002",
++		"judgment_status": "judged",
++		"marked_by_actor": "bob",
++		"marked_by_kind":  "human"
++	}`)
++	entries := []MutationEntry{
++		{Project: "proj-a", Entity: "relation", EntityKey: "rel-001", Op: "upsert", Payload: validPayload},
++		{Project: "proj-a", Entity: "relation", EntityKey: "rel-002", Op: "upsert", Payload: invalidPayload},
++	}
++	body := marshalPushRequest(t, entries)
++
++	rec := httptest.NewRecorder()
++	req := httptest.NewRequest(http.MethodPost, "/sync/mutations/push", body)
++	req.Header.Set("Authorization", "Bearer secret")
++	req.Header.Set("Content-Type", "application/json")
++	srv.Handler().ServeHTTP(rec, req)
++
++	if rec.Code != http.StatusBadRequest {
++		t.Fatalf("D.1c: expected 400 for partial-batch with invalid entry, got %d body=%q", rec.Code, rec.Body.String())
++	}
++	// Atomic rejection: neither entry stored
++	if len(ms.mutations) != 0 {
++		t.Fatalf("D.1c: expected 0 mutations stored (atomic batch rejection), got %d", len(ms.mutations))
++	}
++	// Response must include the offending index (1)
++	var resp struct {
++		Invalid []struct {
++			Index int `json:"index"`
++		} `json:"invalid"`
++	}
++	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
++		t.Fatalf("D.1c: decode 400 body: %v", err)
++	}
++	if len(resp.Invalid) == 0 {
++		t.Fatalf("D.1c: expected invalid list in response, got none")
++	}
++	if resp.Invalid[0].Index != 1 {
++		t.Errorf("D.1c: expected offending index=1, got %d", resp.Invalid[0].Index)
++	}
++}
++
++// TestHandleMutationPush_LegacyObsMissingOptional_Returns200 (D.1d) verifies
++// REQ-008: legacy observation entity with only sync_id in payload → HTTP 200.
++// No new required fields for legacy entities — backwards compatibility preserved.
++func TestHandleMutationPush_LegacyObsMissingOptional_Returns200(t *testing.T) {
++	ms := newFakeMutationStore()
++	srv := newMutationTestServer(ms, "secret", []string{"proj-a"})
++
++	// Minimal observation payload: only sync_id, no optional fields
++	minimalPayload := json.RawMessage(`{"sync_id":"obs-001","title":"My observation"}`)
++	entries := []MutationEntry{
++		{Project: "proj-a", Entity: "observation", EntityKey: "obs-001", Op: "upsert", Payload: minimalPayload},
++	}
++	body := marshalPushRequest(t, entries)
++
++	rec := httptest.NewRecorder()
++	req := httptest.NewRequest(http.MethodPost, "/sync/mutations/push", body)
++	req.Header.Set("Authorization", "Bearer secret")
++	req.Header.Set("Content-Type", "application/json")
++	srv.Handler().ServeHTTP(rec, req)
++
++	if rec.Code != http.StatusOK {
++		t.Fatalf("D.1d: expected 200 for legacy obs with minimal payload, got %d body=%q", rec.Code, rec.Body.String())
++	}
++	if len(ms.mutations) != 1 {
++		t.Fatalf("D.1d: expected 1 mutation stored, got %d", len(ms.mutations))
++	}
++}
++
+ // ─── Helpers ─────────────────────────────────────────────────────────────────
+ 
+ func newMutationTestServer(ms *fakeMutationStore, token string, projects []string) *CloudServer {
+@@ -1323,3 +1561,136 @@ func TestMutationPullResponseEnvelopeHasProjectFields(t *testing.T) {
+ 		t.Error("project_path field must be present in pull response JSON")
+ 	}
+ }
++
++// ─── Phase G — Integration tests (G.4, G.5): server validation + backwards compat ──
++
++// TestRelationSync_ServerValidation_MissingField (G.4) verifies REQ-006:
++// Push a relation payload missing `judgment_status` → 400 with `missing` listing
++// the field. Push a valid relation immediately after → 200.
++func TestRelationSync_ServerValidation_MissingField(t *testing.T) {
++	ms := newFakeMutationStore()
++	srv := newMutationTestServer(ms, "secret", []string{"proj-g4"})
++
++	// Push 1: missing judgment_status → must return 400.
++	invalidPayload := json.RawMessage(`{
++		"sync_id":         "rel-g4-001",
++		"source_id":       "obs-src-g4",
++		"target_id":       "obs-tgt-g4",
++		"marked_by_actor": "agent:test",
++		"marked_by_kind":  "agent"
++	}`)
++	entries := []MutationEntry{
++		{Project: "proj-g4", Entity: "relation", EntityKey: "rel-g4-001", Op: "upsert", Payload: invalidPayload},
++	}
++	body := marshalPushRequest(t, entries)
++
++	rec := httptest.NewRecorder()
++	req := httptest.NewRequest(http.MethodPost, "/sync/mutations/push", body)
++	req.Header.Set("Authorization", "Bearer secret")
++	req.Header.Set("Content-Type", "application/json")
++	srv.Handler().ServeHTTP(rec, req)
++
++	if rec.Code != http.StatusBadRequest {
++		t.Fatalf("G.4: expected 400 for missing judgment_status, got %d body=%q", rec.Code, rec.Body.String())
++	}
++
++	// Verify the missing field name appears in the response body.
++	var errResp struct {
++		Invalid []struct {
++			Field string `json:"field"`
++		} `json:"invalid"`
++	}
++	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
++		t.Fatalf("G.4: decode 400 body: %v", err)
++	}
++	if len(errResp.Invalid) == 0 {
++		t.Fatal("G.4: expected non-empty 'invalid' list in 400 response")
++	}
++	if errResp.Invalid[0].Field != "judgment_status" {
++		t.Errorf("G.4: expected field='judgment_status' in invalid[0], got %q", errResp.Invalid[0].Field)
++	}
++
++	// Verify nothing was stored.
++	if len(ms.mutations) != 0 {
+
+===== P065 | repo travishathaway/osmprj | PR #8: Add limit to concurrent downloads, implement processing pipeline | capacidade: project-config
+--- SPEC VIVA
+### Requirement: ProjectConfig represents the full osmprj.toml schema
+The system SHALL provide a `ProjectConfig` struct in `src/config.rs` that deserializes a complete `osmprj.toml` file, including top-level fields and all `[sources.*]` sections.
+
+#### Scenario: Full config round-trip
+- **WHEN** `osmprj.toml` contains `database_url`, multiple `[sources.*]` blocks each with `theme` and optional `schema`, and a `[sources.*.topics]` sub-table
+- **THEN** `ProjectConfig::load()` deserializes all fields without error and all values are accessible on the resulting struct
+
+#### Scenario: Empty file loads with defaults
+- **WHEN** `osmprj.toml` exists but contains no keys
+- **THEN** `ProjectConfig::load()` returns a config with `database_url = None` and an empty sources map
+
+### Requirement: SourceConfig models a single data source
+The system SHALL provide a `SourceConfig` struct with fields: `path: Option<String>`, `theme: Option<String>`, `schema: Option<String>`, and `topics: Option<TopicsConfig>`.
+
+#### Scenario: Geofabrik source (no path)
+- **WHEN** a source block has `theme = "shortbread_v1"` and no `path` key
+- **THEN** `source.path` is `None` and `source.theme` is `Some("shortbread_v1")`
+
+#### Scenario: Local file source (with path)
+- **WHEN** a source block has `path = "/data/file.osm.pbf"` and `theme = "basic"`
+- **THEN** `source.path` is `Some("/data/file.osm.pbf")` and `source.theme` is `Some("basic")`
+
+### Requirement: TopicsConfig models topic customization
+The system SHALL provide a `TopicsConfig` struct with fields: `list: Option<Vec<String>>`, `add: Option<Vec<String>>`, `remove: Option<Vec<String>>`.
+
+#### Scenario: Theme override with add and remove
+- **WHEN** a `[sources.x.topics]` block contains `add = ["basic/generic-points"]` and `remove = ["shortbread_v1/aerialways"]`
+- **THEN** `topics.add` and `topics.remove` contain the respective lists and `topics.list` is `None`
+
+#### Scenario: Explicit topic list
+- **WHEN** a `[sources.x.topics]` block contains only a `list` array
+- **THEN** `topics.list` contains the array and `topics.add` and `topics.remove` are both `None`
+
+### Requirement: Schema name normalization
+The system SHALL compute a default schema name from the source name by replacing all `/` and `-` characters with `_` when the `schema` field is not explicitly set.
+
+#### Scenario: Geofabrik ID with slash
+- **WHEN** a source is named `europe/germany` and has no explicit `schema`
+- **THEN** the effective schema name is `europe_germany`
+
+#### Scenario: Hyphenated source name
+- **WHEN** a source is named `north-america` and has no explicit `schema`
+- **THEN** the effective schema name is `north_america`
+
+#### Scenario: Explicit schema overrides normalization
+- **WHEN** a source named `europe/germany` has `schema = "de"`
+- **THEN** the effective schema name is `de`
+
+--- ARQUIVOS DO PR (40)
+modified  +1     -0     .gitignore
+modified  +19    -4     README.md
+modified  +2     -2     docs/docs/intro.md
+modified  +39    -0     docs/src/pages/index.tsx
+added     +2     -0     openspec/changes/archive/2026-05-09-local-test-http-server/.openspec.yaml
+added     +129   -0     openspec/changes/archive/2026-05-09-local-test-http-server/design.md
+added     +38    -0     openspec/changes/archive/2026-05-09-local-test-http-server/proposal.md
+added     +20    -0     openspec/changes/archive/2026-05-09-local-test-http-server/specs/sync-command/spec.md
+added     +139   -0     openspec/changes/archive/2026-05-09-local-test-http-server/specs/test-http-server/spec.md
+added     +54    -0     openspec/changes/archive/2026-05-09-local-test-http-server/tasks.md
+added     +2     -0     openspec/changes/pipelined-sync-with-concurrency-controls/.openspec.yaml
+added     +108   -0     openspec/changes/pipelined-sync-with-concurrency-controls/design.md
+added     +34    -0     openspec/changes/pipelined-sync-with-concurrency-controls/proposal.md
+added     +16    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/osm2pgsql-tuner/spec.md
+added     +56    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/pipelined-sync/spec.md
+added     +59    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/sync-command/spec.md
+added     +45    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/sync-concurrency-controls/spec.md
+added     +75    -0     openspec/changes/pipelined-sync-with-concurrency-controls/tasks.md
+modified  +71    -0     openspec/specs/sync-command/spec.md
+added     +137   -0     openspec/specs/test-http-server/spec.md
+modified  +3758  -2169  pixi.lock
+modified  +1     -1     pixi.toml
+modified  +5     -5     scripts/osmprj.asciinema.sh
+modified  +5     -1     src/commands/init.rs   <== código ligado à spec
+modified  +623   -250   src/commands/sync.rs   <== código ligado à spec
+modified  +109   -1     src/config.rs
+modified  +4     -0     src/error.rs
+modified  +12    -3     src/main.rs
+modified  +8     -0     src/output.rs
+modified  +63    -4     src/tuner.rs   <== código ligado à spec
+added     +25    -0     tests/integration/_platform.py
+modified  +289   -0     tests/integration/conftest.py
+modified  +0     -30    tests/integration/test_remove.py
+modified  +21    -16    tests/integration/test_sync_e2e.py
+added     +163   -0     tests/integration/test_sync_errors.py
+modified  +3     -1     tests/integration/test_themes_e2e.py
+renamed   +0     -0     tests/integration/test_themes_list.py
+added     +20    -0     tests/themes/bad-postprocess/config.lua
+added     +2     -0     tests/themes/bad-postprocess/sql/01_bad.sql
+added     +5     -0     tests/themes/bad-postprocess/theme.toml
+--- DIFF DO CÓDIGO LIGADO
+### src/commands/init.rs
+@@ -2,7 +2,7 @@ use crate::error::OsmprjError;
+ use std::fs;
+ use std::path::Path;
+ 
+-pub fn run(db: Option<String>) -> Result<(), OsmprjError> {
++pub fn run(db: Option<String>, data_dir: Option<String>) -> Result<(), OsmprjError> {
+     if Path::new("osmprj.toml").exists() {
+         return Err(OsmprjError::ProjectExists);
+     }
+@@ -15,6 +15,10 @@ pub fn run(db: Option<String>) -> Result<(), OsmprjError> {
+         content.push_str("# database_url = \"postgres://user:pass@localhost/osm\"\n");
+     }
+ 
++    if let Some(dir) = data_dir {
++        content.push_str(&format!("data_dir = \"{dir}\"\n"));
++    }
++
+     fs::write("osmprj.toml", &content)?;
+     println!("Created osmprj.toml");
+     Ok(())
+
+### src/commands/sync.rs
+@@ -14,6 +14,10 @@ use std::process::Stdio;
+ use std::sync::{Arc, Mutex};
+ use tokio::fs as tfs;
+ use tokio::io::{AsyncBufReadExt, BufReader};
++use tokio::sync::Semaphore;
++
++/// Return type for an import task: source name plus an optional post-process warning.
++type ImportResult = Result<(String, Option<OsmprjError>), (String, OsmprjError)>;
+ 
+ // ─── helpers ─────────────────────────────────────────────────────────────────
+ 
+@@ -59,6 +63,25 @@ async fn fetch_remote_md5(client: &reqwest::Client, pbf_url: &str) -> Result<Str
+     Ok(text.split_whitespace().next().unwrap_or("").to_string())
+ }
+ 
++/// Issue a HEAD request to determine the file size before downloading.
++/// Returns 0 on failure or if `Content-Length` is absent — those sources
++/// sort to the back of the download queue without causing a sync failure.
++async fn fetch_content_length(client: &reqwest::Client, url: &str) -> u64 {
++    client
++        .head(url)
++        .send()
++        .await
++        .ok()
++        .and_then(|r| r.content_length())
++        .unwrap_or(0)
++}
++
++/// Sort a list of `(name, url, size)` tuples largest-first by `size`.
++/// Uses a stable sort so equal-sized sources preserve their original order.
++fn sort_sources_by_size(sources: &mut [(String, String, u64)]) {
++    sources.sort_by_key(|b| std::cmp::Reverse(b.2));
++}
++
+ /// Stream a single PBF file to disk with a progress bar; return bytes written.
+ async fn download_pbf(
+     client: &reqwest::Client,
+@@ -89,21 +112,30 @@ async fn download_pbf(
+     let mut file = tfs::File::create(dest).await.map_err(OsmprjError::Io)?;
+     let mut stream = response;
+ 
+-    while let Some(chunk) = stream
+-        .chunk()
+-        .await
+-        .map_err(|e| OsmprjError::DownloadFailed {
+-            url: url.to_string(),
+-            message: e.to_string(),
+-        })?
+-    {
+-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++    let stream_result = async {
++        while let Some(chunk) = stream
++            .chunk()
+             .await
+-            .map_err(OsmprjError::Io)?;
+-        bar.inc(chunk.len() as u64);
++            .map_err(|e| OsmprjError::DownloadFailed {
++                url: url.to_string(),
++                message: e.to_string(),
++            })?
++        {
++            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++                .await
++                .map_err(OsmprjError::Io)?;
++            bar.inc(chunk.len() as u64);
++        }
++        Ok::<(), OsmprjError>(())
+     }
++    .await;
+ 
+-    Ok(())
++    if stream_result.is_err() {
++        drop(file);
++        let _ = tfs::remove_file(dest).await;
++    }
++
++    stream_result
+ }
+ 
+ // ─── download phase ──────────────────────────────────────────────────────────
+@@ -115,12 +147,25 @@ struct DownloadResult {
+ }
+ 
+ async fn download_source(
++    dl_sem: Arc<Semaphore>,
+     client: Arc<reqwest::Client>,
+     source_name: String,
+     url: String,
+     dest: PathBuf,
+     bar: ProgressBar,
++    bar_style: indicatif::ProgressStyle,
+ ) -> Result<DownloadResult, (String, OsmprjError)> {
++    // Acquire the download semaphore permit; held until MD5 verification completes.
++    // While waiting the bar shows "Pending <name>" in the dim pending style.
++    let _permit = dl_sem.acquire().await.expect("semaphore closed");
++
++    // Permit acquired: switch to the full download bar style and update the message.
++    bar.set_style(bar_style);
++    bar.set_message(output::truncate_message(
++        &format!("{source_name}.osm.pbf"),
++        output::progress_bar_msg_width(),
++    ));
++
+     let err = |e| (source_name.clone(), e);
+ 
+     download_pbf(&client, &url, &dest, &bar)
+@@ -141,7 +186,8 @@ async fn download_source(
+         ));
+     }
+ 
+-    bar.finish_with_message("✓");
++    // Disappear the download bar — the import spinner replaces it immediately.
++    bar.finish_and_clear();
+ 
+     Ok(DownloadResult {
+         source_name,
+@@ -302,7 +348,7 @@ fn collect_sql_files(source: &SourceConfig, registry: &ThemeRegistry) -> Vec<Pat
+     files
+ }
+ 
+-async fn replication_init(
++async fn run_replication_init(
+     database_url: &str,
+     schema: &str,
+     log_path: &Path,
+@@ -348,6 +394,126 @@ async fn replication_init(
+     Ok(())
+ }
+ 
++// ─── import source task ───────────────────────────────────────────────────────
++
++/// All data needed to run a single source through the full import pipeline.
++struct ImportSourceArgs {
++    pub source_name: String,
++    pub db_url: String,
++    pub effective_schema: String,
++    pub srid: u32,
++    pub argv: Vec<String>,
++    pub sql_files: Vec<PathBuf>,
++    pub log_dir: PathBuf,
++    pub verbose: bool,
++}
++
++/// Run a source through the full import pipeline under the import semaphore:
++///   1. osm2pgsql import
++///   2. post-processing SQL (if any)
++///   3. replication init
++///
++/// The semaphore permit is held for the entire pipeline duration so that
++/// concurrent import slots are not double-counted during post-processing.
++async fn import_source(
++    imp_sem: Arc<Semaphore>,
++    mp: Arc<MultiProgress>,
++    args: ImportSourceArgs,
++) -> ImportResult {
++    let name = &args.source_name;
++    let err = |e| (name.clone(), e);
++
++    let spinner_style = output::spinner_style();
++    let pending_style = output::pending_style();
++
++    // Add the spinner immediately so the user sees "Pending <name>" while
++    // waiting for the import semaphore permit.
++    let spinner = mp.add(ProgressBar::new_spinner());
++    spinner.set_style(pending_style);
++    spinner.set_message(format!("Pending {name}"));
++    spinner.enable_steady_tick(std::time::Duration::from_millis(120));
++
++    // Acquire the import semaphore permit; held until replication init completes.
++    let _permit = imp_sem.acquire().await.expect("semaphore closed");
++
++    // Permit acquired: switch to the active import style.
++    spinner.set_style(spinner_style.clone());
++    spinner.set_message(format!("Importing {name}..."));
++    spinner.enable_steady_tick(std::time::Duration::from_millis(250));
++
++    let log_path = args.log_dir.join(format!("{}.log", name.replace('/', "-")));
++    let env_vars = vec![
++        ("OSMPRJ_SCHEMA".to_string(), args.effective_schema.clone()),
++        ("OSMPRJ_SRID".to_string(), args.srid.to_string()),
++    ];
++
++    run_subprocess(&args.argv, &env_vars, &log_path, args.verbose, &spinner)
++        .await
++        .map_err(|e| {
++            spinner.finish_with_message(format!("{} {name} failed", output::icon_error()));
++            err(e)
++        })?;
++
++    // ── Post-processing SQL ───────────────────────────────────────────────────
++    let mut pp_warning: Option<OsmprjError> = None;
++    if !args.sql_files.is_empty() {
++        spinner.set_message(format!("Post-processing {name}..."));
++        match db::connect(&args.db_url).await {
++            Err(e) => {
++                spinner.set_message(format!("Post-processing {name} skipped (no DB)..."));
++                eprintln!(
++                    "  {} {name}: could not connect for post-processing: {e}",
++                    output::icon_warn()
++                );
++                pp_warning = Some(OsmprjError::PostProcessFailed {
++                    source_name: name.clone(),
++                    file: String::new(),
++                    message: e.to_string(),
++                });
++            }
++            Ok(client) => {
++                match run_postprocess(&client, name, &args.effective_schema, &args.sql_files).await
++                {
++                    Ok(()) => {
++                        // spinner message will update to replication step below
++                    }
++                    Err(e) => {
++                        spinner
++                            .set_message(format!("Post-processing {name} failed, continuing..."));
++                        eprintln!("  {e}");
++                        pp_warning = Some(e);
++                    }
++                }
++            }
++        }
++    }
++
++    // ── Replication init ──────────────────────────────────────────────────────
++    spinner.set_message(format!("Initialising replication for {name}..."));
++    let repl_log_path = args
++        .log_dir
++        .join(format!("{}-replication-init.log", name.replace('/', "-")));
++
++    run_replication_init(
++        &args.db_url,
++        &args.effective_schema,
++        &repl_log_path,
++        args.verbose,
++    )
++    .await
++    .map_err(|e| {
++        spinner.finish_with_message(format!(
++            "{} {name} replication init failed",
++            output::icon_error()
++        ));
++        err(e)
++    })?;
++
++    spinner.finish_with_message(format!("{} {name} imported", output::icon_success()));
++
++    Ok((name.clone(), pp_warning))
++}
++
+ // ─── replication update ───────────────────────────────────────────────────────
+ 
+ async fn replication_update(
+@@ -427,6 +593,7 @@ async fn replication_update(
+ pub async fn run(
+     requested_sources: Vec<String>,
+     verbose: bool,
++    postprocess_only: bool,
+     config: &ProjectConfig,
+ ) -> Result<(), OsmprjError> {
+     // Validate source filter
+@@ -443,6 +610,84 @@ pub async fn run(
+         }
+     }
+ 
++    // ── --postprocess-only early-return branch ────────────────────────────────
++    // Re-run post-processing SQL for each source without downloading or importing.
++    // osm2pgsql / osm2pgsql-replication are not required.
++    if postprocess_only {
++        let db_url = config
++            .project
++            .database_url
++            .as_deref()
++            .ok_or(OsmprjError::NoDatabaseUrl)?;
++
++        let theme_registry = ThemeRegistry::build();
++
++        let sources_to_process: Vec<(&String, &SourceConfig)> = config
++            .sources
++            .iter()
++            .filter(|(name, _)| requested_sources.is_empty() || requested_sources.contains(name))
++            .collect();
++
++        let mut pp_errors: Vec<(String, OsmprjError)> = Vec::new();
++
++        for (name, source) in &sources_to_process {
++            let sql_files = collect_sql_files(source, &theme_registry);
++            if sql_files.is_empty() {
++                println!(
++                    "  {} {name}: no post-processing SQL, skipping",
++                    output::icon_skip()
++                );
++                continue;
++            }
++
++            let effective_schema = source.effective_schema(name);
++
++            match db::connect(db_url).await {
++                Err(e) => {
++                    eprintln!(
++                        "  {} {name}: could not connect for post-processing: {e}",
+
+### src/tuner.rs
+@@ -5,6 +5,7 @@ pub struct TunerInput {
+     pub system_ram_gb: f64,
+     pub pbf_size_gb: f64,
+     pub ssd: bool,
++    pub concurrent_imports: usize,
+     pub database_url: String,
+     pub effective_schema: String,
+     pub pbf_path: PathBuf,
+@@ -23,8 +24,9 @@ pub fn use_flat_nodes(pbf_size_gb: f64, ssd: bool) -> bool {
+     (pbf_size_gb >= 8.0 && ssd) || pbf_size_gb >= 30.0
+ }
+ 
+-pub fn get_cache_mb(pbf_size_gb: f64, system_ram_gb: f64) -> u32 {
+-    let cache_max_gb = system_ram_gb * 0.66;
++pub fn get_cache_mb(pbf_size_gb: f64, system_ram_gb: f64, concurrent_imports: usize) -> u32 {
++    let per_import_ram_gb = system_ram_gb / concurrent_imports.max(1) as f64;
++    let cache_max_gb = per_import_ram_gb * 0.66;
+     let slim_cache_gb = 0.75 * (1.0 + 2.5 * pbf_size_gb);
+     let chosen = slim_cache_gb.min(cache_max_gb);
+     (chosen * 1024.0) as u32
+@@ -42,7 +44,11 @@ pub fn build_command(input: &TunerInput) -> Vec<String> {
+         args.push(format!("--flat-nodes={}", nodes_path.display()));
+         args.push("--cache=0".to_string());
+     } else {
+-        let cache = get_cache_mb(input.pbf_size_gb, input.system_ram_gb);
++        let cache = get_cache_mb(
++            input.pbf_size_gb,
++            input.system_ram_gb,
++            input.concurrent_imports,
++        );
+         args.push(format!("--cache={cache}"));
+     }
+ 
+@@ -68,6 +74,7 @@ mod tests {
+             system_ram_gb: ram_gb,
+             pbf_size_gb: pbf_gb,
+             ssd,
++            concurrent_imports: 1,
+             database_url: "postgres://localhost/osm".to_string(),
+             effective_schema: "albania".to_string(),
+             pbf_path: PathBuf::from("/data/albania.osm.pbf"),
+@@ -108,7 +115,7 @@ mod tests {
+     #[test]
+     fn cache_capped_by_ram() {
+         // 100 GB PBF, only 8 GB RAM → cache capped at 0.66 * 8 * 1024 = 5406 MB
+-        let cache = get_cache_mb(100.0, 8.0);
++        let cache = get_cache_mb(100.0, 8.0, 1);
+         let cap = (8.0 * 0.66 * 1024.0) as u32;
+         let uncapped = (0.75 * (1.0 + 250.0) * 1024.0) as u32;
+         assert!(cache <= cap);
+@@ -140,4 +147,56 @@ mod tests {
+         assert!(cmd.iter().any(|a| a.starts_with("--database=")));
+         assert!(cmd.iter().any(|a| a.starts_with("--schema=")));
+     }
++
++    #[test]
++    fn concurrent_imports_halves_cache_budget() {
++        // With concurrent_imports=1, the full RAM budget is used.
++        let cache_single = get_cache_mb(0.5, 16.0, 1);
++        // With concurrent_imports=2, each import gets half the RAM.
++        let cache_double = get_cache_mb(0.5, 16.0, 2);
++        // The double-concurrent cache should be roughly half the single cache
++        // (both are slim_cache-limited here, so they should be equal — but let's
++        // also verify the cap case, which differs).
++        // For 100 GB PBF on 16 GB RAM: slim_cache >> cache_max, so cap applies.
++        let capped_single = get_cache_mb(100.0, 16.0, 1);
++        let capped_double = get_cache_mb(100.0, 16.0, 2);
++        assert!(
++            capped_double < capped_single,
++            "double-concurrent cap ({capped_double}) should be less than single ({capped_single})"
++        );
++        // capped_double should be approximately half of capped_single
++        let ratio = capped_single as f64 / capped_double as f64;
++        assert!(
++            (ratio - 2.0).abs() < 0.1,
++            "ratio should be ~2.0, got {ratio}"
++        );
++    }
++
++    #[test]
++    fn concurrent_imports_quarters_cache_budget() {
++        // 100 GB PBF on 32 GB RAM: always RAM-capped regardless of concurrency.
++        let capped_single = get_cache_mb(100.0, 32.0, 1);
++        let capped_quad = get_cache_mb(100.0, 32.0, 4);
++        // Four concurrent imports should each get one-quarter of the RAM budget.
++        let ratio = capped_single as f64 / capped_quad as f64;
++        assert!(
++            (ratio - 4.0).abs() < 0.1,
++            "ratio should be ~4.0, got {ratio}"
++        );
++    }
++
++    #[test]
++    fn concurrent_imports_cache_capped_by_divided_budget() {
++        // 100 GB PBF on 8 GB RAM with 2 concurrent imports:
++        // per-import budget = 4 GB, cache_max = 4 * 0.66 = 2.64 GB
++        let cache = get_cache_mb(100.0, 8.0, 2);
++        let expected_cap = (4.0_f64 * 0.66 * 1024.0) as u32;
++        assert_eq!(
++            cache, expected_cap,
++            "cache should be capped by per-import budget"
++        );
++        // And it should be less than the full-RAM cap
++        let cache_full = get_cache_mb(100.0, 8.0, 1);
++        assert!(cache < cache_full);
++    }
+ }
+
+===== P067 | repo AshkanYarmoradi/go-mink | PR #175: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan | capacidade: data-export
+--- SPEC VIVA
+# data-export Specification
+
+## Purpose
+TBD - created by archiving change fix-review-correctness-bugs. Update Purpose after archive.
+## Requirements
+### Requirement: Export never emits ciphertext for an undecryptable event
+`DataExporter` SHALL independently detect an event whose encryption metadata is present
+and whose fields remain encrypted — e.g. because a configured `WithDecryptionErrorHandler`
+returned nil for a revoked/missing key — and mark it `Redacted=true` with `nil` `Data`,
+regardless of the handler's decision. `RawData` retains only the unrecoverable
+ciphertext (consistent with the existing key-revocation redaction), never a decrypted
+or re-serialized payload. A crypto-shredded event SHALL NOT be exported as a
+non-redacted record.
+
+#### Scenario: Shredded event with a swallowing decryption handler is redacted
+- **WHEN** the store is configured with a `WithDecryptionErrorHandler` that returns nil, a subject's key is revoked, and the subject is exported
+- **THEN** the exported event has `Redacted=true` and `Data==nil` (no decrypted payload leaks); `RawData` holds only the unrecoverable ciphertext
+
+#### Scenario: Normal decryptable event is unaffected
+- **WHEN** an event decrypts successfully
+- **THEN** it is exported with `Redacted=false` and its plaintext `Data` as before
+
+
+--- ARQUIVOS DO PR (46)
+modified  +3     -1     CHANGELOG.md
+modified  +1     -1     README.md
+modified  +88    -0     adapters/adapter.go
+added     +40    -0     adapters/feed_filter_test.go
+added     +84    -0     adapters/memory/filtered_feed_test.go
+modified  +22    -5     adapters/memory/memory.go
+added     +50    -0     adapters/memory/rewrite.go
+added     +113   -0     adapters/postgres/filtered_feed_test.go
+modified  +1     -0     adapters/postgres/postgres.go
+added     +39    -0     adapters/postgres/rewrite.go
+modified  +78    -0     adapters/postgres/subscription.go   <== código ligado à spec
+added     +77    -0     e2e_reencrypt_inplace_test.go
+modified  +9     -0     errors.go
+modified  +4     -2     examples/README.md
+added     +32    -0     examples/feed-filter/README.md
+added     +84    -0     examples/feed-filter/main.go
+added     +87    -0     examples/reencrypt-inplace/main.go
+added     +2     -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/.openspec.yaml
+added     +142   -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/design.md
+added     +86    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/proposal.md
+added     +35    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/specs/retention-policies/spec.md
+added     +21    -0     openspec/changes/archive/2026-07-04-bounded-retention-scan/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/design.md
+added     +103   -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/proposal.md
+added     +58    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/in-place-stream-re-encryption/spec.md
+added     +25    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/specs/stored-event-encryption/spec.md
+added     +28    -0     openspec/changes/archive/2026-07-04-in-place-stream-re-encryption/tasks.md
+added     +2     -0     openspec/changes/filtered-feed-read/.openspec.yaml
+added     +131   -0     openspec/changes/filtered-feed-read/design.md
+added     +124   -0     openspec/changes/filtered-feed-read/proposal.md
+added     +39    -0     openspec/changes/filtered-feed-read/specs/event-subscriptions/spec.md
+added     +40    -0     openspec/changes/filtered-feed-read/tasks.md
+added     +62    -0     openspec/specs/in-place-stream-re-encryption/spec.md
+modified  +34    -0     openspec/specs/retention-policies/spec.md
+added     +29    -0     openspec/specs/stored-event-encryption/spec.md
+added     +211   -0     reencrypt_inplace_test.go
+modified  +151   -17    retention.go
+added     +253   -0     retention_checkpoint_test.go
+added     +14    -0     retention_errors.go
+modified  +123   -0     store.go
+added     +39    -0     store_filtered_test.go
+modified  +5     -1     website/docs/advanced/security.md
+modified  +34    -0     website/docs/core/event-store.md
+modified  +2     -1     website/docs/roadmap.md
+modified  +42    -0     website/docs/security.md
+--- DIFF DO CÓDIGO LIGADO
+### adapters/postgres/subscription.go
+@@ -6,6 +6,8 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"log"
++	"strconv"
++	"strings"
+ 	"time"
+ 
+ 	"go-mink.dev/adapters"
+@@ -187,6 +189,82 @@ func (a *PostgresAdapter) LoadFromPosition(ctx context.Context, fromPosition uin
+ 	return a.scanEvents(rows)
+ }
+ 
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, error) {
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++
++	limit = adapters.DefaultLimit(limit, 1000)
++
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++
++	return a.scanEvents(rows)
++}
++
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
++		b.WriteString(" AND ")
++		b.WriteString(column)
++		b.WriteString(" IN (")
++		for i, v := range values {
++			if i > 0 {
++				b.WriteByte(',')
++			}
++			b.WriteByte('$')
++			b.WriteString(strconv.Itoa(idx))
++			args = append(args, v)
++			idx++
++		}
++		b.WriteByte(')')
++	}
++
++	writeInClause("event_type", filter.EventTypes)
++	writeInClause("stream_id", filter.StreamIDs)
++
++	if filter.Category != "" {
++		b.WriteString(" AND stream_id LIKE $")
++		b.WriteString(strconv.Itoa(idx))
++		// LIKE '<category>-%': the same "<category>-" prefix FeedFilter.Matches uses (via
++		// adapters.CategoryStreamPrefix), escaped so metacharacters in the category are
++		// matched literally rather than over-matching adjacent categories.
++		args = append(args, escapeLikePattern(adapters.CategoryStreamPrefix(filter.Category))+"%")
++		idx++
++	}
++
++	return b.String(), args, idx
++}
++
+ // SubscribeAll subscribes to all events across all streams.
+ // Events are delivered starting from the specified global position.
+ // This uses polling-based subscription with continuous updates.
+

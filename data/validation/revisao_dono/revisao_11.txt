@@ -1,0 +1,477 @@
+===== P063 | skzv/ccmux PR #114 | capacidade do par: adaptive-screen-layout
+PR: feat(tui): design-system redesign — tokens, components, dashboard rewrite
+arquivos ligados: internal/tui/width_test.go
+--- linhas alteradas (2; mostrando até 40)
+-		{ScreenSessions, []string{"Sessions", "Claude usage"}, []string{"Hello.", "Welcome to ccmux", "Codex usage"}},
++		{ScreenSessions, []string{"Sessions"}, []string{"Hello.", "Welcome to ccmux", "Codex usage"}},
+--- candidata: tui-design-system [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Agents sub-tab row uses the per-agent palette
+  | The Agents tab's sub-tab row SHALL render each sub-tab label in the corresponding agent's accent colour from the shared `styles.AgentAccent(id)` helper. Inactive sub-tabs SHALL render in the muted col
+  > #### Scenario: Active Claude sub-tab renders in mauve
+  > - **WHEN** the Agents tab is open with the Claude sub-tab active
+  > - **THEN** the `Claude` label renders in the colour returned by `styles.AgentAccent(agent.IDClaude)` (mauve) with the `◆ ` glyph prefix
+  > - **WHEN** the Agents tab is open with the Claude sub-tab active
+  > - **THEN** the `Codex`, `Antigravity`, and `Cursor` labels render in `Styles.Muted` (no agent-accent colour)
+  > The Agents tab's `HelpBarProps` SHALL surface keys relevant to the active sub-tab in addition to the common Agents-tab keys. The Claude sub-tab SHALL include `m model`, `e effort`, `a always`, `y yolo
+  > #### Scenario: Claude sub-tab HelpBar advertises its keys
+  > - **WHEN** the Agents tab is open with the Claude sub-tab active
+--- candidata: telegram-commands [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Read tier always available
+  | When the bridge is enabled, allowlisted chats SHALL be able to inspect state without any extra permission: `/sessions` (local + peers), `/projects`, `/notes [project]`, `/usage`, and `/preview <host:s
+  > When the bridge is enabled, allowlisted chats SHALL be able to inspect state without any extra permission: `/sessions` (local + peers), `/projects`, `/notes [project]`, `/usage`, and `/preview <host:s
+  > - **WHEN** an allowlisted user sends `/usage`
+  > - **WHEN** an allowlisted user sends `/new ccmux claude`
+  > - **THEN** the bridge asks the daemon to spawn a Claude session in the `ccmux` project and reports the new session name
+  > ### Requirement: Inline-query autocomplete of ccmux commands
+  > The bridge SHALL answer Telegram inline queries (typing the bot's @handle plus a partial command) with matching ccmux management commands and their one-line help, so the user can discover ccmux's own 
+--- candidata: conversation-agent-grouping [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Conversations are navigated by known agent
+  | The Conversations TUI SHALL render an agent navigation control ordered
+  > Claude, Codex, Cursor, then Agy. The screen SHALL render only the focused
+  > - **GIVEN** the visible conversation set contains Claude, Codex, Cursor,
+  > - **THEN** the agent navigation lists Claude, Codex, Cursor, and Agy in
+  > ID is not Claude, Codex, Cursor, or Antigravity
+  > - **GIVEN** the visible conversation set has Claude conversations and no
+  > - **GIVEN** the Codex section is focused and a Codex conversation row is
+  > - **THEN** ccmux resumes that Codex conversation using its conversation ID
+  > - **GIVEN** the Claude section is focused and its last row is selected
+
+===== P064 | Gentleman-Programming/engram PR #282 | capacidade do par: cloud-autosync
+PR: feat(memory): conflict surfacing Phases 2+3+4 (sync, audit, semantic)
+arquivos ligados: cmd/engram/autosync_e2e_test.go;cmd/engram/autosync_status.go;internal/cloud/autosync/manager.go;internal/cloud/autosync/manager_test.go;internal/cloud/cloudserver/mutations.go;internal/cloud/cloudserver/mutations_test.go
+--- linhas alteradas (680; mostrando até 40)
++// Phase E: deferred replay stubs — no-ops for the E2E fake store.
++func (s *autosyncFakeStore) ReplayDeferred() (store.ReplayDeferredResult, error) {
++	return store.ReplayDeferredResult{}, nil
++}
++func (s *autosyncFakeStore) CountDeferredAndDead() (int, int, error) { return 0, 0, nil }
++		// Phase E: propagate deferred/dead counts from autosync.Status.
++		DeferredCount: st.DeferredCount,
++		DeadCount:     st.DeadCount,
++	// Phase E: deferred relation retry.
++	ReplayDeferred() (store.ReplayDeferredResult, error)
++	CountDeferredAndDead() (deferred, dead int, err error)
++	// Phase E: deferred relation retry counts from sync_apply_deferred.
++	DeferredCount int `json:"deferred_count"`
++	DeadCount     int `json:"dead_count"`
++// Includes live counts of deferred and dead rows from sync_apply_deferred.
+-	defer m.mu.RUnlock()
+-	return m.status
++	st := m.status
++	m.mu.RUnlock()
++	// Phase E: populate deferred/dead counts from store (live query, best-effort).
++	if deferred, dead, err := m.store.CountDeferredAndDead(); err == nil {
++		st.DeferredCount = deferred
++		st.DeadCount = dead
++	}
++	return st
++	// Phase E: replay deferred relation rows before fetching new mutations.
++	// This gives previously-deferred rows a chance to apply now that their
++	// referenced observations may have arrived.
++	if res, err := m.store.ReplayDeferred(); err != nil {
++		log.Printf("[autosync] replayDeferred error: %v", err)
++		// Non-fatal: log and continue — deferred replay failures must not halt pulls.
++	} else if res.Retried > 0 {
++		log.Printf("[autosync] replayDeferred: retried=%d succeeded=%d failed=%d dead=%d",
++			res.Retried, res.Succeeded, res.Failed, res.Dead)
++	}
++			// Phase E: per-entity error policy (design §9).
++			// ApplyPulledMutation handles relation FK misses internally by writing
++			// to sync_apply_deferred and returning nil — the cursor advances normally.
++			// All other errors (legacy entities, decode errors) propagate and halt the pull.
++// Phase E: deferred replay stubs — base fakeLocalStore always returns zero counts
+--- candidata: cloud-upgrade-path [tasks]
+  | # cloud-upgrade-path Specification
+  | ## Requirements
+  | ### Requirement: REQ-UPGRADE-01 — Guided Upgrade Workflow
+  > The CLI MUST provide `doctor`, `repair`, `bootstrap`, `status`, and `rollback` under `engram cloud upgrade`. It SHALL require explicit `--project` and SHALL keep local SQLite as source of truth.
+  > - GIVEN an existing local project with no cloud enrollment
+  > - THEN help output lists doctor/repair/bootstrap/status/rollback workflow
+  > #### Scenario: Missing project target fails loudly
+  > - GIVEN a user runs `engram cloud upgrade doctor` without `--project`
+  > - WHEN argument validation runs
+  > - AND stderr includes usage guidance
+  > `doctor` MUST return deterministic readiness findings with stable reason codes for auth, reachability, policy, and project validity. Findings SHALL be identical for unchanged inputs.
+--- candidata: cloud-dashboard [termos]
+  | # cloud-dashboard Specification
+  | ## Purpose
+  | Restore standalone `engram-cloud` dashboard behavior in the integrated repo while preserving local-first and current security/runtime rules.
+  > Restore standalone `engram-cloud` dashboard behavior in the integrated repo while preserving local-first and current security/runtime rules.
+  > The system MUST expose authenticated, shareable URLs for overview, browser, projects, contributors, and admin with parity to standalone cloud behavior.
+  > #### Scenario: Direct URL access works after login
+  > - GIVEN an authenticated dashboard session
+  > - THEN the server renders the corresponding page
+  > - AND navigation state is preserved in the URL
+  > - GIVEN no valid dashboard session
+  > - THEN the response redirects to `/dashboard/login`
+--- candidata: cloud-user-token-management [termos]
+  | # Specification: Cloud User Token Management
+  | ## Purpose
+  | Engram Cloud MUST support principal-based user and token management for human users while preserving existing sync routes, payload contracts, and legacy environment-token behavior during migration. Th
+  > Engram Cloud MUST support principal-based user and token management for human users while preserving existing sync routes, payload contracts, and legacy environment-token behavior during migration. Th
+  > The system MUST resolve every authenticated cloud request to a principal before making authorization decisions.
+  > A principal MUST include a stable identifier and `kind`, where `kind` supports `human` and `service_account`. The MVP MUST implement human principals and MUST keep the model/schema ready for future se
+  > Tokens MUST authenticate principals; tokens MUST NOT be treated as identities for authorization decisions.
+  > #### Scenario: Managed token resolves to a human principal
+  > - GIVEN a stored active human principal with an active token
+  > - WHEN a request presents that token as a bearer credential
+  > - THEN the request is authenticated as that human principal
+--- candidata: cloud-sync-audit [termos]
+  | # Cloud Sync Audit Log Specification
+  | ## Purpose
+  | Persistent, admin-visible audit trail of every push rejection that occurs when a project's sync is paused. Covers persistence layer, server-handler integration, and admin dashboard UI.
+  > Persistent, admin-visible audit trail of every push rejection that occurs when a project's sync is paused. Covers persistence layer, server-handler integration, and admin dashboard UI.
+  > The system MUST append idempotent DDL to `cs.migrate()` that creates the `cloud_sync_audit_log` table and its indexes. The DDL MUST use `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`. T
+  > - WHEN `cs.migrate()` is called
+  > - THEN the table exists with all required columns
+  > - GIVEN a database where `cs.migrate()` has already been called once
+  > - WHEN `cs.migrate()` is called again
+  > - GIVEN a database where the `cloud_sync_audit_log` table already exists
+  > - WHEN `cs.migrate()` is called
+
+===== P065 | travishathaway/osmprj PR #8 | capacidade do par: project-config
+PR: Add limit to concurrent downloads, implement processing pipeline
+arquivos ligados: src/commands/init.rs;src/commands/sync.rs;src/tuner.rs
+--- linhas alteradas (861; mostrando até 40)
+-pub fn run(db: Option<String>) -> Result<(), OsmprjError> {
++pub fn run(db: Option<String>, data_dir: Option<String>) -> Result<(), OsmprjError> {
++    if let Some(dir) = data_dir {
++        content.push_str(&format!("data_dir = \"{dir}\"\n"));
++    }
++use tokio::sync::Semaphore;
++/// Return type for an import task: source name plus an optional post-process warning.
++type ImportResult = Result<(String, Option<OsmprjError>), (String, OsmprjError)>;
++/// Issue a HEAD request to determine the file size before downloading.
++/// Returns 0 on failure or if `Content-Length` is absent — those sources
++/// sort to the back of the download queue without causing a sync failure.
++async fn fetch_content_length(client: &reqwest::Client, url: &str) -> u64 {
++    client
++        .head(url)
++        .send()
++        .await
++        .ok()
++        .and_then(|r| r.content_length())
++        .unwrap_or(0)
++}
++/// Sort a list of `(name, url, size)` tuples largest-first by `size`.
++/// Uses a stable sort so equal-sized sources preserve their original order.
++fn sort_sources_by_size(sources: &mut [(String, String, u64)]) {
++    sources.sort_by_key(|b| std::cmp::Reverse(b.2));
++}
+-    while let Some(chunk) = stream
+-        .chunk()
+-        .await
+-        .map_err(|e| OsmprjError::DownloadFailed {
+-            url: url.to_string(),
+-            message: e.to_string(),
+-        })?
+-    {
+-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++    let stream_result = async {
++        while let Some(chunk) = stream
++            .chunk()
+-            .map_err(OsmprjError::Io)?;
+-        bar.inc(chunk.len() as u64);
++            .map_err(|e| OsmprjError::DownloadFailed {
+--- candidata: sync-command [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Sync accepts optional source filter
+  | `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > ### Requirement: Sync accepts optional source filter
+  > `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > #### Scenario: Sync all sources
+  > - **THEN** all sources defined in `osmprj.toml` are downloaded and imported
+  > #### Scenario: Sync specific sources
+  > - **WHEN** user runs `osmprj sync albania us-alabama`
+  > - **THEN** only the `albania` and `us-alabama` sources are processed
+  > #### Scenario: Unknown source name
+--- candidata: pipelined-sync [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Import begins immediately when download completes
+  | The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > ### Requirement: Import begins immediately when download completes
+  > The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > #### Scenario: Small source imports while large source downloads
+  > - **WHEN** source A (100 MB) finishes downloading while source B (1 GB) is still downloading
+  > - **THEN** source A's import begins immediately, running concurrently with source B's download
+  > #### Scenario: Import semaphore blocks when at capacity
+  > - **WHEN** `max_concurrent_imports = 1` and an import is already running
+  > - **THEN** the next completed download's import waits until the running import finishes before starting
+--- candidata: sync-concurrency-controls [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Concurrent download limit is configurable
+  | The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > ### Requirement: Concurrent download limit is configurable
+  > The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > #### Scenario: Default concurrent downloads
+  > - **WHEN** `osmprj.toml` has no `max_concurrent_downloads` field
+  > - **THEN** at most 3 PBF downloads run simultaneously
+  > #### Scenario: Custom concurrent downloads
+  > - **WHEN** `osmprj.toml` sets `max_concurrent_downloads = 2`
+  > - **THEN** at most 2 PBF downloads run simultaneously
+--- candidata: test-http-server [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: PBF fixture cache
+  | The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > ### Requirement: PBF fixture cache
+  > The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > `download.geofabrik.de` are made during test runs after the first setup. The cache location SHALL
+  > `OSMPRJ_TEST_FIXTURE_DIR` environment variable. The cache directory SHALL be listed in `.gitignore`.
+  > On first use the fixture SHALL be downloaded from `download.geofabrik.de` and a `.md5` sidecar
+  > SHALL be computed and stored alongside it.
+  > #### Scenario: Cache populated on first use
+  > - **THEN** the `pbf_fixture_cache` fixture downloads the file from Geofabrik and saves it to that path
+--- candidata: osm2pgsql-tuner [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Tuner computes cache size from RAM and PBF size
+  | The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > ### Requirement: Tuner computes cache size from RAM and PBF size
+  > The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > - **THEN** cache is set to `floor(0.75 * 1 + 2.5 * 0.5) * 1024)` = 1689 MB
+  > #### Scenario: Cache capped by available RAM
+  > - **WHEN** the computed slim_cache exceeds cache_max
+  > - **THEN** cache is set to `floor(cache_max * 1024)` MB
+  > The tuner SHALL set `--flat-nodes=<data_dir>/<source_name>.nodes` and `--cache=0` when PBF size is ≥ 8.0 GB and `ssd=true`, or when PBF size is ≥ 30.0 GB regardless of storage type.
+  > - **THEN** `--flat-nodes` is included and `--cache=0`
+
+===== P067 | AshkanYarmoradi/go-mink PR #175 | capacidade do par: data-export
+PR: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan
+arquivos ligados: adapters/postgres/subscription.go
+--- linhas alteradas (67; mostrando até 40)
++	"strconv"
++	"strings"
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, er
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++	limit = adapters.DefaultLimit(limit, 1000)
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++	return a.scanEvents(rows)
++}
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
+--- candidata: event-subscriptions [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  | The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  > The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > across a contiguous, stable prefix of `global_position`, bounded by a safe watermark below
+  > which no in-flight transaction can still commit a lower position — covering `SubscribeAll`,
+  > `SubscribeCategory`, async projections (`loadEventsFromPosition`, which also checkpoints),
+  > and the saga manager's event loop. The watermark SHALL be enforced
+  > at the adapter's load-from-position query (returning nothing above it) and SHALL NOT
+  > gap-detection with a staleness timeout). An event whose transaction is assigned a lower
+--- candidata: cli-tooling [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code generation does not overwrite existing files without --force
+  | `mink generate` SHALL refuse to overwrite an existing target file unless a `--force`
+  > - **THEN** the command returns an error and leaves the existing file unchanged
+  > - **THEN** `migrate down` returns an error and exits non-zero rather than reporting success
+  > ### Requirement: `mink events` queries the global feed by indexed axes
+  > The `mink` CLI SHALL provide a top-level `events` command that reads the global event feed through the adapter's `FilteredFeedAdapter.LoadFromPositionFiltered`, filtered by the indexed axes the `FeedF
+  > #### Scenario: A type filter reads only matching events across streams
+  > - **WHEN** `mink events --type OrderPlaced` runs against a feed where `OrderPlaced` spans several streams
+  > - **THEN** only `OrderPlaced` events are printed, across all their streams, in ascending `global_position` order, up to the limit
+  > #### Scenario: Multi-valued and multi-axis filters AND/OR-compose
+--- candidata: retention-policies [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable retention policy
+  | The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > - **WHEN** a policy is defined to shred events older than `MaxAge` for a category
+  > - **THEN** events in that category whose age exceeds `MaxAge` are selected for shredding
+  > - **THEN** each matched event has the action of every policy that matches it applied
+  > A `RetentionManager` SHALL apply the configured policies over the event store on demand via `Apply(ctx)`, SHALL be safe to run on a schedule, and SHALL return a `RetentionReport` (matched, acted-on, s
+  > #### Scenario: Apply enforces matching policies
+  > - **WHEN** `Apply` runs with a shred policy and matching events exist
+  > - **THEN** the matching subjects' keys are revoked and the report counts them
+--- candidata: in-place-stream-re-encryption [PR]
+  | ## ADDED Requirements
+  | ### Requirement: In-place stream re-encryption
+  | `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > ### Requirement: In-place stream re-encryption
+  > `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > string) (reEncrypted int, keyIDs []string, err error)` that brings a stream's
+  > existing events under the current `FieldEncryptionConfig` in place — sealing each
+  > event's configured fields under the current key and rewriting the same row — while
+  > preserving the event's id, type, stream, version, global position, and timestamp
+  > (the payload's at-rest encoding changes, not the event's identity or order). The key
+  > MUST be resolved exactly as the append path would (running the configured
+--- candidata: saga-orchestration [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Saga retry attempts are at least one
+  | `WithSagaRetryAttempts(n)` SHALL clamp the configured attempts to a minimum of 1, so a
+  > saga event is always attempted at least once. A configured value of 0 SHALL NOT cause
+  > the processing loop to skip the event, drop it silently, or advance the position past an
+  > unprocessed event.
+  > #### Scenario: Zero retry attempts still processes the event
+  > - **WHEN** the saga manager is configured with `WithSagaRetryAttempts(0)` and an event arrives
+  > - **THEN** the event is dispatched at least once and the position advances only after a real attempt, not over a silently-dropped event
+  > ### Requirement: Context cancellation during dispatch does not trigger compensation
+  > The saga manager SHALL NOT treat a command-dispatch failure of `context.Canceled` or
+
+===== P068 | qzw881130/AI-NovelFlow PR #18 | capacidade do par: workflow
+PR: feat: 新增旁白角色和多关键帧参考
+arquivos ligados: frontend/my-app/src/pages/ChapterGenerate/components/AudioGenTab.tsx;frontend/my-app/src/pages/ChapterGenerate/components/ShotForm.tsx;frontend/my-app/src/pages/ChapterGenerate/components/ShotSplitTab.tsx;frontend/my-app/src/pages/ChapterGenerate/components/VideoGenTab.tsx
+--- linhas alteradas (473; mostrando até 40)
++  isNarrator?: boolean;
++  isNarrator,
+-        isSelected ? 'bg-blue-50 border-blue-300' : ''
+-      }`}
++        isSelected ? (isNarrator ? 'bg-purple-50 border-purple-300' : 'bg-blue-50 border-blue-300') : ''
++      } ${isNarrator ? 'border-l-4 border-l-purple-400' : ''}`}
+-          <ChevronRight className={`w-4 h-4 flex-shrink-0 ${isSelected ? 'text-blue-500' : 'text-gray-400'}`} />
++          <ChevronRight className={`w-4 h-4 flex-shrink-0 ${isSelected ? (isNarrator ? 'text-purple-500' : 'text-blue-500') : 'text-gray-400'}`} />
+-            <p className="text-sm font-medium text-gray-900 truncate">{charName}</p>
++            <div className="flex items-center gap-2">
++              <p className="text-sm font-medium text-gray-900 truncate">{charName}</p>
++              {isNarrator && (
++                <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded">{t('chapterGenerate.narration')}</span>
++              )}
++            </div>
+-          <button
+-            onClick={(e) => onRemove(charName, e)}
+-            disabled={isRemoving}
+-            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+-            title={t('chapterGenerate.removeFromShot')}
+-          >
+-            {isRemoving ? (
+-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+-            ) : (
+-              <X className="w-3.5 h-3.5" />
+-            )}
+-          </button>
++          {!isNarrator && (
++            <button
++              onClick={(e) => onRemove(charName, e)}
++              disabled={isRemoving}
++              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
++              title={t('chapterGenerate.removeFromShot')}
++            >
++              {isRemoving ? (
++                <Loader2 className="w-3.5 h-3.5 animate-spin" />
++              ) : (
++                <X className="w-3.5 h-3.5" />
++              )}
++            </button>
+--- candidata: shot-audio-generation [tasks+PR+termos]
+  | # shot-audio-generation Specification
+  | ## Purpose
+  | 定义基于分镜台词和角色音色生成语音音频的能力要求，支持单个分镜和批量章节音频生成。
+  > - **THEN** 系统 SHALL 为每条台词创建一个 "character_audio" 类型的任务
+  > - **THEN** 端点 SHALL 为 `POST /api/novels/{novel_id}/chapters/{chapter_id}/shots/{shot_index}/audio`
+  > - **AND** 请求体 SHALL 包含 `dialogues` 数组
+  > - **THEN** 系统 SHALL 检查角色是否有 `reference_audio_url`
+  > - **THEN** 角色的 `reference_audio_url` SHALL 作为工作流的参考音频输入
+  > - **AND** 情感提示词 SHALL 注入到 `emotion_prompt_node_id` 节点
+  > - **WHEN** 角色没有 `reference_audio_url`
+  > - **AND** 返回数据 SHALL 包含 `total_tasks` 和 `total_warnings` 计数
+--- candidata: shot-dialogue-parse [tasks+PR+termos]
+  | # 功能规格说明
+  | ## MODIFIED Requirements
+  | ### Requirement: 分镜数据存储台词列表
+  > - **THEN** 分镜数据 SHALL 包含 `dialogues` 数组字段
+  > - **AND** 每个台词项 SHALL 包含 `character_name`、`text`、`type`、`order` 和可选的 `emotion_prompt`
+  > - **THEN** 分镜记录 SHALL 仍有效，`dialogues` 为空数组或不存在
+  > - `type`: 台词类型（必填，枚举值：`character`、`narration`）
+  > - `order`: 时序序号（必填，非负整数）
+  > - `character_name`: 角色名称（必填，旁白时为"旁白"）
+  > - `emotion_prompt`: 情感提示词（可选，默认"自然"）
+  > - **THEN** 系统 SHALL 创建一条类型为 `character` 的空白台词记录
+--- candidata: keyframe-control [tasks+PR]
+  | # 功能规格说明
+  | ## ADDED Requirements
+  | ### Requirement: 分镜存储关键帧数据
+  > - **THEN** 分镜数据 SHALL 包含 `keyframes` 数组字段
+  > - **AND** 每个关键帧项 SHALL 包含 `description`、`image_url`、`image_source` 和 `frame_index` 字段
+  > - **THEN** 分镜记录 SHALL 仍有效，`keyframes` 为空数组或不存在
+  > - `image_url`: 图片 URL（可选）
+  > - `reference_image_url`: 参考图片 URL（可选，null 表示不使用参考图）
+  > - **THEN** `reference_image_url` 字段：
+  > - **THEN** 系统 SHALL 自动填入分镜图 URL 作为 `reference_image_url`
+  > - **THEN** 系统 SHALL 自动填入 `keyframes[frame_index - 1].image_url` 作为 `reference_image_url`
+--- candidata: narrator-support [tasks+PR]
+  | # 功能规格说明
+  | ## ADDED Requirements
+  | ### Requirement: 自动创建旁白角色
+  > - **THEN** 旁白角色的 `voice_prompt` 和 `reference_audio_url` SHALL 用于旁白音频生成
+  > - **AND** `type` 枚举值 SHALL 为 `character` 或 `narration`
+  > - **WHEN** 台词 `type` 为 `character`
+  > - **THEN** 台词的 `character_name` SHALL 对应角色表中的角色
+  > - **WHEN** 台词 `type` 为 `narration`
+  > - **THEN** 台词的 `character_name` SHALL 为"旁白"
+  > - **THEN** 台词数据 SHALL 包含 `order` 字段
+  > - **AND** `order` SHALL 为非负整数
+--- candidata: audio-reference [tasks+PR]
+  | # 功能规格说明
+  | ## ADDED Requirements
+  | ### Requirement: 分镜存储参考音频
+  > - **THEN** 分镜数据 SHALL 包含 `reference_audio_url` 字段
+  > - **AND** 合并后的音频 SHALL 作为 `reference_audio_url`
+  > - **THEN** 系统 SHALL 保存音频文件并更新 `reference_audio_url`
+  > - **THEN** 系统 SHALL 使用角色的 `reference_audio_url` 作为视频参考音频
+  > - **THEN** 系统 SHALL 保存音频并更新分镜的 `reference_audio_url`
+  > - **THEN** 端点 SHALL 为 `POST /api/novels/{novel_id}/chapters/{chapter_id}/shots/{shot_index}/upload-reference-audio`
+  > - **THEN** 系统 SHALL 按 `order` 字段排序所有台词
+  > - **AND** 该节点 SHALL 接收分镜的 `reference_audio_url` 作为输入
+
+===== P069 | 0verL1nk/PaperSage PR #28 | capacidade do par: middleware-architecture
+PR: feat: team architecture upgrade
+arquivos ligados: agent/runtime_agent.py
+--- linhas alteradas (4; mostrando até 40)
++    profile: Any | None = None,
++    deps: Any | None = None,
++        profile=profile,
++        deps=deps,
+--- candidata: a2a-task-execution [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unified task execution backend contract
+  | The system SHALL execute teammate todos through a backend abstraction that normalizes local and A2A-backed task execution results.
+--- candidata: leader-teammate-orchestration [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Leader-managed team planning
+  | The system SHALL support a structured Leader-teammate orchestration flow that converts a team-mode request into an explicit team plan before teammate execution begins.
+--- candidata: orchestration-middleware [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Context Analysis
+  | The middleware SHALL analyze the conversation context to determine task complexity.
+--- candidata: team-state-machine [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Team runs use explicit workflow states
+  | The system SHALL track structured workflow state for each team run.
+--- candidata: todolist-middleware [PR]
+  | ## ADDED Requirements
+  | ### Requirement: LangChain TodoListMiddleware Integration
+  | The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.

@@ -1,0 +1,2903 @@
+===== P148 | repo lis186/ccxray | PR #37: feat: Codex dashboard parity — write-path abstraction + WS capture + UI fixes | capacidade: session-title-initial-load
+--- SPEC VIVA
+# session-title-initial-load Specification
+
+## Purpose
+TBD - created by archiving change session-title-initial-load. Update Purpose after archive.
+## Requirements
+### Requirement: Entries API returns session titles
+The `/_api/entries` endpoint SHALL return a JSON object with shape `{ entries: Array, sessionTitles: Object }` where `sessionTitles` is a map of session ID to title string, containing only sessions that have a non-null title in `store.sessionMeta`.
+
+#### Scenario: Response includes known titles
+- **WHEN** the client fetches `/_api/entries`
+- **THEN** the response body is `{ "entries": [...], "sessionTitles": { "<sid>": "<title>", ... } }`
+- **THEN** `sessionTitles` contains every session whose title is non-null in `store.sessionMeta`
+
+#### Scenario: No session titles exist
+- **WHEN** no sessions have been titled yet
+- **THEN** `sessionTitles` is an empty object `{}`
+
+### Requirement: Client applies session titles after entries load
+After populating `sessionsMap` from the entries array, the client SHALL iterate `sessionTitles` and apply each title to the corresponding session, then re-render any visible session card element.
+
+#### Scenario: Title applied to known session
+- **WHEN** `sessionTitles` contains a sid present in `sessionsMap`
+- **THEN** `sess.title` is set to the title value
+- **THEN** the session card element is re-rendered if it exists in the DOM
+
+#### Scenario: Title for session not in DOM is skipped
+- **WHEN** `sessionTitles` contains a sid whose card element does not exist in the DOM
+- **THEN** no DOM mutation occurs, but `sess.title` is still updated in `sessionsMap`
+
+#### Scenario: Subsequent SSE title update overwrites initial-load title
+- **WHEN** a `session_title_update` SSE event arrives after initial load
+- **THEN** the SSE handler applies the new title using the existing `titleReqTs` comparison logic
+- **THEN** the live title takes precedence over the initial-load title
+
+
+--- ARQUIVOS DO PR (91)
+modified  +34    -0     CHANGELOG.md
+modified  +23    -0     CLAUDE.md
+added     +300   -0     docs/normalization-map.md
+added     +750   -0     docs/superpowers/plans/2026-06-03-a1a3-write-path-abstraction.md
+added     +100   -0     docs/superpowers/specs/2026-06-03-a1a3-premortem.md
+added     +193   -0     docs/superpowers/specs/2026-06-03-codex-write-path-abstraction-design.md
+added     +133   -0     docs/war-stories.md
+added     +197   -0     docs/wire-protocol-reference.md
+modified  +27    -9     openspec/changes/2026-05-26-auth-phase-2/design.md
+modified  +82    -51    openspec/changes/2026-05-26-auth-phase-2/tasks.md
+modified  +10    -10    openspec/changes/2026-05-26-auth-phase-3/tasks.md
+added     +2     -0     openspec/changes/2026-05-28-codex-dashboard-parity/.openspec.yaml
+added     +84    -0     openspec/changes/2026-05-28-codex-dashboard-parity/design.md
+added     +38    -0     openspec/changes/2026-05-28-codex-dashboard-parity/proposal.md
+added     +34    -0     openspec/changes/2026-05-28-codex-dashboard-parity/tasks.md
+added     +292   -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/design.md
+added     +50    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/proposal.md
+added     +74    -0     openspec/changes/2026-05-29-dashboard-agent-abstraction/tasks.md
+modified  +34    -4     openspec/specs/two-domain-auth/spec.md
+modified  +1     -1     package.json
+modified  +2     -1     public/entry-rendering.js   <== código ligado à spec
+modified  +4     -0     public/index.html
+modified  +62    -92    public/messages.js
+modified  +30    -26    public/miller-columns.js
+added     +30    -0     public/renderers/anthropic.js
+added     +4     -0     public/renderers/fallback.js
+added     +7     -0     public/renderers/index.js
+added     +65    -0     public/renderers/openai.js
+added     +496   -0     reason/260529-dashboard-agent-abstraction/handoff.md
+added     +66    -0     reason/260603-codex-parity-ledger/ledger.md
+added     +25    -0     reason/260603-codex-parity-ledger/next-session-prompt.md
+added     +143   -0     scripts/rebuild-missing-index.js
+modified  +155   -91    server/auth.js
+modified  +0     -15    server/config.js
+modified  +5     -0     server/cost-worker.js
+added     +16    -0     server/entry.js
+modified  +81    -221   server/forward.js
+modified  +54    -23    server/helpers.js
+modified  +180   -59    server/hub.js
+modified  +176   -146   server/index.js
+added     +71    -0     server/openai-response.js
+removed   +0     -94    server/openai-session.js
+modified  +10    -2     server/pricing.js
+modified  +5     -0     server/providers.js
+modified  +27    -13    server/routes/auth.js
+modified  +2     -1     server/sse-broadcast.js
+modified  +6     -0     server/system-prompt.js
+added     +112   -0     server/wire-parsers/anthropic.js
+added     +15    -0     server/wire-parsers/index.js
+added     +220   -0     server/wire-parsers/openai.js
+modified  +115   -108   server/ws-proxy.js
+modified  +132   -4     test/auth-bootstrap.test.js
+added     +94    -0     test/auth-dashboard-shell.e2e.test.js
+modified  +220   -29    test/auth-dispatcher.test.js
+modified  +58    -52    test/auth-header-injection.e2e.test.js
+modified  +1     -0     test/auth-token-strip.e2e.test.js
+added     +133   -0     test/auth-upstream-credential.test.js
+modified  +3     -50    test/auth-ws.test.js
+removed   +0     -81    test/auth.test.js
+modified  +1     -0     test/codex-noise-suppression.e2e.test.js
+modified  +11    -10    test/config.test.js
+modified  +1     -1     test/dashboard-codex-e2e.test.js
+added     +166   -0     test/entry.test.js
+added     +16    -0     test/fixtures/codex-ws-frames/say-hi.ndjson
+added     +27    -0     test/fixtures/wire-parsers/anthropic/turn1_req.json
+added     +11    -0     test/fixtures/wire-parsers/anthropic/turn1_res.json
+added     +31    -0     test/fixtures/wire-parsers/anthropic/turn2_req.json
+added     +14    -0     test/fixtures/wire-parsers/openai/noise_paths.json
+added     +63    -0     test/fixtures/wire-parsers/openai/sse-events.json
+added     +24    -0     test/fixtures/wire-parsers/openai/turn1_req.json
+added     +27    -0     test/fixtures/wire-parsers/openai/turn1_res.json
+added     +36    -0     test/fixtures/wire-parsers/openai/turn2_req.json
+modified  +49    -60    test/helpers.test.js
+added     +31    -0     test/helpers/upstream-token.js
+added     +456   -0     test/hub-socket.test.js
+modified  +95    -142   test/hub.test.js
+modified  +13    -7     test/messages-ui.test.js
+modified  +7     -1     test/pricing.test.js
+added     +107   -0     test/provider-compat.test.js
+modified  +7     -0     test/providers.test.js
+modified  +1     -0     test/socket-error-survival.e2e.test.js
+modified  +124   -9     test/startup.test.js
+modified  +25    -1     test/system-prompt.test.js
+modified  +1     -0     test/websocket-headers-forward.e2e.test.js
+modified  +129   -5     test/websocket-proxy.test.js
+added     +66    -0     test/wire-parsers-anthropic.test.js
+added     +121   -0     test/wire-parsers-build-entry.test.js
+added     +125   -0     test/wire-parsers-openai.test.js
+added     +142   -0     test/ws-frame-timeline.test.js
+added     +27    -0     test/ws-restore-guard.test.js
+modified  +1     -0     test/ws-shutdown-drain.e2e.test.js
+--- DIFF DO CÓDIGO LIGADO
+### public/entry-rendering.js
+@@ -228,7 +228,7 @@ function addEntry(e) {
+   const entryCwd = e.cwd || null;
+   if (!sessionsMap.has(sid)) {
+     const shortSid = sid.slice(0, 8);
+-    sessionsMap.set(sid, { id: sid, firstTs: e.ts, firstId: entryId, lastId: entryId, count: 0, mainCount: 0, subCount: 0, model, totalCost: 0, cwd: entryCwd, title: null, titleReqTs: 0, lastAssistantText: null });
++    sessionsMap.set(sid, { id: sid, firstTs: e.ts, firstId: entryId, lastId: entryId, count: 0, mainCount: 0, subCount: 0, model, totalCost: 0, cwd: entryCwd, title: null, titleReqTs: 0, lastAssistantText: null, agent: e.agent || 'claude' });
+     const sessEl = document.createElement('div');
+     sessEl.className = 'session-item';
+     sessEl.dataset.sessionId = sid;
+@@ -354,6 +354,7 @@ function addEntry(e) {
+     title: e.title || null,
+     coreHash: e.coreHash || null,
+     thinkingStripped: e.thinkingStripped || false,
++    provider: e.provider || 'anthropic',
+   });
+ 
+   // ── V3 turn card: five-line layout ──
+
+===== P149 | repo travishathaway/osmprj | PR #8: Add limit to concurrent downloads, implement processing pipeline | capacidade: color-output
+--- SPEC VIVA
+# color-output Specification
+
+## Purpose
+
+This specification defines the canonical color output helpers and NO_COLOR compliance requirements for consistent terminal output across all commands.
+
+## Requirements
+
+### Requirement: Canonical icon helpers
+The system SHALL provide a `crate::output` module exporting five icon functions — `icon_success()`, `icon_error()`, `icon_warn()`, `icon_info()`, and `icon_skip()` — each returning a `console::StyledObject<&'static str>` with a fixed color and symbol.
+
+| Function        | Symbol | Style        | Semantic meaning        |
+|-----------------|--------|--------------|-------------------------|
+| `icon_success`  | ✓      | green        | completed / ok          |
+| `icon_error`    | ✗      | red          | failed / error          |
+| `icon_warn`     | ⚠      | yellow       | warning / degraded      |
+| `icon_info`     | ℹ      | dim          | informational / note    |
+| `icon_skip`     | ⊙      | dim          | skipped / no-op         |
+
+All command files SHALL import icons from `crate::output` and SHALL NOT inline `console::style()` calls for status icons.
+
+#### Scenario: Icon functions return styled output when color is enabled
+- **WHEN** color output is enabled and `output::icon_success()` is called
+- **THEN** the result formats as a green `✓` character
+
+#### Scenario: Icon functions return plain output when color is disabled
+- **WHEN** `NO_COLOR` is set or `--no-color` flag is passed and `output::icon_success()` is called
+- **THEN** the result formats as a plain `✓` character with no ANSI codes
+
+### Requirement: Canonical progress bar style
+The system SHALL provide a `crate::output::progress_bar_style()` function returning an `indicatif::ProgressStyle` suitable for download progress bars. All progress bars in the `sync` command SHALL use this shared style.
+
+#### Scenario: Progress bar style is importable
+- **WHEN** `output::progress_bar_style()` is called
+- **THEN** it returns a valid `ProgressStyle` without panicking
+
+### Requirement: NO_COLOR environment variable compliance
+The system SHALL disable all ANSI color output when the `NO_COLOR` environment variable is present and non-empty, regardless of its value, per the [no-color.org](https://no-color.org/) specification.
+
+#### Scenario: NO_COLOR disables color in sync output
+- **WHEN** the user runs `NO_COLOR=1 osmprj sync`
+- **THEN** all status icons and progress bar elements in stdout/stderr contain no ANSI escape sequences
+
+#### Scenario: NO_COLOR disables color in themes list output
+- **WHEN** the user runs `NO_COLOR=1 osmprj themes list`
+- **THEN** all output contains no ANSI escape sequences
+
+#### Scenario: Empty NO_COLOR does not disable color
+- **WHEN** the `NO_COLOR` environment variable is set to an empty string (`NO_COLOR=`)
+- **THEN** color output is not disabled by the env var
+
+--- ARQUIVOS DO PR (40)
+modified  +1     -0     .gitignore
+modified  +19    -4     README.md
+modified  +2     -2     docs/docs/intro.md
+modified  +39    -0     docs/src/pages/index.tsx
+added     +2     -0     openspec/changes/archive/2026-05-09-local-test-http-server/.openspec.yaml
+added     +129   -0     openspec/changes/archive/2026-05-09-local-test-http-server/design.md
+added     +38    -0     openspec/changes/archive/2026-05-09-local-test-http-server/proposal.md
+added     +20    -0     openspec/changes/archive/2026-05-09-local-test-http-server/specs/sync-command/spec.md
+added     +139   -0     openspec/changes/archive/2026-05-09-local-test-http-server/specs/test-http-server/spec.md
+added     +54    -0     openspec/changes/archive/2026-05-09-local-test-http-server/tasks.md
+added     +2     -0     openspec/changes/pipelined-sync-with-concurrency-controls/.openspec.yaml
+added     +108   -0     openspec/changes/pipelined-sync-with-concurrency-controls/design.md
+added     +34    -0     openspec/changes/pipelined-sync-with-concurrency-controls/proposal.md
+added     +16    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/osm2pgsql-tuner/spec.md
+added     +56    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/pipelined-sync/spec.md
+added     +59    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/sync-command/spec.md
+added     +45    -0     openspec/changes/pipelined-sync-with-concurrency-controls/specs/sync-concurrency-controls/spec.md
+added     +75    -0     openspec/changes/pipelined-sync-with-concurrency-controls/tasks.md
+modified  +71    -0     openspec/specs/sync-command/spec.md
+added     +137   -0     openspec/specs/test-http-server/spec.md
+modified  +3758  -2169  pixi.lock
+modified  +1     -1     pixi.toml
+modified  +5     -5     scripts/osmprj.asciinema.sh
+modified  +5     -1     src/commands/init.rs
+modified  +623   -250   src/commands/sync.rs   <== código ligado à spec
+modified  +109   -1     src/config.rs
+modified  +4     -0     src/error.rs
+modified  +12    -3     src/main.rs
+modified  +8     -0     src/output.rs   <== código ligado à spec
+modified  +63    -4     src/tuner.rs
+added     +25    -0     tests/integration/_platform.py
+modified  +289   -0     tests/integration/conftest.py
+modified  +0     -30    tests/integration/test_remove.py
+modified  +21    -16    tests/integration/test_sync_e2e.py
+added     +163   -0     tests/integration/test_sync_errors.py
+modified  +3     -1     tests/integration/test_themes_e2e.py
+renamed   +0     -0     tests/integration/test_themes_list.py
+added     +20    -0     tests/themes/bad-postprocess/config.lua
+added     +2     -0     tests/themes/bad-postprocess/sql/01_bad.sql
+added     +5     -0     tests/themes/bad-postprocess/theme.toml
+--- DIFF DO CÓDIGO LIGADO
+### src/commands/sync.rs
+@@ -14,6 +14,10 @@ use std::process::Stdio;
+ use std::sync::{Arc, Mutex};
+ use tokio::fs as tfs;
+ use tokio::io::{AsyncBufReadExt, BufReader};
++use tokio::sync::Semaphore;
++
++/// Return type for an import task: source name plus an optional post-process warning.
++type ImportResult = Result<(String, Option<OsmprjError>), (String, OsmprjError)>;
+ 
+ // ─── helpers ─────────────────────────────────────────────────────────────────
+ 
+@@ -59,6 +63,25 @@ async fn fetch_remote_md5(client: &reqwest::Client, pbf_url: &str) -> Result<Str
+     Ok(text.split_whitespace().next().unwrap_or("").to_string())
+ }
+ 
++/// Issue a HEAD request to determine the file size before downloading.
++/// Returns 0 on failure or if `Content-Length` is absent — those sources
++/// sort to the back of the download queue without causing a sync failure.
++async fn fetch_content_length(client: &reqwest::Client, url: &str) -> u64 {
++    client
++        .head(url)
++        .send()
++        .await
++        .ok()
++        .and_then(|r| r.content_length())
++        .unwrap_or(0)
++}
++
++/// Sort a list of `(name, url, size)` tuples largest-first by `size`.
++/// Uses a stable sort so equal-sized sources preserve their original order.
++fn sort_sources_by_size(sources: &mut [(String, String, u64)]) {
++    sources.sort_by_key(|b| std::cmp::Reverse(b.2));
++}
++
+ /// Stream a single PBF file to disk with a progress bar; return bytes written.
+ async fn download_pbf(
+     client: &reqwest::Client,
+@@ -89,21 +112,30 @@ async fn download_pbf(
+     let mut file = tfs::File::create(dest).await.map_err(OsmprjError::Io)?;
+     let mut stream = response;
+ 
+-    while let Some(chunk) = stream
+-        .chunk()
+-        .await
+-        .map_err(|e| OsmprjError::DownloadFailed {
+-            url: url.to_string(),
+-            message: e.to_string(),
+-        })?
+-    {
+-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++    let stream_result = async {
++        while let Some(chunk) = stream
++            .chunk()
+             .await
+-            .map_err(OsmprjError::Io)?;
+-        bar.inc(chunk.len() as u64);
++            .map_err(|e| OsmprjError::DownloadFailed {
++                url: url.to_string(),
++                message: e.to_string(),
++            })?
++        {
++            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++                .await
++                .map_err(OsmprjError::Io)?;
++            bar.inc(chunk.len() as u64);
++        }
++        Ok::<(), OsmprjError>(())
+     }
++    .await;
+ 
+-    Ok(())
++    if stream_result.is_err() {
++        drop(file);
++        let _ = tfs::remove_file(dest).await;
++    }
++
++    stream_result
+ }
+ 
+ // ─── download phase ──────────────────────────────────────────────────────────
+@@ -115,12 +147,25 @@ struct DownloadResult {
+ }
+ 
+ async fn download_source(
++    dl_sem: Arc<Semaphore>,
+     client: Arc<reqwest::Client>,
+     source_name: String,
+     url: String,
+     dest: PathBuf,
+     bar: ProgressBar,
++    bar_style: indicatif::ProgressStyle,
+ ) -> Result<DownloadResult, (String, OsmprjError)> {
++    // Acquire the download semaphore permit; held until MD5 verification completes.
++    // While waiting the bar shows "Pending <name>" in the dim pending style.
++    let _permit = dl_sem.acquire().await.expect("semaphore closed");
++
++    // Permit acquired: switch to the full download bar style and update the message.
++    bar.set_style(bar_style);
++    bar.set_message(output::truncate_message(
++        &format!("{source_name}.osm.pbf"),
++        output::progress_bar_msg_width(),
++    ));
++
+     let err = |e| (source_name.clone(), e);
+ 
+     download_pbf(&client, &url, &dest, &bar)
+@@ -141,7 +186,8 @@ async fn download_source(
+         ));
+     }
+ 
+-    bar.finish_with_message("✓");
++    // Disappear the download bar — the import spinner replaces it immediately.
++    bar.finish_and_clear();
+ 
+     Ok(DownloadResult {
+         source_name,
+@@ -302,7 +348,7 @@ fn collect_sql_files(source: &SourceConfig, registry: &ThemeRegistry) -> Vec<Pat
+     files
+ }
+ 
+-async fn replication_init(
++async fn run_replication_init(
+     database_url: &str,
+     schema: &str,
+     log_path: &Path,
+@@ -348,6 +394,126 @@ async fn replication_init(
+     Ok(())
+ }
+ 
++// ─── import source task ───────────────────────────────────────────────────────
++
++/// All data needed to run a single source through the full import pipeline.
++struct ImportSourceArgs {
++    pub source_name: String,
++    pub db_url: String,
++    pub effective_schema: String,
++    pub srid: u32,
++    pub argv: Vec<String>,
++    pub sql_files: Vec<PathBuf>,
++    pub log_dir: PathBuf,
++    pub verbose: bool,
++}
++
++/// Run a source through the full import pipeline under the import semaphore:
++///   1. osm2pgsql import
++///   2. post-processing SQL (if any)
++///   3. replication init
++///
++/// The semaphore permit is held for the entire pipeline duration so that
++/// concurrent import slots are not double-counted during post-processing.
++async fn import_source(
++    imp_sem: Arc<Semaphore>,
++    mp: Arc<MultiProgress>,
++    args: ImportSourceArgs,
++) -> ImportResult {
++    let name = &args.source_name;
++    let err = |e| (name.clone(), e);
++
++    let spinner_style = output::spinner_style();
++    let pending_style = output::pending_style();
++
++    // Add the spinner immediately so the user sees "Pending <name>" while
++    // waiting for the import semaphore permit.
++    let spinner = mp.add(ProgressBar::new_spinner());
++    spinner.set_style(pending_style);
++    spinner.set_message(format!("Pending {name}"));
++    spinner.enable_steady_tick(std::time::Duration::from_millis(120));
++
++    // Acquire the import semaphore permit; held until replication init completes.
++    let _permit = imp_sem.acquire().await.expect("semaphore closed");
++
++    // Permit acquired: switch to the active import style.
++    spinner.set_style(spinner_style.clone());
++    spinner.set_message(format!("Importing {name}..."));
++    spinner.enable_steady_tick(std::time::Duration::from_millis(250));
++
++    let log_path = args.log_dir.join(format!("{}.log", name.replace('/', "-")));
++    let env_vars = vec![
++        ("OSMPRJ_SCHEMA".to_string(), args.effective_schema.clone()),
++        ("OSMPRJ_SRID".to_string(), args.srid.to_string()),
++    ];
++
++    run_subprocess(&args.argv, &env_vars, &log_path, args.verbose, &spinner)
++        .await
++        .map_err(|e| {
++            spinner.finish_with_message(format!("{} {name} failed", output::icon_error()));
++            err(e)
++        })?;
++
++    // ── Post-processing SQL ───────────────────────────────────────────────────
++    let mut pp_warning: Option<OsmprjError> = None;
++    if !args.sql_files.is_empty() {
++        spinner.set_message(format!("Post-processing {name}..."));
++        match db::connect(&args.db_url).await {
++            Err(e) => {
++                spinner.set_message(format!("Post-processing {name} skipped (no DB)..."));
++                eprintln!(
++                    "  {} {name}: could not connect for post-processing: {e}",
++                    output::icon_warn()
++                );
++                pp_warning = Some(OsmprjError::PostProcessFailed {
++                    source_name: name.clone(),
++                    file: String::new(),
++                    message: e.to_string(),
++                });
++            }
++            Ok(client) => {
++                match run_postprocess(&client, name, &args.effective_schema, &args.sql_files).await
++                {
++                    Ok(()) => {
++                        // spinner message will update to replication step below
++                    }
++                    Err(e) => {
++                        spinner
++                            .set_message(format!("Post-processing {name} failed, continuing..."));
++                        eprintln!("  {e}");
++                        pp_warning = Some(e);
++                    }
++                }
++            }
++        }
++    }
++
++    // ── Replication init ──────────────────────────────────────────────────────
++    spinner.set_message(format!("Initialising replication for {name}..."));
++    let repl_log_path = args
++        .log_dir
++        .join(format!("{}-replication-init.log", name.replace('/', "-")));
++
++    run_replication_init(
++        &args.db_url,
++        &args.effective_schema,
++        &repl_log_path,
++        args.verbose,
++    )
++    .await
++    .map_err(|e| {
++        spinner.finish_with_message(format!(
++            "{} {name} replication init failed",
++            output::icon_error()
++        ));
++        err(e)
++    })?;
++
++    spinner.finish_with_message(format!("{} {name} imported", output::icon_success()));
++
++    Ok((name.clone(), pp_warning))
++}
++
+ // ─── replication update ───────────────────────────────────────────────────────
+ 
+ async fn replication_update(
+@@ -427,6 +593,7 @@ async fn replication_update(
+ pub async fn run(
+     requested_sources: Vec<String>,
+     verbose: bool,
++    postprocess_only: bool,
+     config: &ProjectConfig,
+ ) -> Result<(), OsmprjError> {
+     // Validate source filter
+@@ -443,6 +610,84 @@ pub async fn run(
+         }
+     }
+ 
++    // ── --postprocess-only early-return branch ────────────────────────────────
++    // Re-run post-processing SQL for each source without downloading or importing.
++    // osm2pgsql / osm2pgsql-replication are not required.
++    if postprocess_only {
++        let db_url = config
++            .project
++            .database_url
++            .as_deref()
++            .ok_or(OsmprjError::NoDatabaseUrl)?;
++
++        let theme_registry = ThemeRegistry::build();
++
++        let sources_to_process: Vec<(&String, &SourceConfig)> = config
++            .sources
++            .iter()
++            .filter(|(name, _)| requested_sources.is_empty() || requested_sources.contains(name))
++            .collect();
++
++        let mut pp_errors: Vec<(String, OsmprjError)> = Vec::new();
++
++        for (name, source) in &sources_to_process {
++            let sql_files = collect_sql_files(source, &theme_registry);
++            if sql_files.is_empty() {
++                println!(
++                    "  {} {name}: no post-processing SQL, skipping",
++                    output::icon_skip()
++                );
++                continue;
++            }
++
++            let effective_schema = source.effective_schema(name);
++
++            match db::connect(db_url).await {
++                Err(e) => {
++                    eprintln!(
++                        "  {} {name}: could not connect for post-processing: {e}",
+
+### src/output.rs
+@@ -64,6 +64,14 @@ pub fn progress_bar_style() -> ProgressStyle {
+     }
+ }
+ 
++/// Style for a download that is queued but waiting for a semaphore permit.
++/// Shows a dim spinner and "Pending <name>" with no progress bar or byte counts.
++pub fn pending_style() -> ProgressStyle {
++    ProgressStyle::with_template("  {spinner:.dim} {msg}")
++        .unwrap()
++        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
++}
++
+ pub fn spinner_style() -> ProgressStyle {
+     ProgressStyle::with_template("  {spinner} {msg}")
+         .unwrap()
+
+===== P150 | repo memorysaver/looplia-core | PR #47: feat: skill auto-discovery system (v0.8.0) | capacidade: workflow-execution
+--- SPEC VIVA
+# Workflow Execution Specification
+
+## Purpose
+
+Defines how workflow execution completes and returns results using sandbox-based validation and result extraction.
+
+## Requirements
+
+### Requirement: Sandbox-Based Result Extraction
+
+The workflow executor SHALL extract final results from sandbox output files instead of StructuredOutput tool calls.
+
+#### Scenario: Successful workflow completion
+- **GIVEN** a workflow has completed execution
+- **AND** all steps have `validated: true` in validation.json
+- **WHEN** the SDK query completes
+- **THEN** the executor SHALL read `validation.json` from the sandbox
+- **AND** identify the final step (last step or step with `final: true`)
+- **AND** read the final artifact from the step's output path
+- **AND** return the artifact as the workflow result
+
+#### Scenario: Final artifact extraction path
+- **GIVEN** validation.json contains:
+  ```json
+  {
+    "steps": {
+      "writing-kit": {
+        "output": "outputs/writing-kit.json",
+        "validated": true
+      }
+    }
+  }
+  ```
+- **WHEN** extracting the final result
+- **THEN** the executor SHALL read `{sandbox}/outputs/writing-kit.json`
+- **AND** parse and return its contents
+
+### Requirement: No SDK StructuredOutput Enforcement
+
+The workflow executor SHALL NOT use SDK's `outputFormat: json_schema` setting.
+
+#### Scenario: Query options exclude outputFormat
+- **GIVEN** the workflow executor creates SDK query options
+- **WHEN** initializing the query
+- **THEN** the options SHALL NOT include `outputFormat: { type: "json_schema" }`
+- **AND** no StructuredOutput tool enforcement SHALL be applied by the SDK
+
+#### Scenario: No synthetic StructuredOutput messages
+- **GIVEN** a model attempts to stop without calling StructuredOutput
+- **WHEN** the SDK processes the stop request
+- **THEN** the SDK SHALL NOT inject "You MUST call StructuredOutput" messages
+- **AND** only custom hooks (TypeScript hooks) SHALL control stop behavior
+
+### Requirement: Validation.json Step Population
+
+The run command SHALL populate validation.json with workflow steps before execution starts.
+
+#### Scenario: Steps populated from workflow definition
+- **GIVEN** a workflow is being executed
+- **AND** the sandbox has been created with initial validation.json
+- **WHEN** the run command prepares for execution
+- **THEN** it SHALL call `generateValidationManifest()` with the workflow definition
+- **AND** update validation.json `steps` with the manifest steps
+- **AND** each step SHALL have `validated: false` initially
+
+#### Scenario: Steps enable stop-guard validation
+- **GIVEN** validation.json has been populated with steps
+- **WHEN** the agent attempts to stop
+- **THEN** the stop hook SHALL find steps to validate
+- **AND** SHALL block if any step is not validated
+
+### Requirement: Stop Hook Continuation Prompts
+
+The stop hook SHALL return actionable continuation prompts when blocking.
+
+#### Scenario: Missing output files
+- **GIVEN** stop hook detects missing output files
+- **WHEN** blocking the stop request
+- **THEN** the `reason` field SHALL contain an actionable continuation prompt
+- **AND** the prompt SHALL tell the agent to create the missing files using Write tool
+- **AND** the prompt SHALL NOT be just an explanation of what's wrong
+
+#### Scenario: Pending validation
+- **GIVEN** stop hook detects steps with `validated: false`
+- **WHEN** blocking the stop request
+- **THEN** the `reason` field SHALL contain an actionable continuation prompt
+- **AND** the prompt SHALL tell the agent to re-write files to trigger validation
+- **AND** the prompt SHALL NOT be just an explanation of what's wrong
+
+#### Scenario: Continuation prompt fed to agent
+- **GIVEN** stop hook returns a block decision with a reason
+- **WHEN** the SDK processes the stop hook response
+- **THEN** the SDK SHALL create a synthetic message from the `reason` content
+- **AND** feed it back to the agent as a continuation prompt
+
+### Requirement: Sandbox Discovery
+
+The executor SHALL locate the active sandbox for result extraction.
+
+#### Scenario: Sandbox ID from workflow context
+- **GIVEN** the workflow-executor skill creates a sandbox with ID `content-2026-01-22-abc1`
+- **AND** the sandbox ID is included in the execution context
+- **WHEN** extracting results
+- **THEN** the executor SHALL use `~/.looplia/sandbox/content-2026-01-22-abc1/`
+
+#### Scenario: Sandbox discovery fallback
+- **GIVEN** no explicit sandbox ID is available in context
+- **WHEN** extracting results
+- **THEN** the executor SHALL find the most recently modified sandbox directory
+- **AND** use that sandbox for result extraction
+
+### Requirement: Error Handling for Result Extraction
+
+The executor SHALL handle result extraction failures gracefully.
+
+#### Scenario: Sandbox not found
+- **GIVEN** the expected sandbox directory does not exist
+- **WHEN** attempting to extract results
+- **THEN** the executor SHALL return an error result
+- **AND** the error message SHALL indicate "sandbox not found"
+
+#### Scenario: Validation state incomplete
+- **GIVEN** validation.json exists
+- **AND** one or more steps have `validated: false`
+- **WHEN** the SDK query completes unexpectedly
+- **THEN** the executor SHALL return an error result
+- **AND** the error message SHALL list the unvalidated steps
+
+#### Scenario: Final output file missing
+- **GIVEN** validation.json indicates the final step output path
+- **AND** the output file does not exist
+- **WHEN** extracting results
+- **THEN** the executor SHALL return an error result
+- **AND** the error message SHALL indicate the missing file path
+
+#### Scenario: Invalid JSON in final output
+- **GIVEN** the final output file exists
+- **AND** its contents are not valid JSON
+- **WHEN** extracting results
+- **THEN** the executor SHALL return an error result
+- **AND** the error message SHALL include the parse error details
+
+### Requirement: Workflow Result Structure
+
+The workflow result structure SHALL remain compatible with existing consumers.
+
+#### Scenario: Successful result format
+- **GIVEN** a workflow completes successfully
+- **WHEN** the result is returned
+- **THEN** it SHALL include:
+  - `success: true`
+  - `data.status: "success"`
+  - `data.sandboxId: string`
+  - `data.workflowId: string`
+  - `data.artifact: object` (the validated final output)
+
+#### Scenario: Error result format
+- **GIVEN** a workflow fails or cannot extract results
+- **WHEN** the error result is returned
+- **THEN** it SHALL include:
+  - `success: false`
+  - `error.type: string`
+  - `error.message: string`
+
+--- ARQUIVOS DO PR (45)
+modified  +49    -15    .claude/skills/looplia-e2e/SKILL.md
+added     +164   -0     .claude/skills/looplia-e2e/scripts/e2e-auto-discovery.sh
+added     +107   -0     .claude/skills/looplia-e2e/scripts/e2e-setup.sh
+modified  +109   -207   .claude/skills/looplia-e2e/scripts/e2e.sh
+modified  +45    -1     CHANGELOG.md
+modified  +1     -1     apps/cli/package.json
+modified  +130   -6     apps/cli/src/commands/build.ts
+modified  +7     -7     apps/cli/src/commands/init.ts
+modified  +1     -1     apps/cli/src/commands/run.ts   <== código ligado à spec
+modified  +146   -0     apps/cli/src/commands/skill.ts
+modified  +1     -1     apps/docs/package.json
+modified  +36    -0     apps/docs/src/content/docs/cli/skill.mdx
+modified  +1     -1     apps/docs/src/content/docs/index.mdx
+modified  +5     -5     docs/README.md
+added     +2     -0     openspec/changes/archive/2026-02-05-add-skill-search-command/.openspec.yaml
+added     +54    -0     openspec/changes/archive/2026-02-05-add-skill-search-command/design.md
+added     +26    -0     openspec/changes/archive/2026-02-05-add-skill-search-command/proposal.md
+added     +68    -0     openspec/changes/archive/2026-02-05-add-skill-search-command/specs/skill-search-command/spec.md
+added     +13    -0     openspec/changes/archive/2026-02-05-add-skill-search-command/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/.openspec.yaml
+added     +119   -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/design.md
+added     +45    -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/proposal.md
+added     +62    -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/specs/skill-architecture/spec.md
+added     +67    -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/specs/skill-discovery/spec.md
+added     +57    -0     openspec/changes/archive/2026-02-05-skill-auto-discovery/tasks.md
+modified  +48    -24    openspec/specs/skill-architecture/spec.md
+added     +67    -0     openspec/specs/skill-discovery/spec.md
+added     +68    -0     openspec/specs/skill-search-command/spec.md
+modified  +1     -1     packages/config/package.json
+modified  +1     -1     packages/core/package.json
+modified  +9     -1     packages/provider/package.json
+modified  +37    -48    packages/provider/src/bootstrap/index.ts
+modified  +2     -2     packages/provider/src/claude-agent-sdk/streaming/interactive-query-executor.ts   <== código ligado à spec
+modified  +22    -7     packages/provider/src/claude-agent-sdk/streaming/prompts/looplia-system.ts
+modified  +2     -2     packages/provider/src/claude-agent-sdk/streaming/query-executor.ts   <== código ligado à spec
+added     +143   -0     packages/provider/src/discovery/auto-discovery-plugin.ts
+added     +19    -0     packages/provider/src/discovery/index.ts
+added     +302   -0     packages/provider/src/discovery/skills-search.ts
+modified  +39    -34    packages/provider/src/registry/compiler.ts
+modified  +25    -12    packages/provider/test/bootstrap/default-sources.test.ts
+modified  +9     -6     packages/provider/test/bootstrap/index.test.ts
+modified  +7     -1     packages/provider/test/claude-agent-sdk/fixtures/test-data.ts
+added     +203   -0     packages/provider/test/discovery/auto-discovery-plugin.test.ts
+added     +199   -0     packages/provider/test/discovery/skills-search.test.ts
+modified  +2     -0     packages/provider/tsup.config.ts
+--- DIFF DO CÓDIGO LIGADO
+### apps/cli/src/commands/run.ts
+@@ -440,7 +440,7 @@ Examples:
+  * Get workspace path
+  */
+ function getWorkspacePath(): string {
+-  return resolve(homedir(), ".looplia");
++  return process.env.LOOPLIA_HOME ?? resolve(homedir(), ".looplia");
+ }
+ 
+ /**
+
+### packages/provider/src/claude-agent-sdk/streaming/interactive-query-executor.ts
+@@ -38,7 +38,7 @@ import {
+   processEvent,
+ } from "./executor-common";
+ import { ProgressTracker } from "./progress-tracker";
+-import { loopliaSystemPrompt } from "./prompts/looplia-system";
++import { getLoopliaSystemPrompt } from "./prompts/looplia-system";
+ import {
+   createTransformContext,
+   type TransformContext,
+@@ -198,7 +198,7 @@ export async function* executeInteractiveQueryStreaming<T>(
+         systemPrompt: {
+           type: "preset",
+           preset: "claude_code",
+-          append: `${loopliaSystemPrompt}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, resolve them against the User Working Directory above.`,
++          append: `${getLoopliaSystemPrompt(loopliaHome)}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, resolve them against the User Working Directory above.`,
+         },
+         // Include AskUserQuestion in allowed tools (interactive mode only)
+         allowedTools: [
+
+### packages/provider/src/claude-agent-sdk/streaming/query-executor.ts
+@@ -28,7 +28,7 @@ import {
+   initializeAndValidateApiKey,
+   processEvent,
+ } from "./executor-common";
+-import { loopliaSystemPrompt } from "./prompts/looplia-system";
++import { getLoopliaSystemPrompt } from "./prompts/looplia-system";
+ 
+ // Re-export for backward compatibility - intentional to maintain API surface
+ // biome-ignore lint/performance/noBarrelFile: intentional re-export for backward compatibility
+@@ -139,7 +139,7 @@ export async function* executeAgenticQueryStreaming<T>(
+         systemPrompt: {
+           type: "preset",
+           preset: "claude_code",
+-          append: `${loopliaSystemPrompt}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, resolve them against the User Working Directory above.`,
++          append: `${getLoopliaSystemPrompt(loopliaHome)}\n\n## User Context\n\nUser Working Directory: ${userCwd}\n\nWhen processing --file arguments or user file paths, resolve them against the User Working Directory above.`,
+         },
+         // v0.6.0: Enable Task for subagent spawning, Write/Glob for file operations
+         // v0.6.3: Added WebSearch/WebFetch for input-less search skill
+
+===== P151 | repo codeready-toolchain/claw-operator | PR #158: feat: skip device-pairing app deployment when `disableDevicePairing` is true | capacidade: standard-library-testing
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Test functions use standard naming
+All test functions MUST follow Go standard library conventions with `Test*` naming and accept `*testing.T` parameter.
+
+#### Scenario: Top-level test function
+- **WHEN** a test file contains tests
+- **THEN** each test MUST be a function named `Test<Name>(t *testing.T)`
+
+#### Scenario: Nested subtests
+- **WHEN** a test has multiple related scenarios
+- **THEN** subtests MUST be created using `t.Run(name, func(t *testing.T) {...})`
+
+### Requirement: Assertions use standard testing methods
+Test assertions MUST use standard `testing` package methods and helper functions instead of external assertion libraries.
+
+#### Scenario: Basic equality check
+- **WHEN** comparing expected and actual values
+- **THEN** test MUST use `if got != want { t.Errorf(...) }` pattern
+
+#### Scenario: Fatal errors
+- **WHEN** a condition prevents further test execution
+- **THEN** test MUST use `t.Fatal()` or `t.Fatalf()` to stop immediately
+
+#### Scenario: Error reporting
+- **WHEN** reporting test failures
+- **THEN** error messages MUST include both expected and actual values using `t.Errorf("got %v, want %v", got, want)`
+
+### Requirement: Async assertions use polling helpers
+Tests requiring eventual consistency MUST use polling helper functions instead of external assertion libraries.
+
+#### Scenario: Wait for condition
+- **WHEN** a test needs to wait for an async condition (e.g., Kubernetes resource ready)
+- **THEN** test MUST use a polling helper that checks condition repeatedly with timeout
+
+#### Scenario: Timeout exceeded
+- **WHEN** polling exceeds timeout without success
+- **THEN** helper MUST call `t.Fatalf()` with clear timeout message
+
+#### Scenario: Polling configuration
+- **WHEN** polling for conditions
+- **THEN** timeout MUST be 10 seconds and poll interval MUST be 250 milliseconds (matching Gomega Eventually defaults)
+
+### Requirement: Test suite setup uses TestMain
+Test suites requiring shared setup (e.g., envtest) MUST use `TestMain` function for initialization and cleanup.
+
+#### Scenario: Envtest initialization
+- **WHEN** tests require Kubernetes API server (envtest)
+- **THEN** `TestMain(m *testing.M)` MUST start envtest before `m.Run()` and stop after
+
+#### Scenario: Cleanup on exit
+- **WHEN** TestMain completes
+- **THEN** cleanup MUST run via `defer` to ensure resources release even on test failure
+
+#### Scenario: Exit code propagation
+- **WHEN** TestMain exits
+- **THEN** it MUST call `os.Exit(m.Run())` to propagate test result code
+
+### Requirement: Table-driven tests for multiple scenarios
+Tests with multiple input/output combinations MUST use table-driven test pattern.
+
+#### Scenario: Test table structure
+- **WHEN** a test has multiple scenarios
+- **THEN** test MUST define a slice of structs containing `name`, `input`, and `want` fields
+
+#### Scenario: Subtest per table entry
+- **WHEN** iterating table entries
+- **THEN** each entry MUST run as subtest using `t.Run(tt.name, func(t *testing.T) {...})`
+
+#### Scenario: Parallel execution
+- **WHEN** table-driven tests are independent
+- **THEN** subtests MAY call `t.Parallel()` for concurrent execution
+
+### Requirement: Test cleanup uses t.Cleanup
+Tests requiring cleanup MUST use `t.Cleanup()` instead of `defer` for resource cleanup.
+
+#### Scenario: Resource cleanup
+- **WHEN** a test creates resources (e.g., Kubernetes objects)
+- **THEN** test MUST register cleanup using `t.Cleanup(func() {...})` immediately after creation
+
+#### Scenario: Cleanup order
+- **WHEN** multiple cleanup handlers registered
+- **THEN** handlers MUST execute in LIFO order (last registered runs first)
+
+#### Scenario: Cleanup on failure
+- **WHEN** test fails or panics
+- **THEN** all registered cleanup handlers MUST still execute
+
+### Requirement: No external test dependencies
+Unit tests MUST NOT depend on Ginkgo or Gomega packages.
+
+#### Scenario: Import statements
+- **WHEN** reviewing test file imports
+- **THEN** imports MUST NOT include `github.com/onsi/ginkgo` or `github.com/onsi/gomega`
+
+#### Scenario: Module dependencies
+- **WHEN** running `go mod tidy` after migration
+- **THEN** `go.mod` MUST NOT contain Ginkgo or Gomega dependencies
+
+### Requirement: Test coverage preserved
+Migrated tests MUST maintain 100% coverage of existing test scenarios.
+
+#### Scenario: Existing test scenarios
+- **WHEN** comparing migrated tests to original Ginkgo tests
+- **THEN** every Ginkgo `It` block MUST have corresponding standard library test or subtest
+
+#### Scenario: Assertion count
+- **WHEN** counting assertions in migrated tests
+- **THEN** number of assertions MUST equal or exceed original Ginkgo tests
+
+--- ARQUIVOS DO PR (19)
+modified  +13    -1     config/rbac/role.yaml
+modified  +1     -1     internal/controller/claw_auth_test.go
+modified  +137   -0     internal/controller/claw_device_pairing_deployment_test.go
+modified  +3     -1     internal/controller/claw_idle.go
+modified  +97    -29    internal/controller/claw_resource_controller.go
+modified  +15    -9     internal/controller/claw_status.go
+modified  +57    -0     internal/controller/claw_status_test.go
+modified  +7     -0     internal/controller/suite_test.go   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/.openspec.yaml
+added     +71    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/design.md
+added     +30    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/proposal.md
+added     +17    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/specs/device-pairing-deployment/spec.md
+added     +63    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/specs/optional-device-pairing-app-deployment/spec.md
+added     +34    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/specs/status-conditions/spec.md
+added     +35    -0     openspec/changes/archive/2026-05-28-optional-device-pairing-deployment/tasks.md
+modified  +6     -1     openspec/specs/device-pairing-deployment/spec.md
+added     +62    -0     openspec/specs/optional-device-pairing-app-deployment/spec.md
+modified  +24    -5     openspec/specs/status-conditions/spec.md
+modified  +104   -0     test/e2e/e2e_test.go
+--- DIFF DO CÓDIGO LIGADO
+### internal/controller/suite_test.go
+@@ -372,6 +372,13 @@ func setAllDeploymentsAvailable(t *testing.T, ctx context.Context, instanceName,
+ 	setDeploymentAvailable(t, ctx, getDevicePairingDeploymentName(instanceName), namespace)
+ }
+ 
++// setCoreDeploymentsAvailable marks claw and claw-proxy Deployments as available (no device-pairing).
++func setCoreDeploymentsAvailable(t *testing.T, ctx context.Context, instanceName, namespace string) { //nolint:unparam
++	t.Helper()
++	setDeploymentAvailable(t, ctx, getClawDeploymentName(instanceName), namespace)
++	setDeploymentAvailable(t, ctx, getProxyDeploymentName(instanceName), namespace)
++}
++
+ // reconcileClaw performs a reconciliation for the given Claw resource.
+ func reconcileClaw(t *testing.T, ctx context.Context, reconciler *ClawResourceReconciler, name, namespace string) {
+ 	t.Helper()
+
+===== P152 | repo mckinsey/agents-at-scale-ark | PR #2066: feat(api): implement K8s user impersonation for SSO-authenticated requests | capacidade: query-extension-docs
+--- SPEC VIVA
+# Query Extension Documentation Clarification
+
+## ADDED Requirements
+
+### Requirement: Query extension README documents self-resolution pattern
+The query extension README SHALL explicitly state that only a QueryRef crosses the A2A boundary and that executors resolve all resources from the cluster.
+
+#### Scenario: Developer reads query extension README
+- **WHEN** a developer reads `ark/api/extensions/query/v1/README.md`
+- **THEN** the Resolution section SHALL state that only a QueryRef (name + namespace) is transmitted over A2A, the executor resolves all resources locally from the cluster via its service account, and secrets never traverse the A2A boundary
+
+### Requirement: Building execution engines guide documents resolution location
+The execution engines developer guide SHALL clarify that resolution happens within the executor pod, not over the wire.
+
+#### Scenario: Developer reads building execution engines guide
+- **WHEN** a developer reads `docs/content/developer-guide/building-execution-engines.mdx`
+- **THEN** the "How It Works" section SHALL state that the SDK resolves resources from the cluster within the executor pod, not that the executor "receives" a pre-populated request over A2A
+
+### Requirement: Building execution engines guide documents MCP server usage
+The execution engines developer guide SHALL document how executors consume `mcpServers` from the `ExecutionEngineRequest`.
+
+#### Scenario: Developer reads building execution engines guide
+- **WHEN** a developer reads the quickstart and Key Types sections
+- **THEN** the guide SHALL show `request.mcpServers` usage, document the `MCPServerConfig` type, and explain the allowlist pattern
+
+### Requirement: Query extension README documents MCP server resolution step
+The query extension README SHALL mention MCP server resolution as part of the resolution chain.
+
+#### Scenario: Developer reads query extension resolution section
+- **WHEN** a developer reads the Resolution section of the query extension README
+- **THEN** it SHALL mention that MCP servers referenced by the agent's tools are resolved alongside agent config and model
+
+--- ARQUIVOS DO PR (59)
+added     +20    -0     ark/dist/chart/templates/rbac/a2aserver_admin_role.yaml
+added     +27    -0     ark/dist/chart/templates/rbac/a2aserver_editor_role.yaml
+added     +23    -0     ark/dist/chart/templates/rbac/a2aserver_viewer_role.yaml
+added     +20    -0     ark/dist/chart/templates/rbac/a2atask_admin_role.yaml
+added     +27    -0     ark/dist/chart/templates/rbac/a2atask_editor_role.yaml
+added     +23    -0     ark/dist/chart/templates/rbac/a2atask_viewer_role.yaml
+added     +20    -0     ark/dist/chart/templates/rbac/executionengine_admin_role.yaml
+added     +27    -0     ark/dist/chart/templates/rbac/executionengine_editor_role.yaml
+added     +23    -0     ark/dist/chart/templates/rbac/executionengine_viewer_role.yaml
+added     +20    -0     ark/dist/chart/templates/rbac/mcpserver_admin_role.yaml
+added     +27    -0     ark/dist/chart/templates/rbac/mcpserver_editor_role.yaml
+added     +23    -0     ark/dist/chart/templates/rbac/mcpserver_viewer_role.yaml
+modified  +160   -0     docs/content/developer-guide/authentication.mdx
+modified  +15    -6     lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/client.py   <== código ligado à spec
+added     +12    -0     lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/impersonation.py
+modified  +1     -1     lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/k8s.py
+added     +69    -0     lib/ark-sdk/gen_sdk/overlay/python/test_overlay/test_impersonation.py
+modified  +7     -6     lib/ark-sdk/gen_sdk/python_sdk.py
+modified  +10    -5     lib/ark-sdk/gen_sdk/template/python/base_client.py.template
+added     +2     -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/.openspec.yaml
+added     +143   -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/design.md
+added     +31    -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/proposal.md
+added     +218   -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/specs/api-impersonation/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/specs/ark-api-rbac/spec.md
+added     +47    -0     openspec/changes/archive/2026-05-18-implement-api-impersonation/tasks.md
+added     +218   -0     openspec/specs/api-impersonation/spec.md
+modified  +18    -58    openspec/specs/ark-api-rbac/spec.md
+added     +279   -0     samples/rbac-test-bindings.yaml
+added     +45    -0     samples/rbac-test-catchall.yaml
+modified  +14    -11    services/ark-api/ark-api/src/ark_api/api/v1/a2a_servers.py
+modified  +10    -7     services/ark-api/ark-api/src/ark_api/api/v1/a2a_tasks.py
+modified  +11    -8     services/ark-api/ark-api/src/ark_api/api/v1/a2agw/query.py
+modified  +6     -3     services/ark-api/ark-api/src/ark_api/api/v1/a2agw/registry.py
+modified  +14    -11    services/ark-api/ark-api/src/ark_api/api/v1/agents.py
+modified  +50    -25    services/ark-api/ark-api/src/ark_api/api/v1/broker.py
+modified  +20    -9     services/ark-api/ark-api/src/ark_api/api/v1/conversations.py
+modified  +23    -1     services/ark-api/ark-api/src/ark_api/api/v1/exceptions.py
+modified  +16    -9     services/ark-api/ark-api/src/ark_api/api/v1/export.py
+modified  +14    -11    services/ark-api/ark-api/src/ark_api/api/v1/mcp_servers.py
+modified  +20    -15    services/ark-api/ark-api/src/ark_api/api/v1/memories.py
+modified  +8     -5     services/ark-api/ark-api/src/ark_api/api/v1/models.py
+modified  +18    -16    services/ark-api/ark-api/src/ark_api/api/v1/proxy/proxy.py
+modified  +21    -12    services/ark-api/ark-api/src/ark_api/api/v1/queries.py
+modified  +14    -11    services/ark-api/ark-api/src/ark_api/api/v1/teams.py
+modified  +14    -11    services/ark-api/ark-api/src/ark_api/api/v1/tools.py
+added     +81    -0     services/ark-api/ark-api/src/ark_api/auth/client_pool.py
+added     +18    -0     services/ark-api/ark-api/src/ark_api/auth/dependencies.py
+added     +21    -0     services/ark-api/ark-api/src/ark_api/auth/impersonation_config.py
+added     +44    -0     services/ark-api/ark-api/src/ark_api/auth/impersonation_errors.py
+modified  +97    -70    services/ark-api/ark-api/src/ark_api/auth/middleware.py
+modified  +8     -1     services/ark-api/ark-api/src/ark_api/models/auth.py
+added     +135   -0     services/ark-api/ark-api/tests/test_client_pool.py
+added     +86    -0     services/ark-api/ark-api/tests/test_exceptions_impersonation.py
+added     +131   -0     services/ark-api/ark-api/tests/test_impersonation.py
+added     +59    -0     services/ark-api/ark-api/tests/test_impersonation_errors.py
+added     +197   -0     services/ark-api/ark-api/tests/test_middleware_dispatch.py
+modified  +14    -2     services/ark-api/chart/templates/deployment.yaml
+modified  +6     -0     services/ark-api/chart/templates/rbac.yaml
+modified  +10    -0     services/ark-api/chart/values.yaml
+--- DIFF DO CÓDIGO LIGADO
+### lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/client.py
+@@ -3,6 +3,7 @@
+ 
+ from ark_sdk import versions
+ from ark_sdk.k8s import get_context
++from ark_sdk.impersonation import ImpersonationConfig
+ from ark_sdk.executor import (
+     Parameter,
+     Model,
+@@ -18,8 +19,15 @@
+ V1_ALPHA1 = "v1alpha1"
+ V1_PREALPHA1 = "v1prealpha1"
+ 
+-def get_client(namespace: Optional[str], version: str):
+-    # If namespace is None, get it from context
++def _build_headers(impersonation: Optional[ImpersonationConfig] = None) -> Optional[dict]:
++    if impersonation is None:
++        return None
++    headers = {"Impersonate-User": impersonation.username}
++    if impersonation.groups:
++        headers["Impersonate-Group"] = ",".join(impersonation.groups)
++    return headers
++
++def get_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
+     if namespace is None:
+         namespace = get_context()["namespace"]
+ 
+@@ -29,19 +37,20 @@ def get_client(namespace: Optional[str], version: str):
+     }.get(version)
+     if not clazz:
+         raise Exception(f"No client for {version}")
+-    return clazz(namespace)
++    return clazz(namespace, default_headers=_build_headers(impersonation))
+ 
+ @asynccontextmanager
+-async def with_ark_client(namespace: Optional[str], version: str):
++async def with_ark_client(namespace: Optional[str], version: str, impersonation: Optional[ImpersonationConfig] = None):
+     """
+     Async context manager that provides an ARK client.
+ 
+     Args:
+         namespace: The Kubernetes namespace (defaults to current context)
+         version: The API version to use
++        impersonation: Optional impersonation config for K8s user identity
+ 
+     Yields:
+         ARK client instance
+     """
+-    ark_client = get_client(namespace, version)
+-    yield ark_client
+\ No newline at end of file
++    ark_client = get_client(namespace, version, impersonation)
++    yield ark_client
+
+===== P153 | repo yazelin/ching-tech-os | PR #3: feat: 新增專案發包期程管理、附件/連結 MCP 工具 | capacidade: text-viewer
+--- SPEC VIVA
+# text-viewer Specification
+
+## Purpose
+TBD - created by archiving change add-markdown-rendering-unified. Update Purpose after archive.
+## Requirements
+### Requirement: TextViewer Display Mode
+文字讀取器 SHALL 支援多種顯示模式，讓使用者能以最適合的方式檢視檔案內容。
+
+#### Scenario: 顯示模式切換介面
+- **WHEN** TextViewer 視窗開啟
+- **THEN** 工具列顯示顯示模式切換按鈕
+- **AND** 按鈕包含：原始文字、Markdown、JSON、YAML、XML
+
+#### Scenario: 自動選擇預設模式
+- **GIVEN** 開啟 `.md` 或 `.markdown` 檔案
+- **THEN** 預設使用 Markdown 預覽模式
+- **GIVEN** 開啟 `.json` 檔案
+- **THEN** 預設使用 JSON 格式化模式
+- **GIVEN** 開啟 `.yaml` 或 `.yml` 檔案
+- **THEN** 預設使用 YAML 格式化模式
+- **GIVEN** 開啟 `.xml`、`.html`、`.svg` 檔案
+- **THEN** 預設使用 XML 格式化模式
+- **GIVEN** 開啟其他文字檔案
+- **THEN** 預設使用原始文字模式
+
+#### Scenario: 手動切換顯示模式
+- **WHEN** 使用者點擊顯示模式按鈕
+- **THEN** 內容以所選模式重新渲染
+- **AND** 當前模式按鈕顯示選中狀態
+
+---
+
+### Requirement: TextViewer Markdown Preview
+文字讀取器 SHALL 支援 Markdown 預覽模式。
+
+#### Scenario: Markdown 渲染
+- **WHEN** 使用者選擇 Markdown 模式
+- **THEN** 系統使用 marked.js 渲染檔案內容
+- **AND** 套用統一的 Markdown 樣式
+- **AND** 標題、列表、代碼塊、引用、表格等元素正確顯示
+
+#### Scenario: Markdown 主題適配
+- **WHEN** 使用者切換暗色/亮色主題
+- **THEN** Markdown 渲染樣式自動更新
+- **AND** 代碼塊、引用等元素的背景與文字顏色正確切換
+
+---
+
+### Requirement: TextViewer JSON Formatting
+文字讀取器 SHALL 支援 JSON 格式化顯示。
+
+#### Scenario: JSON 格式化成功
+- **GIVEN** 檔案內容為有效的 JSON
+- **WHEN** 使用者選擇 JSON 模式
+- **THEN** 系統解析並美化 JSON 內容
+- **AND** 顯示適當的縮排（2 空格）
+- **AND** 套用語法色彩（字串、數字、布林、null、鍵名）
+
+#### Scenario: JSON 格式化失敗
+- **GIVEN** 檔案內容非有效的 JSON
+- **WHEN** 使用者選擇 JSON 模式
+- **THEN** 系統顯示原始文字內容
+- **AND** 狀態列顯示錯誤訊息「無效的 JSON 格式」
+
+#### Scenario: JSON 主題適配
+- **WHEN** 使用者切換暗色/亮色主題
+- **THEN** JSON 語法色彩自動更新
+- **AND** 字串、數字、布林等元素顏色正確切換
+
+---
+
+### Requirement: TextViewer YAML Formatting
+文字讀取器 SHALL 支援 YAML 格式化顯示。
+
+#### Scenario: YAML 格式化
+- **WHEN** 使用者選擇 YAML 模式
+- **THEN** 系統對 YAML 內容套用語法色彩
+- **AND** 鍵名、字串、數字、布林、null、註解使用不同顏色
+- **AND** 保留原始縮排結構
+
+#### Scenario: YAML 主題適配
+- **WHEN** 使用者切換暗色/亮色主題
+- **THEN** YAML 語法色彩自動更新
+
+---
+
+### Requirement: TextViewer XML Formatting
+文字讀取器 SHALL 支援 XML 格式化顯示。
+
+#### Scenario: XML 格式化成功
+- **GIVEN** 檔案內容為有效的 XML
+- **WHEN** 使用者選擇 XML 模式
+- **THEN** 系統解析並美化 XML 內容
+- **AND** 顯示適當的縮排
+- **AND** 套用語法色彩（標籤、屬性、屬性值、文字內容）
+
+#### Scenario: XML 格式化失敗
+- **GIVEN** 檔案內容非有效的 XML
+- **WHEN** 使用者選擇 XML 模式
+- **THEN** 系統顯示原始文字內容
+- **AND** 狀態列顯示錯誤訊息「無效的 XML 格式」
+
+#### Scenario: XML 主題適配
+- **WHEN** 使用者切換暗色/亮色主題
+- **THEN** XML 語法色彩自動更新
+
+---
+
+### Requirement: TextViewer Raw Mode
+文字讀取器 SHALL 保留原始文字顯示模式。
+
+#### Scenario: 原始文字顯示
+- **WHEN** 使用者選擇原始文字模式
+- **THEN** 系統以 `<pre>` 標籤顯示未經處理的檔案內容
+- **AND** 保留所有空白字元與換行
+
+#### Scenario: 原始文字主題適配
+- **WHEN** 使用者切換暗色/亮色主題
+- **THEN** 原始文字區域背景與文字顏色正確切換
+
+
+--- ARQUIVOS DO PR (34)
+modified  +1     -1     README.md
+added     +71    -0     backend/migrations/versions/025_create_delivery_schedules.py
+added     +239   -0     backend/migrations/versions/026_update_linebot_prompts_delivery.py
+added     +250   -0     backend/migrations/versions/027_update_delivery_schedule_params.py
+added     +273   -0     backend/migrations/versions/028_add_project_attachments_links_mcp.py
+modified  +97    -0     backend/src/ching_tech_os/api/project.py
+modified  +30    -16    backend/src/ching_tech_os/api/share.py
+modified  +54    -0     backend/src/ching_tech_os/models/project.py
+modified  +2     -2     backend/src/ching_tech_os/models/share.py
+modified  +56    -15    backend/src/ching_tech_os/services/linebot_agents.py
+modified  +805   -5     backend/src/ching_tech_os/services/mcp_server.py
+modified  +126   -3     backend/src/ching_tech_os/services/project.py
+modified  +45    -0     backend/src/ching_tech_os/services/share.py
+modified  +27    -1     docs/mcp-server.md
+modified  +177   -0     frontend/css/project-management.css   <== código ligado à spec
+modified  +3     -0     frontend/js/icons.js
+modified  +231   -0     frontend/js/project-management.js
+modified  +2     -1     frontend/js/public.js
+added     +186   -0     openspec/changes/archive/2026-01-12-add-delivery-schedules/design.md
+added     +38    -0     openspec/changes/archive/2026-01-12-add-delivery-schedules/proposal.md
+added     +76    -0     openspec/changes/archive/2026-01-12-add-delivery-schedules/specs/mcp-tools/spec.md
+added     +108   -0     openspec/changes/archive/2026-01-12-add-delivery-schedules/specs/project-management/spec.md
+added     +103   -0     openspec/changes/archive/2026-01-12-add-delivery-schedules/tasks.md
+added     +201   -0     openspec/changes/archive/2026-01-12-add-project-attachments-mcp/design.md
+added     +55    -0     openspec/changes/archive/2026-01-12-add-project-attachments-mcp/proposal.md
+added     +102   -0     openspec/changes/archive/2026-01-12-add-project-attachments-mcp/specs/mcp-tools/spec.md
+added     +55    -0     openspec/changes/archive/2026-01-12-add-project-attachments-mcp/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-01-12-update-mobile-app-layouts/proposal.md
+added     +89    -0     openspec/changes/archive/2026-01-12-update-mobile-app-layouts/specs/mobile-app-layout/spec.md
+renamed   +6     -6     openspec/changes/archive/2026-01-12-update-mobile-app-layouts/tasks.md
+removed   +0     -331   openspec/changes/update-mobile-app-layouts/specs/mobile-app-layout/spec.md
+modified  +165   -24    openspec/specs/mcp-tools/spec.md
+added     +91    -0     openspec/specs/mobile-app-layout/spec.md
+modified  +105   -0     openspec/specs/project-management/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### frontend/css/project-management.css
+@@ -1234,6 +1234,150 @@
+   animation: spin 1s linear infinite;
+ }
+ 
++/* ==========================================================================
++   Deliveries (發包/交貨管理)
++   ========================================================================== */
++
++.pm-deliveries-list {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.pm-delivery-card {
++  display: flex;
++  align-items: flex-start;
++  gap: 12px;
++  padding: 12px;
++  background: var(--bg-surface-dark);
++  border-radius: 8px;
++  border: 1px solid var(--border-subtle);
++  transition: all 0.15s;
++}
++
++.pm-delivery-card:hover {
++  border-color: var(--border-light);
++}
++
++/* 狀態指示條 */
++.pm-delivery-status-indicator {
++  width: 4px;
++  height: 100%;
++  min-height: 60px;
++  border-radius: 2px;
++  flex-shrink: 0;
++  align-self: stretch;
++}
++
++.pm-delivery-status-indicator.pending {
++  background: var(--status-pending-color);
++}
++
++.pm-delivery-status-indicator.ordered {
++  background: var(--color-primary);
++}
++
++.pm-delivery-status-indicator.delivered {
++  background: var(--color-warning);
++}
++
++.pm-delivery-status-indicator.completed {
++  background: var(--color-success);
++}
++
++.pm-delivery-info {
++  flex: 1;
++  min-width: 0;
++}
++
++.pm-delivery-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  margin-bottom: 4px;
++}
++
++.pm-delivery-vendor {
++  font-weight: 600;
++  color: var(--text-primary);
++}
++
++.pm-delivery-status-badge {
++  display: inline-block;
++  padding: 2px 8px;
++  border-radius: 10px;
++  font-size: 11px;
++  font-weight: 500;
++}
++
++.pm-delivery-status-badge.pending {
++  background: var(--status-pending-bg);
++  color: var(--status-pending-color);
++}
++
++.pm-delivery-status-badge.ordered {
++  background: var(--tag-bg-blue);
++  color: var(--tag-color-blue);
++}
++
++.pm-delivery-status-badge.delivered {
++  background: var(--tag-bg-orange);
++  color: var(--tag-color-orange);
++}
++
++.pm-delivery-status-badge.completed {
++  background: var(--status-completed-bg);
++  color: var(--status-completed-color);
++}
++
++.pm-delivery-item {
++  font-size: 14px;
++  color: var(--text-primary);
++  margin-bottom: 4px;
++}
++
++.pm-delivery-quantity {
++  font-size: 12px;
++  color: var(--text-secondary);
++  margin-bottom: 6px;
++}
++
++.pm-delivery-dates {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 12px;
++  font-size: 12px;
++  color: var(--text-muted);
++}
++
++.pm-delivery-dates span {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++}
++
++.pm-delivery-dates .icon {
++  font-size: 14px;
++}
++
++.pm-delivery-dates .actual {
++  color: var(--color-success);
++}
++
++.pm-delivery-notes {
++  margin-top: 8px;
++  padding-top: 8px;
++  border-top: 1px solid var(--border-subtle);
++  font-size: 12px;
++  color: var(--text-secondary);
++}
++
++.pm-delivery-actions {
++  display: flex;
++  gap: 4px;
++  flex-shrink: 0;
++}
++
+ /* ==========================================================================
+    Milestones (里程碑)
+    ========================================================================== */
+@@ -1738,6 +1882,39 @@
+     margin-top: var(--spacing-xs);
+   }
+ 
++  /* 發包/交貨卡片：手機版調整 */
++  .pm-delivery-card {
++    flex-wrap: wrap;
++  }
++
++  .pm-delivery-status-indicator {
++    min-height: auto;
++    height: 4px;
++    width: 100%;
++    border-radius: 4px 4px 0 0;
++    margin: -12px -12px 8px -12px;
++    padding: 0 12px;
++    width: calc(100% + 24px);
++  }
++
++  .pm-delivery-header {
++    flex-wrap: wrap;
++    gap: var(--spacing-xs);
++  }
++
++  .pm-delivery-dates {
++    flex-direction: column;
++    gap: 4px;
++  }
++
++  .pm-delivery-actions {
++    width: 100%;
++    justify-content: flex-end;
++    padding-top: var(--spacing-xs);
++    border-top: 1px solid var(--border-subtle);
++    margin-top: var(--spacing-xs);
++  }
++
+   /* 里程碑：手機版調整 */
+   .pm-milestones-timeline {
+     padding-left: 20px;
+
+===== P154 | repo opencue/gitguardex | PR #647: fix(release): auto-bump direct npm publish versions | capacidade: readme-multi-agent-mermaid
+--- SPEC VIVA
+# readme-multi-agent-mermaid Specification
+
+## Purpose
+TBD - created by archiving change agent-codex-readme-multi-agent-mermaid-2026-04-20-12-13. Update Purpose after archive.
+## Requirements
+### Requirement: readme-multi-agent-mermaid behavior
+The README conflict Mermaid diagram SHALL depict a multi-agent collision model, not a two-agent-only model.
+
+#### Scenario: Multiple concurrent agents are visualized
+- **WHEN** the README Mermaid diagram is rendered
+- **THEN** it shows at least three concurrent agents feeding the same shared target surface
+- **AND** the downstream conflict loop remains visible.
+
+#### Scenario: Failure loop remains explicit
+- **WHEN** a reader scans the conflict portion of the diagram
+- **THEN** they can see conflict/overwrite leading to lost code and rework
+- **AND** the cycle loops back to conflict risk.
+
+
+--- ARQUIVOS DO PR (13)
+modified  +1     -1     .release-please-manifest.json
+modified  +9     -0     README.md
+added     +2     -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/.openspec.yaml
+added     +18    -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/design.md
+added     +16    -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/notes.md
+added     +23    -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/proposal.md
+added     +24    -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/specs/release-workflow/spec.md
+added     +25    -0     openspec/changes/agent-codex-auto-bump-package-version-before-npm-pub-2026-06-17-10-18/tasks.md
+modified  +2     -2     package-lock.json
+modified  +3     -1     package.json
+added     +191   -0     scripts/prepublish-bump-version.js
+modified  +12    -0     test/metadata.test.js   <== código ligado à spec
+added     +153   -0     test/prepublish-bump-version.test.js
+--- DIFF DO CÓDIGO LIGADO
+### test/metadata.test.js
+@@ -210,6 +210,18 @@ test('package manifest pins runtime and dev dependency versions exactly', () =>
+   assert.match(lockfile, /"fast-check": "3\.23\.2"/);
+ });
+ 
++test('package publish lifecycle bumps already-published direct npm publish versions', () => {
++  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
++  const scriptPath = path.join(repoRoot, 'scripts', 'prepublish-bump-version.js');
++  const scriptSource = fs.readFileSync(scriptPath, 'utf8');
++
++  assert.equal(pkg.scripts?.prepublishOnly, 'node scripts/prepublish-bump-version.js');
++  assert.match(pkg.files.join('\n'), /^scripts\/prepublish-bump-version\.js$/m);
++  assert.match(scriptSource, /npm view/);
++  assert.match(scriptSource, /GITHUB_ACTIONS/);
++  assert.match(scriptSource, /package-lock\.json/);
++});
++
+ test('frontend mirror workflow skips cleanly when the mirror PAT is missing', () => {
+   const workflowPath = path.join(repoRoot, '.github', 'workflows', 'sync-frontend-mirror.yml');
+   const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+===== P155 | repo jdjingdian/StaticRouteHelper | PR #16:  fix(ui): unify settings entry and align route edit sheets | capacidade: swiftdata-persistence
+--- SPEC VIVA
+## MODIFIED Requirements
+
+### Requirement: SwiftData ModelContainer 配置
+应用启动时，当运行在 macOS 14.0 及以上版本时 SHALL 创建包含 `RouteRule` 和 `RouteGroup` 两个模型的 `ModelContainer`，并通过 `.modelContainer()` 修饰符注入到 SwiftUI 视图层级中。在 macOS 12–13 上 SHALL 改为初始化 `LegacyPersistenceStack`（Core Data）并通过 `.environment(\.managedObjectContext, context)` 注入，不初始化 SwiftData 栈。
+
+#### Scenario: 应用首次启动（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上首次启动应用（无历史数据）
+- **THEN** 系统创建 SwiftData 存储文件，ModelContainer 成功初始化，应用正常显示空列表
+
+#### Scenario: 应用正常启动（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上启动应用（已有 SwiftData 数据）
+- **THEN** ModelContainer 加载已有数据，视图通过 @Query 自动获取并显示路由规则和分组
+
+#### Scenario: 应用在 macOS 12–13 上启动
+- **WHEN** 用户在 macOS 12 或 13 上启动应用
+- **THEN** 系统初始化 LegacyPersistenceStack，SwiftData 相关代码不执行，视图通过 @FetchRequest 加载路由规则
+
+### Requirement: RouteRule 数据模型
+系统 SHALL 提供 `RouteRule` @Model 类，在 macOS 14+ 作为 SwiftData 模型使用（行为不变）。在 macOS 12–13 上，数据由 Core Data `RouteRuleMO` 实体承担，`RouteRule` SwiftData 类仅在 macOS 14+ 环境中编译和使用。
+
+`RouteRule` 在 macOS 14+ 上 SHALL 继续包含以下属性：
+- `id: UUID`、`network: String`、`prefixLength: Int`、`gatewayType: GatewayType`、`gateway: String`、`isActive: Bool`、`groups: [RouteGroup]`、`createdAt: Date`
+
+#### Scenario: 创建使用 IP 网关的路由规则（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上创建路由规则，网络地址为 "10.0.0.0"，前缀长度为 8，网关类型为 `.ipAddress`，网关为 "192.168.1.1"
+- **THEN** 系统保存 RouteRule 到 SwiftData，`subnetMask` 返回 "255.0.0.0"，`cidrNotation` 返回 "10.0.0.0/8"
+
+#### Scenario: 创建使用网络接口的路由规则（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上创建路由规则，网关类型为 `.interface`，网关为 "utun3"
+- **THEN** 系统保存 RouteRule 到 SwiftData，`gateway` 值为 "utun3"
+
+### Requirement: RouteGroup 数据模型
+`RouteGroup` @Model 类仅在 macOS 14+ 上可用（行为不变）。在 macOS 12–13 上，分组功能不提供，`RouteGroup` 类不在 legacy 路径中编译使用。
+
+#### Scenario: 创建路由分组（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上创建名为 "Office VPN" 的分组
+- **THEN** 系统保存 RouteGroup 到 SwiftData，`routes` 初始为空数组
+
+### Requirement: 多对多关系管理
+RouteRule 和 RouteGroup 之间的双向多对多关系 SHALL 仅在 macOS 14+ 上可用（行为不变）。在 macOS 12–13 上，`RouteRuleMO` 不包含 groups 关系，此需求不适用。
+
+#### Scenario: 将路由添加到分组（macOS 14+）
+- **WHEN** 在 macOS 14+ 上将一条 RouteRule 添加到 "Office VPN" 分组
+- **THEN** 该 RouteRule 的 `groups` 数组包含 "Office VPN"，该分组的 `routes` 数组包含该 RouteRule
+
+#### Scenario: 将同一路由添加到多个分组（macOS 14+）
+- **WHEN** 在 macOS 14+ 上将 "192.168.4.0/24" 路由同时添加到 "Office VPN" 和 "Home VPN" 分组
+- **THEN** 该路由的 `groups` 数组同时包含两个分组
+
+#### Scenario: 从分组中移除路由（macOS 14+）
+- **WHEN** 在 macOS 14+ 上从 "Office VPN" 分组中移除 "192.168.4.0/24" 路由
+- **THEN** 该路由仍然存在于 SwiftData 中，`groups` 不再包含 "Office VPN"，但仍包含 "Home VPN"
+
+### Requirement: Core Data 数据迁移
+应用在 macOS 14+ 上首次以新版本启动时，SHALL 检测旧 Core Data 存储（DataModel / StaticRouteLegacy）是否存在。若存在，SHALL 读取其中数据，解析为路由规则列表，并导入到 SwiftData 中（所有导入的路由不关联任何 Group）。迁移完成后 SHALL 删除旧 Core Data 存储文件。此逻辑在 macOS 12–13 上不执行。
+
+#### Scenario: 从旧版本升级且有数据（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 从旧版本升级，旧 Core Data 中存有 3 条路由规则
+- **THEN** 系统自动将 3 条路由导入 SwiftData（isActive 均为 false，groups 为空），删除旧存储
+
+#### Scenario: 从旧版本升级但无数据（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 从旧版本升级，Core Data 存储存在但为空
+- **THEN** 系统跳过导入，删除旧存储
+
+#### Scenario: 全新安装（macOS 14+）
+- **WHEN** 用户在 macOS 14+ 上全新安装应用，不存在旧 Core Data 存储
+- **THEN** 系统跳过迁移逻辑，正常初始化 SwiftData
+
+--- ARQUIVOS DO PR (17)
+modified  +10    -6     StaticRouteHelper.xcodeproj/project.pbxproj
+added     +61    -0     StaticRouter/Services/SettingsNavigator.swift
+modified  +2     -2     StaticRouter/View/Customized/StatusBanner.swift
+modified  +56    -20    StaticRouter/View/LegacyRouteListView.swift   <== código ligado à spec
+modified  +6     -8     StaticRouter/View/MainWindow.swift
+modified  +7     -7     StaticRouter/View/RouteEditSheet.swift
+modified  +1     -1     StaticRouter/View/SidebarView.swift
+added     +2     -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/.openspec.yaml
+added     +91    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/design.md
+added     +27    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/proposal.md
+added     +24    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/main-navigation/spec.md
+added     +52    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/route-crud/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/specs/status-banner/spec.md
+added     +20    -0     openspec/changes/archive/2026-03-24-fix-macos13-settings-navigation-and-route-config-ui/tasks.md
+modified  +13    -3     openspec/specs/main-navigation/spec.md
+modified  +19    -1     openspec/specs/route-crud/spec.md
+modified  +6     -0     openspec/specs/status-banner/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### StaticRouter/View/LegacyRouteListView.swift
+@@ -305,78 +305,114 @@ struct LegacyRouteEditSheet: View {
+     }
+ 
+     var body: some View {
+-        VStack(alignment: .leading, spacing: 20) {
+-            Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
+-                .font(.headline)
++        VStack(alignment: .leading, spacing: 14) {
++            VStack(alignment: .leading, spacing: 4) {
++                Text(isEditing ? String(localized: "route.edit.title.edit") : String(localized: "route.edit.title.add"))
++                    .font(.title2.bold())
++                Text("Network / Gateway")
++                    .font(.footnote)
++                    .foregroundStyle(.secondary)
++            }
+ 
+             // Network + Prefix
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.destination.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.destination.label"), systemImage: "dot.scope")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+                 HStack(spacing: 8) {
+                     TextField("192.168.4.0", text: $network)
+                         .textFieldStyle(.roundedBorder)
+                         .overlay(
+                             RoundedRectangle(cornerRadius: 5)
+-                                .stroke(networkError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(networkError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                         )
+                         .onChange(of: network) { _ in validateNetwork() }
+ 
+                     Text("/").foregroundStyle(.secondary)
+ 
+                     TextField("24", value: $prefixLength, format: .number)
++                        .multilineTextAlignment(.center)
+                         .textFieldStyle(.roundedBorder)
+-                        .frame(width: 50)
++                        .frame(width: 68)
+                         .overlay(
+                             RoundedRectangle(cornerRadius: 5)
+-                                .stroke(prefixLengthError != nil ? Color.red : Color.clear, lineWidth: 1)
++                                .stroke(prefixLengthError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                         )
+                 }
++
++                Text("= \(subnetMaskPreview)")
++                    .font(.caption)
++                    .foregroundStyle(.secondary)
++
+                 if let err = networkError {
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
++                }
++                if let err = prefixLengthError {
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
+                 }
+             }
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+ 
+             // Gateway Type + Gateway
+-            VStack(alignment: .leading, spacing: 6) {
+-                Text(String(localized: "route.edit.field.gateway.label"))
+-                    .font(.subheadline).foregroundStyle(.secondary)
++            VStack(alignment: .leading, spacing: 10) {
++                Label(String(localized: "route.edit.field.gateway.label"), systemImage: "arrow.triangle.turn.up.right.diamond")
++                    .font(.subheadline.weight(.semibold))
++                    .foregroundStyle(.secondary)
+                 Picker(String(localized: "route.edit.field.gateway.label"), selection: $gatewayTypeStr) {
+                     Text(String(localized: "route.edit.gateway.ip_option")).tag("ipAddress")
+                     Text(String(localized: "route.edit.gateway.interface_option")).tag("interface")
+                 }
+-                .pickerStyle(.radioGroup)
++                .pickerStyle(.segmented)
+                 .onChange(of: gatewayTypeStr) { _ in gateway = ""; validateGateway() }
+ 
+                 TextField(gatewayTypeStr == "ipAddress" ? "10.0.0.1" : "utun3", text: $gateway)
+                     .textFieldStyle(.roundedBorder)
+                     .overlay(
+                         RoundedRectangle(cornerRadius: 5)
+-                            .stroke(gatewayError != nil ? Color.red : Color.clear, lineWidth: 1)
++                            .stroke(gatewayError != nil ? RouterTheme.danger : Color.clear, lineWidth: 1)
+                     )
+                     .onChange(of: gateway) { _ in validateGateway() }
+ 
+                 if let err = gatewayError {
+-                    Text(err).font(.caption).foregroundStyle(.red)
++                    Text(err).font(.caption).foregroundStyle(RouterTheme.danger)
+                 }
+             }
+-
+-            Divider()
++            .padding(14)
++            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .overlay(
++                RoundedRectangle(cornerRadius: 10, style: .continuous)
++                    .stroke(RouterTheme.subtleBorder, lineWidth: 0.6)
++            )
+ 
+             HStack {
+                 Spacer()
+                 Button(String(localized: "route.edit.button.cancel")) { dismiss() }
+                     .keyboardShortcut(.cancelAction)
++                    .buttonStyle(.bordered)
+                 Button(isEditing ? String(localized: "route.edit.button.save") : String(localized: "route.edit.button.add")) { save() }
+                     .keyboardShortcut(.defaultAction)
++                    .buttonStyle(.borderedProminent)
+                     .disabled(!isFormValid)
+             }
++            .padding(.top, 4)
++            .padding(.horizontal, 2)
+         }
+-        .padding(24)
+-        .frame(width: 360)
++        .padding(20)
++        .frame(width: 460)
+         .onAppear { populate() }
+     }
+ 
++    private var subnetMaskPreview: String {
++        guard prefixLength >= 0, prefixLength <= 32 else { return String(localized: "route.edit.mask_preview.invalid") }
++        let mask: UInt32 = prefixLength == 0 ? 0 : (~UInt32(0) << (32 - prefixLength))
++        return "\((mask>>24)&0xFF).\((mask>>16)&0xFF).\((mask>>8)&0xFF).\(mask&0xFF)"
++    }
++
+     private func populate() {
+         guard let mo = existingMO else { return }
+         network = mo.network
+
+===== P157 | repo IgniteUI/igniteui-theming | PR #537: feat: add generic platform detection knowledge | capacidade: resources
+--- SPEC VIVA
+## Purpose
+
+Define the MCP resource URIs and the content they return.
+
+## Requirements
+
+### Requirement: Platform resources are exposed
+
+The server exposes platform metadata via `theming://platforms` and platform-specific resource URIs.
+
+#### Scenario: Platform listing
+
+- **WHEN** `theming://platforms` is requested
+- **THEN** the response lists supported platforms with metadata
+
+#### Scenario: Platform detail
+
+- **WHEN** `theming://platforms/<platform>` is requested
+- **THEN** the response provides the platform configuration and usage hints
+
+### Requirement: Preset resources are exposed
+
+#### Scenario: Preset palettes
+
+- **WHEN** `theming://presets/palettes` is requested
+- **THEN** the response includes preset palette configurations
+
+#### Scenario: Preset typography
+
+- **WHEN** `theming://presets/typography` is requested
+- **THEN** the response includes typography presets
+
+#### Scenario: Preset elevations
+
+- **WHEN** `theming://presets/elevations` is requested
+- **THEN** the response includes elevation presets
+
+### Requirement: Guidance resources are exposed
+
+#### Scenario: Color guidance
+
+- **WHEN** `theming://guidance/colors` is requested
+- **THEN** the response provides color usage guidance content
+
+### Requirement: Layout documentation resources are exposed
+
+#### Scenario: Layout documentation
+
+- **WHEN** `theming://docs/spacing-and-sizing` is requested
+- **THEN** the response provides layout scale documentation
+
+--- ARQUIVOS DO PR (49)
+modified  +0     -3     .gitignore
+modified  +2     -2     README.md
+added     +2     -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/.openspec.yaml
+added     +113   -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/design.md
+added     +31    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/proposal.md
+added     +27    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/elevations/spec.md
+added     +112   -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/sass-compilation-tests/spec.md
+added     +54    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/theme-generation/spec.md
+added     +29    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/typography/spec.md
+added     +38    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/tasks.md
+added     +2     -0     openspec/changes/generic-platform-detection/.openspec.yaml
+added     +151   -0     openspec/changes/generic-platform-detection/design.md
+added     +41    -0     openspec/changes/generic-platform-detection/proposal.md
+added     +26    -0     openspec/changes/generic-platform-detection/specs/component-theming/spec.md
+added     +164   -0     openspec/changes/generic-platform-detection/specs/generic-platform/spec.md
+added     +50    -0     openspec/changes/generic-platform-detection/specs/layout-overrides/spec.md
+added     +54    -0     openspec/changes/generic-platform-detection/specs/platform-detection/spec.md
+added     +36    -0     openspec/changes/generic-platform-detection/specs/theme-generation/spec.md
+added     +70    -0     openspec/changes/generic-platform-detection/tasks.md
+modified  +13    -1     openspec/specs/elevations/spec.md
+added     +116   -0     openspec/specs/sass-compilation-tests/spec.md
+modified  +27    -1     openspec/specs/theme-generation/spec.md
+modified  +14    -1     openspec/specs/typography/spec.md
+modified  +6     -6     src/mcp/README.md
+modified  +169   -4     src/mcp/__tests__/generators/sass.test.ts   <== código ligado à spec
+modified  +127   -19    src/mcp/__tests__/knowledge/platform-detection.test.ts   <== código ligado à spec
+modified  +2     -2     src/mcp/__tests__/knowledge/sass-api.test.ts
+modified  +44    -0     src/mcp/__tests__/tools/handlers/handlers.test.ts   <== código ligado à spec
+modified  +2     -10    src/mcp/generators/css.ts
+modified  +32    -2     src/mcp/generators/sass.ts
+modified  +2     -2     src/mcp/index.ts
+added     +228   -0     src/mcp/knowledge/docs/setup/platform.md
+modified  +0     -2     src/mcp/knowledge/index.ts
+added     +9     -0     src/mcp/knowledge/platform-setup.ts
+modified  +32    -22    src/mcp/knowledge/platforms/index.ts
+modified  +3     -3     src/mcp/knowledge/platforms/react.ts
+modified  +3     -3     src/mcp/knowledge/sass-api.ts
+modified  +46    -1     src/mcp/resources/presets.ts
+modified  +25    -7     src/mcp/tools/descriptions.ts
+modified  +24    -3     src/mcp/tools/handlers/component-theme.ts
+modified  +2     -1     src/mcp/tools/handlers/custom-palette.ts
+modified  +2     -1     src/mcp/tools/handlers/elevations.ts
+modified  +1     -1     src/mcp/tools/handlers/layout.ts
+modified  +2     -1     src/mcp/tools/handlers/palette.ts
+modified  +368   -98    src/mcp/tools/handlers/platform.ts
+modified  +3     -0     src/mcp/tools/handlers/theme.ts
+modified  +2     -1     src/mcp/tools/handlers/typography.ts
+modified  +52    -0     src/mcp/utils/sass.ts
+modified  +2     -0     src/mcp/utils/types.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/mcp/__tests__/generators/sass.test.ts
+@@ -5,10 +5,7 @@
+  * 1. Generated code contains expected Sass constructs
+  * 2. Generated code structure is correct for each platform
+  * 3. Variables and descriptions are set correctly
+- *
+- * Note: Full Sass compilation tests are limited because generated code
+- * uses variables (like $material-type-scale) that are defined within
+- * the theming library's context. We focus on structural validation.
++ * 4. Generated code compiles as valid Sass (compilation tests)
+  */
+ 
+ import * as path from "node:path";
+@@ -32,13 +29,22 @@ const PACKAGE_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
+ /**
+  * Rewrites generated Sass code to use local paths for testing.
+  * Replaces package imports with local sass/ directory imports.
++ *
++ * Handles:
++ * - Base module: @use 'igniteui-theming' as *; → @use 'sass' as *;
++ * - Angular module: @use "igniteui-angular/theming" as *; → @use 'sass' as *;
++ * - Sub-module presets: @use 'igniteui-theming/sass/...' as *; → @use 'sass/...' as *;
+  */
+ function rewriteImportsForTesting(code: string): string {
+ 	return code
+ 		.replace(
+ 			/@use ['"]igniteui-angular\/theming['"] as \*;/g,
+ 			"@use 'sass' as *;",
+ 		)
++		.replace(
++			/@use ['"]igniteui-theming\/sass\/(.+?)['"] as \*;/g,
++			"@use 'sass/$1' as *;",
++		)
+ 		.replace(/@use ['"]igniteui-theming['"] as \*;/g, "@use 'sass' as *;");
+ }
+ 
+@@ -190,6 +196,69 @@ describe("generateTypography", () => {
+ 		// Font stack should be wrapped in quotes
+ 		expect(result.code).toContain("\"'Titillium Web', sans-serif\"");
+ 	});
++
++	it("includes typography preset import for non-Angular platforms", () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/typography/presets' as *;",
++		);
++	});
++
++	it("omits typography preset import for Angular platform", () => {
++		const result = generateTypography({
++			platform: "angular",
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++
++		expect(result.code).not.toContain("typography/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateTypography({
++			platform: "webcomponents",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for react", async () => {
++		const result = generateTypography({
++			platform: "react",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for blazor", async () => {
++		const result = generateTypography({
++			platform: "blazor",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles with no platform", async () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("compiles for all design systems", async () => {
++		for (const ds of ["material", "fluent", "bootstrap", "indigo"] as const) {
++			const result = generateTypography({
++				fontFamily: "Roboto",
++				designSystem: ds,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++		}
++	});
+ });
+ 
+ describe("generateElevations", () => {
+@@ -215,6 +284,57 @@ describe("generateElevations", () => {
+ 		expect(result.variables).toContain("$indigo-elevations");
+ 		expect(result.code).toContain("$indigo-elevations");
+ 	});
++
++	it("includes elevations preset import for non-Angular platforms", () => {
++		const result = generateElevations({});
++
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/elevations/presets' as *;",
++		);
++	});
++
++	it("omits elevations preset import for Angular platform", () => {
++		const result = generateElevations({
++			platform: "angular",
++		});
++
++		expect(result.code).not.toContain("elevations/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateElevations({
++			platform: "webcomponents",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for react", async () => {
++		const result = generateElevations({
++			platform: "react",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for blazor", async () => {
++		const result = generateElevations({
++			platform: "blazor",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles with no platform", async () => {
++		const result = generateElevations({});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("compiles with indigo design system", async () => {
++		const result = generateElevations({
++			designSystem: "indigo",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++		expect(result.code).toContain("$indigo-elevations");
++	});
+ });
+ 
+ describe("generateTheme", () => {
+@@ -271,6 +391,51 @@ describe("generateTheme", () => {
+ 
+ 			expect(result.code).toContain("$surface: #222222");
+ 		});
++
++		it("generates valid Sass that compiles with defaults", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++		});
++
++		it("generates valid Sass that compiles without typography", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++				includeTypography: false,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++			expect(result.code).not.toContain("typography/presets");
++		});
++
++		it("generates valid Sass that compiles without elevations", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++				includeElevations: false,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++			expect(result.code).not.toContain("elevations/presets");
++		});
++
++		it("includes preset imports for typography and elevations", () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				designSystem: "material",
++			});
++
++			expect(result.code).toContain(
++				"@use 'igniteui-theming/sass/typography/presets' as *;",
++			);
++			expect(result.code).toContain(
++				"@use 'igniteui-theming/sass/elevations/presets' as *;",
++			);
++		});
+ 	});
+ 
+ 	describe("Angular platform", () => {
+
+### src/mcp/__tests__/knowledge/platform-detection.test.ts
+@@ -82,29 +82,49 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("detects Angular from angular.json config file", () => {
++		it("detects Angular from angular.json config file with Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("angular.json");
+ 			});
+ 
+-			const result = detectPlatformFromDependencies({}, {}, "/project");
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-angular": "^18.0.0" },
++				{},
++				"/project",
++			);
+ 
+ 			expect(result.platform).toBe("angular");
+-			expect(result.confidence).toBe("high"); // 80 rounds to high
++			expect(result.confidence).toBe("high");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "angular.json",
++				confidence: 80,
++			});
++		});
++
++		it("returns generic when angular.json exists but no Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("angular.json");
++			});
++
++			const result = detectPlatformFromDependencies({}, {}, "/project");
++
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "config_file",
+ 				file: "angular.json",
+ 				confidence: 80,
+ 			});
+ 		});
+ 
+-		it("uses @angular/core as fallback with low confidence", () => {
++		it("returns generic with @angular/core only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies(
+ 				{ "@angular/core": "^18.0.0" },
+ 				{},
+ 			);
+ 
+-			expect(result.platform).toBe("angular");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -136,10 +156,10 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("uses lit as fallback with low confidence", () => {
++		it("returns generic with lit only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies({ lit: "^3.0.0" }, {});
+ 
+-			expect(result.platform).toBe("webcomponents");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -171,7 +191,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("detects React from vite.config.ts with @vitejs/plugin-react", () => {
++		it("returns generic from vite.config.ts with React plugin but no Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("vite.config.ts");
+ 			});
+@@ -183,6 +203,31 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "vite.config.ts",
++				confidence: 80,
++			});
++		});
++
++		it("detects React from vite.config.ts with React plugin and Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("vite.config.ts");
++			});
++			mockReadFileSync.mockReturnValue(`
++        import { defineConfig } from 'vite';
++        import react from '@vitejs/plugin-react';
++        export default defineConfig({ plugins: [react()] });
++      `);
++
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-react": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("react");
+ 			expect(result.confidence).toBe("high");
+ 			expect(result.signals).toContainEqual({
+@@ -192,13 +237,33 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("detects React from next.config.js", () => {
++		it("returns generic from next.config.js without Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("next.config.js");
+ 			});
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "next.config.js",
++				confidence: 80,
++			});
++		});
++
++		it("detects React from next.config.js with Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("next.config.js");
++			});
++
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-react": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("react");
+ 			expect(result.confidence).toBe("high");
+ 			expect(result.signals).toContainEqual({
+@@ -208,13 +273,13 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("uses react package as fallback with low confidence", () => {
++		it("returns generic with react package only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies(
+ 				{ react: "^18.0.0", "react-dom": "^18.0.0" },
+ 				{},
+ 			);
+ 
+-			expect(result.platform).toBe("react");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -249,7 +314,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("detects Blazor SDK without IgniteUI with low confidence", () => {
++		it("returns generic for Blazor SDK without IgniteUI", () => {
+ 			mockExistsSync.mockReturnValue(false);
+ 			mockReaddirSync.mockReturnValue(["MyApp.csproj"] as unknown as ReturnType<
+ 				typeof readdirSync
+@@ -264,7 +329,7 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
+-			expect(result.platform).toBe("blazor");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "config_file",
+@@ -294,7 +359,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			).toEqual(["angular", "react"]);
+ 		});
+ 
+-		it("returns ambiguous when angular.json and next.config.js both exist", () => {
++		it("returns generic (not ambiguous) when angular.json and next.config.js both exist without Ignite UI", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				const pathStr = String(path);
+ 				return (
+@@ -304,6 +369,28 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			// Without Ignite UI product packages, config-only signals resolve to generic
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++		});
++
++		it("returns ambiguous when angular.json and next.config.js both exist with Ignite UI packages", () => {
++			mockExistsSync.mockImplementation((path) => {
++				const pathStr = String(path);
++				return (
++					pathStr.includes("angular.json") || pathStr.includes("next.config.js")
++				);
++			});
++
++			const result = detectPlatformFromDependencies(
++				{
++					"igniteui-angular": "^18.0.0",
++					"igniteui-react": "^18.0.0",
++				},
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBeNull();
+ 			expect(result.ambiguous).toBe(true);
+ 			expect(result.alternatives).toHaveLength(2);
+@@ -355,19 +442,19 @@ describe("detectPlatformFromDependencies", () => {
+ 	});
+ 
+ 	describe("No platform detected", () => {
+-		it("returns null platform with none confidence when no matches", () => {
++		it("returns generic platform with none confidence when no matches", () => {
+ 			const result = detectPlatformFromDependencies({ lodash: "^4.17.0" }, {});
+ 
+-			expect(result.platform).toBeNull();
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("none");
+ 			expect(result.signals).toEqual([]);
+ 			expect(result.reason).toContain("No Ignite UI packages");
+ 		});
+ 
+-		it("returns null platform when dependencies are empty", () => {
++		it("returns generic platform when dependencies are empty", () => {
+ 			const result = detectPlatformFromDependencies({}, {});
+ 
+-			expect(result.platform).toBeNull();
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("none");
+ 		});
+ 	});
+@@ -388,7 +475,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			// Should not include framework fallback since we have high confidence
+ 		});
+ 
+-		it("prefers config file over framework fallback", () => {
++		it("returns generic with config file + framework package but no Ignite UI product", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("angular.json");
+ 			});
+@@ -399,6 +486,27 @@ describe("detectPlatformFromDependencies", () => {
+ 				"/project",
+ 			);
+ 
++			// Without Ignite UI product, returns generic despite strong config+framework signals
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "angular.json",
++				confidence: 80,
++			});
++		});
++
++		it("prefers config file over framework fallback with Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("angular.json");
++			});
++
++			const result = detectPlatformFromDependencies(
++				{ "@angular/core": "^18.0.0", "igniteui-angular": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("angular");
+ 			expect(result.confidence).toBe("high");
+ 			// Config file (80) should override framework fallback (40)
+
+### src/mcp/__tests__/tools/handlers/handlers.test.ts
+@@ -265,6 +265,34 @@ describe("layout handlers", () => {
+ 		expect(text).toContain("--ig-radius-factor: 0.8;");
+ 		expect(text).toContain("igx-avatar");
+ 	});
++
++	it("set_size with generic platform and component merges selectors like undefined", async () => {
++		const resultGeneric = await handleSetSize({
++			size: "small",
++			component: "avatar",
++			platform: "generic",
++		});
++
++		const resultUndefined = await handleSetSize({
++			size: "small",
++			component: "avatar",
++		});
++
++		// Both should produce the same merged-selectors output
++		expect(resultGeneric.content[0].text).toBe(resultUndefined.content[0].text);
++	});
++
++	it("set_size with generic platform and scope works correctly", async () => {
++		const result = await handleSetSize({
++			size: "large",
++			scope: ".my-section",
++			platform: "generic",
++		});
++
++		const text = result.content[0].text;
++		expect(text).toContain("--ig-size: 3;");
++		expect(text).toContain(".my-section");
++	});
+ });
+ 
+ describe("handleCreateElevations", () => {
+@@ -395,6 +423,22 @@ describe("handleCreateComponentTheme", () => {
+ 		expect(text).toContain("required");
+ 	});
+ 
++	it("returns error when platform is generic", async () => {
++		const result = await handleCreateComponentTheme({
++			platform: "generic",
++			component: "avatar",
++			tokens: {
++				background: "#ff5722",
++			},
++		});
++
++		expect(result.isError).toBe(true);
++		const text = result.content[0].text;
++		expect(text).toContain("Error");
++		expect(text).toContain("generic");
++		expect(text).toContain("not supported");
++	});
++
+ 	it("returns MCP response format for valid component", async () => {
+ 		const result = await handleCreateComponentTheme({
+ 			platform: "webcomponents",
+
+===== P158 | repo VimCommando/kibana-object-manager | PR #12: Add dependency resolution when adding assets to manifest | capacidade: agents
+--- SPEC VIVA
+# agents Specification
+
+## Purpose
+TBD - created by archiving change agent-api-support. Update Purpose after archive.
+## Requirements
+### Requirement: Agent API Compliance
+The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates.
+
+#### Scenario: Create Agent
+- **WHEN** creating a new agent
+- **THEN** the system sends a `POST` request to `/api/agent_builder/agents`
+- **AND** the request body includes the `id`
+- **AND** the request body DOES NOT include `readonly` or `schema` fields
+
+#### Scenario: Update Agent
+- **WHEN** updating an existing agent
+- **THEN** the system sends a `PUT` request to `/api/agent_builder/agents/{id}`
+- **AND** the request body DOES NOT include `id`, `readonly`, or `schema` fields
+
+
+--- ARQUIVOS DO PR (9)
+added     +29    -0     openspec/changes/archive/2026-01-22-include-dependencies/design.md
+added     +17    -0     openspec/changes/archive/2026-01-22-include-dependencies/proposal.md
+added     +40    -0     openspec/changes/archive/2026-01-22-include-dependencies/specs/include-dependencies/spec.md
+added     +12    -0     openspec/changes/archive/2026-01-22-include-dependencies/tasks.md
+added     +42    -0     openspec/specs/include-dependencies/spec.md
+modified  +285   -8     src/cli.rs   <== código ligado à spec
+added     +201   -0     src/kibana/dependencies.rs
+modified  +1     -0     src/kibana/mod.rs
+modified  +26    -4     src/main.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/cli.rs
+@@ -3,11 +3,14 @@
+ use crate::{
+     client::{Auth, KibanaClient},
+     etl::{Extractor, Loader, Transformer},
+-    kibana::agents::{AgentsExtractor, AgentsLoader, AgentsManifest},
++    kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
++    kibana::dependencies::{
++        Dependency, find_agent_dependencies, find_tool_dependencies, find_workflow_dependencies,
++    },
+     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
+     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
+     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
+-    kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
++    kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
+     migration::load_saved_objects_manifest,
+     storage::{self, DirectoryReader, DirectoryWriter},
+     transform::{
+@@ -17,6 +20,8 @@ use crate::{
+ };
+ use eyre::{Context, Result};
+ use owo_colors::OwoColorize;
++use serde_json::Value;
++use std::collections::HashSet;
+ use std::path::Path;
+ use std::sync::Arc;
+ use tokio::task::JoinSet;
+@@ -616,6 +621,7 @@ pub async fn add_workflows_to_manifest(
+     include: Option<String>,
+     exclude: Option<String>,
+     file_path: Option<String>,
++    exclude_dependencies: bool,
+ ) -> Result<usize> {
+     use crate::kibana::workflows::WorkflowEntry;
+ 
+@@ -783,6 +789,7 @@ pub async fn add_workflows_to_manifest(
+     std::fs::create_dir_all(&workflows_dir)?;
+ 
+     let mut added_count = 0;
++    let mut all_deps = Vec::new();
+     for workflow in &filtered_workflows {
+         // Extract id and name
+         let workflow_id = workflow
+@@ -810,11 +817,23 @@ pub async fn add_workflows_to_manifest(
+ 
+             log::debug!("Wrote workflow file: {}", workflow_file.display());
+             added_count += 1;
++
++            if !exclude_dependencies {
++                all_deps.extend(find_workflow_dependencies(workflow));
++            }
+         } else {
+             log::debug!("Workflow already in manifest, skipping: {}", workflow_name);
+         }
+     }
+ 
++    // Resolve dependencies if any
++    let mut dep_summary = DependencySummary::new();
++    if !all_deps.is_empty() {
++        let client = load_kibana_client(project_dir)?;
++        dep_summary =
++            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
++    }
++
+     // Create manifest directory if it doesn't exist
+     let manifest_dir = get_space_manifest_dir(project_dir, space_id);
+     std::fs::create_dir_all(&manifest_dir)?;
+@@ -826,9 +845,18 @@ pub async fn add_workflows_to_manifest(
+         space_id.cyan(),
+         manifest.count()
+     );
+-    log::info!("✓ Added {} new workflow(s)", added_count);
+ 
+-    Ok(added_count)
++    if !dep_summary.is_empty() {
++        log::info!(
++            "✓ Added {} new workflow(s) (plus dependencies: {})",
++            added_count,
++            dep_summary.format_summary()
++        );
++    } else {
++        log::info!("✓ Added {} new workflow(s)", added_count);
++    }
++
++    Ok(added_count + dep_summary.total())
+ }
+ 
+ /// Add spaces to an existing manifest
+@@ -1566,6 +1594,7 @@ pub async fn add_agents_to_manifest(
+     include: Option<String>,
+     exclude: Option<String>,
+     file_path: Option<String>,
++    exclude_dependencies: bool,
+ ) -> Result<usize> {
+     use crate::kibana::agents::AgentEntry;
+ 
+@@ -1723,6 +1752,7 @@ pub async fn add_agents_to_manifest(
+     std::fs::create_dir_all(&agents_dir)?;
+ 
+     let mut added_count = 0;
++    let mut all_deps = Vec::new();
+     for agent in &filtered_agents {
+         // Extract id and name
+         let agent_id = agent
+@@ -1746,11 +1776,23 @@ pub async fn add_agents_to_manifest(
+ 
+             log::debug!("Wrote agent file: {}", agent_file.display());
+             added_count += 1;
++
++            if !exclude_dependencies {
++                all_deps.extend(find_agent_dependencies(agent));
++            }
+         } else {
+             log::debug!("Agent already in manifest, skipping: {}", agent_name);
+         }
+     }
+ 
++    // Resolve dependencies if any
++    let mut dep_summary = DependencySummary::new();
++    if !all_deps.is_empty() {
++        let client = load_kibana_client(project_dir)?;
++        dep_summary =
++            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
++    }
++
+     // Create manifest directory if it doesn't exist
+     let manifest_dir = get_space_manifest_dir(project_dir, space_id);
+     std::fs::create_dir_all(&manifest_dir)?;
+@@ -1762,9 +1804,18 @@ pub async fn add_agents_to_manifest(
+         space_id.cyan(),
+         manifest.count()
+     );
+-    log::info!("✓ Added {} new agent(s)", added_count);
+ 
+-    Ok(added_count)
++    if !dep_summary.is_empty() {
++        log::info!(
++            "✓ Added {} new agent(s) (plus dependencies: {})",
++            added_count,
++            dep_summary.format_summary()
++        );
++    } else {
++        log::info!("✓ Added {} new agent(s)", added_count);
++    }
++
++    Ok(added_count + dep_summary.total())
+ }
+ 
+ /// Pull agents from Kibana to local directory
+@@ -1941,6 +1992,7 @@ pub async fn add_tools_to_manifest(
+     include: Option<String>,
+     exclude: Option<String>,
+     file_path: Option<String>,
++    exclude_dependencies: bool,
+ ) -> Result<usize> {
+     let project_dir = project_dir.as_ref();
+ 
+@@ -2104,6 +2156,7 @@ pub async fn add_tools_to_manifest(
+     std::fs::create_dir_all(&tools_dir)?;
+ 
+     let mut added_count = 0;
++    let mut all_deps = Vec::new();
+     for tool in &filtered_tools {
+         // Extract id (required)
+         let tool_id = tool
+@@ -2125,11 +2178,23 @@ pub async fn add_tools_to_manifest(
+ 
+             log::debug!("Wrote tool file: {}", tool_file.display());
+             added_count += 1;
++
++            if !exclude_dependencies {
++                all_deps.extend(find_tool_dependencies(tool));
++            }
+         } else {
+             log::debug!("Tool already in manifest, skipping: {}", tool_id);
+         }
+     }
+ 
++    // Resolve dependencies if any
++    let mut dep_summary = DependencySummary::new();
++    if !all_deps.is_empty() {
++        let client = load_kibana_client(project_dir)?;
++        dep_summary =
++            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
++    }
++
+     // Create manifest directory if it doesn't exist
+     let manifest_dir = get_space_manifest_dir(project_dir, space_id);
+     std::fs::create_dir_all(&manifest_dir)?;
+@@ -2141,9 +2206,18 @@ pub async fn add_tools_to_manifest(
+         space_id.cyan(),
+         manifest.count()
+     );
+-    log::info!("✓ Added {} new tool(s)", added_count);
+ 
+-    Ok(added_count)
++    if !dep_summary.is_empty() {
++        log::info!(
++            "✓ Added {} new tool(s) (plus dependencies: {})",
++            added_count,
++            dep_summary.format_summary()
++        );
++    } else {
++        log::info!("✓ Added {} new tool(s)", added_count);
++    }
++
++    Ok(added_count + dep_summary.total())
+ }
+ 
+ /// Pull tools from Kibana to local directory
+@@ -2925,6 +2999,187 @@ fn get_space_file(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
+     get_space_dir(project_dir, space_id).join("space.json")
+ }
+ 
++/// Summary of dependencies added during an operation
++#[derive(Debug, Default, Clone)]
++pub struct DependencySummary {
++    pub agents: usize,
++    pub tools: usize,
++    pub workflows: usize,
++}
++
++impl DependencySummary {
++    pub fn new() -> Self {
++        Self::default()
++    }
++
++    pub fn is_empty(&self) -> bool {
++        self.agents == 0 && self.tools == 0 && self.workflows == 0
++    }
++
++    pub fn total(&self) -> usize {
++        self.agents + self.tools + self.workflows
++    }
++
++    pub fn format_summary(&self) -> String {
++        let mut parts = Vec::new();
++        if self.agents > 0 {
++            parts.push(format!("{} agent(s)", self.agents));
++        }
++        if self.tools > 0 {
++            parts.push(format!("{} tool(s)", self.tools));
++        }
++        if self.workflows > 0 {
++            parts.push(format!("{} workflow(s)", self.workflows));
++        }
++        parts.join(", ")
++    }
++}
++
++/// Recursively resolve and add dependencies to manifests
++async fn resolve_and_add_dependencies(
++    project_dir: &Path,
++    space_id: &str,
++    client: &KibanaClient,
++    initial_deps: Vec<Dependency>,
++) -> Result<DependencySummary> {
++    let client = client.space(space_id)?;
++    let mut pending_deps = initial_deps;
++    let mut processed_ids = HashSet::new();
++    let mut summary = DependencySummary::new();
++
++    while let Some(dep) = pending_deps.pop() {
++        match dep {
++            Dependency::Agent(id) => {
++                if !processed_ids.insert(format!("agent:{}", id)) {
++                    continue;
++                }
++
++                let manifest_path = get_space_agents_manifest(project_dir, space_id);
++                let mut manifest = if manifest_path.exists() {
++                    AgentsManifest::read(&manifest_path)?
++                } else {
++                    AgentsManifest::new()
++                };
++
++                if manifest.contains_id(&id) {
++                    continue;
++                }
++
++                log::info!("Automatically adding dependent agent: {}", id.cyan());
++                let path = format!("api/agent_builder/agents/{}", id);
++                let response = client.get(&path).await?;
++                if !response.status().is_success() {
++                    log::warn!(
++                        "Failed to fetch dependent agent {}: {}",
++                        id,
++                        response.status()
++                    );
++                    continue;
++                }
++                let agent: Value = response.json().await?;
++                let name = agent.get("name").and_then(|v| v.as_str()).unwrap_or(&id);
++
++                if manifest.add_agent(AgentEntry::new(&id, name)) {
++                    manifest.write(&manifest_path)?;
++                    let agents_dir = get_space_agents_dir(project_dir, space_id);
++                    std::fs::create_dir_all(&agents_dir)?;
++                    let agent_file = agents_dir.join(format!("{}.json", name));
++                    let json = storage::to_string_with_multiline(&agent)?;
++                    std::fs::write(&agent_file, json)?;
+
+===== P159 | repo 0verL1nk/PaperSage | PR #28: feat: team architecture upgrade | capacidade: trace-middleware
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: 使用 Node-style Hooks 追踪执行阶段
+系统 SHALL 实现 TraceMiddleware 类，继承自 AgentMiddleware，使用 before_model 和 after_model hooks 自动记录 agent 执行阶段。
+
+#### Scenario: before_model hook 提取当前阶段
+- **WHEN** before_model hook 被调用
+- **THEN** middleware 从 state["messages"] 中提取最新的 performative 字段，调用 phase_label_from_performative 转换为中文标签，并追加到 state 的 trace_labels 列表中
+
+#### Scenario: after_model hook 记录模型响应
+- **WHEN** after_model hook 被调用
+- **THEN** middleware 从新增的 AIMessage 中提取 performative，记录到 trace_labels 列表中
+
+### Requirement: 保持现有 Trace API
+系统 SHALL 保持 `agent/domain/trace.py` 中定义的 `PHASE_BY_PERFORMATIVE`、`phase_label_from_performative` 和 `phase_summary` 函数的公共 API 不变。
+
+#### Scenario: 现有代码继续工作
+- **WHEN** 其他模块调用 `phase_label_from_performative("plan")`
+- **THEN** 返回 "规划"，与之前行为一致
+
+### Requirement: 扩展 AgentState Schema
+系统 SHALL 定义自定义的 AgentState schema，添加 trace_labels 字段（类型为 NotRequired[list[str]]）用于存储执行阶段标签。
+
+#### Scenario: 初始化 trace_labels
+- **WHEN** agent 开始执行且 state 中不存在 trace_labels
+- **THEN** middleware 初始化 trace_labels 为空列表
+
+#### Scenario: 追加阶段标签
+- **WHEN** middleware 提取到新的 performative
+- **THEN** 将对应的中文标签追加到 state["trace_labels"] 列表中
+
+### Requirement: 使用 after_agent Hook 生成阶段摘要
+系统 SHALL 实现 after_agent hook，在 agent 执行完成后调用 phase_summary 函数生成去重的阶段路径摘要。
+
+#### Scenario: 生成去重的阶段路径
+- **WHEN** after_agent hook 被调用且 state["trace_labels"] 包含多个标签
+- **THEN** 调用 phase_summary(state["trace_labels"]) 生成摘要（如 "接收请求 -> 规划 -> 输出最终答案"），并存储到 state["trace_summary"] 中
+
+#### Scenario: 空标签列表处理
+- **WHEN** state["trace_labels"] 为空
+- **THEN** phase_summary 返回 "无"
+
+--- ARQUIVOS DO PR (86)
+modified  +1     -0     .github/workflows/claude.yml
+modified  +1     -0     .github/workflows/claude_review.yml
+modified  +37    -16    README.md
+modified  +36    -15    README_EN.md
+modified  +2     -0     agent/__init__.py
+modified  +3     -2     agent/adapters/agent_session.py
+modified  +6     -0     agent/application/agent_center/page_orchestrator.py
+modified  +6     -0     agent/application/agent_center/turn_state.py
+modified  +2     -0     agent/application/contracts.py
+modified  +135   -11    agent/application/turn_engine.py
+added     +37    -0     agent/capabilities/__init__.py
+added     +24    -0     agent/capabilities/document.py
+added     +7     -0     agent/capabilities/planning.py
+added     +7     -0     agent/capabilities/runtime.py
+added     +7     -0     agent/capabilities/skill.py
+added     +8     -0     agent/capabilities/team.py
+added     +8     -0     agent/capabilities/web.py
+modified  +18    -0     agent/domain/__init__.py
+modified  +215   -1     agent/domain/orchestration.py
+modified  +22    -1     agent/domain/todo_graph.py
+modified  +46    -41    agent/middlewares/builder.py
+modified  +19    -5     agent/middlewares/orchestration.py
+modified  +17    -22    agent/middlewares/team.py
+modified  +45    -3     agent/middlewares/todolist.py
+added     +16    -0     agent/orchestration/__init__.py
+added     +215   -0     agent/orchestration/coordinator.py
+added     +101   -0     agent/orchestration/executors.py
+added     +127   -0     agent/orchestration/planner.py
+added     +94    -0     agent/orchestration/state_machine.py
+added     +64    -0     agent/orchestration/todo_scheduler.py
+modified  +36    -171   agent/paper_agent.py
+added     +62    -0     agent/paper_prompt.py
+added     +61    -0     agent/profiled_agent.py
+added     +88    -0     agent/profiles.py
+added     +13    -0     agent/prompts/__init__.py
+added     +16    -0     agent/prompts/base.py
+added     +17    -0     agent/prompts/leader.py
+added     +43    -0     agent/prompts/paper_domain.py
+added     +7     -0     agent/prompts/reviewer.py
+added     +7     -0     agent/prompts/worker.py
+modified  +4     -0     agent/runtime_agent.py   <== código ligado à spec
+added     +185   -0     agent/session_factory.py
+modified  +216   -21    agent/team/runtime.py
+modified  +157   -3     agent/tools/document.py
+modified  +116   -27    agent/tools/team.py
+modified  +64    -0     agent/tools/utils.py
+added     +30    -0     agent/tools/wait.py
+added     +650   -0     docs/plan/2026-03-20-BaseAgent-ProfileCapability-重构方案.md
+added     +282   -0     docs/todo/2026-03-20-base-agent-profile-capability-todo.md
+added     +2     -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/.openspec.yaml
+added     +128   -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/design.md
+added     +31    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/proposal.md
+added     +33    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/specs/a2a-task-execution/spec.md
+added     +52    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/specs/leader-teammate-orchestration/spec.md
+added     +40    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/specs/orchestration-middleware/spec.md
+added     +38    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/specs/team-state-machine/spec.md
+added     +43    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/specs/todolist-middleware/spec.md
+added     +34    -0     openspec/changes/archive/2026-03-21-upgrade-leader-teammate-orchestration/tasks.md
+added     +33    -0     openspec/specs/a2a-task-execution/spec.md
+added     +52    -0     openspec/specs/leader-teammate-orchestration/spec.md
+modified  +27    -31    openspec/specs/orchestration-middleware/spec.md
+added     +38    -0     openspec/specs/team-state-machine/spec.md
+modified  +32    -44    openspec/specs/todolist-middleware/spec.md
+modified  +2     -0     pyproject.toml
+added     +77    -0     tests/integration/test_leader_teammate_orchestration_e2e.py
+modified  +31    -2     tests/integration/test_plan_mode_e2e.py
+modified  +2     -1     tests/unit/test_adapters_layer.py
+modified  +4     -0     tests/unit/test_agent_center_page_orchestrator.py
+modified  +4     -0     tests/unit/test_agent_center_turn_state.py
+added     +161   -0     tests/unit/test_document_tools.py
+added     +161   -0     tests/unit/test_leader_teammate_flow.py
+modified  +32    -2     tests/unit/test_middlewares_builder.py
+modified  +25    -111   tests/unit/test_paper_agent.py
+added     +62    -0     tests/unit/test_profiled_agent.py
+added     +49    -0     tests/unit/test_profiles.py
+added     +40    -0     tests/unit/test_prompt_layers.py
+added     +217   -0     tests/unit/test_session_factory.py
+added     +92    -0     tests/unit/test_team_orchestration_domain.py
+added     +46    -0     tests/unit/test_team_runtime_profiles.py
+added     +84    -0     tests/unit/test_team_runtime_result_schema.py
+added     +125   -0     tests/unit/test_team_tools.py
+added     +66    -0     tests/unit/test_todo_graph_scheduler.py
+added     +59    -0     tests/unit/test_todolist_middleware_schema.py
+modified  +132   -0     tests/unit/test_turn_engine.py
+added     +21    -0     tests/unit/test_wait_tools.py
+modified  +15    -0     uv.lock
+--- DIFF DO CÓDIGO LIGADO
+### agent/runtime_agent.py
+@@ -29,9 +29,13 @@ def create_runtime_agent(
+     checkpointer: Any | None = None,
+     enable_auto_summarization: bool = True,
+     enable_tool_selector: bool = True,
++    profile: Any | None = None,
++    deps: Any | None = None,
+ ) -> Any:
+     middleware_list = build_middleware_list(
+         model=model,
++        profile=profile,
++        deps=deps,
+         enable_auto_summarization=enable_auto_summarization,
+         enable_tool_selector=enable_tool_selector,
+     )
+

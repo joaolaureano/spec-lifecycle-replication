@@ -1,0 +1,3376 @@
+===== P076 | repo aleris/woti | PR #2: add sub-hour navigation interval (60/30/15 min) | capacidade: dynamic-tz-abbrev-year
+--- SPEC VIVA
+### Requirement: Abbreviation map uses current year for DST sampling
+The abbreviation map SHALL derive its winter and summer sample dates from the current UTC year at initialization time, rather than a hardcoded year.
+
+#### Scenario: Map built in 2026
+- **WHEN** the process starts and the abbreviation map is initialized in the year 2026
+- **THEN** the winter sample date SHALL be January 15, 2026 and the summer sample date SHALL be July 15, 2026
+
+#### Scenario: Map built in any future year
+- **WHEN** the process starts in year Y
+- **THEN** the abbreviation map SHALL use Y as the year for both winter and summer sample dates, reflecting that year's DST rules as defined by the compiled IANA database
+
+--- ARQUIVOS DO PR (26)
+modified  +1     -1     Cargo.lock
+modified  +1     -1     Cargo.toml
+modified  +26    -3     README.md
+added     +2     -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/.openspec.yaml
+added     +198   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/design.md
+added     +82    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/proposal.md
+added     +79    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/accelerated-nav/spec.md
+added     +55    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/half-hour-timeline-indicator/spec.md
+added     +63    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/hour-offset-indicator/spec.md
+added     +268   -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/specs/sub-hour-nav-interval/spec.md
+added     +77    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/tasks.md
+added     +50    -0     openspec/changes/archive/2026-04-25-sub-hour-nav-interval/view.md
+modified  +45    -18    openspec/specs/accelerated-nav/spec.md
+modified  +34    -18    openspec/specs/half-hour-timeline-indicator/spec.md
+modified  +39    -17    openspec/specs/hour-offset-indicator/spec.md
+added     +266   -0     openspec/specs/sub-hour-nav-interval/spec.md
+modified  +6     -0     src/cli.rs
+modified  +90    -8     src/config.rs
+modified  +19    -5     src/main.rs
+modified  +14    -4     src/tui/app.rs
+modified  +112   -45    src/tui/copy.rs
+modified  +18    -10    src/tui/event.rs
+modified  +85    -0     src/tui/mod.rs
+added     +185   -0     src/tui/nav_interval.rs
+modified  +635   -161   src/tui/render.rs
+modified  +266   -1     src/tz_data.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src/tz_data.rs
+@@ -1,7 +1,7 @@
+ use std::collections::HashMap;
+ use std::sync::LazyLock;
+ 
+-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
++use chrono::{Datelike, NaiveDate, Offset, TimeZone, Utc};
+ use chrono_tz::{OffsetName, Tz, TZ_VARIANTS};
+ 
+ // ---------------------------------------------------------------------------
+@@ -83,9 +83,85 @@ fn build_abbreviation_map() -> HashMap<String, Tz> {
+     }
+ 
+     map.insert("UTC".to_string(), Tz::UTC);
++
++    // Curated fallback: insert canonical abbreviations for zones whose IANA
++    // tzdata format string is numeric (so chrono-tz exposes no named
++    // abbreviation, e.g. NPT for Asia/Kathmandu, MMT for Asia/Yangon).
++    // Walk modern IANA ids first so legacy aliases (e.g. Asia/Rangoon,
++    // NZ-CHAT) don't claim the slot through non-deterministic iteration.
++    let mut canonical_insert = |tz: Tz| {
++        for nd in [winter, summer] {
++            if let Some(dt) = tz.from_local_datetime(&nd).earliest() {
++                if dt.offset().abbreviation().is_some() {
++                    continue;
++                }
++                let utc_offset_minutes = dt.offset().fix().local_minus_utc() / 60;
++                if let Some(abbr) = canonical_abbreviation(tz.name(), utc_offset_minutes) {
++                    map.entry(abbr.to_uppercase()).or_insert(tz);
++                }
++            }
++        }
++    };
++    for &tz in CANONICAL_FALLBACK_PREFERRED {
++        canonical_insert(tz);
++    }
++    for &tz in &TZ_VARIANTS {
++        canonical_insert(tz);
++    }
++
+     map
+ }
+ 
++/// Modern IANA zones to consider first when registering the curated
++/// `canonical_abbreviation` fallback. Ensures the modern name wins over a
++/// legacy alias (e.g. `Asia/Yangon` over `Asia/Rangoon`).
++const CANONICAL_FALLBACK_PREFERRED: &[Tz] = &[
++    Tz::Asia__Kathmandu,
++    Tz::Asia__Yangon,
++    Tz::Asia__Tehran,
++    Tz::Asia__Kabul,
++    Tz::Asia__Yerevan,
++    Tz::Asia__Singapore,
++    Tz::Asia__Almaty,
++    Tz::Indian__Mahe,
++    Tz::Indian__Mauritius,
++    Tz::Indian__Reunion,
++    Tz::Indian__Chagos,
++    Tz::Indian__Maldives,
++    Tz::Indian__Christmas,
++    Tz::Indian__Cocos,
++    Tz::Indian__Kerguelen,
++    Tz::Pacific__Marquesas,
++    Tz::Pacific__Chatham,
++    Tz::Pacific__Norfolk,
++    Tz::Pacific__Niue,
++    Tz::Pacific__Tongatapu,
++    Tz::Pacific__Fiji,
++    Tz::Pacific__Tahiti,
++    Tz::Pacific__Gambier,
++    Tz::Pacific__Easter,
++    Tz::Pacific__Galapagos,
++    Tz::Pacific__Apia,
++    Tz::Pacific__Port_Moresby,
++    Tz::Pacific__Palau,
++    Tz::Pacific__Kwajalein,
++    Tz::Pacific__Majuro,
++    Tz::Pacific__Tarawa,
++    Tz::Pacific__Funafuti,
++    Tz::Pacific__Nauru,
++    Tz::Pacific__Wake,
++    Tz::Pacific__Wallis,
++    Tz::Pacific__Kiritimati,
++    Tz::Pacific__Kanton,
++    Tz::Australia__Eucla,
++    Tz::Australia__Lord_Howe,
++    Tz::Atlantic__Azores,
++    Tz::Atlantic__Cape_Verde,
++    Tz::Atlantic__Stanley,
++    Tz::America__Rio_Branco,
++    Tz::America__Noronha,
++];
++
+ static ABBR_MAP: LazyLock<HashMap<String, Tz>> = LazyLock::new(build_abbreviation_map);
+ 
+ pub fn lookup_abbreviation(abbr: &str) -> Option<ResolvedTz> {
+@@ -95,6 +171,109 @@ pub fn lookup_abbreviation(abbr: &str) -> Option<ResolvedTz> {
+     Some(ResolvedTz { tz, city, region })
+ }
+ 
++// ---------------------------------------------------------------------------
++// Display abbreviation: friendly fallback for zones whose chrono-tz output
++// is a numeric `+HHMM` placeholder (because the IANA tzdata format string
++// uses `%z`). Curated from the IANA abbreviation conventions and Wikipedia's
++// "List of time zone abbreviations". Only zones with a widely recognized
++// abbreviation are included; collision-prone or genuinely numeric zones
++// (e.g. `Etc/GMT*`, several Pacific atolls) intentionally fall through.
++// ---------------------------------------------------------------------------
++
++/// Returns a canonical, human-friendly abbreviation for `(iana_id, utc_offset_minutes)`,
++/// where `utc_offset_minutes` is the signed `local - UTC` offset in minutes
++/// (used to disambiguate standard vs DST variants of the same zone).
++pub fn canonical_abbreviation(iana_id: &str, utc_offset_minutes: i32) -> Option<&'static str> {
++    match (iana_id, utc_offset_minutes) {
++        // ── Asia ──
++        ("Asia/Kathmandu", 345) => Some("NPT"),
++        ("Asia/Yangon" | "Asia/Rangoon", 390) => Some("MMT"),
++        ("Asia/Tehran" | "Iran", 210) => Some("IRST"),
++        ("Asia/Tehran" | "Iran", 270) => Some("IRDT"),
++        ("Asia/Kabul", 270) => Some("AFT"),
++        ("Asia/Yerevan", 240) => Some("AMT"),
++        ("Asia/Singapore" | "Singapore", 480) => Some("SGT"),
++        ("Asia/Almaty", 300) => Some("ALMT"),
++
++        // ── Indian Ocean ──
++        ("Indian/Mahe", 240) => Some("SCT"),
++        ("Indian/Mauritius", 240) => Some("MUT"),
++        ("Indian/Reunion", 240) => Some("RET"),
++        ("Indian/Chagos", 360) => Some("IOT"),
++        ("Indian/Maldives", 300) => Some("MVT"),
++        ("Indian/Christmas", 420) => Some("CXT"),
++        ("Indian/Cocos", 390) => Some("CCT"),
++        ("Indian/Kerguelen", 300) => Some("TFT"),
++
++        // ── Pacific ──
++        ("Pacific/Marquesas", -570) => Some("MART"),
++        ("Pacific/Chatham" | "NZ-CHAT", 765) => Some("CHAST"),
++        ("Pacific/Chatham" | "NZ-CHAT", 825) => Some("CHADT"),
++        ("Pacific/Norfolk", 660) => Some("NFT"),
++        ("Pacific/Norfolk", 720) => Some("NFDT"),
++        ("Pacific/Niue", -660) => Some("NUT"),
++        ("Pacific/Tongatapu", 780) => Some("TOT"),
++        ("Pacific/Fiji", 720) => Some("FJT"),
++        ("Pacific/Fiji", 780) => Some("FJST"),
++        ("Pacific/Tahiti", -600) => Some("TAHT"),
++        ("Pacific/Gambier", -540) => Some("GAMT"),
++        ("Pacific/Easter", -360) => Some("EAST"),
++        ("Pacific/Easter", -300) => Some("EASST"),
++        ("Pacific/Galapagos", -360) => Some("GALT"),
++        ("Pacific/Apia", 780) => Some("WSST"),
++        ("Pacific/Apia", 840) => Some("WSDT"),
++        ("Pacific/Port_Moresby", 600) => Some("PGT"),
++        ("Pacific/Palau", 540) => Some("PWT"),
++        (
++            "Pacific/Kwajalein" | "Pacific/Majuro" | "Kwajalein",
++            720,
++        ) => Some("MHT"),
++        ("Pacific/Tarawa", 720) => Some("GILT"),
++        ("Pacific/Funafuti", 720) => Some("TVT"),
++        ("Pacific/Nauru", 720) => Some("NRT"),
++        ("Pacific/Wake", 720) => Some("WAKT"),
++        ("Pacific/Wallis", 720) => Some("WFT"),
++        ("Pacific/Kiritimati", 840) => Some("LINT"),
++        (
++            "Pacific/Enderbury" | "Pacific/Kanton" | "Pacific/Fakaofo",
++            780,
++        ) => Some("PHOT"),
++
++        // ── Australia ──
++        ("Australia/Eucla", 525) => Some("ACWST"),
++        ("Australia/Lord_Howe" | "Australia/LHI", 630) => Some("LHST"),
++        ("Australia/Lord_Howe" | "Australia/LHI", 660) => Some("LHDT"),
++
++        // ── Atlantic ──
++        ("Atlantic/Azores", -60) => Some("AZOT"),
++        ("Atlantic/Azores", 0) => Some("AZOST"),
++        ("Atlantic/Cape_Verde", -60) => Some("CVT"),
++        ("Atlantic/Stanley", -180) => Some("FKST"),
++
++        // ── Americas ──
++        ("America/Rio_Branco" | "Brazil/Acre", -300) => Some("ACT"),
++        ("America/Noronha" | "Brazil/DeNoronha", -120) => Some("FNT"),
++
++        _ => None,
++    }
++}
++
++/// Format `dt`'s timezone abbreviation for display. Prefers chrono-tz's
++/// named abbreviation (`%Z`) when available; falls back to
++/// [`canonical_abbreviation`] for IANA zones whose tzdata format is numeric;
++/// finally falls back to the numeric `+HHMM` form itself.
++pub fn display_abbreviation(dt: &chrono::DateTime<Tz>) -> String {
++    let raw = dt.format("%Z").to_string();
++    if !(raw.starts_with('+') || raw.starts_with('-')) {
++        return raw;
++    }
++    let iana = dt.timezone().name();
++    let utc_offset_minutes = dt.offset().fix().local_minus_utc() / 60;
++    canonical_abbreviation(iana, utc_offset_minutes)
++        .map(str::to_owned)
++        .unwrap_or(raw)
++}
++
+ // ---------------------------------------------------------------------------
+ // City aliases: common names that don't appear in IANA zone paths
+ // ---------------------------------------------------------------------------
+@@ -860,6 +1039,92 @@ mod tests {
+         assert!(lookup_abbreviation("XYZ").is_none());
+     }
+ 
++    // --- display_abbreviation: friendly fallback for numeric chrono-tz output ---
++
++    fn dt_at(iana: &str, year: i32, month: u32, day: u32) -> chrono::DateTime<Tz> {
++        let tz: Tz = iana.parse().unwrap();
++        let nd = chrono::NaiveDate::from_ymd_opt(year, month, day)
++            .unwrap()
++            .and_hms_opt(12, 0, 0)
++            .unwrap();
++        tz.from_local_datetime(&nd).earliest().unwrap()
++    }
++
++    #[test]
++    fn display_abbreviation_kathmandu_is_npt() {
++        let dt = dt_at("Asia/Kathmandu", 2026, 7, 15);
++        assert_eq!(display_abbreviation(&dt), "NPT");
++    }
++
++    #[test]
++    fn display_abbreviation_named_zone_passthrough() {
++        // Asia/Kolkata exposes a real "IST" via chrono-tz; we should not override it.
++        let dt = dt_at("Asia/Kolkata", 2026, 7, 15);
++        assert_eq!(display_abbreviation(&dt), "IST");
++    }
++
++    #[test]
++    fn display_abbreviation_unknown_zone_falls_back_to_numeric() {
++        // Etc/GMT+10 is genuinely numeric and not in the curated override list,
++        // so we should preserve chrono-tz's `-10` output.
++        let dt = dt_at("Etc/GMT+10", 2026, 1, 15);
++        assert_eq!(display_abbreviation(&dt), "-10");
++    }
++
++    #[test]
++    fn display_abbreviation_marquesas_is_mart() {
++        let dt = dt_at("Pacific/Marquesas", 2026, 7, 15);
++        assert_eq!(display_abbreviation(&dt), "MART");
++    }
++
++    // --- Canonical fallback also registers as input abbreviation ---
++
++    #[test]
++    fn abbreviation_npt_resolves_to_kathmandu() {
++        let r = lookup_abbreviation("NPT").expect("NPT should resolve");
++        assert_eq!(r.tz.name(), "Asia/Kathmandu");
++    }
++
++    #[test]
++    fn abbreviation_mmt_resolves_to_yangon() {
++        let r = lookup_abbreviation("MMT").expect("MMT should resolve");
++        assert_eq!(r.tz.name(), "Asia/Yangon");
++    }
++
++    #[test]
++    fn abbreviation_mart_resolves_to_marquesas() {
++        let r = lookup_abbreviation("MART").expect("MART should resolve");
++        assert_eq!(r.tz.name(), "Pacific/Marquesas");
++    }
++
++    #[test]
++    fn abbreviation_acwst_resolves_to_eucla() {
++        let r = lookup_abbreviation("ACWST").expect("ACWST should resolve");
++        assert_eq!(r.tz.name(), "Australia/Eucla");
++    }
++
++    #[test]
++    fn abbreviation_chast_resolves_to_chatham() {
++        let r = lookup_abbreviation("CHAST").expect("CHAST should resolve");
++        assert_eq!(r.tz.name(), "Pacific/Chatham");
++    }
++
++    #[test]
++    fn abbreviation_canonical_fallback_case_insensitive() {
++        let r = lookup_abbreviation("npt").expect("npt should resolve");
++        assert_eq!(r.tz.name(), "Asia/Kathmandu");
++    }
++
++    #[test]
++    fn display_abbreviation_chatham_disambiguates_dst() {
++        // Chatham uses +12:45 (CHAST) in jul, +13:45 (CHADT) in jan (NZ DST).
++        let dt_winter = dt_at("Pacific/Chatham", 2026, 7, 15);
++        assert_eq!(display_abbreviation(&dt_winter), "CHAST");
++        let dt_summer = dt_at("Pacific/Chatham", 2026, 1, 15);
++        assert_eq!(display_abbreviation(&dt_summer), "CHADT");
++    }
++
++
+     // --- City name resolution (from spec: "Add timezone by city name") ---
+ 
+     #[test]
+
+===== P077 | repo Litash/moomoo-api-mcp | PR #4: Feat/auto select account for trades | capacidade: account-info
+--- SPEC VIVA
+# account-info Specification
+
+## Purpose
+
+TBD - created by archiving change add-account-tools. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: Get Account List
+
+The system SHALL provide a tool to retrieve the list of trading accounts available to the user.
+
+#### Scenario: Get Account List
+
+Given the agent needs to know available accounts
+When the `get_accounts` tool is called
+Then it should return a list of trading accounts with their IDs, types, and simulation status
+
+### Requirement: Get Account Assets
+
+The system SHALL provide a tool to retrieve the asset summary (cash, market value) for a specific account.
+
+#### Scenario: Get Assets
+
+Given the user has funds in their account
+When the `get_assets` tool is called
+Then it should return the total assets, cash, market value, and purchasing power
+
+### Requirement: Get Account Positions
+
+The system SHALL provide a tool to retrieve the current positions held in a trading account.
+
+#### Scenario: Get Positions
+
+Given the user holds stocks
+When the `get_positions` tool is called
+Then it should return a list of held securities with stock code, quantity, cost price, and current market value
+
+#### Scenario: Get Positions by Market
+
+Given the user holds stocks in multiple markets (e.g. US, HK)
+When the `get_positions` tool is called with a specific `market` (e.g. "US")
+Then it should return only the positions for that market
+
+### Requirement: Get Max Tradable Quantity
+
+The system SHALL provide a tool to calculate the maximum tradable quantity for a security.
+
+#### Scenario: Get Max Buy
+
+Given the user wants to buy a stock
+When the `get_max_tradable` tool is called with code and price
+Then it should return the maximum number of shares they can buy based on available funds
+
+### Requirement: Get Margin Ratio
+
+The system SHALL provide a tool to retrieve margin ratio data for the account.
+
+#### Scenario: Get Margin Status
+
+Given the user has a margin account
+When the `get_margin_ratio` tool is called
+Then it should return the current margin ratios and risk status
+
+### Requirement: Get Cash Flow
+
+The system SHALL provide a tool to retrieve the cash flow history of the account.
+
+#### Scenario: Get Cash History
+
+Given the user wants to see transaction history
+When the `get_cash_flow` tool is called with a date range
+Then it should return a list of cash transactions (deposits, withdrawals, fees)
+
+### Requirement: Unlock Trade
+
+The system SHALL provide a tool to unlock trading permissions using a password or PIN.
+
+#### Scenario: Unlock Trading
+
+Given the user needs to perform a restricted action (e.g. check max tradable or trade)
+When the `unlock_trade` tool is called with the password
+Then the trading context should be unlocked for subsequent operations
+
+--- ARQUIVOS DO PR (9)
+modified  +17    -0     README.md
+added     +19    -0     openspec/changes/add-watchlist-access/proposal.md
+added     +23    -0     openspec/changes/add-watchlist-access/specs/watchlist-management/spec.md
+added     +6     -0     openspec/changes/add-watchlist-access/tasks.md
+modified  +53    -0     src/moomoo_mcp/services/market_data_service.py
+modified  +66    -8     src/moomoo_mcp/services/trade_service.py   <== código ligado à spec
+modified  +51    -0     src/moomoo_mcp/tools/market_data.py
+added     +107   -0     tests/test_services/test_market_data_service_watchlist.py
+modified  +81    -1     tests/test_services/test_trade_service.py   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### src/moomoo_mcp/services/trade_service.py
+@@ -1,6 +1,6 @@
+ """Trade service for managing Moomoo trading context and account operations."""
+ 
+-from moomoo import OpenSecTradeContext, RET_OK, SecurityFirm, TrdMarket
++from moomoo import OpenSecTradeContext, OrderStatus, RET_OK, SecurityFirm, TrdMarket
+ 
+ 
+ class TradeService:
+@@ -24,7 +24,45 @@ def __init__(
+         self.port = port
+         self.security_firm = security_firm
+         self.trade_ctx: OpenSecTradeContext | None = None
+-        
++
++    def _convert_status_filter(
++        self, status_filter_list: list[str] | None
++    ) -> list | None:
++        """Convert string status values to OrderStatus enum values.
++
++        The Moomoo SDK expects OrderStatus enum values, not strings.
++        This method converts user-provided string values to the proper enum format.
++
++        Args:
++            status_filter_list: List of status strings like ['SUBMITTED', 'FILLED_ALL'].
++
++        Returns:
++            List of OrderStatus enum values, or None if input is None.
++
++        Raises:
++            ValueError: If an invalid status string is provided.
++        """
++        if status_filter_list is None:
++            return None
++
++        converted = []
++        for status_str in status_filter_list:
++            # OrderStatus has the attribute matching the string (e.g., OrderStatus.SUBMITTED)
++            status_enum = getattr(OrderStatus, status_str.upper(), None)
++            if status_enum is None:
++                valid_statuses = [
++                    "UNSUBMITTED", "WAITING_SUBMIT", "SUBMITTING", "SUBMIT_FAILED",
++                    "SUBMITTED", "FILLED_PART", "FILLED_ALL",
++                    "CANCELLING_PART", "CANCELLING_ALL", "CANCELLED_PART", "CANCELLED_ALL",
++                    "REJECTED", "DISABLED", "DELETED", "FAILED", "NONE"
++                ]
++                raise ValueError(
++                    f"Invalid order status: '{status_str}'. "
++                    f"Valid options: {valid_statuses}"
++                )
++            converted.append(status_enum)
++        return converted
++
+     def _get_market_from_code(self, code: str) -> str | None:
+         """Extract market from stock code (e.g., 'JP' from 'JP.8058')."""
+         if "." in code:
+@@ -499,27 +537,37 @@ def get_orders(
+ 
+         Args:
+             code: Filter by stock code.
+-            status_filter_list: Filter by order statuses.
++            status_filter_list: Filter by order statuses (as strings).
++                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
++                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
++                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+             trd_env: Trading environment.
+             acc_id: Account ID.
+             refresh_cache: Whether to refresh cache.
+ 
+         Returns:
+-            List of order dictionaries.
++            List of order dictionaries. Returns empty list if no orders found.
+         """
+         if not self.trade_ctx:
+             raise RuntimeError("Trade context not connected")
+ 
++        # Convert string status values to OrderStatus enum values
++        converted_status_filter = self._convert_status_filter(status_filter_list)
++
+         ret, data = self.trade_ctx.order_list_query(
+             code=code,
+-            status_filter_list=status_filter_list,
++            status_filter_list=converted_status_filter,
+             trd_env=trd_env,
+             acc_id=acc_id,
+             refresh_cache=refresh_cache,
+         )
+         if ret != RET_OK:
+             raise RuntimeError(f"order_list_query failed: {data}")
+ 
++        # Handle None or empty DataFrame gracefully
++        if data is None or data.empty:
++            return []
++
+         return data.to_dict("records")
+ 
+     def get_deals(
+@@ -567,21 +615,27 @@ def get_history_orders(
+ 
+         Args:
+             code: Filter by stock code.
+-            status_filter_list: Filter by order statuses.
++            status_filter_list: Filter by order statuses (as strings).
++                Valid options: UNSUBMITTED, WAITING_SUBMIT, SUBMITTING, SUBMIT_FAILED,
++                SUBMITTED, FILLED_PART, FILLED_ALL, CANCELLING_PART, CANCELLING_ALL,
++                CANCELLED_PART, CANCELLED_ALL, REJECTED, DISABLED, DELETED, FAILED, NONE.
+             start: Start date (YYYY-MM-DD).
+             end: End date (YYYY-MM-DD).
+             trd_env: Trading environment.
+             acc_id: Account ID.
+ 
+         Returns:
+-            List of historical order dictionaries.
++            List of historical order dictionaries. Returns empty list if no orders found.
+         """
+         if not self.trade_ctx:
+             raise RuntimeError("Trade context not connected")
+ 
++        # Convert string status values to OrderStatus enum values
++        converted_status_filter = self._convert_status_filter(status_filter_list)
++
+         ret, data = self.trade_ctx.history_order_list_query(
+             code=code,
+-            status_filter_list=status_filter_list,
++            status_filter_list=converted_status_filter,
+             start=start,
+             end=end,
+             trd_env=trd_env,
+@@ -590,6 +644,10 @@ def get_history_orders(
+         if ret != RET_OK:
+             raise RuntimeError(f"history_order_list_query failed: {data}")
+ 
++        # Handle None or empty DataFrame gracefully
++        if data is None or data.empty:
++            return []
++
+         return data.to_dict("records")
+ 
+     def get_history_deals(
+
+### tests/test_services/test_trade_service.py
+@@ -233,6 +233,9 @@ def test_place_order_success(self, trade_service_with_mock, mock_trade_ctx):
+ 
+     def test_place_order_error(self, trade_service_with_mock, mock_trade_ctx):
+         """Test order placement failure."""
++        # Setup mock for smart account selection
++        acc_df = pd.DataFrame([{"acc_id": 123, "trd_env": "SIMULATE", "market_auth": ["US"]}])
++        mock_trade_ctx.get_acc_list.return_value = (0, acc_df)
+         mock_trade_ctx.place_order.return_value = (-1, "Order rejected")
+ 
+         with pytest.raises(RuntimeError, match="place_order failed"):
+@@ -537,6 +540,8 @@ def test_get_history_orders_with_filters(
+         self, trade_service_with_mock, mock_trade_ctx
+     ):
+         """Test history orders with code and status filters."""
++        from moomoo import OrderStatus
++
+         df = pd.DataFrame([])
+         mock_trade_ctx.history_order_list_query.return_value = (0, df)
+ 
+@@ -547,7 +552,8 @@ def test_get_history_orders_with_filters(
+ 
+         call_kwargs = mock_trade_ctx.history_order_list_query.call_args.kwargs
+         assert call_kwargs["code"] == "US.AAPL"
+-        assert call_kwargs["status_filter_list"] == ["FILLED_ALL"]
++        # Status strings should be converted to OrderStatus enum values
++        assert call_kwargs["status_filter_list"] == [OrderStatus.FILLED_ALL]
+ 
+     def test_get_history_orders_error(self, trade_service_with_mock, mock_trade_ctx):
+         """Test history order retrieval failure."""
+@@ -597,3 +603,77 @@ def test_get_history_deals_error(self, trade_service_with_mock, mock_trade_ctx):
+ 
+         with pytest.raises(RuntimeError, match="history_deal_list_query failed"):
+             trade_service_with_mock.get_history_deals()
++
++
++class TestStatusFilterConversion:
++    """Tests for status_filter_list string to enum conversion."""
++
++    def test_get_orders_converts_status_filter_to_enum(
++        self, trade_service_with_mock, mock_trade_ctx
++    ):
++        """Test that get_orders converts string status values to OrderStatus enums."""
++        from moomoo import OrderStatus
++
++        df = pd.DataFrame([{"order_id": "123", "code": "US.AAPL"}])
++        mock_trade_ctx.order_list_query.return_value = (0, df)
++
++        trade_service_with_mock.get_orders(
++            status_filter_list=["SUBMITTED", "FILLED_ALL"],
++        )
++
++        call_kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
++        assert call_kwargs["status_filter_list"] == [
++            OrderStatus.SUBMITTED,
++            OrderStatus.FILLED_ALL,
++        ]
++
++    def test_get_orders_handles_empty_result(
++        self, trade_service_with_mock, mock_trade_ctx
++    ):
++        """Test that get_orders returns empty list when no orders found."""
++        # Test with None data
++        mock_trade_ctx.order_list_query.return_value = (0, None)
++        result = trade_service_with_mock.get_orders(code="HK.00100")
++        assert result == []
++
++        # Test with empty DataFrame
++        df = pd.DataFrame([])
++        mock_trade_ctx.order_list_query.return_value = (0, df)
++        result = trade_service_with_mock.get_orders(code="HK.00100")
++        assert result == []
++
++    def test_get_history_orders_handles_empty_result(
++        self, trade_service_with_mock, mock_trade_ctx
++    ):
++        """Test that get_history_orders returns empty list when no orders found."""
++        # Test with None data
++        mock_trade_ctx.history_order_list_query.return_value = (0, None)
++        result = trade_service_with_mock.get_history_orders()
++        assert result == []
++
++        # Test with empty DataFrame
++        df = pd.DataFrame([])
++        mock_trade_ctx.history_order_list_query.return_value = (0, df)
++        result = trade_service_with_mock.get_history_orders()
++        assert result == []
++
++    def test_get_orders_invalid_status_raises_error(self, trade_service_with_mock):
++        """Test that invalid status string raises ValueError with helpful message."""
++        with pytest.raises(
++            ValueError, match="Invalid order status: 'INVALID_STATUS'"
++        ):
++            trade_service_with_mock.get_orders(
++                status_filter_list=["INVALID_STATUS"],
++            )
++
++    def test_status_filter_none_passes_none(
++        self, trade_service_with_mock, mock_trade_ctx
++    ):
++        """Test that None status_filter_list passes None to SDK."""
++        df = pd.DataFrame([{"order_id": "123", "code": "US.AAPL"}])
++        mock_trade_ctx.order_list_query.return_value = (0, df)
++
++        trade_service_with_mock.get_orders(status_filter_list=None)
++
++        call_kwargs = mock_trade_ctx.order_list_query.call_args.kwargs
++        assert call_kwargs["status_filter_list"] is None
+
+===== P078 | repo opencom-org/opencom | PR #36: update to main | capacidade: shared-audience-rule-contracts
+--- SPEC VIVA
+# shared-audience-rule-contracts Specification
+
+## Purpose
+TBD - created by archiving change align-web-audience-rule-contracts. Update Purpose after archive.
+## Requirements
+### Requirement: Web audience targeting payloads MUST match Convex validator contracts
+
+Web targeting editors SHALL produce payload shapes that conform to corresponding Convex argument validators for each endpoint.
+
+#### Scenario: Segment-capable surface submits targeting
+
+- **WHEN** a web surface backed by `audienceRulesOrSegmentValidator` submits segment targeting
+- **THEN** the payload SHALL use `{ segmentId }` shape
+- **AND** it SHALL remain accepted by typecheck without unsafe casts
+
+#### Scenario: Inline-only surface submits targeting
+
+- **WHEN** a web surface backed by `audienceRulesValidator` submits targeting
+- **THEN** the payload SHALL contain only inline condition/group rule structures
+- **AND** segment references SHALL be excluded from its local targeting state
+
+### Requirement: Shared audience-rule contracts MUST be reusable across web modules
+
+Audience-rule condition/group/segment contract types SHALL be defined in `@opencom/types` and reused by web modules that build or normalize targeting state.
+
+#### Scenario: Builder and helper use shared contract
+
+- **WHEN** `AudienceRuleBuilder` and audience-rule helper modules compile
+- **THEN** they SHALL import audience-rule contract types from `@opencom/types`
+- **AND** duplicate local contract definitions SHALL be minimized
+
+
+--- ARQUIVOS DO PR (77)
+modified  +9     -0     AGENTS.md
+added     +7     -0     CLAUDE.md
+modified  +3     -1     ROADMAP.md
+modified  +1     -1     apps/landing/package.json
+modified  +1     -1     apps/mobile/package.json
+modified  +1     -1     apps/web/e2e/global-teardown.ts
+modified  +5     -1     apps/web/e2e/helpers/test-data.ts
+modified  +2     -0     apps/web/e2e/helpers/widget-helpers.ts
+modified  +0     -12    apps/web/next.config.js
+modified  +2     -2     apps/web/package.json
+modified  +20    -8     apps/web/src/app/articles/hooks/useArticlesAdminConvex.ts
+modified  +64    -19    apps/web/src/app/articles/page.tsx   <== código ligado à spec
+added     +46    -0     apps/web/src/app/inbox/InboxAiReviewPanel.test.tsx
+modified  +6     -0     apps/web/src/app/inbox/InboxAiReviewPanel.tsx
+modified  +385   -387   apps/web/src/app/inbox/InboxThreadPane.tsx
+modified  +38    -11    apps/web/src/app/inbox/hooks/useInboxConvex.ts
+modified  +2     -0     apps/web/src/app/inbox/inboxRenderTypes.ts
+modified  +13    -10    apps/web/src/app/inbox/page.tsx
+added     +87    -0     apps/web/src/app/settings/AIAgentSection.test.tsx
+modified  +45    -24    apps/web/src/app/settings/AIAgentSection.tsx
+modified  +140   -39    apps/web/src/app/settings/hooks/useSettingsSectionsConvex.ts
+added     +95    -0     apps/web/src/components/SuggestionsPanel.test.tsx
+modified  +14    -0     apps/web/src/components/SuggestionsPanel.tsx
+modified  +3     -1     apps/web/src/components/hooks/useSuggestionsPanelConvex.ts
+modified  +1     -1     apps/widget/package.json
+modified  +6     -5     apps/widget/src/components/Home.tsx
+modified  +31    -3     apps/widget/src/components/conversationView/MessageList.tsx
+modified  +184   -47    apps/widget/src/styles.css
+added     +13    -0     convex/_generated/ai/ai-files.state.json
+added     +365   -0     convex/_generated/ai/guidelines.md
+modified  +53    -2     docs/api-reference.md
+added     +2     -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/.openspec.yaml
+added     +79    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/design.md
+added     +30    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/proposal.md
+added     +11    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/ai-help-center-linked-sources/spec.md
+added     +24    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-insertion/spec.md
+added     +27    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/inbox-knowledge-vector-search/spec.md
+added     +44    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/specs/shared-markdown-rendering-sanitization/spec.md
+added     +46    -0     openspec/changes/archive/2026-03-13-article-link-widget-integration/tasks.md
+modified  +11    -0     openspec/specs/ai-help-center-linked-sources/spec.md
+modified  +23    -5     openspec/specs/inbox-knowledge-insertion/spec.md
+added     +33    -0     openspec/specs/inbox-knowledge-vector-search/spec.md
+modified  +18    -0     openspec/specs/shared-markdown-rendering-sanitization/spec.md
+modified  +10    -1     package.json
+modified  +2     -0     packages/convex/convex/_generated/api.d.ts
+modified  +201   -40    packages/convex/convex/aiAgent.ts
+modified  +40    -26    packages/convex/convex/aiAgentActions.ts
+modified  +4     -2     packages/convex/convex/aiAgentActionsKnowledge.ts
+modified  +5     -3     packages/convex/convex/embeddings.ts
+modified  +137   -3     packages/convex/convex/knowledge.ts
+modified  +63    -6     packages/convex/convex/lib/aiGateway.ts
+added     +45    -0     packages/convex/convex/lib/embeddingModels.ts
+modified  +1     -0     packages/convex/convex/schema/inboxConversationTables.ts
+modified  +3     -1     packages/convex/convex/schema/operationsAiTables.ts
+modified  +2     -1     packages/convex/convex/schema/operationsReportingTables.ts
+modified  +36    -14    packages/convex/convex/suggestions.ts
+modified  +22    -3     packages/convex/convex/testAdmin.ts
+modified  +2     -0     packages/convex/convex/testing/helpers.ts
+modified  +14    -0     packages/convex/convex/testing/helpers/ai.ts
+modified  +1     -1     packages/convex/package.json
+modified  +15    -1     packages/convex/tests/aiAgent.test.ts
+modified  +20    -1     packages/convex/tests/aiAgentAuthorizationSemantics.test.ts
+modified  +116   -12    packages/convex/tests/aiAgentRuntimeSafety.test.ts
+added     +42    -0     packages/convex/tests/embeddingModels.test.ts
+modified  +1     -1     packages/convex/tests/helpers/testHelpers.ts
+modified  +14    -0     packages/convex/tests/runtimeTypeHardeningGuard.test.ts
+modified  +1     -1     packages/convex/tests/setupTestAdminFallback.ts
+modified  +14    -0     packages/convex/tests/suggestions.test.ts
+added     +117   -0     packages/convex/tests/suggestionsMetadataSemantics.test.ts
+modified  +1     -1     packages/react-native-sdk/package.json
+modified  +1     -1     packages/sdk-core/package.json
+modified  +25    -0     packages/web-shared/src/markdown.test.ts
+modified  +38    -10    packages/web-shared/src/markdown.ts
+modified  +150   -145   pnpm-lock.yaml
+modified  +1     -1     scripts/screenshots/seed.ts
+modified  +1     -13    security/convex-v-any-arg-exceptions.json
+modified  +48    -0     security/dependency-audit-allowlist.json
+--- DIFF DO CÓDIGO LIGADO
+### apps/web/src/app/articles/page.tsx
+@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
+ import { useAuth } from "@/contexts/AuthContext";
+ import { AppLayout } from "@/components/AppLayout";
+ import { Button } from "@opencom/ui";
+-import { Plus } from "lucide-react";
++import { Plus, RefreshCw } from "lucide-react";
+ import Link from "next/link";
+ import type { Id } from "@opencom/convex/dataModel";
+ import { strToU8, zipSync } from "fflate";
+@@ -39,12 +39,8 @@ function ArticlesContent() {
+   const searchParams = useSearchParams();
+   const { activeWorkspace } = useAuth();
+   const [searchQuery, setSearchQuery] = useState("");
+-  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(
+-    ALL_COLLECTION_FILTER
+-  );
+-  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(
+-    ALL_VISIBILITY_FILTER
+-  );
++  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(ALL_COLLECTION_FILTER);
++  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>(ALL_VISIBILITY_FILTER);
+   const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUS_FILTER);
+   const [importSourceName, setImportSourceName] = useState("");
+   const [importTargetCollectionId, setImportTargetCollectionId] = useState<
+@@ -68,6 +64,9 @@ function ArticlesContent() {
+   const [deleteTarget, setDeleteTarget] = useState<DeleteArticleTarget | null>(null);
+   const [deleteError, setDeleteError] = useState<string | null>(null);
+   const [isDeletingArticle, setIsDeletingArticle] = useState(false);
++  const [isBackfillingEmbeddings, setIsBackfillingEmbeddings] = useState(false);
++  const [backfillNotice, setBackfillNotice] = useState<string | null>(null);
++  const [backfillError, setBackfillError] = useState<string | null>(null);
+   const folderInputRef = useRef<HTMLInputElement | null>(null);
+   const createQueryHandledRef = useRef(false);
+   const {
+@@ -84,6 +83,7 @@ function ArticlesContent() {
+     restoreImportRun,
+     syncMarkdownFolder,
+     unpublishArticle,
++    backfillEmbeddings,
+   } = useArticlesAdminConvex({
+     workspaceId: activeWorkspace?._id,
+     isExporting,
+@@ -159,6 +159,31 @@ function ArticlesContent() {
+     }
+   };
+ 
++  const handleBackfillEmbeddings = async () => {
++    if (!activeWorkspace?._id) {
++      return;
++    }
++
++    setIsBackfillingEmbeddings(true);
++    setBackfillError(null);
++    setBackfillNotice(null);
++
++    try {
++      const result = await backfillEmbeddings({
++        workspaceId: activeWorkspace._id,
++        contentTypes: ["article", "internalArticle"],
++      });
++      setBackfillNotice(
++        `Embeddings backfilled: ${result.processed} processed, ${result.skipped} skipped (already existed)`
++      );
++    } catch (error) {
++      console.error("Failed to backfill embeddings:", error);
++      setBackfillError(error instanceof Error ? error.message : "Failed to backfill embeddings.");
++    } finally {
++      setIsBackfillingEmbeddings(false);
++    }
++  };
++
+   const buildImportPayload = async () =>
+     Promise.all(
+       selectedImportItems.map(async (item) => ({
+@@ -517,18 +542,38 @@ function ArticlesContent() {
+           <h1 className="text-2xl font-bold">Articles</h1>
+           <p className="text-gray-500">Manage public and internal knowledge articles</p>
+         </div>
+-        <div className="flex gap-2">
+-          <Link href="/articles/collections">
+-            <Button variant="outline">Manage Collections</Button>
+-          </Link>
+-          <Button variant="outline" onClick={() => void handleCreateArticle("internal")}>
+-            <Plus className="h-4 w-4 mr-2" />
+-            New Internal Article
+-          </Button>
+-          <Button onClick={() => void handleCreateArticle("public")}>
+-            <Plus className="h-4 w-4 mr-2" />
+-            New Article
+-          </Button>
++        <div className="flex flex-col gap-2 items-end">
++          <div className="flex gap-2">
++            <Button
++              variant="outline"
++              onClick={() => void handleBackfillEmbeddings()}
++              disabled={
++                isBackfillingEmbeddings ||
++                !activeWorkspace?._id ||
++                (activeWorkspace.role !== "owner" && activeWorkspace.role !== "admin")
++              }
++            >
++              <RefreshCw
++                className={`h-4 w-4 mr-2 ${isBackfillingEmbeddings ? "animate-spin" : ""}`}
++              />
++              {isBackfillingEmbeddings ? "Refreshing..." : "Refresh Embeddings"}
++            </Button>
++            <Link href="/articles/collections">
++              <Button variant="outline">Manage Collections</Button>
++            </Link>
++          </div>
++          <div className="flex gap-2">
++            <Button variant="outline" onClick={() => void handleCreateArticle("internal")}>
++              <Plus className="h-4 w-4 mr-2" />
++              New Internal Article
++            </Button>
++            <Button onClick={() => void handleCreateArticle("public")}>
++              <Plus className="h-4 w-4 mr-2" />
++              New Article
++            </Button>
++          </div>
++          {backfillNotice && <p className="text-sm text-green-600">{backfillNotice}</p>}
++          {backfillError && <p className="text-sm text-red-600">{backfillError}</p>}
+         </div>
+       </div>
+ 
+
+===== P079 | repo Amm1rr/WebAI-to-API | PR #80: Refactor Gemini to provider-centric adapter architecture | capacidade: robust-auth-recovery
+--- SPEC VIVA
+# robust-auth-recovery Specification
+
+## Purpose
+TBD - created by archiving change robust-auth-recovery. Update Purpose after archive.
+## Requirements
+### Requirement: Authentication Failure Classification
+The system SHALL classify authentication checks and startup status failures into two distinct types based entirely on DOM and navigation state:
+1. **Transient Failures**: Playwright locator timeouts, temporary DOM loading delays, network socket errors, or temporary navigation glitches occurring before prompt submission.
+2. **Hard Failures**: A confirmed, stable redirect to the Google accounts sign-in UI or a stable, visible "sign in" button that remains present after the grace period.
+The `GeminiProviderAdapter.check_authentication` method MUST remain a lightweight, stateless, and fast DOM inspector with no internal sleep, polling, or retry loops. Transient failures MUST NOT trigger permanent session storage state (`gemini.json`) deletion. Hard failures SHALL immediately trigger an authentication status cache update to `EXPIRED_SESSION` and propagate the failure to block redundant browser creation on subsequent requests until manual or on-demand login completes.
+
+#### Scenario: Transient Network Lag During Check
+- **WHEN** the authentication check encounters a Playwright timeout or a network socket disconnect during page status loading
+- **THEN** the system SHALL treat this as a transient failure, preserve the persistent `gemini.json` state file, and allow a pre-submission retry
+
+#### Scenario: Explicit Invalid Session Verified
+- **WHEN** the page redirects stably to the Google accounts sign-in screen and the sign-in button is confirmed visible after the grace period
+- **THEN** the system SHALL classify this as a hard failure, raise a terminal exception, trigger an auth status refresh to `EXPIRED_SESSION`, and log the state as unauthenticated
+
+### Requirement: Pre-Submission Retry Policy & Lease Preservation
+The runtime execution layer MUST restrict the exponential backoff retry policy strictly to the **pre-submission phase** (page acquisition, page readiness checks, authentication verification, and observer preparation). 
+Once prompt filling or submit actions begin (the **submission boundary**), the request becomes non-idempotent. Any exception after this boundary MUST bypass retry logic entirely and fail-fast immediately.
+Furthermore, failed pre-submission attempts MUST **fully release page leases and resources** before initiating a retry, preventing stale lease holding and lock contention.
+
+#### Scenario: Pre-Submission Failure Releases Lease Before Retry
+- **WHEN** a transient failure occurs during page readiness or auth verification in the pre-submission phase
+- **THEN** the system SHALL release the active `ManagedPage` lease and decrement the active lease count, wait for the backoff delay, and only then acquire a fresh lease for the next attempt
+
+#### Scenario: Post-Submission Failure Bypasses Retry
+- **WHEN** a page crash or timeout occurs during prompt filling, clicking submit, or active streaming
+- **THEN** the system SHALL NOT attempt any retry, MUST release resources, and SHALL propagate the failure immediately to prevent duplicate submissions or inconsistent bridge state
+
+---
+
+### Requirement: Google Login Redirect Grace Period (Outer Orchestration)
+The system MUST implement a 2.5-second grace period (polling every 500ms) to distinguish a momentary redirection during page loading from a terminal redirect to the Google accounts sign-in page. This polling grace-period loop MUST be executed as a bounded outer orchestration flow in the provider layer, not inside the adapter.
+
+#### Scenario: Momentary Redirection Healed in Grace Period
+- **WHEN** the page URL briefly redirects through a sign-in URL, but resolves back to the Gemini chat interface within 2.5 seconds
+- **THEN** the system SHALL proceed with observer setup and prompt execution, treating the state as fully authenticated
+
+
+--- ARQUIVOS DO PR (35)
+modified  +4     -4     README.md
+modified  +7     -0     config.conf.example
+modified  +9     -6     docs/api-contract.md
+modified  +1     -1     docs/lifecycle-and-recovery.md
+modified  +8     -6     docs/provider-contract.md
+modified  +5     -5     docs/runtime-architecture-overview.md
+added     +2     -0     openspec/changes/refactor-provider-architecture/.openspec.yaml
+added     +52    -0     openspec/changes/refactor-provider-architecture/design.md
+added     +30    -0     openspec/changes/refactor-provider-architecture/proposal.md
+added     +15    -0     openspec/changes/refactor-provider-architecture/specs/backend-configuration-authority/spec.md
+added     +13    -0     openspec/changes/refactor-provider-architecture/specs/modular-browser-engine/spec.md
+added     +51    -0     openspec/changes/refactor-provider-architecture/specs/provider-adapter-framework/spec.md
+added     +30    -0     openspec/changes/refactor-provider-architecture/tasks.md
+modified  +12    -0     src/app/config.py
+modified  +1     -1     src/app/services/browser/auth_manager.py   <== código ligado à spec
+modified  +18    -9     src/app/services/factory.py
+removed   +0     -428   src/app/services/providers/gemini.py
+added     +5     -0     src/app/services/providers/gemini/__init__.py
+added     +19    -0     src/app/services/providers/gemini/base_adapter.py
+added     +84    -0     src/app/services/providers/gemini/persistence.py
+renamed   +82    -233   src/app/services/providers/gemini/playwright_adapter.py
+added     +98    -0     src/app/services/providers/gemini/provider.py
+added     +136   -0     src/app/services/providers/gemini/shared.py
+added     +206   -0     src/app/services/providers/gemini/webapi_adapter.py
+removed   +0     -183   src/app/services/providers/gemini_playwright_scripts.py
+modified  +1     -3     src/app/services/session_manager.py
+added     +5     -0     src/app/utils/tokens.py
+modified  +1     -1     tests/test_endpoints.py
+modified  +1     -1     tests/test_factory.py
+modified  +18    -18    tests/test_gemini_provider.py
+added     +72    -0     tests/test_gemini_provider_architecture.py
+modified  +1     -1     tests/test_gemini_serialization.py
+modified  +7     -7     tests/test_persistent_conversation_layer.py
+modified  +37    -37    tests/test_recovery_orchestration.py   <== código ligado à spec
+modified  +1     -1     verify_login.py
+--- DIFF DO CÓDIGO LIGADO
+### src/app/services/browser/auth_manager.py
+@@ -288,7 +288,7 @@ async def run_login_flow(self) -> None:
+         Orchestrate the headful login workflow using core BrowserEngine primitives.
+         """
+         from app.services.browser.engine import get_browser_engine
+-        from app.services.providers.gemini_playwright_scripts import SELECTORS
++        from app.services.browser.adapters.scripts.gemini_scripts import SELECTORS
+         
+         # 1. Perform environment checks
+         if not self._check_display_available():
+
+### tests/test_recovery_orchestration.py
+@@ -4,7 +4,7 @@
+ from app.services.browser.session import ProviderSession
+ from app.services.browser.errors import TransientSessionError
+ from app.services.browser.engine import BrowserEngine
+-from app.services.providers.gemini_playwright import GeminiPlaywrightProvider
++from app.services.providers.gemini.provider import GeminiProvider
+ from app.schemas.request import OpenAIChatRequest
+ from fastapi import HTTPException
+ 
+@@ -84,7 +84,7 @@ async def test_transient_auth_failure_retry_and_lease_release(monkeypatch):
+     # Mock get_browser_engine
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     # Mock page and locator
+     mock_page = MagicMock()
+@@ -121,7 +121,7 @@ async def mock_close():
+     async def mock_check_authentication(*args, **kwargs):
+         raise TransientSessionError("Mock transient auth failure")
+         
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+     
+     # Mock asyncio.sleep to record sleep delays and bypass actual sleeping
+     original_sleep = asyncio.sleep
+@@ -132,10 +132,10 @@ async def mock_sleep(delay):
+             await original_sleep(0)
+         else:
+             await original_sleep(delay)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.sleep", mock_sleep)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.sleep", mock_sleep)
+     
+     # 3. Create provider and request
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -278,7 +278,7 @@ async def test_post_submission_no_retry(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     mock_page = MagicMock()
+     mock_page.url = "https://gemini.google.com/app"
+@@ -313,7 +313,7 @@ async def mock_close():
+     async def mock_check_authentication(*args, **kwargs):
+         return True
+         
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+     
+     # Mock submit_prompt to deliberately raise an exception to simulate post-submission failure
+     submit_calls = 0
+@@ -322,7 +322,7 @@ async def mock_submit_prompt(*args, **kwargs):
+         submit_calls += 1
+         raise RuntimeError("Post-submission failure")
+         
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.submit_prompt", mock_submit_prompt)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.submit_prompt", mock_submit_prompt)
+     
+     # Mock state.js_ready.set() to trigger instantly when evaluate is called for the observer script
+     async def mock_evaluate(script, *args, **kwargs):
+@@ -332,7 +332,7 @@ async def mock_evaluate(script, *args, **kwargs):
+             
+     mock_page.evaluate = mock_evaluate
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -368,7 +368,7 @@ async def test_observer_leak_prevention(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     mock_page = MagicMock()
+     mock_page.url = "https://gemini.google.com/app"
+@@ -409,7 +409,7 @@ async def mock_acquire_lease(conversation_id, request_id):
+     async def mock_check_authentication(*args, **kwargs):
+         return True
+         
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+     
+     # Patch asyncio.sleep to not actually wait during retry backoff
+     original_sleep = asyncio.sleep
+@@ -418,7 +418,7 @@ async def mock_sleep(delay):
+             await original_sleep(0)
+         else:
+             await original_sleep(delay)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.sleep", mock_sleep)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.sleep", mock_sleep)
+     
+     # Patch asyncio.timeout to timeout instantly
+     class InstantTimeout:
+@@ -429,9 +429,9 @@ async def __aenter__(self):
+         async def __aexit__(self, exc_type, exc_val, exc_tb):
+             pass
+             
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.timeout", InstantTimeout)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.timeout", InstantTimeout)
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -464,7 +464,7 @@ async def test_auth_expired_maps_to_401(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     mock_page = MagicMock()
+     mock_page.url = "https://gemini.google.com/app"
+@@ -489,9 +489,9 @@ async def mock_acquire_lease(conversation_id, request_id):
+     # Mock adapter check_authentication to return False (auth expired)
+     async def mock_check_authentication(*args, **kwargs):
+         return False
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -521,7 +521,7 @@ async def test_transient_failure_maps_to_503(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     mock_page = MagicMock()
+     mock_page.url = "https://gemini.google.com/app"
+@@ -547,15 +547,15 @@ async def mock_acquire_lease(conversation_id, request_id):
+     async def mock_check_authentication(*args, **kwargs):
+         from app.services.browser.errors import TransientSessionError
+         raise TransientSessionError("Mock transient error")
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.GeminiProviderAdapter.check_authentication", mock_check_authentication)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.GeminiProviderAdapter.check_authentication", mock_check_authentication)
+     
+     # Bypass retry sleep
+     original_sleep = asyncio.sleep
+     async def mock_sleep(delay):
+         await original_sleep(0)
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.asyncio.sleep", mock_sleep)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.asyncio.sleep", mock_sleep)
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -581,7 +581,7 @@ async def test_timeout_maps_to_504(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     mock_page = MagicMock()
+     mock_page.url = "https://gemini.google.com/app"
+@@ -596,7 +596,7 @@ async def mock_acquire_lease(conversation_id, request_id):
+         raise asyncio.TimeoutError()
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -622,14 +622,14 @@ async def test_unknown_exception_maps_to_500(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     # Make acquire_lease raise an unexpected exception
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise ValueError("Secret database password failed")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -652,9 +652,9 @@ async def test_exception_before_retry_loop_initializes_state(monkeypatch):
+     """
+     async def mock_get_browser_engine():
+         raise RuntimeError("Failure before retry loop")
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -681,13 +681,13 @@ async def test_browser_disconnected_error_poisons_session(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise BrowserDisconnectedError("Process died")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -715,13 +715,13 @@ async def test_browser_generation_mismatch_error_poisons_session(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise BrowserGenerationMismatchError("Mismatch occurred")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -748,13 +748,13 @@ async def test_playwright_closed_page_error_maps_to_503(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise PlaywrightError("Target page, context or browser has been closed")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -780,13 +780,13 @@ async def test_generic_playwright_error_maps_to_502(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise PlaywrightError("Failed to click element due to overlap")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+@@ -813,13 +813,13 @@ async def test_www_authenticate_header_exists_on_401(monkeypatch):
+     
+     async def mock_get_browser_engine():
+         return mock_engine
+-    monkeypatch.setattr("app.services.providers.gemini_playwright.get_browser_engine", mock_get_browser_engine)
++    monkeypatch.setattr("app.services.providers.gemini.playwright_adapter.get_browser_engine", mock_get_browser_engine)
+     
+     async def mock_acquire_lease(conversation_id, request_id):
+         raise SessionNotAliveError("Expired session cookies")
+     mock_session.acquire_lease = mock_acquire_lease
+     
+-    provider = GeminiPlaywrightProvider()
++    provider = GeminiProvider()
+     request = OpenAIChatRequest(
+         model="playwright/gemini",
+         messages=[{"role": "user", "content": "Hello"}],
+
+===== P080 | repo Creatiwity/siren | PR #644: feat: add doublons data and endpoints | capacidade: sentry-integration-axum
+--- SPEC VIVA
+# sentry-integration-axum Specification
+
+## Purpose
+TBD - created by archiving change migrate-from-warp-to-axum. Update Purpose after archive.
+## Requirements
+### Requirement: Sentry Error Tracking
+
+The server SHALL integrate Sentry for error tracking and monitoring using Axum's built-in support.
+
+#### Scenario: Error Reporting
+
+- **WHEN** an error occurs in any endpoint handler
+- **THEN** the error is automatically reported to Sentry
+- **AND** the error includes relevant context (e.g., request details, error type)
+
+#### Scenario: Performance Monitoring
+
+- **WHEN** a request is processed by the server
+- **THEN** the request is tracked as a transaction in Sentry
+- **AND** the transaction includes timing and performance data
+
+#### Scenario: Breadcrumbs
+
+- **WHEN** a request is processed by the server
+- **THEN** breadcrumbs are automatically added to Sentry for debugging context
+- **AND** breadcrumbs include request details (e.g., method, path, headers)
+
+
+--- ARQUIVOS DO PR (20)
+added     +5     -0     migrations/2026-05-21-000000_add_siren_doublons/down.sql
+added     +16    -0     migrations/2026-05-21-000000_add_siren_doublons/up.sql
+added     +2     -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/.openspec.yaml
+added     +70    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/design.md
+added     +28    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/proposal.md
+added     +83    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/specs/http-server-axum/spec.md
+added     +42    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/specs/siren-doublons/spec.md
+added     +35    -0     openspec/changes/archive/2026-05-21-siren-doublons-redirect/tasks.md
+modified  +27    -0     openspec/specs/http-server-axum/spec.md
+added     +45    -0     openspec/specs/siren-doublons/spec.md
+modified  +2     -0     src/commands/common.rs
+modified  +10    -2     src/commands/serve/runner/error.rs   <== código ligado à spec
+modified  +25    -1     src/commands/serve/runner/etablissements.rs
+modified  +20    -1     src/commands/serve/runner/unites_legales.rs
+modified  +6     -0     src/models/group_metadata/common.rs
+modified  +1     -0     src/models/mod.rs
+modified  +30    -0     src/models/schema.rs
+added     +6     -0     src/models/siren_doublon/error.rs
+added     +130   -0     src/models/siren_doublon/mod.rs
+modified  +6     -0     src/models/update_metadata/common.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/commands/serve/runner/error.rs
+@@ -1,9 +1,9 @@
+ use crate::connectors::Error as ConnectorError;
+-use crate::models::{etablissement, lien_succession, unite_legale, update_metadata};
++use crate::models::{etablissement, lien_succession, siren_doublon, unite_legale, update_metadata};
+ use crate::update::error::Error as InternalUpdate;
+ use axum::{
+     Json,
+-    http::StatusCode,
++    http::{StatusCode, header},
+     response::{IntoResponse, Response},
+ };
+ use custom_error::custom_error;
+@@ -23,18 +23,26 @@ custom_error! { pub Error
+     Etablissement {source: etablissement::error::Error} = "[Etablissement] {source}",
+     LienSuccession {source: lien_succession::error::Error} = "[LienSuccession] {source}",
+     Status {source: update_metadata::error::Error} = "[Status] {source}",
++    SirenDoublonRedirect{location: String} = "Moved permanently to {location}",
++    SirenDoublonLookup{source: siren_doublon::error::Error} = "[SirenDoublon] {source}",
+ }
+ 
+ impl IntoResponse for Error {
+     fn into_response(self) -> Response {
+         let (status, message) = match self {
++            Error::SirenDoublonRedirect { location } => {
++                return (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, location.as_str())]).into_response();
++            }
+             Error::InvalidData => (StatusCode::BAD_REQUEST, self.to_string()),
+             Error::InvalidSearchParams { message: _ } => {
+                 (StatusCode::BAD_REQUEST, self.to_string())
+             }
+             Error::MissingApiKey => (StatusCode::UNAUTHORIZED, self.to_string()),
+             Error::ApiKey => (StatusCode::UNAUTHORIZED, self.to_string()),
+             Error::MissingBaseUrlForAsync => (StatusCode::BAD_REQUEST, self.to_string()),
++            Error::SirenDoublonLookup { source: _ } => {
++                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
++            }
+             Error::LocalConnectionFailed { source: _ } => {
+                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+             }
+
+===== P081 | repo Xeonice/soul-killer | PR #2: fix: Windows viewer 路径对齐 + updater 父目录自愈 | capacidade: build-script
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: 两阶段构建产出全平台二进制
+
+`scripts/build.ts` SHALL 执行两阶段构建：先 bundle（含 devtools stub plugin），再对 5 个目标平台执行 `bun build --compile`。
+
+#### Scenario: 成功构建全部平台
+
+- **WHEN** 执行 `bun scripts/build.ts`
+- **THEN** `dist/` 下 SHALL 产出 5 个文件：`soulkiller-darwin-arm64`、`soulkiller-darwin-x64`、`soulkiller-linux-x64`、`soulkiller-linux-arm64`、`soulkiller-windows-x64.exe`
+
+### Requirement: 版本号注入
+
+构建时 SHALL 从 `package.json` 读取 `version` 字段，通过 `--define` 注入到 bundle 中作为 `process.env.SOULKILLER_VERSION`。
+
+#### Scenario: 二进制包含正确版本
+
+- **WHEN** `package.json` 版本为 `0.2.0` 并执行构建
+- **THEN** 产出的二进制执行 `--version` 时 SHALL 输出 `0.2.0`
+
+### Requirement: react-devtools-core 被 stub 替换
+
+bundle 阶段 SHALL 通过 plugin 将 `react-devtools-core` 替换为空模块，避免运行时依赖缺失。
+
+#### Scenario: 编译后无 devtools 错误
+
+- **WHEN** 执行编译后的二进制（TTY 环境）
+- **THEN** 不 SHALL 出现 `react-devtools-core` 相关错误
+
+### Requirement: 产出压缩包
+
+构建脚本 SHALL 将 Unix 平台二进制压缩为 `.tar.gz`，Windows 二进制压缩为 `.zip`。
+
+#### Scenario: 压缩产物命名
+
+- **WHEN** 构建完成
+- **THEN** `dist/` 下 SHALL 包含 `soulkiller-darwin-arm64.tar.gz`、`soulkiller-windows-x64.zip` 等压缩文件
+
+### Requirement: 构建流程包含 viewer 前端编译
+
+`build.ts` SHALL 在 Phase 1 (Bundle) 之前新增两个步骤：Phase 0 执行 `vite build` 编译 viewer 前端，Phase 0.5 将产物生成为 barrel 模块。
+
+#### Scenario: vite build 成功后生成 barrel 模块
+
+- **WHEN** 执行 `bun scripts/build.ts`
+- **THEN** SHALL 先执行 `packages/viewer` 的 vite build，然后将 `dist/` 下所有文件转为字符串常量写入 `src/export/state/viewer-bundle.ts`，最后执行现有的 Bundle + Compile 流程
+
+#### Scenario: vite build 失败时中断构建
+
+- **WHEN** `vite build` 执行失败（非零退出码）
+- **THEN** SHALL 打印错误信息并以非零退出码终止，不继续后续编译步骤
+
+
+
+
+
+--- ARQUIVOS DO PR (11)
+added     +2     -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/.openspec.yaml
+added     +62    -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/design.md
+added     +25    -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/proposal.md
+added     +25    -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/specs/install-script/spec.md
+added     +26    -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/specs/self-update/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-14-fix-windows-viewer-path/tasks.md
+modified  +16    -1     openspec/specs/install-script/spec.md
+modified  +25    -0     openspec/specs/self-update/spec.md
+modified  +9     -2     scripts/install.ps1
+modified  +20    -6     src/cli/updater.ts   <== código ligado à spec
+modified  +41    -1     tests/unit/cli/updater.test.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/cli/updater.ts
+@@ -2,9 +2,9 @@
+  * Self-update: query GitHub Releases, compare binary hash, download if changed.
+  */
+ 
+-import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync } from 'node:fs'
++import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
+ import { tmpdir, homedir } from 'node:os'
+-import { join } from 'node:path'
++import { dirname, join } from 'node:path'
+ 
+ const REPO = 'Xeonice/soul-killer'
+ const CDN_BASE = 'https://soulkiller-download.ad546971975.workers.dev'
+@@ -238,6 +238,22 @@ export async function atomicReplaceBinary(
+   }
+ }
+ 
++/**
++ * Replace the viewer static-assets directory atomically.
++ *
++ * Ensures the parent directory (~/.soulkiller) exists before attempting
++ * rename — install.ps1 never creates ~/.soulkiller on Windows, so the first
++ * --update after a fresh install would otherwise hit ENOENT.
++ *
++ * Extracted as its own function to make the ordering (mkdir → rm → rename)
++ * directly testable without standing up the whole download pipeline.
++ */
++export function replaceViewer(src: string, dst: string): void {
++  mkdirSync(dirname(dst), { recursive: true })
++  rmSync(dst, { recursive: true, force: true })
++  renameSync(src, dst)
++}
++
+ /**
+  * Print a user-facing message for a ReplaceFailure. One helper instead of
+  * scattering console.error calls through runUpdate.
+@@ -425,12 +441,10 @@ export async function runUpdate(): Promise<void> {
+     return
+   }
+ 
+-  // Replace viewer static files (if present in archive)
++  // Replace viewer static files (if present in archive).
+   const extractedViewer = join(extractDir, 'viewer')
+   if (existsSync(extractedViewer)) {
+-    const viewerDst = join(homedir(), '.soulkiller', 'viewer')
+-    rmSync(viewerDst, { recursive: true, force: true })
+-    renameSync(extractedViewer, viewerDst)
++    replaceViewer(extractedViewer, join(homedir(), '.soulkiller', 'viewer'))
+     console.log('  ✓ Viewer files updated')
+   }
+ 
+
+===== P082 | repo exasol/exasol-personal | PR #130: fix: Fix bug where results larger 1,000 rows were not fetched | capacidade: connect-sql-input
+--- SPEC VIVA
+# connect-sql-input Specification
+
+## Purpose
+TBD - created by archiving change add-connect-command-and-file-flags. Update Purpose after archive.
+## Requirements
+### Requirement: Inline SQL via --command
+
+`exasol connect` SHALL accept a `-c`/`--command <SQL>` flag whose argument is one or more SQL statements. When the flag is supplied, the command SHALL execute the statements non-interactively and then exit, without starting the interactive shell or reading stdin.
+
+The supplied SQL SHALL be split into statements on `;` terminators using the same splitting rules as the interactive shell (quote- and comment-aware), and each statement SHALL be executed in order against the database. Results SHALL be printed using the same formatter as the interactive shell, honoring `--json` and `--json` format options.
+
+#### Scenario: Single statement
+
+- **WHEN** the user runs `exasol connect -c "SELECT 1"`
+- **THEN** the statement is executed and its result is printed
+- **AND** the command exits without entering the interactive shell
+
+#### Scenario: Multiple semicolon-separated statements
+
+- **WHEN** the user runs `exasol connect -c "CREATE TABLE t(x INT); INSERT INTO t VALUES (1); SELECT * FROM t"`
+- **THEN** each statement is executed in order
+- **AND** the result of each result-producing statement is printed in order
+
+#### Scenario: Trailing or empty statements are ignored
+
+- **WHEN** the supplied SQL contains empty segments (e.g. a trailing `;` or `;;`)
+- **THEN** empty segments are skipped and no error is raised for them
+
+### Requirement: SQL script via --file
+
+`exasol connect` SHALL accept a `-f`/`--file <path>` flag whose argument is the path to a SQL script file. When the flag is supplied, the command SHALL read the file, execute its `;`-separated statements non-interactively in order, and then exit, without starting the interactive shell or reading stdin.
+
+The file contents SHALL be split and executed using the same rules as `--command`.
+
+#### Scenario: Run a script file
+
+- **WHEN** the user runs `exasol connect -f script.sql` and `script.sql` contains multiple `;`-separated statements
+- **THEN** each statement is executed in order and results are printed
+
+#### Scenario: Missing or unreadable file
+
+- **WHEN** the file given to `--file` does not exist or cannot be read
+- **THEN** the command exits with a non-zero status and a clear error message
+- **AND** no statements are executed
+
+### Requirement: Flag precedence and mutual exclusivity
+
+The `--command` and `--file` flags SHALL be mutually exclusive. Supplying both SHALL cause the command to exit with a non-zero status and a clear error message before connecting to the database. When neither flag is supplied, `exasol connect` SHALL retain its existing interactive and stdin behavior unchanged.
+
+#### Scenario: Both flags supplied
+
+- **WHEN** the user runs `exasol connect -c "SELECT 1" -f script.sql`
+- **THEN** the command exits with a non-zero status and an error stating the flags are mutually exclusive
+
+#### Scenario: Neither flag supplied preserves existing behavior
+
+- **WHEN** the user runs `exasol connect` with neither `--command` nor `--file`
+- **THEN** the command behaves as before: interactive shell on a TTY, or reads SQL from stdin when piped
+
+### Requirement: Non-interactive exit status
+
+When run with `--command` or `--file`, `exasol connect` SHALL exit with a non-zero status if any executed statement fails, so that callers and scripts can detect errors.
+
+#### Scenario: Statement fails
+
+- **WHEN** a statement supplied via `--command` or `--file` fails to execute
+- **THEN** the command reports the error
+- **AND** exits with a non-zero status
+
+
+--- ARQUIVOS DO PR (16)
+modified  +7     -0     README.md
+modified  +8     -0     cmd/exasol/connect.go   <== código ligado à spec
+modified  +52    -3     internal/connect/connect.go   <== código ligado à spec
+modified  +40    -0     internal/connect/connect_test.go
+modified  +44    -35    internal/connect/exasol/database.go
+modified  +191   -99    internal/connect/exasol/database_test.go
+modified  +4     -68    internal/connect/exasol/query_result.go
+removed   +0     -104   internal/connect/exasol/query_result_test.go
+modified  +1     -3     internal/connect/exasol/types/connector.go
+modified  +52    -46    internal/connect/exasol/types/typesfakes/fake_exasol_connector.go
+modified  +6     -1     internal/connect/types/types.go
+added     +2     -0     openspec/changes/fix-connect-large-result-sets/.openspec.yaml
+added     +45    -0     openspec/changes/fix-connect-large-result-sets/design.md
+added     +33    -0     openspec/changes/fix-connect-large-result-sets/proposal.md
+added     +83    -0     openspec/changes/fix-connect-large-result-sets/specs/connect-result-retrieval/spec.md
+added     +31    -0     openspec/changes/fix-connect-large-result-sets/tasks.md
+--- DIFF DO CÓDIGO LIGADO
+### cmd/exasol/connect.go
+@@ -23,6 +23,7 @@ const connectCmdExample = `  exasol connect
+ var connectOpts = connect.Opts{
+ 	ExecuteOnSemicolon: true,
+ 	JSONFormat:         connect.JSONFormatPretty,
++	MaxRows:            connect.MaxRowsUnset,
+ }
+ 
+ var connectCmd = &cobra.Command{
+@@ -73,6 +74,13 @@ func registerConnectFlags() {
+ 		connect.JSONFormatPretty,
+ 		"Output in JSON format: pretty, compact",
+ 	)
++
++	connectCmd.Flags().IntVar(
++		&connectOpts.MaxRows,
++		"max-rows", connect.MaxRowsUnset,
++		"Maximum rows to display per query (0 = unlimited; "+
++			"default: 100 interactively, unlimited otherwise)",
++	)
+ }
+ 
+ // nolint: gochecknoinits
+
+### internal/connect/connect.go
+@@ -56,6 +56,26 @@ type Opts struct {
+ 	ExecuteOnSemicolon         bool
+ 	OutputJSON                 bool
+ 	JSONFormat                 JSONFormat
++	// MaxRows caps the number of rows displayed per query. A negative value
++	// means "unset" (use the per-mode default); 0 means unlimited.
++	MaxRows int
++}
++
++// MaxRowsUnset is the sentinel for a MaxRows that was not set on the command
++// line, leaving the limit to be derived from the session mode.
++const MaxRowsUnset = -1
++
++// interactivePreviewMaxRows is the default row cap for interactive sessions.
++const interactivePreviewMaxRows = 100
++
++// effectiveMaxRows returns the explicit row limit when one was set, otherwise
++// the mode default. A negative requested value means "unset".
++func effectiveMaxRows(requested, modeDefault int) int {
++	if requested >= 0 {
++		return requested
++	}
++
++	return modeDefault
+ }
+ 
+ type jsonQueryResult struct {
+@@ -143,7 +163,15 @@ func Connect(
+ 		printer = newJSONResultPrinter(opts.JSONFormat)
+ 	}
+ 
+-	if util.IsInteractiveStdin() {
++	interactive := util.IsInteractiveStdin()
++
++	modeDefault := 0
++	if interactive {
++		modeDefault = interactivePreviewMaxRows
++	}
++	maxRows := effectiveMaxRows(opts.MaxRows, modeDefault)
++
++	if interactive {
+ 		if err := printExitHint(os.Stderr); err != nil {
+ 			return err
+ 		}
+@@ -155,15 +183,36 @@ func Connect(
+ 			return nil
+ 		}
+ 
+-		queryResult, err := database.Exec(ctx, input)
++		queryResult, err := database.Exec(ctx, input, maxRows)
+ 		if err != nil {
+ 			return err
+ 		}
+ 
+-		return printer(output, queryResult)
++		if err := printer(output, queryResult); err != nil {
++			return err
++		}
++
++		if queryResult.Truncated() {
++			return printTruncationFooter(os.Stderr, len(queryResult.Rows()))
++		}
++
++		return nil
+ 	}, ShellOpts{ExecuteOnSemicolon: opts.ExecuteOnSemicolon})
+ }
+ 
++// printTruncationFooter notifies the user, via stderr, that the displayed
++// result was capped. It is written to stderr so it never corrupts stdout
++// output such as JSON.
++func printTruncationFooter(output io.Writer, shown int) error {
++	_, err := fmt.Fprintf(
++		output,
++		"-- showing first %d rows (output truncated; use --max-rows 0 to see all)\n",
++		shown,
++	)
++
++	return err
++}
++
+ func printExitHint(output io.Writer) error {
+ 	_, err := fmt.Fprintln(output, "Type \"exit\" to exit the shell")
+ 
+
+===== P083 | repo lueluelue12138/sharp-gui | PR #16: feat(video): 添加视频 3DGS 重建能力 | capacidade: local-photo-album-gallery
+--- SPEC VIVA
+# local-photo-album-gallery Specification
+
+## Purpose
+TBD - created by archiving change add-local-photo-album-gallery. Update Purpose after archive.
+## Requirements
+### Requirement: The system SHALL allow local photo album roots to be configured
+
+The system SHALL allow a local user to configure one or more photo directory roots, and SHALL represent each configured directory as a photo album.
+
+#### Scenario: Add a photo directory from localhost
+- **WHEN** a localhost user adds a valid photo directory
+- **THEN** the system SHALL persist the directory as a photo album configuration
+- **AND** the album SHALL appear in the photo album list without requiring application restart
+
+#### Scenario: Non-local client attempts to modify photo roots
+- **WHEN** a non-local client attempts to add, remove, or rescan a photo album root
+- **THEN** the system MUST reject the request
+- **AND** the system MUST NOT modify the saved photo gallery configuration
+
+#### Scenario: Existing configuration has no photo roots
+- **WHEN** the application starts with an existing `config.json` that does not contain photo gallery settings
+- **THEN** the system SHALL start normally
+- **AND** the photo gallery SHALL show an empty configured-albums state
+
+### Requirement: The system SHALL expose configured directories as albums
+
+The system SHALL list configured photo directories as albums with a display name, cover thumbnail when available, photo count or scan status, and updated timestamp, and SHALL avoid scanning every configured album as a prerequisite for returning the album list.
+
+#### Scenario: Album contains supported images
+- **WHEN** a configured directory contains supported image files and indexed album metadata is available
+- **THEN** the album SHALL show a cover image derived from an available photo thumbnail
+- **AND** the album SHALL expose enough metadata for the UI to show count and freshness information
+
+#### Scenario: Album metadata is cached
+- **WHEN** the application requests the configured album list
+- **THEN** the system SHALL return album configuration and cached summary metadata without recursively scanning all configured album directories
+- **AND** the album list SHALL remain usable even when one large album would take a long time to rescan
+
+#### Scenario: Album cache is missing
+- **WHEN** a configured album has no cached summary or media index yet
+- **THEN** the album SHALL remain visible in the album list
+- **AND** the album SHALL expose a scan status that allows the UI to show that the album needs indexing
+- **AND** the album list response SHALL NOT block on scanning all media in that album
+
+#### Scenario: Album is empty
+- **WHEN** a configured directory contains no supported images
+- **THEN** the album SHALL remain visible
+- **AND** the album SHALL show an empty state instead of failing the album list
+
+#### Scenario: Album path is unavailable
+- **WHEN** a configured directory cannot be read because the drive, mount, or NAS path is unavailable
+- **THEN** that album SHALL show an error status
+- **AND** other albums SHALL remain usable
+
+### Requirement: The system MUST handle photo paths safely across Windows, Linux, and macOS
+
+The system MUST normalize and validate all local photo paths so that photo listing, preview, thumbnail, download, and conversion requests cannot access files outside configured album roots.
+
+#### Scenario: Path traversal is attempted through a photo request
+- **WHEN** a request attempts to reference a path outside a configured album root
+- **THEN** the system MUST reject the request
+- **AND** the system MUST NOT return file contents
+
+#### Scenario: Windows paths use different casing or drive letters
+- **WHEN** the deployment runs on Windows and a request resolves paths with case differences or cross-drive inputs
+- **THEN** the system MUST validate the resolved path using platform-safe path comparison
+- **AND** the system MUST NOT crash on cross-drive comparisons
+
+#### Scenario: File names contain spaces or non-ASCII characters
+- **WHEN** a configured album contains image files with spaces or non-ASCII characters in their names
+- **THEN** the system SHALL list, preview, download, and convert those photos using stable IDs and URLs
+
+### Requirement: The photo grid SHALL browse large albums responsively
+
+The photo gallery UI SHALL keep browsing responsive for large albums by using paginated data loading, cached media indexes, thumbnail assets, stable layout sizing, and bounded incremental rendering.
+
+#### Scenario: Album contains at least 1000 photos
+- **WHEN** the user opens an album containing at least 1000 photos and a cached media index exists
+- **THEN** the UI SHALL become interactive without waiting for the album directory to be recursively rescanned
+- **AND** the photo grid SHALL load the first page from the cached index
+- **AND** the photo grid SHALL load additional photos incrementally as the user browses
+
+#### Scenario: Album index is not available
+- **WHEN** the user opens an album that has not been indexed yet
+- **THEN** the UI SHALL show an indexing or loading state for that album
+- **AND** the system SHALL build the album index without blocking unrelated application views
+
+#### Scenario: User scrolls quickly through the photo grid
+- **WHEN** the user rapidly scrolls through a large album
+- **THEN** visible grid items SHALL show either a thumbnail, loading placeholder, or fallback state
+- **AND** the UI SHALL NOT require full-resolution originals for offscreen or list thumbnails
+- **AND** loading the next page SHALL NOT trigger a full album directory rescan when a usable cached index exists
+
+#### Scenario: Mobile viewport renders the photo grid
+- **WHEN** the photo gallery is viewed on a mobile-width viewport
+- **THEN** the grid SHALL avoid horizontal overflow
+- **AND** core actions SHALL remain reachable without hover-only interactions
+- **AND** the grid SHALL support more than one visible column when the selected density allows it
+
+#### Scenario: User adjusts photo grid density
+- **WHEN** the user changes the gallery column density from the grid control
+- **THEN** the photo grid SHALL update the displayed column count without reloading the album
+- **AND** the control SHALL expose a clear current density label
+
+#### Scenario: Touch user pinches on the photo grid
+- **WHEN** a touch user performs a two-finger pinch gesture in the photo gallery
+- **THEN** the grid SHALL adjust toward a denser or larger photo layout
+- **AND** the interaction SHALL preserve normal scrolling outside the gesture
+
+### Requirement: The photo gallery SHALL provide useful sort modes
+
+The photo gallery SHALL allow users to sort photos by common file properties using localized labels, and SHALL use cached album index data for ordinary sort changes.
+
+#### Scenario: User sorts by time, name, or size
+- **WHEN** the user selects a sort mode for modified time, created time, file name, or file size
+- **THEN** the photo list request SHALL use the corresponding backend sort key
+- **AND** the grid SHALL render photos in the requested order
+- **AND** the sort change SHALL NOT trigger a full album directory rescan when a usable cached index exists
+
+#### Scenario: Sort labels are displayed
+- **WHEN** sort options are shown in the UI
+- **THEN** each option SHALL keep a readable field name
+- **AND** ascending or descending direction SHALL be visible through arrows or A-Z/Z-A notation
+
+### Requirement: The system SHALL provide cached thumbnails for photo browsing
+
+The system SHALL use dedicated cached thumbnails for album covers and photo grid items, SHALL regenerate thumbnails when the underlying source image changes, and SHALL keep thumbnail generation bounded so large source images do not make the whole gallery unresponsive.
+
+#### Scenario: Thumbnail exists and source is unchanged
+- **WHEN** a photo thumbnail has already been generated for the current source file version
+- **THEN** the system SHALL serve the cached thumbnail
+- **AND** the system SHALL avoid regenerating it for the same request
+
+#### Scenario: Thumbnail is missing
+- **WHEN** a visible photo or album cover needs a thumbnail that is missing
+- **THEN** the system SHALL generate a bounded thumbnail on demand
+- **AND** the system SHALL keep the rest of the gallery responsive
+- **AND** concurrent thumbnail generation SHALL be limited so multiple large source images do not exhaust CPU, memory, or disk IO
+
+#### Scenario: Source image changes
+- **WHEN** a source image has a different modification time or size from the cached metadata
+- **THEN** the system SHALL treat the previous thumbnail as stale
+- **AND** a fresh thumbnail SHALL be generated before being served as current
+
+### Requirement: The photo preview SHALL support viewing, downloading, and conversion
+
+The photo preview SHALL allow the user to inspect a photo, download the original image, navigate between photos in the current album context, and convert the photo to a 3D model.
+
+#### Scenario: User opens a photo
+- **WHEN** the user opens a photo from the masonry grid
+- **THEN** the preview SHALL display the photo using the original image URL
+- **AND** the preview SHALL NOT upscale or reuse the grid thumbnail as the primary preview image
+- **AND** the preview SHALL provide controls to close, download, and convert the photo to 3D
+
+#### Scenario: Original image has a non-ASCII filename
+- **WHEN** the user opens or downloads a photo whose filename contains spaces or non-ASCII characters
+- **THEN** the system SHALL return the original image with browser-compatible response headers
+- **AND** the preview SHALL render the image instead of an empty frame
+
+#### Scenario: User downloads a photo
+- **WHEN** the user chooses download from the photo preview
+- **THEN** the system SHALL return the original photo as an attachment
+- **AND** the downloaded file name SHALL be safe and recognizable
+
+#### Scenario: User converts from preview
+- **WHEN** the user chooses convert to 3D from the photo preview
+- **THEN** the system SHALL create a generation task from that photo
+- **AND** the existing task queue SHALL show the new task
+
+### Requirement: The photo gallery SHALL support multi-select conversion to 3D
+
+The photo gallery SHALL allow users to select multiple photos from the current album or visible photo set and submit them as a batch to the existing 3D generation queue.
+
+#### Scenario: User selects multiple photos
+- **WHEN** the user enters selection mode and selects multiple photo cards
+- **THEN** the UI SHALL show the selected count
+- **AND** the UI SHALL provide a batch convert-to-3D action
+
+#### Scenario: User submits batch conversion
+- **WHEN** the user submits selected photos for conversion
+- **THEN** the backend SHALL validate every requested photo ID against configured album roots
+- **AND** valid photos SHALL be copied or staged into the existing input workflow
+- **AND** generation tasks SHALL be created using the existing task queue lifecycle
+
+#### Scenario: Some selected photos are no longer available
+- **WHEN** a batch conversion includes photos that were deleted or became unavailable
+- **THEN** the response SHALL report the failed photo IDs or count
+- **AND** successfully queued photos SHALL still be returned as created tasks
+
+### Requirement: The photo gallery entry SHALL be a first-level application entry
+
+The photo gallery SHALL be reachable from a first-level application control near the existing model workflow, rather than only from settings.
+
+#### Scenario: User switches from model gallery to photo gallery
+- **WHEN** the user activates the photo gallery entry
+- **THEN** the main content area SHALL switch from the 3D viewer workspace to the photo gallery workspace
+- **AND** the existing model gallery and current model selection SHALL remain preserved
+
+#### Scenario: User returns to model view
+- **WHEN** the user switches back to the model view
+- **THEN** the existing 3D viewer behavior SHALL remain available
+- **AND** model gallery selection SHALL NOT be cleared solely because the user visited the photo gallery
+
+### Requirement: New photo gallery UI MUST be localized and accessible
+
+The system MUST provide localized text and accessible controls for all new photo gallery user-facing UI.
+
+#### Scenario: Language changes
+- **WHEN** the application language switches between supported locales
+- **THEN** all photo gallery labels, empty states, errors, tooltips, and actions SHALL render from locale resources
+
+#### Scenario: Keyboard user navigates photo gallery controls
+- **WHEN** a keyboard-only user navigates albums, photo cards, selection controls, and preview controls
+- **THEN** focus state SHALL be visible
+- **AND** each actionable control SHALL expose a clear semantic label
+
+#### Scenario: Photo gallery asks for input or confirmation
+- **WHEN** the photo gallery needs a path input, sorting menu, confirmation, or status feedback
+- **THEN** the UI SHALL use project-styled custom components
+- **AND** the main photo gallery flow SHOULD avoid browser-native `select`, `prompt`, `confirm`, and `alert` controls
+
+### Requirement: The photo gallery SHALL filter media by type
+The photo gallery SHALL provide a type filter that lets users browse all media, only photos, or only videos within the current album.
+
+#### Scenario: User selects all media
+- **WHEN** the user selects the all-media filter
+- **THEN** the grid SHALL show supported photos and videos from the current album
+- **AND** the total count and empty state SHALL reflect the all-media result set
+
+#### Scenario: User selects photos only
+- **WHEN** the user selects the photos filter
+- **THEN** the grid SHALL show only supported image items from the current album
+- **AND** existing photo preview, download, selection, and convert-to-3D behavior SHALL remain available
+
+#### Scenario: User selects videos only
+- **WHEN** the user selects the videos filter
+- **THEN** the grid SHALL show only supported video items from the current album
+- **AND** video preview and download behavior SHALL remain available
+- **AND** convert-to-3D actions SHALL NOT be offered for video-only selections
+
+#### Scenario: Filter labels are displayed
+- **WHEN** the media type filter is shown in the UI
+- **THEN** the all, photos, and videos labels SHALL render from locale resources
+- **AND** the active filter SHALL be visually and semantically identifiable
+- **AND** the type filter SHALL keep a shared segmented background while avoiding mismatched pill count badges
+- **AND** each segment SHALL keep consistent height and alignment with adjacent toolbar controls across desktop, tablet, and mobile widths
+
+#### Scenario: Viewport width is between desktop and mobile breakpoints
+- **WHEN** the gallery toolbar is shown on a narrow desktop, tablet portrait, or other intermediate width
+- **THEN** toolbar groups SHALL wrap or reflow without clipping button text
+- **AND** labels SHALL remain horizontally readable instead of stacking one character per line
+
+#### Scenario: Mobile toolbar changes between expanded and compact states
+- **WHEN** the gallery toolbar changes between expanded and compact states on a mobile or tablet viewport
+- **THEN** the toolbar content SHALL animate or transition without causing the masonry grid below it to jump vertically
+- **AND** the reserved layout height SHALL remain stable enough that media cards do not shift as a side effect of the control state change
+- **AND** tapping non-button space in the compact toolbar SHALL expand the controls in place without forcing a scroll-to-top action
+- **AND** any rebound effect SHALL feel subtle and coordinated rather than causing child controls to bounce independently
+
+#### Scenario: Mobile toolbar uses glass styling
+- **WHEN** the gallery toolbar is rendered in mobile or tablet layout
+- **THEN** the visible control surface SHALL keep the same Apple-style glass background, blur, border, and shadow language used by the desktop toolbar
+- **AND** the outer layout container SHALL NOT use transform, isolation, filter, or transform-related will-change rules that break backdrop sampling for the visible glass surface
+
+#### Scenario: Mobile toolbar shows summary text
+- **WHEN** the gallery toolbar is expanded on a mobile or tablet viewport
+- **THEN** the album summary, media count, and filter context text SHALL remain readable on the glass surface
+- **AND** secondary text SHALL keep a subdued visual hierarchy without becoming too small or too low-contrast
+- **AND** the title block and media type filter SHALL be spaced tightly enough to avoid a visually empty gap
+
+### Requirement: Temporary gallery downloads SHALL be cleaned up
+The system SHALL avoid unbounded accumulation of temporary ZIP files created for bulk gallery downloads.
+
+#### Scenario: Bulk media download completes normally
+- **WHEN** the user downloads selected gallery media as a ZIP archive
+- **THEN** the system SHALL serve the archive as a temporary file
+- **AND** the archive SHALL include supported photos and videos that are part of the current selection
+- **AND** the system SHALL attempt to remove the temporary ZIP when the response closes
+
+#### Scenario: Bulk media download leaves stale temporary ZIP files
+- **WHEN** a browser cancellation, interrupted connection, or server restart leaves `photo-gallery-*.zip` files in the gallery cache
+- **THEN** the system SHALL clean up expired temporary ZIP files before creating subsequent bulk download archives
+- **AND** the cleanup SHALL NOT remove the gallery index, thumbnails, video posters, or unrelated files
+
+### Requirement: The photo gallery SHALL NOT block application startup
+
+The application SHALL complete its authenticated startup path without waiting for local photo album scanning or full photo album metadata loading.
+
+#### Scenario: Authenticated user opens the application in model view
+- **WHEN** an authenticated or owner user opens the application and the default model view is active
+- **THEN** the application SHALL leave the boot screen without waiting for all configured photo albums to scan
+- **AND** model gallery, task queue, settings, and viewer functionality SHALL remain available
+
+#### Scenario: User switches to the photo gallery after startup
+- **WHEN** the user switches from the model view to the photo gallery view
+- **THEN** the application SHALL load photo album summaries at that time if they are not already loaded
+- **AND** the photo gallery SHALL show loading, cached, indexing, or error states without returning the whole application to the boot screen
+
+### Requirement: The system SHALL maintain cache-first album indexes
+
+The system SHALL maintain media indexes that allow album listing, paging, filtering, sorting, preview, download, thumbnail, video poster, and conversion operations to resolve media without using full album scans as the normal read path.
+
+#### Scenario: Cached index serves a page
+- **WHEN** a client requests a page of media for an indexed album
+- **THEN** the system SHALL read the album media from cached index data
+- **AND** the response SHALL include the requested page, next cursor, total count, and media counts
+- **AND** the system SHALL NOT recursively scan the album directory as part of that ordinary page request
+
+#### Scenario: Media ID is resolved without a global lookup
+- **WHEN** a preview, download, thumbnail, video poster, or conversion request references a media ID
+- **THEN** the system SHALL resolve the media ID to its configured album using the album identity encoded in the media ID, without reading a global media-lookup table
+- **AND** the system SHALL read only the relevant album index to locate the media's relative path
+- **AND** the system MUST still validate that the resolved file is inside the configured album root before returning or copying file contents
+
+#### Scenario: Cached media file is missing
+- **WHEN** an encoded media ID resolves to a file that was deleted or moved outside Sharp GUI
+- **THEN** the system SHALL return a not-found or unavailable response for that media item
+- **AND** the system MUST NOT expose files outside configured album roots
+
+#### Scenario: Cached index uses old global format
+- **WHEN** an existing workspace has the legacy global photo gallery index format
+- **THEN** the system SHALL derive a catalog summary (counts and cover) from the legacy index without reading media files, so the album list stays usable
+- **AND** the system SHALL build each album's media index on demand when the album is first browsed, so existing media can still be listed, previewed, downloaded, and converted
+- **AND** the system MAY reuse already-cached image dimensions and video metadata from the legacy index to avoid recomputation, but is not required to preserve them across all albums
+- **AND** the system SHALL NOT delete original photos or videos
+- **AND** thumbnail or video poster cache entries keyed by the previous media ID format MAY be invalidated and regenerated on demand
+
+#### Scenario: Legacy index is missing or unreadable
+- **WHEN** no legacy index exists or the legacy index cannot be parsed
+- **THEN** the system SHALL build the album index by scanning the album directory
+- **AND** the system SHALL surface an indexing state to the UI while the index is being built
+
+### Requirement: The system SHALL separate scanning from ordinary browsing
+
+The system SHALL distinguish explicit or background album scanning from ordinary album browsing, so users can browse cached data without paying scan cost on every request.
+
+#### Scenario: User explicitly rescans an album
+- **WHEN** an owner user requests a rescan for a configured album
+- **THEN** the system SHALL scan that album directory and update its cached media index and album summary
+- **AND** the updated summary SHALL be reflected in subsequent album list and album page responses
+
+#### Scenario: Ordinary browsing uses stale but valid cache
+- **WHEN** a cached album index exists but may be older than the current directory contents
+- **THEN** ordinary paging, filtering, and sorting requests SHALL be allowed to return the cached result
+- **AND** the system SHALL rely on explicit refresh, background scan, or single-file validation to correct stale data
+
+#### Scenario: Scanning one album is slow
+- **WHEN** scanning one large or NAS-backed album takes a long time
+- **THEN** other indexed albums SHALL remain browseable
+- **AND** application startup and model preview SHALL remain available
+
+#### Scenario: Background scan completes during active browsing
+- **WHEN** a background scan or refresh updates an album index while the user is actively paging or scrolling that album
+- **THEN** the in-progress browsing session SHALL continue against a stable view of the index
+- **AND** the updated index SHALL take effect on the next album entry or explicit refresh rather than reordering or shifting the list the user is currently scrolling
+
+### Requirement: The photo gallery SHALL expose bounded cache management
+
+The photo gallery SHALL provide owner-controlled cache management behavior for generated gallery cache files without deleting user original media.
+
+#### Scenario: Owner inspects gallery cache
+- **WHEN** an owner requests gallery cache status
+- **THEN** the system SHALL report useful cache information for indexes, thumbnails, video posters, and temporary gallery download files
+- **AND** the response SHALL avoid exposing unrestricted filesystem contents
+
+#### Scenario: Owner clears generated gallery cache
+- **WHEN** an owner clears generated gallery cache
+- **THEN** the system SHALL remove generated index, thumbnail, video poster, or temporary download cache according to the requested scope
+- **AND** the system MUST NOT delete original photos or videos from configured album directories
+- **AND** subsequent gallery browsing SHALL rebuild missing cache as needed
+
+#### Scenario: Non-owner attempts cache management
+- **WHEN** a non-owner client attempts to clear gallery cache or trigger owner-only cache management
+- **THEN** the system MUST reject the request
+- **AND** the system MUST NOT remove cached files or alter gallery configuration
+
+#### Scenario: User-facing cache controls are shown
+- **WHEN** cache status or cache cleanup controls are displayed in the UI
+- **THEN** all labels, confirmations, errors, and success messages SHALL render from both Chinese and English locale resources
+
+
+--- ARQUIVOS DO PR (108)
+modified  +48    -1     .agents/rules/backend-guide.md
+modified  +18    -1     .agents/rules/frontend-guide.md
+modified  +39    -6     .agents/rules/project-overview.md
+modified  +4     -0     .agents/rules/styling-guide.md
+modified  +15    -0     .agents/rules/testing.md
+modified  +3     -1     .agents/skills/commit-and-release/SKILL.md
+added     +14    -0     .editorconfig
+modified  +1     -0     .gitattributes
+modified  +4     -1     .gitignore
+modified  +189   -13    README.en.md
+modified  +189   -13    README.md
+modified  +11    -2     backend/app_factory.py
+modified  +61    -0     backend/config.py
+modified  +9     -0     backend/paths.py   <== código ligado à spec
+modified  +2     -1     backend/routes/__init__.py
+modified  +20    -0     backend/routes/gallery.py
+modified  +15    -1     backend/routes/settings.py
+added     +67    -0     backend/routes/video_reconstruction.py
+modified  +36    -4     backend/runtime.py
+modified  +8     -1     backend/security/access_control.py   <== código ligado à spec
+modified  +302   -9     backend/services/model_gallery.py
+modified  +144   -20    backend/services/task_queue.py
+added     +2519  -0     backend/services/video_reconstruction.py
+modified  +36    -0     docs/i18n.js
+added     +0     -0     docs/images/demo-video-reconstruction.gif
+added     +0     -0     docs/images/video-reconstruction-dialog.png
+modified  +131   -0     docs/index.html
+modified  +794   -0     docs/style.css
+removed   +0     -150   frontend/dist/assets/index-C_vxx1ZK.js
+removed   +0     -1     frontend/dist/assets/index-C_vxx1ZK.js.map
+added     +151   -0     frontend/dist/assets/index-DUq6IJoa.js
+added     +1     -0     frontend/dist/assets/index-DUq6IJoa.js.map
+removed   +0     -1     frontend/dist/assets/index-DajxzeCm.css
+added     +1     -0     frontend/dist/assets/index-eQQ2i7-w.css
+renamed   +2     -2     frontend/dist/assets/spark-C8aTDLbx.js
+renamed   +1     -1     frontend/dist/assets/spark-C8aTDLbx.js.map
+renamed   +2     -2     frontend/dist/assets/three-D2Dui5N1.js
+renamed   +1     -1     frontend/dist/assets/three-D2Dui5N1.js.map
+modified  +4     -4     frontend/dist/index.html
+modified  +94    -36    frontend/src/App.tsx
+modified  +1     -0     frontend/src/api/index.ts
+modified  +2     -1     frontend/src/api/settings.ts
+modified  +1     -1     frontend/src/api/tasks.ts
+added     +55    -0     frontend/src/api/videoReconstruction.ts
+modified  +56    -19    frontend/src/components/common/ImageViewer/ImageViewer.tsx
+modified  +32    -8     frontend/src/components/common/Modal/Modal.module.css
+added     +41    -0     frontend/src/components/common/Tooltip/Tooltip.module.css
+added     +172   -0     frontend/src/components/common/Tooltip/Tooltip.tsx
+added     +1     -0     frontend/src/components/common/Tooltip/index.ts
+modified  +13    -8     frontend/src/components/gallery/GalleryItem/GalleryItem.tsx
+modified  +11    -3     frontend/src/components/gallery/GalleryList/GalleryList.tsx
+modified  +174   -3     frontend/src/components/layout/Settings/Settings.module.css
+modified  +231   -3     frontend/src/components/layout/Settings/Settings.tsx
+modified  +2     -2     frontend/src/components/layout/Sidebar/Sidebar.tsx
+modified  +60    -1     frontend/src/components/layout/TaskQueue/TaskQueue.module.css
+modified  +94    -6     frontend/src/components/layout/TaskQueue/TaskQueue.tsx
+modified  +5     -5     frontend/src/components/photoGallery/PhotoAlbumList/PhotoAlbumList.tsx
+modified  +26    -2     frontend/src/components/photoGallery/PhotoGalleryView/PhotoGalleryView.tsx
+modified  +18    -6     frontend/src/components/photoGallery/PhotoMasonryGrid/PhotoMasonryGrid.tsx
+modified  +19    -0     frontend/src/components/photoGallery/PhotoSelectionBar/PhotoSelectionBar.module.css
+modified  +29    -3     frontend/src/components/photoGallery/PhotoSelectionBar/PhotoSelectionBar.tsx
+added     +462   -0     frontend/src/components/photoGallery/VideoReconstructionDialog/VideoReconstructionDialog.module.css
+added     +524   -0     frontend/src/components/photoGallery/VideoReconstructionDialog/VideoReconstructionDialog.tsx
+added     +1     -0     frontend/src/components/photoGallery/VideoReconstructionDialog/index.ts
+added     +350   -0     frontend/src/components/photoGallery/VideoReconstructionGuide/VideoReconstructionGuide.module.css
+added     +224   -0     frontend/src/components/photoGallery/VideoReconstructionGuide/VideoReconstructionGuide.tsx
+added     +1     -0     frontend/src/components/photoGallery/VideoReconstructionGuide/index.ts
+modified  +2     -1     frontend/src/components/photoGallery/index.ts
+modified  +62    -2     frontend/src/components/viewer/QuickControls/QuickControls.module.css
+modified  +151   -3     frontend/src/components/viewer/QuickControls/QuickControls.tsx
+modified  +4     -1     frontend/src/components/viewer/ViewerCanvas/ViewerCanvas.tsx
+modified  +418   -48    frontend/src/hooks/useViewer.ts
+modified  +322   -5     frontend/src/i18n/en.json
+modified  +322   -5     frontend/src/i18n/zh.json
+modified  +55    -0     frontend/src/store/useAppStore.ts
+modified  +4     -0     frontend/src/types/gallery.ts
+modified  +1     -0     frontend/src/types/index.ts
+modified  +27    -0     frontend/src/types/task.ts
+added     +74    -0     frontend/src/types/videoReconstruction.ts
+modified  +16    -0     frontend/src/utils/gallery.ts
+modified  +12    -0     install.bat
+added     +2     -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/.openspec.yaml
+added     +136   -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/design.md
+added     +56    -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/proposal.md
+added     +101   -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/specs/feedforward-reconstruction-engine/spec.md
+added     +56    -0     openspec/changes/archive/2026-06-25-add-feedforward-reconstruction-engine/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/.openspec.yaml
+added     +576   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/design.md
+added     +89    -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/proposal.md
+added     +42    -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/specs/local-video-gallery-preview/spec.md
+added     +344   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/specs/video-3dgs-reconstruction/spec.md
+added     +178   -0     openspec/changes/archive/2026-06-29-add-video-3dgs-reconstruction/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/.openspec.yaml
+added     +96    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/design.md
+added     +29    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/proposal.md
+added     +124   -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/specs/windows-portable-release-packages/spec.md
+added     +34    -0     openspec/changes/archive/2026-06-29-add-video-recon-portable-bundle/tasks.md
+modified  +41    -0     openspec/specs/local-video-gallery-preview/spec.md
+added     +349   -0     openspec/specs/video-3dgs-reconstruction/spec.md
+modified  +60    -15    openspec/specs/windows-portable-release-packages/spec.md
+modified  +14    -0     run.bat
+modified  +171   -0     tests/test_api_contract.py
+modified  +4     -0     tests/test_route_map.py
+modified  +32    -0     tests/test_security.py
+modified  +952   -0     tests/test_services.py
+modified  +277   -5     tools/build_portable_package.ps1
+modified  +55    -12    tools/build_portable_release.ps1
+added     +488   -0     tools/install_video_reconstruction.py
+--- DIFF DO CÓDIGO LIGADO
+### backend/paths.py
+@@ -11,6 +11,8 @@ class PathContext:
+     output_folder: str
+     thumbnail_folder: str
+     photo_gallery_cache_folder: str
++    video_reconstruction_folder: str
++    video_reconstruction_jobs_folder: str
+     photo_thumbnail_folder: str
+     video_poster_folder: str
+     photo_index_file: str
+@@ -28,6 +30,8 @@ def build_path_context(config_data):
+     output_folder = os.path.join(workspace_folder, "outputs")
+     thumbnail_folder = os.path.join(input_folder, ".thumbnails")
+     photo_gallery_cache_folder = os.path.join(workspace_folder, ".photo-gallery-cache")
++    video_reconstruction_folder = os.path.join(workspace_folder, ".video-reconstruction")
++    video_reconstruction_jobs_folder = os.path.join(video_reconstruction_folder, "jobs")
+     photo_thumbnail_folder = os.path.join(photo_gallery_cache_folder, "thumbnails")
+     video_poster_folder = os.path.join(photo_gallery_cache_folder, "video-posters")
+     photo_index_file = os.path.join(photo_gallery_cache_folder, "index.json")
+@@ -40,6 +44,8 @@ def build_path_context(config_data):
+         output_folder=output_folder,
+         thumbnail_folder=thumbnail_folder,
+         photo_gallery_cache_folder=photo_gallery_cache_folder,
++        video_reconstruction_folder=video_reconstruction_folder,
++        video_reconstruction_jobs_folder=video_reconstruction_jobs_folder,
+         photo_thumbnail_folder=photo_thumbnail_folder,
+         video_poster_folder=video_poster_folder,
+         photo_index_file=photo_index_file,
+@@ -55,6 +61,7 @@ def ensure_runtime_directories(paths):
+     os.makedirs(paths.photo_thumbnail_folder, exist_ok=True)
+     os.makedirs(paths.video_poster_folder, exist_ok=True)
+     os.makedirs(paths.photo_album_index_folder, exist_ok=True)
++    os.makedirs(paths.video_reconstruction_jobs_folder, exist_ok=True)
+ 
+ 
+ def install_path_config(app, paths):
+@@ -64,6 +71,8 @@ def install_path_config(app, paths):
+     app.config["OUTPUT_FOLDER"] = paths.output_folder
+     app.config["THUMBNAIL_FOLDER"] = paths.thumbnail_folder
+     app.config["PHOTO_GALLERY_CACHE_FOLDER"] = paths.photo_gallery_cache_folder
++    app.config["VIDEO_RECONSTRUCTION_FOLDER"] = paths.video_reconstruction_folder
++    app.config["VIDEO_RECONSTRUCTION_JOBS_FOLDER"] = paths.video_reconstruction_jobs_folder
+     app.config["PHOTO_THUMBNAIL_FOLDER"] = paths.photo_thumbnail_folder
+     app.config["VIDEO_POSTER_FOLDER"] = paths.video_poster_folder
+     app.config["PHOTO_CATALOG_FILE"] = paths.photo_catalog_file
+
+### backend/security/access_control.py
+@@ -303,7 +303,14 @@ def get_required_access_level(access_config=None):
+         if method == "GET" and not download and verify_video_play_token(video_id, token, access_config):
+             return ACCESS_PUBLIC
+         return ACCESS_UNLOCKED
+-    if path in {"/api/generate", "/api/photo-conversions"}:
++    if path == "/api/video-reconstructions/status":
++        return ACCESS_UNLOCKED
++    if path in {
++        "/api/generate",
++        "/api/photo-conversions",
++        "/api/video-reconstructions",
++        "/api/video-reconstructions/upload",
++    }:
+         access_config = access_config or get_access_control_config(persist_missing=False)
+         if not is_access_control_enabled(access_config):
+             return ACCESS_OWNER
+
+===== P084 | repo aserowy/yeet | PR #312: build(deps): bump the cargo group across 1 directory with 3 updates | capacidade: devops
+--- SPEC VIVA
+# Capability: Automated Release Pipeline
+
+## Purpose
+
+Automate the release process by triggering on a `release` tag push, computing a calendar-versioned tag, updating workspace version metadata, and coordinating with existing release workflows.
+
+## Requirements
+
+### Requirement: Release workflow triggers on release tag
+
+The release pipeline SHALL trigger when a tag named exactly `release` is pushed to the repository.
+
+#### Scenario: Push release tag triggers workflow
+
+- **WHEN** a tag named `release` is pushed
+- **THEN** the automated release workflow SHALL start
+
+#### Scenario: Other tags do not trigger workflow
+
+- **WHEN** a tag with any other name (e.g., `v2026.4.6`, `test`) is pushed
+- **THEN** the automated release workflow SHALL NOT start
+
+### Requirement: Version tag follows calendar versioning
+
+The workflow SHALL compute a version tag in the format `vYYYY.M.PATCH` where `YYYY` is the four-digit year, `M` is the month without leading zeros, and `PATCH` is a sequential number starting at 0 for each year-month combination.
+
+#### Scenario: First release in a new month
+
+- **WHEN** the workflow runs in April 2026 and no tags matching `v2026.4.*` exist
+- **THEN** the computed version tag SHALL be `v2026.4.0`
+
+#### Scenario: Subsequent release in the same month
+
+- **WHEN** the workflow runs in April 2026 and tags `v2026.4.0` and `v2026.4.1` exist
+- **THEN** the computed version tag SHALL be `v2026.4.2`
+
+#### Scenario: First release in January 2027
+
+- **WHEN** the workflow runs in January 2027 and no tags matching `v2027.1.*` exist
+- **THEN** the computed version tag SHALL be `v2027.1.0`
+
+### Requirement: Workspace version in Cargo.toml is updated
+
+The workflow SHALL update the `version` field under `[workspace.package]` and the `version` fields in workspace dependency entries for internal crates (`yeet-*`) in the root `Cargo.toml` to match the computed version without the `v` prefix. The workflow SHALL NOT modify version strings of external dependencies.
+
+#### Scenario: Version updated in Cargo.toml
+
+- **WHEN** the computed version tag is `v2026.4.2`
+- **THEN** the `version` field in `Cargo.toml` under `[workspace.package]` SHALL be set to `"2026.4.2"`
+
+#### Scenario: Internal crate versions updated
+
+- **WHEN** the computed version tag is `v2026.4.2`
+- **THEN** the `version` field in `yeet-buffer`, `yeet-frontend`, `yeet-keymap`, and `yeet-lua` entries under `[workspace.dependencies]` SHALL be set to `"2026.4.2"`
+
+#### Scenario: External dependency versions are not modified
+
+- **WHEN** the workflow updates versions in `Cargo.toml`
+- **THEN** external dependency version strings (e.g., `arboard = { version = "3.6.1", ... }`) SHALL remain unchanged
+
+### Requirement: Version commit is created on main
+
+The workflow SHALL generate a GitHub App installation token using the `actions/create-github-app-token` action with `APP_ID` and `APP_PRIVATE_KEY` secrets. The workflow SHALL use this token for repository checkout and push operations to bypass branch protection rules. The workflow SHALL commit the `Cargo.toml` version change to the `main` branch and tag that commit with the computed version tag.
+
+#### Scenario: Commit and tag on main
+
+- **WHEN** the workflow completes version computation and Cargo.toml update
+- **THEN** a new commit SHALL exist on `main` with the updated `Cargo.toml`
+- **AND** the computed version tag SHALL point to that commit
+
+#### Scenario: Workflow authenticates with GitHub App token
+
+- **WHEN** the workflow starts
+- **THEN** it SHALL generate an installation token using `actions/create-github-app-token` with `APP_ID` and `APP_PRIVATE_KEY` repository secrets
+- **AND** use that token for checkout and push operations
+
+#### Scenario: Push bypasses branch protection
+
+- **WHEN** the workflow pushes the version commit and tag to `main`
+- **THEN** the push SHALL succeed despite branch protection rules requiring pull requests
+
+### Requirement: Release tag is deleted after use
+
+The workflow SHALL delete the `release` tag from the remote after processing so it can be reused for subsequent releases.
+
+#### Scenario: Release tag cleaned up
+
+- **WHEN** the workflow finishes creating the version tag
+- **THEN** the `release` tag SHALL be deleted from the remote repository
+
+### Requirement: Existing release workflows trigger on version tag
+
+The version tag created by this workflow SHALL match the pattern expected by the existing `release.yml` and `flakehub-publish-tagged.yml` workflows so they trigger automatically.
+
+#### Scenario: Release build triggered
+
+- **WHEN** the version tag `v2026.4.6` is pushed
+- **THEN** the existing `release.yml` workflow SHALL trigger (matches pattern `v[0-9]+.[0-9]+.[0-9]+`)
+- **AND** the existing `flakehub-publish-tagged.yml` workflow SHALL trigger (matches pattern `v?[0-9]+.[0-9]+.[0-9]+*`)
+
+### Requirement: Workspace-internal crates use workspace dependency inheritance
+
+All inter-package dependencies within the workspace SHALL be declared in `[workspace.dependencies]` in the root `Cargo.toml` with both `path` and `version.workspace = true`. Member crates SHALL reference them using `workspace = true`.
+
+#### Scenario: Internal crate dependency declaration
+
+- **WHEN** `yeet-frontend` depends on `yeet-buffer`
+- **THEN** the root `Cargo.toml` SHALL have `yeet-buffer = { path = "yeet-buffer", version.workspace = true }` in `[workspace.dependencies]`
+- **AND** `yeet-frontend/Cargo.toml` SHALL have `yeet-buffer.workspace = true` in `[dependencies]`
+
+#### Scenario: Version consistency across workspace
+
+- **WHEN** the workspace version is updated
+- **THEN** all inter-package version references SHALL automatically reflect the new version through workspace inheritance
+
+### Requirement: Tests must not assume home directory exists on disk
+
+Tests that fall back to `dirs::home_dir()` SHALL verify that the returned path exists on disk before asserting success-path behavior. When the home directory does not exist (e.g., Nix build sandbox), the test SHALL assert the error path instead.
+
+#### Scenario: Home directory exists on disk
+
+- **WHEN** a test invokes a command that falls back to the home directory
+- **AND** `dirs::home_dir()` returns a path that exists on disk
+- **THEN** the test SHALL assert the success path (e.g., `NavigateToPath` action)
+
+#### Scenario: Home directory does not exist on disk
+
+- **WHEN** a test invokes a command that falls back to the home directory
+- **AND** `dirs::home_dir()` returns a path that does not exist on disk (e.g., `/homeless-shelter` in Nix sandbox)
+- **THEN** the test SHALL assert the error path (e.g., command error message)
+
+#### Scenario: Home directory is not available
+
+- **WHEN** a test invokes a command that falls back to the home directory
+- **AND** `dirs::home_dir()` returns `None`
+- **THEN** the test SHALL assert the error path
+
+### Requirement: No explanatory comments in source code
+
+Source code SHALL NOT contain one-line comments that merely explain what the following lines of code do. If intent is unclear from the code itself, the code SHALL be refactored (e.g., extracted into a well-named function) rather than annotated with a comment.
+
+Permitted comment types: TODO, NOTE, FIX, HACK, FIXME, SAFETY markers.
+
+#### Scenario: Explanatory comment removed
+- **WHEN** a source file contains a comment like `// Build read-only buffer metadata object` followed by code that does exactly that
+- **THEN** the comment SHALL be removed
+- **THEN** the code SHALL remain unchanged
+
+#### Scenario: TODO marker preserved
+- **WHEN** a source file contains `// TODO: change to tokio fs`
+- **THEN** the comment SHALL be preserved
+
+--- ARQUIVOS DO PR (13)
+modified  +496   -252   Cargo.lock
+modified  +1     -1     Cargo.toml
+added     +2     -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/.openspec.yaml
+added     +32    -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/design.md
+added     +22    -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/proposal.md
+added     +34    -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/specs/dependency-update-compatibility/spec.md
+added     +8     -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/status.md
+added     +28    -0     openspec/changes/archive/2026-05-08-fix-renovate-package-updates/tasks.md
+added     +40    -0     openspec/specs/dependency-update-compatibility/spec.md
+modified  +33    -11    yeet-frontend/src/update/enumeration.rs
+modified  +14    -10    yeet-frontend/src/update/mod.rs
+modified  +14    -10    yeet-frontend/src/update/mode.rs   <== código ligado à spec
+modified  +119   -67    yeet-frontend/src/update/path.rs   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### yeet-frontend/src/update/mode.rs
+@@ -147,13 +147,15 @@ fn flush_pending_paths(
+             PendingPathEvent::Added(paths) => {
+                 actions.extend(
+                     path::add(
+-                        &mut state.history,
+-                        &state.marks,
+-                        &state.qfix,
+-                        &state.modes.current,
++                        path::PathAddState {
++                            history: &mut state.history,
++                            marks: &state.marks,
++                            qfix: &state.qfix,
++                            mode: &state.modes.current,
++                            theme,
++                        },
+                         app,
+                         &paths,
+-                        theme,
+                         lua,
+                     )
+                     .unwrap_or_else(|err| {
+@@ -169,11 +171,13 @@ fn flush_pending_paths(
+             PendingPathEvent::Removed(path) => {
+                 actions.extend(
+                     path::remove(
+-                        &mut state.history,
+-                        &mut state.marks,
+-                        &mut state.qfix,
+-                        &mut state.junk,
+-                        &state.modes.current,
++                        path::PathRemoveState {
++                            history: &mut state.history,
++                            marks: &mut state.marks,
++                            qfix: &mut state.qfix,
++                            junk: &mut state.junk,
++                            mode: &state.modes.current,
++                        },
+                         app,
+                         &path,
+                         lua,
+
+### yeet-frontend/src/update/path.rs
+@@ -23,17 +23,20 @@ use crate::{
+ 
+ use super::{enumeration, history, junkyard::remove_from_junkyard, sign};
+ 
+-#[tracing::instrument(skip(app, theme, lua))]
++#[tracing::instrument(skip(state, app, lua))]
+ pub fn add(
+-    history: &mut History,
+-    marks: &Marks,
+-    qfix: &QuickFix,
+-    mode: &Mode,
++    state: PathAddState<'_>,
+     app: &mut App,
+     paths: &[PathBuf],
+-    theme: &Theme,
+     lua: Option<&LuaConfiguration>,
+ ) -> Result<Vec<Action>, AppError> {
++    let PathAddState {
++        history,
++        marks,
++        qfix,
++        mode,
++        theme,
++    } = state;
+     let mut actions = Vec::new();
+     for path in paths {
+         actions.extend(update_directory_buffers_on_add(
+@@ -76,17 +79,20 @@ pub fn add(
+     Ok(actions)
+ }
+ 
+-#[tracing::instrument(skip(junk, app))]
++#[tracing::instrument(skip(state, app))]
+ pub fn remove(
+-    history: &mut History,
+-    marks: &mut Marks,
+-    qfix: &mut QuickFix,
+-    junk: &mut JunkYard,
+-    mode: &Mode,
++    state: PathRemoveState<'_>,
+     app: &mut App,
+     path: &Path,
+     lua: Option<&LuaConfiguration>,
+ ) -> Result<Vec<Action>, AppError> {
++    let PathRemoveState {
++        history,
++        marks,
++        qfix,
++        junk,
++        mode,
++    } = state;
+     if path.starts_with(junk.path.clone()) {
+         remove_from_junkyard(junk, path);
+     }
+@@ -124,6 +130,22 @@ pub fn remove(
+     Ok(actions)
+ }
+ 
++pub struct PathAddState<'a> {
++    pub history: &'a mut History,
++    pub marks: &'a Marks,
++    pub qfix: &'a QuickFix,
++    pub mode: &'a Mode,
++    pub theme: &'a Theme,
++}
++
++pub struct PathRemoveState<'a> {
++    pub history: &'a mut History,
++    pub marks: &'a mut Marks,
++    pub qfix: &'a mut QuickFix,
++    pub junk: &'a mut JunkYard,
++    pub mode: &'a Mode,
++}
++
+ fn remove_marks_for_path(marks: &mut Marks, path: &Path) -> Vec<PathBuf> {
+     let mut removed_paths = Vec::new();
+     let mut marks_to_remove = Vec::new();
+@@ -709,6 +731,38 @@ mod test {
+ 
+     use super::*;
+ 
++    fn add_state<'a>(
++        history: &'a mut History,
++        marks: &'a Marks,
++        qfix: &'a QuickFix,
++        mode: &'a Mode,
++        theme: &'a Theme,
++    ) -> PathAddState<'a> {
++        PathAddState {
++            history,
++            marks,
++            qfix,
++            mode,
++            theme,
++        }
++    }
++
++    fn remove_state<'a>(
++        history: &'a mut History,
++        marks: &'a mut Marks,
++        qfix: &'a mut QuickFix,
++        junk: &'a mut JunkYard,
++        mode: &'a Mode,
++    ) -> PathRemoveState<'a> {
++        PathRemoveState {
++            history,
++            marks,
++            qfix,
++            junk,
++            mode,
++        }
++    }
++
+     fn unique_temp_dir() -> PathBuf {
+         let nanos = SystemTime::now()
+             .duration_since(SystemTime::UNIX_EPOCH)
+@@ -949,11 +1003,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1038,13 +1094,9 @@ mod test {
+ 
+         let theme = Theme::default();
+         let actions = add(
+-            &mut history,
+-            &marks,
+-            &qfix,
+-            &Mode::Navigation,
++            add_state(&mut history, &marks, &qfix, &Mode::Navigation, &theme),
+             &mut app,
+             std::slice::from_ref(&newfolder),
+-            &theme,
+             None,
+         )
+         .expect("path add must succeed");
+@@ -1133,11 +1185,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1177,13 +1231,9 @@ mod test {
+         let theme = Theme::default();
+ 
+         let _ = add(
+-            &mut history,
+-            &marks,
+-            &qfix,
+-            &Mode::Navigation,
++            add_state(&mut history, &marks, &qfix, &Mode::Navigation, &theme),
+             &mut app,
+             std::slice::from_ref(&added),
+-            &theme,
+             None,
+         )
+         .expect("path add must succeed");
+@@ -1231,11 +1281,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1306,13 +1358,9 @@ mod test {
+         let theme = Theme::default();
+ 
+         let _ = add(
+-            &mut history,
+-            &marks,
+-            &qfix,
+-            &Mode::Navigation,
++            add_state(&mut history, &marks, &qfix, &Mode::Navigation, &theme),
+             &mut app,
+             std::slice::from_ref(&added),
+-            &theme,
+             None,
+         )
+         .expect("path add must succeed");
+@@ -1390,11 +1438,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1489,11 +1539,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1575,11 +1627,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
++                &mut history,
++                &mut marks,
++                &mut qfix,
++                &mut junk,
++                &Mode::Normal,
++            ),
+             &mut app,
+             &removed,
+             None,
+@@ -1626,13 +1680,9 @@ mod test {
+         let theme = Theme::default();
+ 
+         let _ = add(
+-            &mut history,
+-            &marks,
+-            &qfix,
+-            &Mode::Navigation,
++            add_state(&mut history, &marks, &qfix, &Mode::Navigation, &theme),
+             &mut app,
+             std::slice::from_ref(&added),
+-            &theme,
+             None,
+         )
+         .expect("path add must succeed");
+@@ -1680,11 +1730,13 @@ mod test {
+         let mut junk = JunkYard::default();
+ 
+         let _ = remove(
+-            &mut history,
+-            &mut marks,
+-            &mut qfix,
+-            &mut junk,
+-            &Mode::Normal,
++            remove_state(
+
+===== P085 | repo halo-sigs/plugin-photos | PR #77: feat: add public read-only JSON API for SPA themes | capacidade: theme-url-context
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: PhotoVo Carries A Stable Permalink
+
+`PhotoVo` SHALL expose a `permalink` field whose value is the bare detail URL `/photos/{metadata.name}`. The factory `PhotoVo.from(Photo)` MUST populate this field for every `PhotoVo` it creates, regardless of the calling site (finder method, router, or other consumer).
+
+The permalink MUST NOT include any context query parameters; it represents the canonical, context-free URL of the photo.
+
+#### Scenario: Finder result includes permalink
+
+- **WHEN** a theme calls any `PhotoFinder` method that returns `PhotoVo` instances (`listAll`, `list`, `listBy`, `groupBy`)
+- **THEN** every returned `PhotoVo` has `permalink` set to `"/photos/" + metadata.name`
+
+#### Scenario: Permalink is context-free
+
+- **WHEN** a `PhotoVo` is consumed in any rendering context (list page, detail page, or finder caller in another plugin)
+- **THEN** `photo.permalink` is the same string `/photos/{metadata.name}` and contains no `?group=`, `?page=`, or other query parameters
+
+### Requirement: Per-Request URL Helper Bean Available To Templates
+
+The list and detail handlers SHALL place a per-request URL helper under the model attribute `photoUrl`. The helper MUST hold the current `ServerRequest` (or its query-parameter map) so it can preserve context when constructing URLs.
+
+The helper MUST expose the following methods:
+
+- `detail(PhotoVo photo)`: returns `/photos/{name}` followed by the current request's whitelisted context parameters
+- `detail(PhotoVo photo, Map<String, ?> overrides)`: same as above, but the supplied overrides MUST be applied after the request's parameters, replacing any conflicting values
+- `list()`: returns the bare list URL `/photos`
+- `list(String group)`: returns `/photos?group={group}`, omitting the `group` parameter when the argument is null or blank
+- `list(String group, int page, int size)`: returns the full list URL including pagination, omitting any blank or non-positive parameters
+
+The whitelisted context parameters MUST currently be `group`, `page`, and `size`. The helper MUST NOT propagate query parameters outside this whitelist when constructing detail URLs.
+
+#### Scenario: Detail link from list page preserves group context
+
+- **WHEN** a visitor is on `/photos?group=trips&page=2&size=20` and the template invokes `${photoUrl.detail(photo)}` for a photo with `metadata.name=abc`
+- **THEN** the resulting URL is `/photos/abc?group=trips&page=2&size=20`
+
+#### Scenario: Detail link drops blank group parameter
+
+- **WHEN** a visitor is on `/photos?page=2` (no group filter) and the template invokes `${photoUrl.detail(photo)}` for a photo with `metadata.name=abc`
+- **THEN** the resulting URL is `/photos/abc?page=2` and contains no `group=` parameter
+
+#### Scenario: Detail link with overrides
+
+- **WHEN** the template invokes `${photoUrl.detail(photo, {'group': 'other'})}` while the request is `/photos?group=trips&page=2`
+- **THEN** the resulting URL has `group=other&page=2`, with the override replacing the request's `group`
+
+#### Scenario: List link from detail page
+
+- **WHEN** the detail page template invokes `${photoUrl.list(group)}` and `group` is `trips`
+- **THEN** the resulting URL is `/photos?group=trips`
+
+#### Scenario: List link from detail page with no active group
+
+- **WHEN** the detail page template invokes `${photoUrl.list(group)}` and `group` is null or blank
+- **THEN** the resulting URL is `/photos`
+
+#### Scenario: List link with full pagination
+
+- **WHEN** the detail page template invokes `${photoUrl.list(group, page, size)}` with `group="trips"`, `page=2`, `size=20`
+- **THEN** the resulting URL is `/photos?group=trips&page=2&size=20`
+
+### Requirement: Helper Bean Does Not Propagate Non-Whitelisted Parameters
+
+When constructing URLs from the current request, the helper MUST NOT carry over query parameters that are outside the documented whitelist (currently `group`, `page`, `size`). This preserves the helper as a single place to manage the context contract; arbitrary URL parameters do not leak between requests.
+
+#### Scenario: Unknown query parameter is not preserved
+
+- **WHEN** a visitor is on `/photos?group=trips&debug=true` and the template invokes `${photoUrl.detail(photo)}`
+- **THEN** the resulting URL contains `group=trips` but does NOT contain `debug=true`
+
+--- ARQUIVOS DO PR (39)
+modified  +21    -0     README.md
+modified  +317   -1     api-docs/openapi/v3_0/photosApi.json
+modified  +1     -0     build.gradle
+modified  +7     -0     console/src/api/generated/.openapi-generator/FILES
+modified  +2     -0     console/src/api/generated/api.ts
+added     +433   -0     console/src/api/generated/api/api-photo-halo-run-v1alpha1-photo-api.ts
+added     +128   -0     console/src/api/generated/api/api-photo-halo-run-v1alpha1-photo-group-api.ts
+modified  +1     -1     console/src/api/generated/base.ts
+modified  +5     -0     console/src/api/generated/models/index.ts
+added     +81    -0     console/src/api/generated/models/photo-group-vo-list.ts
+added     +60    -0     console/src/api/generated/models/photo-group-vo.ts
+added     +36    -0     console/src/api/generated/models/photo-tag-vo.ts
+added     +81    -0     console/src/api/generated/models/photo-vo-list.ts
+added     +57    -0     console/src/api/generated/models/photo-vo.ts
+added     +2     -0     openspec/changes/archive/2026-05-04-add-public-api/.openspec.yaml
+added     +125   -0     openspec/changes/archive/2026-05-04-add-public-api/design.md
+added     +43    -0     openspec/changes/archive/2026-05-04-add-public-api/proposal.md
+added     +32    -0     openspec/changes/archive/2026-05-04-add-public-api/specs/photo-exif/spec.md
+added     +209   -0     openspec/changes/archive/2026-05-04-add-public-api/specs/public-api/spec.md
+added     +78    -0     openspec/changes/archive/2026-05-04-add-public-api/tasks.md
+modified  +25    -2     openspec/specs/photo-exif/spec.md
+added     +209   -0     openspec/specs/public-api/spec.md
+added     +54    -0     src/main/java/run/halo/photos/PhotoGroupQueryEndpoint.java
+added     +163   -0     src/main/java/run/halo/photos/PhotoPublicQuery.java
+added     +101   -0     src/main/java/run/halo/photos/PhotoQueryEndpoint.java
+modified  +38    -23    src/main/java/run/halo/photos/PhotoRouter.java
+added     +60    -0     src/main/java/run/halo/photos/finders/PhotoPublicQueryService.java
+modified  +47    -44    src/main/java/run/halo/photos/finders/impl/PhotoFinderImpl.java
+added     +189   -0     src/main/java/run/halo/photos/finders/impl/PhotoPublicQueryServiceImpl.java
+added     +19    -0     src/main/java/run/halo/photos/vo/PhotoTagVo.java
+modified  +30    -1     src/main/java/run/halo/photos/vo/PhotoVo.java   <== código ligado à spec
+modified  +14    -1     src/main/resources/extensions/roleTemplate.yaml
+added     +63    -0     src/test/java/run/halo/photos/PhotoGroupQueryEndpointTest.java
+added     +40    -0     src/test/java/run/halo/photos/PhotoPublicQueryTest.java
+added     +198   -0     src/test/java/run/halo/photos/PhotoQueryEndpointTest.java
+modified  +40    -15    src/test/java/run/halo/photos/PhotoRouterTest.java
+modified  +79    -22    src/test/java/run/halo/photos/finders/impl/PhotoFinderImplTest.java
+added     +259   -0     src/test/java/run/halo/photos/finders/impl/PhotoPublicQueryServiceImplTest.java
+added     +89    -0     src/test/java/run/halo/photos/vo/PhotoVoTest.java
+--- DIFF DO CÓDIGO LIGADO
+### src/main/java/run/halo/photos/vo/PhotoVo.java
+@@ -25,8 +25,37 @@ public static PhotoVo from(Photo photo) {
+         return PhotoVo.builder()
+             .metadata(photo.getMetadata())
+             .spec(photo.getSpec())
+-            .exif(photo.getExif())
++            .exif(cloneExifWithoutGps(photo.getExif()))
+             .permalink("/photos/" + photo.getMetadata().getName())
+             .build();
+     }
++
++    private static Photo.PhotoExif cloneExifWithoutGps(Photo.PhotoExif source) {
++        if (source == null) {
++            return null;
++        }
++        var copy = new Photo.PhotoExif();
++        copy.setMake(source.getMake());
++        copy.setModel(source.getModel());
++        copy.setLensModel(source.getLensModel());
++        copy.setSoftware(source.getSoftware());
++        copy.setDateTimeOriginal(source.getDateTimeOriginal());
++        copy.setFNumber(source.getFNumber());
++        copy.setExposureTime(source.getExposureTime());
++        copy.setIso(source.getIso());
++        copy.setFocalLength(source.getFocalLength());
++        copy.setFocalLengthIn35mm(source.getFocalLengthIn35mm());
++        copy.setFlash(source.getFlash());
++        copy.setWhiteBalance(source.getWhiteBalance());
++        copy.setExposureMode(source.getExposureMode());
++        copy.setExposureProgram(source.getExposureProgram());
++        copy.setMeteringMode(source.getMeteringMode());
++        copy.setImageWidth(source.getImageWidth());
++        copy.setImageHeight(source.getImageHeight());
++        // GPS fields intentionally nulled for privacy
++        copy.setGpsLatitude(null);
++        copy.setGpsLongitude(null);
++        copy.setGpsAltitude(null);
++        return copy;
++    }
+ }
+
+===== P086 | repo rustyrazorblade/easy-db-lab | PR #722: feat(aws): AWS SSO support + reliable, cached AMI builds | capacidade: ami-building
+--- SPEC VIVA
+# AMI Building
+
+Manages creation and maintenance of pre-built Amazon Machine Images containing database software and supporting tools.
+
+## Requirements
+
+### REQ-AMI-001: AMI Creation
+
+The system MUST support building AMIs with multiple database versions and supporting tools pre-installed.
+
+**Scenarios:**
+
+- **GIVEN** Packer build configuration, **WHEN** the user builds a base or Cassandra image, **THEN** an AMI is created with the requested software installed.
+- **GIVEN** multiple Cassandra versions in the build config, **WHEN** the AMI is built, **THEN** all specified versions are installed and selectable at runtime.
+
+### REQ-AMI-002: AMI Maintenance
+
+The system MUST support pruning old AMIs to manage costs.
+
+**Scenarios:**
+
+- **GIVEN** multiple AMI versions exist, **WHEN** the user prunes AMIs, **THEN** older AMIs are deregistered while retaining the most recent ones.
+
+--- ARQUIVOS DO PR (48)
+modified  +1     -1     docs/getting-started/installation.md
+modified  +68    -3     docs/getting-started/setup.md
+modified  +3     -1     gradle/libs.versions.toml
+added     +2     -0     openspec/changes/add-aws-sso-support/.openspec.yaml
+added     +42    -0     openspec/changes/add-aws-sso-support/design.md
+added     +27    -0     openspec/changes/add-aws-sso-support/proposal.md
+added     +49    -0     openspec/changes/add-aws-sso-support/specs/setup/spec.md
+added     +77    -0     openspec/changes/add-aws-sso-support/tasks.md
+modified  +60    -27    packer/base/base.pkr.hcl
+added     +57    -0     packer/base/install/edl-cache-lib.sh
+modified  +15    -3     packer/base/install/install_async_profiler.sh
+modified  +12    -2     packer/base/install/install_cilium_cli.sh   <== código ligado à spec
+modified  +1     -1     packer/base/install/install_helm.sh   <== código ligado à spec
+added     +36    -0     packer/base/install/install_jdks.sh
+modified  +24    -8     packer/base/install/install_k3s.sh
+modified  +13    -2     packer/base/install/install_k9s.sh
+modified  +15    -4     packer/base/install/install_otel_agent.sh
+modified  +1     -1     packer/base/install/install_python.sh
+added     +23    -0     packer/base/install/install_sjk.sh
+added     +28    -0     packer/base/install/install_yq.sh
+added     +14    -0     packer/base/install/save_s3_cache.sh
+added     +35    -0     packer/base/install/setup_s3_cache.sh
+modified  +44    -3     packer/cassandra/cassandra.pkr.hcl
+modified  +18    -8     packer/cassandra/install/install_cassandra.sh
+modified  +1     -1     packer/cassandra/install/install_cassandra_easy_stress.sh
+modified  +9     -1     packer/cassandra/install/install_maac.sh
+modified  +13    -3     packer/cassandra/install/install_pyroscope_agent.sh
+modified  +5     -0     src/main/kotlin/com/rustyrazorblade/easydblab/Constants.kt
+modified  +8     -2     src/main/kotlin/com/rustyrazorblade/easydblab/commands/BuildBaseImage.kt
+modified  +8     -2     src/main/kotlin/com/rustyrazorblade/easydblab/commands/BuildCassandraImage.kt
+modified  +5     -2     src/main/kotlin/com/rustyrazorblade/easydblab/commands/SetupProfile.kt
+modified  +5     -12    src/main/kotlin/com/rustyrazorblade/easydblab/commands/Up.kt
+modified  +9     -0     src/main/kotlin/com/rustyrazorblade/easydblab/commands/mixins/BuildArgsMixin.kt
+modified  +115   -3     src/main/kotlin/com/rustyrazorblade/easydblab/containers/Packer.kt
+modified  +17    -1     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWS.kt
+modified  +27    -15    src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSCredentialsManager.kt
+modified  +10    -3     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/InfrastructureConfig.kt
+modified  +60    -0     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/RetryUtil.kt
+added     +27    -0     src/main/kotlin/com/rustyrazorblade/easydblab/services/ExternalIpService.kt
+modified  +3     -0     src/main/kotlin/com/rustyrazorblade/easydblab/services/ServicesModule.kt
+modified  +6     -2     src/main/kotlin/com/rustyrazorblade/easydblab/services/aws/AwsInfrastructureService.kt
+modified  +36    -0     src/main/kotlin/com/rustyrazorblade/easydblab/services/aws/AwsS3BucketService.kt
+modified  +1     -1     src/main/resources/logback.xml
+modified  +8     -0     src/test/kotlin/com/rustyrazorblade/easydblab/TestModules.kt
+modified  +2     -2     src/test/kotlin/com/rustyrazorblade/easydblab/commands/SetupProfileTest.kt
+added     +53    -0     src/test/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSCredentialsManagerTest.kt
+modified  +7     -7     src/test/kotlin/com/rustyrazorblade/easydblab/providers/aws/InfrastructureConfigTest.kt
+added     +73    -0     src/test/kotlin/com/rustyrazorblade/easydblab/providers/aws/RetryUtilTest.kt
+--- DIFF DO CÓDIGO LIGADO
+### packer/base/install/install_cilium_cli.sh
+@@ -19,10 +19,20 @@ fi
+ TARBALL="cilium-linux-${ARCH}.tar.gz"
+ 
+ echo "Downloading cilium CLI ${CILIUM_CLI_VERSION} for ${ARCH}..."
+-curl -fsSL --retry 3 \
++# Use the shared S3 download cache when present; otherwise download directly (local script
++# tests, or no cache configured).
++if [ -f /usr/local/lib/edl-cache.sh ]; then
++    # shellcheck disable=SC1091
++    source /usr/local/lib/edl-cache.sh
++else
++    cached_fetch() { echo "no S3 cache; downloading $1"; curl -fsSL --retry 3 "$1" -o "$3"; }
++fi
++cached_fetch \
+     "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/${TARBALL}" \
+-    -o "${TARBALL}"
++    "cilium-cli/${CILIUM_CLI_VERSION}/${TARBALL}" \
++    "${TARBALL}"
+ 
++# Always fetch the checksum from origin and verify (validates cache integrity too)
+ curl -fsSL --retry 3 \
+     "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/${TARBALL}.sha256sum" \
+     -o "${TARBALL}.sha256sum"
+
+### packer/base/install/install_helm.sh
+@@ -7,7 +7,7 @@ echo "=== Running: install_helm.sh ==="
+ HELM_VERSION="v3.17.3"
+ 
+ echo "Installing helm ${HELM_VERSION}..."
+-curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" | DESIRED_VERSION="${HELM_VERSION}" bash
++curl -fsSL "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3" | DESIRED_VERSION="${HELM_VERSION}" bash >/tmp/helm-install.log 2>&1
+ 
+ helm version || { echo "ERROR: helm installation verification failed" >&2; exit 1; }
+ 
+
+===== P087 | repo clay-good/OpenLore | PR #218: feat: refine the happy path — guided activation, legible surface, and the benchmark-cleared substrate default | capacidade: project
+--- SPEC VIVA
+# Project Specification
+
+> Generated by openlore v1.0.0 on 2026-03-01 16:52
+> Source files: src/core/services/project-detector.test.ts
+
+## Purpose
+
+Manages project lifecycle and membership, including creation, retrieval, member management, and
+archival of projects within the system.
+
+## Entities
+
+### ProjectType
+
+Represents the human-readable name of a project type.
+
+**Properties:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| typeKey | string | The internal key representing the project type (e.g., 'nodejs', 'python'). |
+| displayName | string | The human-readable name of the project type (e.g., 'Node.js/TypeScript', 'Python'). |
+
+## Requirements
+
+### Requirement: ProjectTypeValidation
+
+The system SHALL validate ProjectType according to these rules:
+- typeKey must be one of: 'nodejs', 'python', 'rust', 'go', 'java', 'ruby', 'php', 'unknown'
+- displayName must be a non-empty string
+
+#### Scenario: GetDisplayNameForNode.jsProjectType
+- **GIVEN** The project type key is 'nodejs'
+- **WHEN** getProjectTypeName is called with 'nodejs'
+- **THEN** The display name is 'Node.js/TypeScript'
+
+#### Scenario: GetDisplayNameForPythonProjectType
+- **GIVEN** The project type key is 'python'
+- **WHEN** getProjectTypeName is called with 'python'
+- **THEN** The display name is 'Python'
+
+#### Scenario: GetDisplayNameForUnknownProjectType
+- **GIVEN** The project type key is 'unknown'
+- **WHEN** getProjectTypeName is called with 'unknown'
+- **THEN** The display name is 'Unknown'
+
+### Requirement: Createproject
+
+The system SHALL the system shall create a new project with the provided input details and associate it with the requesting user as the owner.
+
+#### Scenario: Unnamed
+- **GIVEN** the system is in a valid state
+- **WHEN** the operation is invoked
+- **THEN** the expected outcome occurs
+
+### Requirement: Addmember
+
+The system SHALL the system shall add a user to the list of members for a specified project if the user is not already a member.
+
+#### Scenario: Unnamed
+- **GIVEN** the system is in a valid state
+- **WHEN** the operation is invoked
+- **THEN** the expected outcome occurs
+
+### Requirement: Archiveproject
+
+The system SHALL the system shall archive a project if the requesting user is the owner of the project.
+
+#### Scenario: Unnamed
+- **GIVEN** the system is in a valid state
+- **WHEN** the operation is invoked
+- **THEN** the expected outcome occurs
+
+## Technical Notes
+
+- **Implementation**: `src/core/services/project-detector.test.ts`
+
+--- ARQUIVOS DO PR (67)
+modified  +60    -0     CHANGELOG.md
+modified  +28    -7     CLAUDE.md
+modified  +7     -2     README.md
+added     +82    -0     docs/README.md
+modified  +3     -0     docs/RENAME-TO-OPENLORE.md
+modified  +8     -4     docs/agent-setup.md
+modified  +41    -5     docs/cli-reference.md
+modified  +4     -0     docs/configuration.md
+modified  +1     -1     docs/install.md
+modified  +2     -1     docs/language-support.md
+modified  +4     -0     docs/languages.md
+modified  +3     -3     docs/mcp-tools.md
+modified  +4     -0     docs/plan-rag-improvements.md
+modified  +4     -0     docs/providers.md
+added     +88    -0     openspec/changes/RELEASE-v2.1.5.md
+added     +785   -0     openspec/changes/refine-happy-path-and-defaults/proposal.md
+added     +176   -0     openspec/changes/refine-happy-path-and-defaults/tasks.md
+modified  +6     -1     openspec/decisions/adr-0022-lean-default-mcp-surface-navigation-preset-full-62.md
+added     +22    -0     openspec/decisions/adr-0023-flip-default-mcp-surface-to-the-substrate-both-fac.md
+modified  +18    -2     openspec/specs/analyzer/spec.md
+modified  +17    -1     openspec/specs/cli/spec.md
+modified  +18    -2     openspec/specs/drift/spec.md
+modified  +2     -2     package-lock.json
+modified  +4     -1     package.json
+modified  +25    -1     scripts/bench-agent.ts
+added     +172   -0     scripts/bench-preset-completion.ts
+added     +211   -0     scripts/bench-preset-selection.ts
+added     +162   -0     scripts/bench-preset-surface.ts   <== código ligado à spec
+modified  +3     -3     src/cli/commands/connect.test.ts
+added     +53    -0     src/cli/commands/docs-index.test.ts
+added     +127   -0     src/cli/commands/features.ts
+modified  +77    -35    src/cli/commands/mcp-presets.test.ts
+modified  +16    -11    src/cli/commands/mcp-tool-count-doc.test.ts
+modified  +40    -10    src/cli/commands/mcp.ts
+modified  +4     -1     src/cli/commands/serve.ts
+added     +72    -0     src/cli/help-groups.test.ts
+added     +158   -0     src/cli/help-groups.ts
+modified  +13    -0     src/cli/index-help.test.ts
+modified  +7     -0     src/cli/index.ts
+modified  +7     -7     src/cli/install/install.test.ts
+modified  +12    -7     src/constants.ts
+modified  +1     -1     src/core/analyzer/ai-config-generator.ts
+modified  +1     -1     src/core/analyzer/codebase-digest.ts
+added     +230   -0     src/core/services/feature-inventory.test.ts
+added     +321   -0     src/core/services/feature-inventory.ts
+modified  +81    -1     src/core/services/mcp-handlers/analysis.test.ts
+modified  +68    -15    src/core/services/mcp-handlers/analysis.ts
+modified  +1     -1     src/core/services/mcp-handlers/epistemic-lease.ts
+modified  +1     -0     src/core/services/mcp-handlers/graph.test.ts
+modified  +19    -19    src/core/services/mcp-handlers/graph.ts
+modified  +1     -0     src/core/services/mcp-handlers/landmarks.test.ts
+modified  +2     -2     src/core/services/mcp-handlers/landmarks.ts
+modified  +1     -1     src/core/services/mcp-handlers/live-data/tool-driver.ts
+modified  +1     -0     src/core/services/mcp-handlers/map.test.ts
+modified  +2     -2     src/core/services/mcp-handlers/map.ts
+modified  +1     -0     src/core/services/mcp-handlers/orient.test.ts
+modified  +2     -2     src/core/services/mcp-handlers/orient.ts
+modified  +1     -0     src/core/services/mcp-handlers/pathfind.test.ts
+modified  +2     -2     src/core/services/mcp-handlers/pathfind.ts
+modified  +46    -1     src/core/services/mcp-handlers/progressive.test.ts
+modified  +0     -0     src/core/services/mcp-handlers/progressive.ts
+modified  +3     -3     src/core/services/mcp-handlers/semantic.ts
+added     +78    -0     src/core/services/mcp-handlers/tool-aliases.test.ts
+modified  +36    -2     src/core/services/mcp-handlers/tool-contract.ts
+modified  +18    -0     src/core/services/mcp-handlers/utils.test.ts
+modified  +32    -0     src/core/services/mcp-handlers/utils.ts
+modified  +15    -11    src/core/services/tool-dispatch.ts
+--- DIFF DO CÓDIGO LIGADO
+### scripts/bench-preset-surface.ts
+@@ -0,0 +1,162 @@
++/**
++ * Preset surface benchmark — the deterministic half of the DefaultSurfaceRevealsAllFaces
++ * gate (change: refine-happy-path-and-defaults).
++ *
++ * The proposal's gate for flipping the out-of-box default from `navigation` (read
++ * face only) to a face-complete surface (the `substrate` preset) is:
++ *   "move the default unless the evaluation shows a regression in SELECTION ACCURACY
++ *    or TOKEN ECONOMY."
++ *
++ * Two of those three quantities are deterministic and need no agent, and this harness
++ * measures them now:
++ *   - TOKEN ECONOMY — the upfront tools/list payload (bytes + estimated tokens) each
++ *     preset costs in the prompt prefix, using the exact measurement the budget guard
++ *     in mcp-presets.test.ts uses.
++ *   - FACE COVERAGE — which capability families (faces) each preset exposes, i.e.
++ *     whether the surface "reveals all faces" (navigate + remember + verify + change).
++ *
++ * The third quantity — SELECTION ACCURACY — requires a live agent making tool-choice
++ * decisions over a task corpus; this harness documents that protocol but cannot run it
++ * without an agent/key. So this is decision-SUPPORT, not the final verdict.
++ *
++ * Run: npx tsx scripts/bench-preset-surface.ts [--json]
++ * No LLM, no network, no analyzed repo required — pure surface arithmetic.
++ */
++
++import {
++  TOOL_DEFINITIONS,
++  TOOL_PRESETS,
++  selectActiveTools,
++  toolAnnotations,
++} from '../src/cli/commands/mcp.js';
++import { capabilityFamily, CAPABILITY_FAMILIES, type CapabilityFamily } from '../src/core/services/mcp-handlers/tool-contract.js';
++import { LEAN_DEFAULT_PRESET } from '../src/constants.js';
++
++/** The four faces the default surface should reveal (DefaultSurfaceRevealsAllFaces). */
++const HIGH_VALUE_FACES: CapabilityFamily[] = ['navigate', 'remember', 'verify', 'change'];
++
++/** Rough token estimate — bytes / 4, the standard heuristic for English/JSON. */
++function estTokens(bytes: number): number {
++  return Math.round(bytes / 4);
++}
++
++/** The exact tools/list payload measurement used by the mcp-presets budget guard. */
++function payloadBytes(preset: string): number {
++  const tools = selectActiveTools(TOOL_DEFINITIONS, { preset }).map((t) => ({
++    ...t,
++    annotations: toolAnnotations(t.name),
++  }));
++  return Buffer.byteLength(JSON.stringify({ tools }), 'utf8');
++}
++
++interface PresetMeasurement {
++  preset: string;
++  toolCount: number;
++  bytes: number;
++  estTokens: number;
++  families: CapabilityFamily[];
++  revealsAllFaces: boolean;
++}
++
++function measure(preset: string): PresetMeasurement {
++  const tools = selectActiveTools(TOOL_DEFINITIONS, { preset });
++  const families = new Set<CapabilityFamily>();
++  for (const t of tools) {
++    const fam = capabilityFamily(t.name);
++    if (fam) families.add(fam);
++  }
++  const bytes = payloadBytes(preset);
++  const orderedFamilies = CAPABILITY_FAMILIES.filter((f) => families.has(f));
++  return {
++    preset,
++    toolCount: tools.length,
++    bytes,
++    estTokens: estTokens(bytes),
++    families: orderedFamilies,
++    revealsAllFaces: HIGH_VALUE_FACES.every((f) => families.has(f)),
++  };
++}
++
++const PRESETS_TO_REPORT = ['minimal', LEAN_DEFAULT_PRESET, 'substrate', 'full'];
++
++function kb(bytes: number): string {
++  return `${(bytes / 1024).toFixed(1)} KB`;
++}
++
++function run(): void {
++  const json = process.argv.includes('--json');
++  const measurements = PRESETS_TO_REPORT.map(measure);
++
++  const lean = measurements.find((m) => m.preset === LEAN_DEFAULT_PRESET)!;
++  const substrate = measurements.find((m) => m.preset === 'substrate')!;
++
++  const gate = {
++    leanDefault: LEAN_DEFAULT_PRESET,
++    candidate: 'substrate',
++    tokenEconomy: {
++      deltaBytes: substrate.bytes - lean.bytes,
++      deltaEstTokens: substrate.estTokens - lean.estTokens,
++      // The platform's tool-search guidance reaches for deferral past ~10K tokens of
++      // tool definitions; a candidate default well under that is economically safe.
++      candidateEstTokens: substrate.estTokens,
++      withinSelectionGuidance: substrate.estTokens < 10_000,
++    },
++    faceCoverage: {
++      leanFaces: lean.families,
++      candidateFaces: substrate.families,
++      leanRevealsAllFaces: lean.revealsAllFaces,
++      candidateRevealsAllFaces: substrate.revealsAllFaces,
++    },
++    selectionAccuracy: 'NOT MEASURED — requires a live agent over a task corpus (see protocol below)',
++  };
++
++  if (json) {
++    process.stdout.write(JSON.stringify({ measurements, gate }, null, 2) + '\n');
++    return;
++  }
++
++  const lines: string[] = [];
++  lines.push('');
++  lines.push('Preset surface comparison — deterministic, no LLM (DefaultSurfaceRevealsAllFaces gate)');
++  lines.push('');
++  lines.push('  preset      tools   payload   ~tokens   faces');
++  lines.push('  ' + '-'.repeat(74));
++  for (const m of measurements) {
++    lines.push(
++      '  ' +
++        m.preset.padEnd(11) +
++        String(m.toolCount).padStart(4) +
++        '   ' +
++        kb(m.bytes).padStart(8) +
++        '  ' +
++        `~${(m.estTokens / 1000).toFixed(1)}k`.padStart(8) +
++        '   ' +
++        m.families.join(', '),
++    );
++  }
++  lines.push('');
++  lines.push(`Default-flip gate: ${LEAN_DEFAULT_PRESET} (current default) → substrate (candidate)`);
++  lines.push('');
++  lines.push(
++    `  Token economy : substrate costs +${kb(gate.tokenEconomy.deltaBytes)} / ~+${(gate.tokenEconomy.deltaEstTokens / 1000).toFixed(1)}k tokens upfront ` +
++      `(candidate ~${(substrate.estTokens / 1000).toFixed(1)}k tokens; ${gate.tokenEconomy.withinSelectionGuidance ? 'within' : 'OVER'} the ~10k tool-search threshold).`,
++  );
++  lines.push(
++    `  Face coverage : ${LEAN_DEFAULT_PRESET} reveals {${lean.families.join(', ')}} (all-faces: ${lean.revealsAllFaces}); ` +
++      `substrate reveals {${substrate.families.join(', ')}} (all-faces: ${substrate.revealsAllFaces}).`,
++  );
++  lines.push(
++    `  Verdict (deterministic half): substrate ${substrate.revealsAllFaces ? 'IS face-complete' : 'is NOT face-complete'} and ` +
++      `${gate.tokenEconomy.withinSelectionGuidance ? 'within token budget' : 'OVER token budget'}.`,
++  );
++  lines.push('');
++  lines.push('  Remaining gate — SELECTION ACCURACY (needs a live agent, not run here):');
++  lines.push('    Protocol: for a fixed task corpus, present each preset to an agent and record');
++  lines.push('    whether it selects the correct tool(s) per task (and round-trips to answer).');
++  lines.push('    Flip the default to substrate iff accuracy does not regress vs navigation.');
++  lines.push('    A starting corpus + driver live in scripts/bench-agent.tasks.ts / bench-agent.ts.');
++  lines.push('');
++  process.stdout.write(lines.join('\n') + '\n');
++}
++
++run();
+

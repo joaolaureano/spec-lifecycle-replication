@@ -1,0 +1,3155 @@
+===== P143 | repo tduretz/MDOODZ7.0 | PR #165: Add performance metrics: PCG thermal solver, fused interpolation, logging, benchmarking | capacidade: ci-convergence-rate-tests
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Newton converges faster than Picard
+The test suite SHALL verify that Newton-Raphson iteration requires fewer iterations than Picard for the same non-linear problem.
+
+#### Scenario: Newton uses fewer iterations
+- **WHEN** the same power-law inclusion problem is solved with `Newton=1` and separately with `Newton=0` (Picard)
+- **THEN** the Newton iteration count SHALL be less than or equal to the Picard iteration count
+
+### Requirement: LogIsNewtonStep flag is consistent
+The test suite SHALL verify that the `Iterations/LogIsNewtonStep` field correctly marks which iterations used Newton vs Picard.
+
+#### Scenario: Newton steps are flagged
+- **WHEN** `Newton=1` is set and the solver converges
+- **THEN** at least one entry in `LogIsNewtonStep` SHALL be non-zero (indicating Newton steps were taken)
+
+--- ARQUIVOS DO PR (851)
+added     +193   -0     .claude/skills/skill-anisotropy/SKILL.md
+added     +515   -0     .claude/skills/skill-benchmarking/SKILL.md
+added     +193   -0     .claude/skills/skill-build-and-run/SKILL.md
+added     +248   -0     .claude/skills/skill-code-glossary/SKILL.md
+added     +139   -0     .claude/skills/skill-debugging/SKILL.md
+added     +175   -0     .claude/skills/skill-logging/SKILL.md
+added     +132   -0     .claude/skills/skill-melting/SKILL.md
+added     +388   -0     .claude/skills/skill-model-setup/SKILL.md
+added     +191   -0     .claude/skills/skill-parameter-validation/SKILL.md
+added     +91    -0     .claude/skills/skill-particle-reseeding/SKILL.md
+added     +214   -0     .claude/skills/skill-physics-theory/SKILL.md
+added     +276   -0     .claude/skills/skill-rheology/SKILL.md
+added     +221   -0     .claude/skills/skill-scenario-gallery/SKILL.md
+added     +296   -0     .claude/skills/skill-solvers/SKILL.md
+added     +283   -0     .claude/skills/skill-stokes-benchmark/SKILL.md
+added     +449   -0     .claude/skills/skill-testing-guide/SKILL.md
+added     +224   -0     .claude/skills/skill-thermal/SKILL.md
+added     +349   -0     .claude/skills/skill-visualisation/SKILL.md
+modified  +50    -45    .github/copilot-instructions.md
+modified  +19    -2     .github/skills/skill-anisotropy/SKILL.md
+added     +515   -0     .github/skills/skill-benchmarking/SKILL.md
+modified  +34    -0     .github/skills/skill-build-and-run/SKILL.md
+modified  +24    -0     .github/skills/skill-code-glossary/SKILL.md
+added     +139   -0     .github/skills/skill-debugging/SKILL.md
+added     +175   -0     .github/skills/skill-logging/SKILL.md
+added     +132   -0     .github/skills/skill-melting/SKILL.md
+modified  +51    -0     .github/skills/skill-model-setup/SKILL.md
+modified  +4     -1     .github/skills/skill-parameter-validation/SKILL.md
+added     +91    -0     .github/skills/skill-particle-reseeding/SKILL.md
+modified  +39    -2     .github/skills/skill-rheology/SKILL.md
+modified  +11    -6     .github/skills/skill-scenario-gallery/SKILL.md
+modified  +71    -10    .github/skills/skill-solvers/SKILL.md
+added     +283   -0     .github/skills/skill-stokes-benchmark/SKILL.md
+modified  +30    -26    .github/skills/skill-testing-guide/SKILL.md
+modified  +53    -0     .github/skills/skill-visualisation/SKILL.md
+modified  +7     -0     .gitignore
+modified  +1     -1     Deps.cmake
+modified  +41    -39    MDLIB/AdvectionRoutines.c
+modified  +485   -81    MDLIB/AnisotropyRoutines.c
+modified  +2     -2     MDLIB/CMakeLists.txt
+modified  +70    -70    MDLIB/CheckBC.ipynb
+modified  +14    -5     MDLIB/ChemicalRoutines.c
+modified  +2     -0     MDLIB/FD_Jacobian.c
+modified  +810   -74    MDLIB/FlowLaws.c
+modified  +103   -28    MDLIB/FreeSurface.c
+modified  +5     -3     MDLIB/GridRoutines.c
+modified  +42    -25    MDLIB/HDF5Output.c
+modified  +234   -87    MDLIB/InputOutput.c
+modified  +488   -207   MDLIB/Main_DOODZ.c
+added     +306   -0     MDLIB/MdoodzLog.c
+modified  +4     -3     MDLIB/MeltingRoutines.c
+modified  +58    -7     MDLIB/MemoryAllocFree.c
+modified  +26    -24    MDLIB/MiscFunctions.c
+modified  +9     -7     MDLIB/ParticleReseeding.c
+modified  +886   -276   MDLIB/ParticleRoutines.c
+modified  +245   -210   MDLIB/RheologyDensity.c
+modified  +4     -0     MDLIB/RheologyDensity.h
+modified  +666   -332   MDLIB/RheologyParticles.c
+modified  +32    -31    MDLIB/Setup.c
+modified  +68    -56    MDLIB/Solvers.c
+modified  +3     -1     MDLIB/SparseTools.c
+modified  +19    -54    MDLIB/StokesAssemblyDecoupled.c
+modified  +79    -43    MDLIB/StokesRoutines.c
+modified  +106   -28    MDLIB/ThermalRoutines.c
+modified  +181   -6     MDLIB/ThermalSolver.c
+added     +75    -0     MDLIB/include/mdoodz-log.h
+modified  +86    -3     MDLIB/include/mdoodz.h
+modified  +72    -10    MDLIB/mdoodz-private.h
+added     +0     -0     OPTIMIZATIONS.md
+added     +0     -0     SETS/AniFstrainCalciteBruijn.c
+added     +0     -0     SETS/AniFstrainCalciteBruijn.txt
+added     +0     -0     SETS/AniFstrainCalciteBruijn/README.md
+added     +0     -0     SETS/AniFstrainCalciteBruijn/img/mdoodz_vs_bruijn.png
+added     +0     -0     SETS/AniFstrainCalciteBruijn/mdoodz_vs_bruijn.py
+added     +0     -0     SETS/AniFstrainCalciteBruijn/run.sh
+added     +0     -0     SETS/AniFstrainCalcitePieri.c
+renamed   +0     -0     SETS/AniFstrainCalcitePieri.txt
+added     +0     -0     SETS/AniFstrainCalcitePieri/README.md
+added     +0     -0     SETS/AniFstrainCalcitePieri/img/mdoodz_vs_pieri.png
+added     +0     -0     SETS/AniFstrainCalcitePieri/mdoodz_vs_pieri.py
+added     +0     -0     SETS/AniFstrainCalcitePieri/run.sh
+added     +0     -0     SETS/AniFstrainCalciteSchuster.c
+added     +0     -0     SETS/AniFstrainCalciteSchuster.txt
+added     +0     -0     SETS/AniFstrainCalciteSchuster/README.md
+added     +0     -0     SETS/AniFstrainCalciteSchuster/img/mdoodz_vs_schuster.png
+added     +0     -0     SETS/AniFstrainCalciteSchuster/mdoodz_vs_schuster.py
+added     +0     -0     SETS/AniFstrainCalciteSchuster/run.sh
+added     +0     -0     SETS/AniFstrainOlivineBoneh_InitFS.c
+added     +0     -0     SETS/AniFstrainOlivineBoneh_InitFS.txt
+added     +0     -0     SETS/AniFstrainQuartzBlackford.c
+added     +0     -0     SETS/AniFstrainQuartzBlackford.txt
+added     +0     -0     SETS/AniFstrainQuartzBlackford/README.md
+added     +0     -0     SETS/AniFstrainQuartzBlackford/img/mdoodz_vs_blackford.png
+added     +0     -0     SETS/AniFstrainQuartzBlackford/mdoodz_vs_blackford.py
+added     +0     -0     SETS/AniFstrainQuartzBlackford/run.sh
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni.c
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni.txt
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/README.md
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/img/mdoodz_vs_pennacchioni.png
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/mdoodz_vs_pennacchioni.py
+added     +27    -0     SETS/AniFstrainQuartzPennacchioni/run.sh
+added     +59    -0     SETS/AnisoFstrainBox.c
+added     +129   -0     SETS/AnisoFstrainBox.txt
+modified  +1     -1     SETS/BlankenBench.c
+modified  +14    -0     SETS/CMakeLists.txt
+added     +59    -0     SETS/PinchSwellGSEAniso.c
+added     +148   -0     SETS/PinchSwellGSEAniso.txt
+modified  +5     -0     SETS/Popov2025_Pureshear_VEVP.c
+modified  +11    -4     SETS/Popov2025_Pureshear_VEVP.txt
+modified  +5     -0     SETS/Popov2025_Tensile_VEVP.c
+modified  +11    -4     SETS/Popov2025_Tensile_VEVP.txt
+modified  +1     -0     SETS/RiftingChenin.txt
+added     +140   -0     SETS/RiftingCombinedYield.c
+added     +308   -0     SETS/RiftingCombinedYield.txt
+added     +308   -0     SETS/RiftingCombinedYield_medium.txt
+added     +308   -0     SETS/RiftingCombinedYield_quick.txt
+added     +140   -0     SETS/RiftingComprehensive.c
+added     +330   -0     SETS/RiftingComprehensive.txt
+added     +329   -0     SETS/RiftingComprehensive_highres.txt
+added     +329   -0     SETS/RiftingComprehensive_lowres.txt
+added     +329   -0     SETS/RiftingComprehensive_medres.txt
+added     +255   -0     TESTS/AnalyticalBench/SolKz_chol.txt
+modified  +1312  -473   TESTS/AnalyticalSolutions.md
+renamed   +122   -119   TESTS/AnisotropyBenchmark/AniFstrainEvolution.txt
+modified  +121   -119   TESTS/AnisotropyBenchmark/DirectorEvolution.txt
+renamed   +123   -119   TESTS/AnisotropyBenchmark/DirectorEvolutionInterpMode1.txt
+renamed   +123   -119   TESTS/AnisotropyBenchmark/DirectorEvolutionInterpMode2.txt
+modified  +2     -0     TESTS/AnisotropyBenchmark/StressAngle.txt
+added     +80    -0     TESTS/AnisotropyBenchmark/plot_aniso_factor.gp
+modified  +2062  -444   TESTS/AnisotropyBenchmarkTests.cpp
+added     +118   -0     TESTS/BlankenBench/BlankenBenchOptimized.txt
+added     +124   -0     TESTS/BlankenBench/BlankenBenchRun7.txt
+added     +124   -0     TESTS/BlankenBench/BlankenBenchRun8.txt
+modified  +12    -7     TESTS/BlankenBench/BlankenBenchSteady.txt
+added     +296   -0     TESTS/BlankenBench/Blankenbach.md
+added     +0     -0     TESTS/BlankenBench/blankenbach_run5_vs_run6.png
+added     +87    -0     TESTS/BlankenBench/check_vrms.py
+added     +45    -0     TESTS/BlankenBench/pattern_check.gp
+added     +52    -0     TESTS/BlankenBench/pattern_evolution.gp
+added     +90    -0     TESTS/BlankenBench/plot_3run_comparison.py
+added     +58    -0     TESTS/BlankenBench/timeseries.py
+modified  +165   -93    TESTS/BlankenBenchTests.cpp
+added     +134   -0     TESTS/BoundaryCondition/PeriodicSimpleShearInterpMode1.txt
+added     +134   -0     TESTS/BoundaryCondition/PeriodicSimpleShearInterpMode2.txt
+modified  +180   -153   TESTS/BoundaryConditionTests.cpp   <== código ligado à spec
+modified  +67    -3     TESTS/CMakeLists.txt
+added     +147   -0     TESTS/Compressibility/DilatantFlowInterpMode1.txt
+added     +147   -0     TESTS/Compressibility/DilatantFlowInterpMode2.txt
+modified  +96    -69    TESTS/CompressibilityTests.cpp   <== código ligado à spec
+added     +136   -0     TESTS/ConvergenceRate/NewtonPwlInterpMode1.txt
+added     +136   -0     TESTS/ConvergenceRate/NewtonPwlInterpMode2.txt
+modified  +141   -114   TESTS/ConvergenceRateTests.cpp   <== código ligado à spec
+added     +136   -0     TESTS/Density/HydrostaticPressureInterpMode1.txt
+added     +136   -0     TESTS/Density/HydrostaticPressureInterpMode2.txt
+modified  +27    -0     TESTS/DensityTests.cpp   <== código ligado à spec
+added     +136   -0     TESTS/FiniteStrain/PureShearStrainInterpMode1.txt
+added     +136   -0     TESTS/FiniteStrain/PureShearStrainInterpMode2.txt
+modified  +103   -76    TESTS/FiniteStrainTests.cpp   <== código ligado à spec
+added     +136   -0     TESTS/FreeSurface/SinkingBlockInterpMode1.txt
+added     +136   -0     TESTS/FreeSurface/SinkingBlockInterpMode2.txt
+modified  +140   -113   TESTS/FreeSurfaceTests.cpp   <== código ligado à spec
+added     +200   -0     TESTS/InitAnisoFromFiniteStrainTests.cpp
+added     +116   -0     TESTS/InterpEquiv/InterpEquiv_Mode0.txt
+added     +116   -0     TESTS/InterpEquiv/InterpEquiv_Mode3.txt
+added     +107   -0     TESTS/InterpEquivalenceTests.cpp
+added     +113   -0     TESTS/NeumannBC/StressBCPureShearInterpMode1.txt
+added     +113   -0     TESTS/NeumannBC/StressBCPureShearInterpMode2.txt
+modified  +104   -77    TESTS/NeumannBCTests.cpp   <== código ligado à spec
+modified  +28    -1     TESTS/NewtonIterationConvergence.cpp
+added     +147   -0     TESTS/Plasticity/DruckerPragerYieldInterpMode1.txt
+added     +147   -0     TESTS/Plasticity/DruckerPragerYieldInterpMode2.txt
+modified  +165   -138   TESTS/PlasticityTests.cpp
+added     +320   -0     TESTS/Popov2025/Popov0DAnalytical.cpp
+added     +69    -0     TESTS/Popov2025/Popov0DAnalytical.h
+added     +145   -0     TESTS/Popov2025/Popov0D_DeviatoricShear.txt
+added     +153   -0     TESTS/Popov2025/Popov0D_MixedStrain.txt
+added     +153   -0     TESTS/Popov2025/Popov0D_VolumetricExtension.txt
+added     +75    -0     TESTS/Popov2025/plots/README.md
+added     +210   -0     TESTS/Popov2025/plots/extract_popov2025.cpp
+added     +110   -0     TESTS/Popov2025/plots/fig5_0d_stress.gp
+added     +2     -0     TESTS/Popov2025/plots/out/.gitignore
+added     +0     -0     TESTS/Popov2025/plots/reference/fig5_0d_stress.png
+added     +550   -0     TESTS/Popov2025Tests.cpp
+modified  +179   -32    TESTS/README.md
+added     +112   -0     TESTS/RheologyCreep/GrainSizeSteadyState.txt
+added     +112   -0     TESTS/RheologyCreep/GrainSizeSweepCoupledBase.txt
+added     +140   -0     TESTS/RheologyCreep/PinchSwellGSEAnisoSmoke.txt
+added     +121   -0     TESTS/RheologyCreep/PinchSwellGSESmoke.txt
+added     +136   -0     TESTS/RheologyCreep/PowerLawCreepInterpMode1.txt
+added     +136   -0     TESTS/RheologyCreep/PowerLawCreepInterpMode2.txt
+added     +80    -0     TESTS/RheologyCreep/plot_grain_size.gp
+added     +88    -0     TESTS/RheologyCreep/plot_grain_size_paper_view.gp
+modified  +728   -162   TESTS/RheologyCreepTests.cpp   <== código ligado à spec
+added     +136   -0     TESTS/RotationAdvection/RotationMode0.txt
+added     +136   -0     TESTS/RotationAdvection/VortexMode0.txt
+added     +174   -0     TESTS/RotationAdvection/plot_rotation.py
+added     +323   -0     TESTS/RotationAdvectionTests.cpp
+added     +155   -0     TESTS/ShearBand/ConjugateBands_chol.txt
+added     +176   -0     TESTS/ShearBand/SingleBand_chol.txt
+added     +116   -0     TESTS/ShearHeating/ViscousDissipationInterpMode1.txt
+added     +116   -0     TESTS/ShearHeating/ViscousDissipationInterpMode2.txt
+modified  +47    -0     TESTS/ShearHeatingTests.cpp   <== código ligado à spec
+added     +138   -0     TESTS/ShearTemplate/LinearPureshearIsotropicInterpMode1.txt
+added     +138   -0     TESTS/ShearTemplate/LinearPureshearIsotropicInterpMode2.txt
+added     +102   -0     TESTS/SolCx/SolCx21.txt
+added     +102   -0     TESTS/SolCx/SolCx41.txt
+added     +102   -0     TESTS/SolCx/SolCx51.txt
+added     +102   -0     TESTS/SolCx/SolCx81.txt
+added     +2891  -0     TESTS/SolCx/SolCxAnalytical.cpp
+added     +47    -0     TESTS/SolCx/SolCxAnalytical.h
+added     +47    -0     TESTS/SolCx/plot_solcx.gp
+added     +0     -0     TESTS/SolCx/solcx_convergence.png
+added     +278   -0     TESTS/SolCxBenchmarkTests.cpp
+added     +102   -0     TESTS/SolViBenchmark/SolViRes51InterpMode1.txt
+added     +102   -0     TESTS/SolViBenchmark/SolViRes51InterpMode2.txt
+added     +127   -0     TESTS/SolViBenchmark/SolViRes51_anisotropy_chol.txt
+added     +100   -0     TESTS/SolViBenchmark/SolViRes51_chol.txt
+added     +100   -0     TESTS/SolViBenchmark/SolViRes51_newton_chol.txt
+modified  +27    -0     TESTS/SolViBenchmarkTests.cpp
+added     +134   -0     TESTS/SolverMode/AdaptiveDtInterpMode1.txt
+added     +134   -0     TESTS/SolverMode/AdaptiveDtInterpMode2.txt
+modified  +106   -79    TESTS/SolverModeTests.cpp
+modified  +79    -0     TESTS/TestHelpers.h   <== código ligado à spec
+added     +116   -0     TESTS/Thermal/GaussianDiffusionInterpMode1.txt
+added     +116   -0     TESTS/Thermal/GaussianDiffusionInterpMode2.txt
+added     +114   -0     TESTS/Thermal/GaussianDiffusionL2.txt
+added     +115   -0     TESTS/Thermal/OceanicCooling.txt
+added     +116   -0     TESTS/Thermal/ThermoElastic.txt
+modified  +215   -0     TESTS/ThermalTests.cpp   <== código ligado à spec
+added     +310   -0     TESTS/ThermalVerificationTests.cpp
+added     +106   -0     TESTS/TopoBench/TopoBenchConvergence31InterpMode1.txt
+added     +106   -0     TESTS/TopoBench/TopoBenchConvergence31InterpMode2.txt
+added     +113   -0     TESTS/TopoBench/TopoRelax_chol.txt
+modified  +265   -237   TESTS/TopoBenchTests.cpp
+added     +134   -0     TESTS/VelocityField/PureShearVelocityInterpMode1.txt
+added     +134   -0     TESTS/VelocityField/PureShearVelocityInterpMode2.txt
+modified  +27    -0     TESTS/VelocityFieldTests.cpp   <== código ligado à spec
+added     +137   -0     TESTS/ViscoElastic/StressAccumulationInterpMode1.txt
+added     +137   -0     TESTS/ViscoElastic/StressAccumulationInterpMode2.txt
+modified  +108   -81    TESTS/ViscoElasticTests.cpp   <== código ligado à spec
+added     +0     -0     TESTS/aniso_factor_evolution.png
+added     +189   -0     TESTS/benchmark_results/REPORT-20260412-175030.md
+added     +122   -0     TESTS/benchmark_results/REPORT-20260413-113812.md
+added     +105   -0     TESTS/extract_blankenbach.py
+added     +0     -0     TESTS/grain_size_benchmark.png
+added     +0     -0     TESTS/grain_size_paper_view.png
+added     +414   -0     TESTS/mdoodz.log
+added     +0     -0     TESTS/rotation_advection_comparison.png
+added     +0     -0     TESTS/thermoelastic_benchmark.png
+added     +0     -0     TESTS/vortex_advection_comparison.png
+modified  +48    -2     VISUAL_TESTS/CMakeLists.txt
+added     +211   -0     VISUAL_TESTS/ClosedBoxRunner.cpp
+added     +15    -0     VISUAL_TESTS/InterpEquivalence.gnu
+added     +16    -0     VISUAL_TESTS/OceanicCooling.gnu
+added     +15    -0     VISUAL_TESTS/PCGConvergence.gnu
+added     +116   -0     VISUAL_TESTS/PCGConvergence.txt
+added     +521   -0     VISUAL_TESTS/ReseedingGuide.cpp
+added     +160   -0     VISUAL_TESTS/ReseedingGuide.md
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode0.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode2.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode0.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode2.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeHighPart.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeLowPart.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeLowPart_Mode1.txt
+added     +161   -0     VISUAL_TESTS/ReseedingGuide/EdgeMultiphase.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/HighDensMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/HighDensMode2.txt
+added     +25    -0     VISUAL_TESTS/ThermalAccuracy.gnu
+added     +34    -0     VISUAL_TESTS/ThermoElastic.gnu
+added     +281   -0     VISUAL_TESTS/Validation.cpp
+added     +32    -0     VISUAL_TESTS/advection_anim.gnu
+added     +37    -0     VISUAL_TESTS/advection_primer.gnu
+added     +483   -0     VISUAL_TESTS/aniso_fstrain/CALIBRATION_AND_DYNAMIC_FSTRAIN.md
+added     +252   -0     VISUAL_TESTS/aniso_fstrain/INDEX.md
+added     +108   -0     VISUAL_TESTS/aniso_fstrain/notes/07_rifting_comparison_provenance.md
+added     +101   -0     VISUAL_TESTS/aniso_fstrain/plot_01_fstrain_compare.py
+added     +142   -0     VISUAL_TESTS/aniso_fstrain/plot_02_finit_angle_panel.py
+added     +127   -0     VISUAL_TESTS/aniso_fstrain/plot_03_finit_factor_roundtrip.py
+added     +112   -0     VISUAL_TESTS/aniso_fstrain/plot_04_inheritance_reset.py
+added     +91    -0     VISUAL_TESTS/aniso_fstrain/plot_05_T_sweep_decay.py
+added     +128   -0     VISUAL_TESTS/aniso_fstrain/plot_06_regime_map.py
+added     +190   -0     VISUAL_TESTS/aniso_fstrain/plot_07_rifting_comparison.py
+added     +210   -0     VISUAL_TESTS/aniso_fstrain/runners/_lib.py
+added     +49    -0     VISUAL_TESTS/aniso_fstrain/runners/run_01_fstrain_compare.py
+added     +44    -0     VISUAL_TESTS/aniso_fstrain/runners/run_02_finit_angle.py
+added     +44    -0     VISUAL_TESTS/aniso_fstrain/runners/run_03_finit_factor.py
+added     +43    -0     VISUAL_TESTS/aniso_fstrain/runners/run_04_inheritance.py
+added     +46    -0     VISUAL_TESTS/aniso_fstrain/runners/run_05_T_sweep.py
+added     +110   -0     VISUAL_TESTS/aniso_fstrain/runners/run_06_regime_map.py
+added     +129   -0     VISUAL_TESTS/aniso_fstrain/templates/base.txt
+added     +46    -0     VISUAL_TESTS/cell_uniformity.gnu
+added     +122   -0     VISUAL_TESTS/closed_box_crash_anim.gnu
+added     +38    -0     VISUAL_TESTS/deactivation_strategy.gnu
+added     +40    -0     VISUAL_TESTS/edge_empty_cell.gnu
+added     +38    -0     VISUAL_TESTS/edge_multiphase.gnu
+added     +0     -0     VISUAL_TESTS/img/advection_anim.gif
+added     +0     -0     VISUAL_TESTS/img/advection_primer.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/01_fstrain_compare.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/02_finit_angle_panel.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/03_finit_factor_roundtrip.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/04_inheritance_reset.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/05_T_sweep_decay.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/06_regime_map.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/07_rifting_comparison_5Ma.png
+added     +0     -0     VISUAL_TESTS/img/cell_uniformity.png
+added     +0     -0     VISUAL_TESTS/img/closed_box_crash_anim.gif
+added     +0     -0     VISUAL_TESTS/img/deactivation_strategy.png
+added     +0     -0     VISUAL_TESTS/img/edge_empty_cell.png
+added     +0     -0     VISUAL_TESTS/img/edge_multiphase.png
+modified  +0     -0     VISUAL_TESTS/img/gse.gif
+added     +0     -0     VISUAL_TESTS/img/interp_equivalence.png
+added     +0     -0     VISUAL_TESTS/img/mode_comparison_anim.gif
+added     +0     -0     VISUAL_TESTS/img/mode_comparison_check.png
+added     +0     -0     VISUAL_TESTS/img/nbpart_timeseries.png
+added     +0     -0     VISUAL_TESTS/img/oceanic_cooling.png
+added     +0     -0     VISUAL_TESTS/img/overnight/angle_sweep_summary.png
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso00_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso30_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_erfc_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_min_vs_erfc.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_min_vs_erfc_delta.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso00.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso30.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso45.gif
+added     +0     -0     VISUAL_TESTS/img/pcg_convergence.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_final.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_ic.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_mid.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_gse_vs_aniso.gif
+added     +0     -0     VISUAL_TESTS/img/placement_zoom.png
+added     +0     -0     VISUAL_TESTS/img/reseed_placement.png
+added     +0     -0     VISUAL_TESTS/img/slot_usage.png
+added     +0     -0     VISUAL_TESTS/img/stress_comparison.png
+added     +0     -0     VISUAL_TESTS/img/thermal_accuracy.png
+added     +0     -0     VISUAL_TESTS/img/thermoelastic.png
+modified  +102   -9     VISUAL_TESTS/main.cpp
+added     +58    -0     VISUAL_TESTS/mode_comparison_anim.gnu
+added     +31    -0     VISUAL_TESTS/nbpart_timeseries.gnu
+added     +70    -0     VISUAL_TESTS/placement_zoom.gnu
+added     +44    -0     VISUAL_TESTS/reseed_placement.gnu
+added     +28    -0     VISUAL_TESTS/slot_usage.gnu
+added     +32    -0     VISUAL_TESTS/stress_comparison.gnu
+modified  +7     -0     VISUAL_TESTS/visual-tests.h
+added     +81    -0     WebVis/README.md
+added     +52    -0     WebVis/field-cache.mjs
+added     +124   -0     WebVis/fields.mjs
+added     +458   -0     WebVis/hdf5-reader.mjs
+added     +14    -0     WebVis/node_modules/.package-lock.json
+added     +9     -0     WebVis/node_modules/h5wasm/.editorconfig
+added     +13    -0     WebVis/node_modules/h5wasm/.github/dependabot.yml
+added     +80    -0     WebVis/node_modules/h5wasm/.github/workflows/test-publish.yml
+added     +498   -0     WebVis/node_modules/h5wasm/CHANGELOG.md
+added     +101   -0     WebVis/node_modules/h5wasm/CMakeLists.txt
+added     +23    -0     WebVis/node_modules/h5wasm/DEVELOPER.md
+added     +141   -0     WebVis/node_modules/h5wasm/LICENSE.txt
+added     +557   -0     WebVis/node_modules/h5wasm/README.md
+added     +68    -0     WebVis/node_modules/h5wasm/dist/esm/file_handlers.js
+added     +1208  -0     WebVis/node_modules/h5wasm/dist/esm/hdf5_hl.js
+added     +0     -0     WebVis/node_modules/h5wasm/dist/esm/hdf5_util.js
+added     +30830 -0     WebVis/node_modules/h5wasm/dist/iife/h5wasm.js
+added     +1208  -0     WebVis/node_modules/h5wasm/dist/node/hdf5_hl.js
+added     +2     -0     WebVis/node_modules/h5wasm/dist/node/hdf5_util.js
+added     +45    -0     WebVis/node_modules/h5wasm/package.json
+added     +380   -0     WebVis/node_modules/h5wasm/src/emscripten.d.ts
+added     +74    -0     WebVis/node_modules/h5wasm/src/file_handlers.ts
+added     +209   -0     WebVis/node_modules/h5wasm/src/hdf5_hl.d.ts
+added     +1486  -0     WebVis/node_modules/h5wasm/src/hdf5_hl.ts
+added     +1532  -0     WebVis/node_modules/h5wasm/src/hdf5_util.cc
+added     +3     -0     WebVis/node_modules/h5wasm/src/hdf5_util.d.ts
+added     +159   -0     WebVis/node_modules/h5wasm/src/hdf5_util_helpers.d.ts
+added     +4     -0     WebVis/node_modules/h5wasm/src/node_esm_shim.js
+added     +0     -0     WebVis/node_modules/h5wasm/test/array.h5
+added     +25    -0     WebVis/node_modules/h5wasm/test/bigendian_read.mjs
+added     +47    -0     WebVis/node_modules/h5wasm/test/bool_test.mjs
+added     +49    -0     WebVis/node_modules/h5wasm/test/chunks_resize.mjs
+added     +128   -0     WebVis/node_modules/h5wasm/test/compound_and_array_test.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/compressed.h5
+added     +277   -0     WebVis/node_modules/h5wasm/test/create_compound_dataset.mjs
+added     +54    -0     WebVis/node_modules/h5wasm/test/create_delete_attributes.mjs
+added     +90    -0     WebVis/node_modules/h5wasm/test/create_group_dataset.mjs
+added     +93    -0     WebVis/node_modules/h5wasm/test/create_read_compressed.mjs
+added     +97    -0     WebVis/node_modules/h5wasm/test/create_read_links.mjs
+added     +96    -0     WebVis/node_modules/h5wasm/test/create_read_references.mjs
+added     +33    -0     WebVis/node_modules/h5wasm/test/datatype_test.mjs
+added     +60    -0     WebVis/node_modules/h5wasm/test/dimension_labels.mjs
+added     +79    -0     WebVis/node_modules/h5wasm/test/dimension_scales.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/empty.h5
+added     +40    -0     WebVis/node_modules/h5wasm/test/empty_dataset_and_attrs.mjs
+added     +34    -0     WebVis/node_modules/h5wasm/test/filters_test.mjs
+added     +321   -0     WebVis/node_modules/h5wasm/test/libver_test.mjs
+added     +46    -0     WebVis/node_modules/h5wasm/test/make_test_files.py
+added     +18    -0     WebVis/node_modules/h5wasm/test/nonthrowing_error_handler.mjs
+added     +118   -0     WebVis/node_modules/h5wasm/test/overwrite_dataset.mjs
+added     +49    -0     WebVis/node_modules/h5wasm/test/subarray_write_test.mjs
+added     +91    -0     WebVis/node_modules/h5wasm/test/swmr_test.mjs
+added     +77    -0     WebVis/node_modules/h5wasm/test/test.mjs
+added     +58    -0     WebVis/node_modules/h5wasm/test/test_throwing_error_handler.mjs
+added     +80    -0     WebVis/node_modules/h5wasm/test/to_array_test.mjs
+added     +115   -0     WebVis/node_modules/h5wasm/test/track_order.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/vlen.h5
+added     +65    -0     WebVis/node_modules/h5wasm/test/vlen_test.mjs
+added     +21    -0     WebVis/package-lock.json
+added     +13    -0     WebVis/package.json
+added     +135   -0     WebVis/public/app.mjs
+added     +1     -0     WebVis/public/colormaps/maps.json
+added     +272   -0     WebVis/public/controller.mjs
+added     +37    -0     WebVis/public/index.html
+added     +363   -0     WebVis/public/model.mjs
+added     +250   -0     WebVis/public/overlays.mjs
+added     +529   -0     WebVis/public/style.css
+added     +35    -0     WebVis/public/time-display.mjs
+added     +119   -0     WebVis/public/title-render.mjs
+added     +160   -0     WebVis/public/views/ColourBar.mjs
+added     +111   -0     WebVis/public/views/ControlPanel.mjs
+added     +892   -0     WebVis/public/views/FieldCanvas.mjs
+added     +71    -0     WebVis/public/views/HeaderBanner.mjs
+added     +9     -0     WebVis/public/views/LoadingOverlay.mjs
+added     +644   -0     WebVis/public/views/PanelView.mjs
+added     +37    -0     WebVis/public/views/StatusBar.mjs
+added     +131   -0     WebVis/public/views/TitleInput.mjs
+added     +352   -0     WebVis/server.mjs
+added     +59    -0     WebVis/test-reader.mjs
+added     +207   -0     misc/aniso_fstrain/calibrate/aniso_data.py
+added     +330   -0     misc/aniso_fstrain/calibrate/calibrate_amphibole.py
+added     +175   -0     misc/aniso_fstrain/calibrate/calibrate_calcite.py
+added     +227   -0     misc/aniso_fstrain/calibrate/calibrate_olivine_damped.py
+added     +216   -0     misc/aniso_fstrain/calibrate/calibrate_olivine_hansen.py
+added     +150   -0     misc/aniso_fstrain/calibrate/calibrate_quartz.py
+added     +217   -0     misc/aniso_fstrain/calibrate/calibrate_quartz_mica.py
+added     +203   -0     misc/aniso_fstrain/calibrate/lsq_quality_gate.py
+added     +302   -0     misc/aniso_fstrain/calibrate/make_derived.py
+added     +64    -0     misc/aniso_fstrain/data/amphibole/raw_Ko_Jung_2015_NatComms_table2.csv
+added     +13    -0     misc/aniso_fstrain/data/calcite/derived_HighT_8pts.csv
+added     +11    -0     misc/aniso_fstrain/data/calcite/derived_LowT_Barnhoorn04_7pts.csv
+added     +25    -0     misc/aniso_fstrain/data/calcite/derived_combined_15pts_filtered.csv
+added     +29    -0     misc/aniso_fstrain/data/calcite/raw_Barnhoorn_etal_2004_JSG.csv
+added     +40    -0     misc/aniso_fstrain/data/calcite/raw_Bruijn_etal_2011_Tectonophysics.csv
+added     +21    -0     misc/aniso_fstrain/data/calcite/raw_Pieri_etal_2001_Tectonophysics.csv
+added     +12    -0     misc/aniso_fstrain/data/calcite/raw_Schmid_1976_Tectonophysics_table1.csv
+added     +41    -0     misc/aniso_fstrain/data/calcite/raw_Schuster_etal_2018_JSG.csv
+added     +39    -0     misc/aniso_fstrain/data/olivine/derived_Bernard19_gammaEq_M.csv
+added     +20    -0     misc/aniso_fstrain/data/olivine/derived_Boneh14_gammaEq_M.csv
+added     +8     -0     misc/aniso_fstrain/data/olivine/derived_Bystricky00_Mskemer.csv
+added     +101   -0     misc/aniso_fstrain/data/olivine/derived_DampedOlivine_93pts.csv
+added     +44    -0     misc/aniso_fstrain/data/olivine/derived_HansenGroup_38pts.csv
+added     +33    -0     misc/aniso_fstrain/data/olivine/derived_Kumamoto19_gamma_M.csv
+added     +15    -0     misc/aniso_fstrain/data/olivine/derived_Tasaka16_gamma_M.csv
+added     +85    -0     misc/aniso_fstrain/data/olivine/raw_Bernard19_M_J_pairs.csv
+added     +51    -0     misc/aniso_fstrain/data/olivine/raw_Bernard_etal_2019_G3.csv
+added     +38    -0     misc/aniso_fstrain/data/olivine/raw_Boneh_Skemer_2014_EPSL.csv
+added     +16    -0     misc/aniso_fstrain/data/olivine/raw_Bystricky_etal_2000_Science.csv
+added     +17    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2012_Nature.csv
+added     +41    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2014_EPSL.csv
+added     +28    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2016_EPSL.csv
+added     +47    -0     misc/aniso_fstrain/data/olivine/raw_Kumamoto_etal_2019_JGR.csv
+added     +35    -0     misc/aniso_fstrain/data/olivine/raw_Tasaka_etal_2016_JGR.csv
+added     +36    -0     misc/aniso_fstrain/data/plag_pyroxene/raw_Marti_etal_2018_SolidEarth.csv
+added     +43    -0     misc/aniso_fstrain/data/quartz/derived_Blackford24_38pts.csv
+added     +20    -0     misc/aniso_fstrain/data/quartz/derived_Pennacchioni10_17pts.csv
+added     +55    -0     misc/aniso_fstrain/data/quartz/raw_Blackford_etal_2024_Tectonics.csv
+added     +57    -0     misc/aniso_fstrain/data/quartz/raw_Pennacchioni_etal_2010_JGR.csv
+added     +0     -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.png
+added     +167   -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.py
+added     +31    -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.txt
+added     +50    -0     misc/aniso_fstrain/data/quartz_mica/raw_Tokle_etal_2023_JSG.csv
+added     +0     -0     misc/aniso_fstrain/img/calcite_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_all_datasets.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_damped_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_hansen_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/quartz_calibration.png
+added     +192   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_calcite.py
+added     +220   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_olivine.py
+added     +176   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_quartz.py
+added     +425   -0     misc/aniso_fstrain/notes/boneh2021_delta_relaxation.md
+added     +475   -0     misc/aniso_fstrain/notes/calcite_calibration.md
+added     +202   -0     misc/aniso_fstrain/notes/case15_calibration.md
+added     +347   -0     misc/aniso_fstrain/notes/hansen2012_comparison.md
+added     +280   -0     misc/aniso_fstrain/notes/olivine_calibration.md
+added     +662   -0     misc/aniso_fstrain/notes/quartz_calibration.md
+added     +264   -0     misc/benchmark-aws.sh
+added     +157   -0     misc/benchmark-ec2-setup.sh
+added     +161   -0     misc/benchmark-preflight.sh
+added     +225   -0     misc/benchmark-report.sh
+added     +425   -0     misc/benchmark.sh
+added     +376   -0     misc/perf_sweep.py
+added     +2     -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/.openspec.yaml
+added     +112   -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/design.md
+added     +31    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/proposal.md
+added     +54    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/field-renderer/spec.md
+added     +97    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/multi-panel-layout/spec.md
+added     +158   -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/title-interpolation/spec.md
+added     +20    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/web-server/spec.md
+added     +85    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/web-ui/spec.md
+added     +86    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/.openspec.yaml
+added     +127   -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/design.md
+added     +73    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/benchmark-solvi/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-density-tests/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/l2-error-framework/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/skill-testing-guide/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/.openspec.yaml
+added     +116   -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/design.md
+added     +49    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/proposal.md
+added     +36    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/specs/scenario-quick-verify/spec.md
+added     +85    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/specs/scenario-rift-combined-yield/spec.md
+added     +30    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-10-logging-utility/.openspec.yaml
+added     +211   -0     openspec/changes/archive/2026-04-10-logging-utility/design.md
+added     +32    -0     openspec/changes/archive/2026-04-10-logging-utility/proposal.md
+added     +147   -0     openspec/changes/archive/2026-04-10-logging-utility/specs/log-api/spec.md
+added     +75    -0     openspec/changes/archive/2026-04-10-logging-utility/specs/phase-timing/spec.md
+added     +93    -0     openspec/changes/archive/2026-04-10-logging-utility/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/design.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/benchmark-solvi/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-density-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/l2-error-framework/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/skill-testing-guide/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/.openspec.yaml
+added     +116   -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/HANDOFF.md
+added     +194   -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/design.md
+added     +46    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/proposal.md
+added     +99    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/aws-benchmark-automation/spec.md
+added     +91    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/perf-scenario-integration/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/scenario-rift-combined-yield/spec.md
+added     +76    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/scenario-rift-comprehensive/spec.md
+added     +47    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/skill-aws-benchmarking/spec.md
+added     +81    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/.openspec.yaml
+added     +67    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/design.md
+added     +25    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/proposal.md
+added     +14    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/specs/phase-timing/spec.md
+added     +57    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/specs/thermal-factorization-cache/spec.md
+added     +39    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/.openspec.yaml
+added     +98    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/design.md
+added     +34    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/proposal.md
+added     +93    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/specs/full-phase-coverage/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/specs/phase-timing/spec.md
+added     +58    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/tasks.md
+added     +81    -0     openspec/changes/archive/2026-04-13-comprehensive-perf-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/.openspec.yaml
+added     +81    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/design.md
+added     +32    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/proposal.md
+added     +38    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/specs/cholmod-threading/spec.md
+added     +8     -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/specs/phase-timing/spec.md
+added     +59    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/.openspec.yaml
+added     +58    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/design.md
+added     +27    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/proposal.md
+added     +23    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/specs/accumulated-strain-omp/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/.openspec.yaml
+added     +172   -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/design.md
+added     +40    -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/proposal.md
+added     +143   -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/specs/interp-buffer-pool/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/.openspec.yaml
+added     +104   -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/design.md
+added     +31    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/proposal.md
+added     +78    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/specs/pcg-thermal-solve/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/.openspec.yaml
+added     +202   -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/design.md
+added     +30    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/proposal.md
+added     +52    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/specs/persistent-omp-region/spec.md
+added     +8     -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/specs/phase-timing/spec.md
+added     +74    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/.openspec.yaml
+added     +93    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/design.md
+added     +26    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-oceanic-cooling/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-thermal-tests/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-thermoelastic-coupling/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/.openspec.yaml
+added     +218   -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/design.md
+added     +28    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/proposal.md
+added     +120   -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/specs/fused-p2g-interp/spec.md
+added     +54    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/specs/interp-buffer-pool/spec.md
+added     +58    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/.openspec.yaml
+added     +190   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/design.md
+added     +38    -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/proposal.md
+added     +107   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/field-renderer/spec.md
+added     +140   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/hdf5-reader/spec.md
+added     +137   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/web-server/spec.md
+added     +133   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/web-ui/spec.md
+added     +86    -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/.openspec.yaml
+added     +71    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/design.md
+added     +31    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/proposal.md
+added     +55    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/specs/local-m1-benchmark/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-validate-optimizations/.openspec.yaml
+added     +90    -0     openspec/changes/archive/2026-04-14-validate-optimizations/design.md
+added     +35    -0     openspec/changes/archive/2026-04-14-validate-optimizations/proposal.md
+added     +27    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/interp-equivalence-test/spec.md
+added     +67    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/optimization-docs/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/pcg-convergence-export/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/pcg-thermal-solve/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/thermal-accuracy-comparison/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/validation-visualisation/spec.md
+added     +47    -0     openspec/changes/archive/2026-04-14-validate-optimizations/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/design.md
+added     +27    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/proposal.md
+added     +44    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/specs/thermal-pressurisation-plot/spec.md
+added     +6     -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/.openspec.yaml
+added     +127   -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/design.md
+added     +73    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/benchmark-solvi/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-density-tests/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/l2-error-framework/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/skill-testing-guide/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/.openspec.yaml
+added     +162   -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/design.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/proposal.md
+added     +57    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/field-renderer/spec.md
+added     +312   -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/overlay-layers/spec.md
+added     +69    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/web-ui/spec.md
+added     +72    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/.openspec.yaml
+added     +81    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/design.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/proposal.md
+added     +71    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/field-renderer/spec.md
+added     +96    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/multi-panel-layout/spec.md
+added     +73    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/web-ui/spec.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/.openspec.yaml
+added     +84    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/design.md
+added     +34    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/proposal.md
+added     +63    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-cache/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-labels/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-renderer/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/hdf5-reader/spec.md
+added     +73    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/time-display/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/web-server/spec.md
+added     +132   -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/web-ui/spec.md
+added     +84    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-add-particle-recycling/.openspec.yaml
+added     +87    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/design.md
+added     +27    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/proposal.md
+added     +39    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/ci-blankenbach-convection/spec.md
+added     +51    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/particle-excess-deactivation/spec.md
+added     +43    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/skill-particle-reseeding/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/.openspec.yaml
+added     +122   -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/design.md
+added     +33    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/proposal.md
+added     +79    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/specs/improved-reseeding/spec.md
+added     +49    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/specs/rotation-advection-test/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/.openspec.yaml
+added     +168   -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/design.md
+added     +43    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/proposal.md
+added     +101   -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/specs/reseeding-visual-guide/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/specs/skill-particle-reseeding/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/.openspec.yaml
+added     +65    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_a/run_sweep.sh
+added     +33    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_b/walk_81_cycle1.txt
+added     +114   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_b/walk_vcycle.py
+added     +156   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/design.md
+added     +63    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/proposal.md
+added     +100   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/specs/gmg-stokes-solver/spec.md
+added     +118   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/.openspec.yaml
+added     +228   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/design.md
+added     +52    -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/proposal.md
+added     +265   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/specs/gmg-stokes-solver/spec.md
+added     +203   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/.openspec.yaml
+added     +223   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/design.md
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_active_mask.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_fgmres_controlflow.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_picard_newton.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_stencil_bridge.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_vcycle_tree.png
+added     +465   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/make_defence_figs.py
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_memory_scaling.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_strong_scaling.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_walltime_comparison.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_sol_cx_41.gif
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_01.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_02.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_03.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_04.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_05.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_06.png
+added     +65    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/proposal.md
+added     +93    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/gmg-defence-materials/spec.md
+added     +101   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/gmg-performance-harness/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/skill-solvers/spec.md
+added     +132   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/.openspec.yaml
+added     +156   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/RETROSPECTIVE.md
+added     +287   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/design.md
+added     +121   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/proposal.md
+added     +55    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-defence-materials/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-performance-harness/spec.md
+added     +157   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-stokes-solver/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/.openspec.yaml
+added     +180   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/RETROSPECTIVE.md
+added     +123   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/design.md
+added     +35    -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/proposal.md
+added     +157   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/specs/cholmod-factor-recycling/spec.md
+added     +87    -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/.openspec.yaml
+added     +146   -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/design.md
+added     +29    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/proposal.md
+added     +58    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/specs/ci-popov2025-vevp-tests/spec.md
+added     +56    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/.openspec.yaml
+added     +134   -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/design.md
+added     +42    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/proposal.md
+added     +97    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/specs/benchmark-solcx/spec.md
+added     +60    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/specs/set-grid-density-callback/spec.md
+added     +54    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/.openspec.yaml
+added     +113   -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/design.md
+added     +34    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/proposal.md
+added     +70    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/specs/ci-grain-size-evolution/spec.md
+added     +56    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/.openspec.yaml
+added     +125   -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/design.md
+added     +30    -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/proposal.md
+added     +109   -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/specs/ci-grain-size-evolution/spec.md
+added     +62    -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/.openspec.yaml
+added     +167   -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/design.md
+added     +39    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/proposal.md
+added     +83    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/specs/ci-finite-strain-anisotropy/spec.md
+added     +49    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/.openspec.yaml
+added     +150   -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/design.md
+added     +38    -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/proposal.md
+added     +120   -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/specs/ci-finite-strain-anisotropy/spec.md
+added     +54    -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/.openspec.yaml
+added     +160   -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/design.md
+added     +56    -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/proposal.md
+added     +100   -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/specs/ci-gse-anisotropy-coupled/spec.md
+added     +59    -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/.openspec.yaml
+added     +228   -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/design.md
+added     +50    -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/proposal.md
+added     +178   -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/specs/ci-finite-strain-anisotropy/spec.md
+added     +44    -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/.openspec.yaml
+added     +284   -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/design.md
+added     +59    -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/proposal.md
+added     +102   -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/specs/ci-finite-strain-anisotropy/spec.md
+added     +67    -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/design.md
+added     +55    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/proposal.md
+added     +134   -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/specs/aniso-delta-relaxation/spec.md
+added     +22    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/specs/ci-finite-strain-anisotropy/spec.md
+added     +67    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/.openspec.yaml
+added     +222   -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/design.md
+added     +46    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/proposal.md
+added     +44    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/specs/aniso-delta-relaxation/spec.md
+added     +88    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/specs/aniso-init-from-finite-strain/spec.md
+added     +100   -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/tasks.md
+added     +23    -0     openspec/specs/accumulated-strain-omp/spec.md
+added     +162   -0     openspec/specs/aniso-delta-relaxation/spec.md
+added     +97    -0     openspec/specs/aniso-init-from-finite-strain/spec.md
+modified  +5     -9     openspec/specs/benchmark-anisotropy/spec.md
+added     +101   -0     openspec/specs/benchmark-solcx/spec.md
+added     +161   -0     openspec/specs/cholmod-factor-recycling/spec.md
+added     +38    -0     openspec/specs/cholmod-threading/spec.md
+modified  +31    -2     openspec/specs/ci-blankenbach-convection/spec.md
+modified  +15    -7     openspec/specs/ci-density-tests/spec.md
+added     +821   -0     openspec/specs/ci-finite-strain-anisotropy/spec.md
+added     +178   -0     openspec/specs/ci-grain-size-evolution/spec.md
+added     +100   -0     openspec/specs/ci-gse-anisotropy-coupled/spec.md
+modified  +1     -1     openspec/specs/ci-neumann-bc-tests/spec.md
+added     +38    -0     openspec/specs/ci-oceanic-cooling/spec.md
+added     +56    -0     openspec/specs/ci-popov2025-vevp-tests/spec.md
+modified  +2     -7     openspec/specs/ci-shear-heating-tests/spec.md
+modified  +7     -14    openspec/specs/ci-thermal-tests/spec.md
+added     +39    -0     openspec/specs/ci-thermoelastic-coupling/spec.md
+modified  +5     -30    openspec/specs/ci-velocity-field-tests/spec.md
+modified  +1     -8     openspec/specs/ci-viscoelastic-tests/spec.md
+added     +63    -0     openspec/specs/field-cache/spec.md
+added     +53    -0     openspec/specs/field-labels/spec.md
+added     +57    -0     openspec/specs/field-renderer/spec.md
+added     +93    -0     openspec/specs/full-phase-coverage/spec.md
+added     +120   -0     openspec/specs/fused-p2g-interp/spec.md
+added     +28    -0     openspec/specs/gmg-defence-materials/spec.md
+added     +28    -0     openspec/specs/gmg-performance-harness/spec.md
+added     +33    -0     openspec/specs/gmg-stokes-solver/spec.md
+added     +52    -0     openspec/specs/hdf5-reader/spec.md
+added     +79    -0     openspec/specs/improved-reseeding/spec.md
+added     +54    -0     openspec/specs/interp-buffer-pool/spec.md
+added     +27    -0     openspec/specs/interp-equivalence-test/spec.md
+added     +147   -0     openspec/specs/log-api/spec.md
+added     +96    -0     openspec/specs/multi-panel-layout/spec.md
+added     +67    -0     openspec/specs/optimization-docs/spec.md
+added     +312   -0     openspec/specs/overlay-layers/spec.md
+added     +27    -0     openspec/specs/pcg-convergence-export/spec.md
+added     +28    -0     openspec/specs/pcg-thermal-solve/spec.md
+added     +51    -0     openspec/specs/phase-timing/spec.md
+added     +105   -0     openspec/specs/reseeding-visual-guide/spec.md
+added     +49    -0     openspec/specs/rotation-advection-test/spec.md
+added     +36    -0     openspec/specs/scenario-quick-verify/spec.md
+added     +85    -0     openspec/specs/scenario-rift-combined-yield/spec.md
+added     +64    -0     openspec/specs/set-grid-density-callback/spec.md
+added     +76    -0     openspec/specs/skill-particle-reseeding/spec.md
+modified  +92    -64    openspec/specs/skill-solvers/spec.md
+modified  +2     -68    openspec/specs/skill-testing-guide/spec.md
+added     +176   -0     openspec/specs/stokes-perf-stack/spec.md
+added     +34    -0     openspec/specs/thermal-accuracy-comparison/spec.md
+added     +57    -0     openspec/specs/thermal-factorization-cache/spec.md
+added     +44    -0     openspec/specs/thermal-pressurisation-plot/spec.md
+added     +73    -0     openspec/specs/time-display/spec.md
+added     +162   -0     openspec/specs/title-interpolation/spec.md
+added     +34    -0     openspec/specs/validation-visualisation/spec.md
+added     +113   -0     openspec/specs/web-server/spec.md
+added     +91    -0     openspec/specs/web-ui/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### TESTS/BoundaryConditionTests.cpp
+@@ -1,153 +1,180 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class BoundaryCondition : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase   = SetPhase,
+-                    .SetDensity = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureOrSimpleShearBCVx,
+-                    .SetBCVz = SetPureOrSimpleShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-
+-  static SetBC SetNoSlipBCVx(MdoodzInput *input, POSITION position, Coordinates coordinates) {
+-    SetBC bc;
+-    if (position == N || position == NW || position == NE ||
+-        position == S || position == SW || position == SE) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else if (position == W || position == E) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else {
+-      bc.value = 0.0;
+-      bc.type  = -1;
+-    }
+-    return bc;
+-  }
+-
+-  static SetBC SetNoSlipBCVz(MdoodzInput *input, POSITION position, Coordinates coordinates) {
+-    SetBC bc;
+-    if (position == W || position == E ||
+-        position == SW || position == SE || position == NW || position == NE) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else if (position == S || position == N) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else {
+-      bc.value = 0.0;
+-      bc.type  = -1;
+-    }
+-    return bc;
+-  }
+-};
+-
+-TEST_F(BoundaryCondition, PeriodicSimpleShear) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GT(stepsCount, 0);
+-  // For periodic BCs, pressure should be well-defined
+-  double maxP = getMaxFieldValue(fileName, "Centers", "P");
+-  double minP = getMinFieldValue(fileName, "Centers", "P");
+-  printf("Pressure range: min=%e, max=%e\n", minP, maxP);
+-  // Pressure should be finite
+-  EXPECT_LT(maxP, 1e40);
+-  EXPECT_GT(minP, -1e40);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(BoundaryCondition, FreeSlipPureShear) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GT(stepsCount, 0);
+-  // Free slip: shear stress should be near zero at boundaries
+-  // Check that the solution converged and stresses are bounded
+-  double maxSxz = getMaxFieldValue(fileName, "Vertices", "sxz");
+-  double minSxz = getMinFieldValue(fileName, "Vertices", "sxz");
+-  printf("Shear stress range: min=%e, max=%e\n", minSxz, maxSxz);
+-  EXPECT_LT(maxSxz, 1e40);
+-  EXPECT_GT(minSxz, -1e40);
+-  // Velocity field check: Vx should be anti-symmetric (extensional in x)
+-  double maxVx = getMaxFieldValue(fileName, "VxNodes", "Vx");
+-  double minVx = getMinFieldValue(fileName, "VxNodes", "Vx");
+-  printf("Vx range: [%e, %e]\n", minVx, maxVx);
+-  EXPECT_GT(maxVx, 0.0);
+-  EXPECT_LT(minVx, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(BoundaryCondition, NoSlip) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
+-
+-  // Override with no-slip BCs
+-  MdoodzSetup noSlipSetup = {
+-          .SetParticles = new SetParticles_ff{
+-                  .SetPhase   = SetPhase,
+-                  .SetDensity = SetDensity,
+-          },
+-          .SetBCs = new SetBCs_ff{
+-                  .SetBCVx = SetNoSlipBCVx,
+-                  .SetBCVz = SetNoSlipBCVz,
+-          },
+-  };
+-
+-  RunMDOODZ(inputName, &noSlipSetup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GT(stepsCount, 0);
+-  // Solution should converge
+-  double maxP = getMaxFieldValue(fileName, "Centers", "P");
+-  printf("Max pressure: %e\n", maxP);
+-  EXPECT_LT(maxP, 1e40);
+-  // With no-slip BCs and gravity, velocities exist due to buoyancy but are bounded
+-  double maxAbsVx = getMaxAbsFieldValue(fileName, "VxNodes", "Vx");
+-  double maxAbsVz = getMaxAbsFieldValue(fileName, "VzNodes", "Vz");
+-  printf("Max |Vx|: %e, Max |Vz|: %e\n", maxAbsVx, maxAbsVz);
+-  EXPECT_LT(maxAbsVx, 1e40);
+-  EXPECT_LT(maxAbsVz, 1e40);
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class BoundaryCondition : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase   = SetPhase,
++                    .SetDensity = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureOrSimpleShearBCVx,
++                    .SetBCVz = SetPureOrSimpleShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++
++  static SetBC SetNoSlipBCVx(MdoodzInput *input, POSITION position, Coordinates coordinates) {
++    SetBC bc;
++    if (position == N || position == NW || position == NE ||
++        position == S || position == SW || position == SE) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else if (position == W || position == E) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else {
++      bc.value = 0.0;
++      bc.type  = -1;
++    }
++    return bc;
++  }
++
++  static SetBC SetNoSlipBCVz(MdoodzInput *input, POSITION position, Coordinates coordinates) {
++    SetBC bc;
++    if (position == W || position == E ||
++        position == SW || position == SE || position == NW || position == NE) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else if (position == S || position == N) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else {
++      bc.value = 0.0;
++      bc.type  = -1;
++    }
++    return bc;
++  }
++};
++
++TEST_F(BoundaryCondition, PeriodicSimpleShear) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GT(stepsCount, 0);
++  // For periodic BCs, pressure should be well-defined
++  double maxP = getMaxFieldValue(fileName, "Centers", "P");
++  double minP = getMinFieldValue(fileName, "Centers", "P");
++  printf("Pressure range: min=%e, max=%e\n", minP, maxP);
++  // Pressure should be finite
++  EXPECT_LT(maxP, 1e40);
++  EXPECT_GT(minP, -1e40);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(BoundaryCondition, FreeSlipPureShear) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GT(stepsCount, 0);
++  // Free slip: shear stress should be near zero at boundaries
++  // Check that the solution converged and stresses are bounded
++  double maxSxz = getMaxFieldValue(fileName, "Vertices", "sxz");
++  double minSxz = getMinFieldValue(fileName, "Vertices", "sxz");
++  printf("Shear stress range: min=%e, max=%e\n", minSxz, maxSxz);
++  EXPECT_LT(maxSxz, 1e40);
++  EXPECT_GT(minSxz, -1e40);
++  // Velocity field check: Vx should be anti-symmetric (extensional in x)
++  double maxVx = getMaxFieldValue(fileName, "VxNodes", "Vx");
++  double minVx = getMinFieldValue(fileName, "VxNodes", "Vx");
++  printf("Vx range: [%e, %e]\n", minVx, maxVx);
++  EXPECT_GT(maxVx, 0.0);
++  EXPECT_LT(minVx, 0.0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(BoundaryCondition, NoSlip) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "BoundaryCondition/%s.txt", testName);
++
++  // Override with no-slip BCs
++  MdoodzSetup noSlipSetup = {
++          .SetParticles = new SetParticles_ff{
++                  .SetPhase   = SetPhase,
++                  .SetDensity = SetDensity,
++          },
++          .SetBCs = new SetBCs_ff{
++                  .SetBCVx = SetNoSlipBCVx,
++                  .SetBCVz = SetNoSlipBCVz,
++          },
++  };
++
++  RunMDOODZ(inputName, &noSlipSetup);
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GT(stepsCount, 0);
++  // Solution should converge
++  double maxP = getMaxFieldValue(fileName, "Centers", "P");
++  printf("Max pressure: %e\n", maxP);
++  EXPECT_LT(maxP, 1e40);
++  // With no-slip BCs and gravity, velocities exist due to buoyancy but are bounded
++  double maxAbsVx = getMaxAbsFieldValue(fileName, "VxNodes", "Vx");
+
+### TESTS/CompressibilityTests.cpp
+@@ -1,69 +1,96 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class Compressibility : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase   = SetPhase,
+-                    .SetDensity = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureShearBCVx,
+-                    .SetBCVz = SetPureShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-};
+-
+-TEST_F(Compressibility, DilatantFlow) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "Compressibility/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-
+-  // With compressible=1, elastic compressibility (bet > 0) allows
+-  // small velocity divergence in response to pressure changes
+-  // Check that the simulation completes and produces valid fields
+-  double maxP = getMaxFieldValue(fileName, "Centers", "P");
+-  double minP = getMinFieldValue(fileName, "Centers", "P");
+-  printf("Pressure range: min=%e, max=%e\n", minP, maxP);
+-  EXPECT_LT(fabs(maxP), 1e40);
+-
+-  // Viscosity should be positive and bounded
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("Viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class Compressibility : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase   = SetPhase,
++                    .SetDensity = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureShearBCVx,
++                    .SetBCVz = SetPureShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++};
++
++TEST_F(Compressibility, DilatantFlow) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "Compressibility/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++
++  // With compressible=1, elastic compressibility (bet > 0) allows
++  // small velocity divergence in response to pressure changes
++  // Check that the simulation completes and produces valid fields
++  double maxP = getMaxFieldValue(fileName, "Centers", "P");
++  double minP = getMinFieldValue(fileName, "Centers", "P");
++  printf("Pressure range: min=%e, max=%e\n", minP, maxP);
++  EXPECT_LT(fabs(maxP), 1e40);
++
++  // Viscosity should be positive and bounded
++  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
++  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
++  printf("Viscosity range: min=%e, max=%e\n", minEta, maxEta);
++  EXPECT_GT(minEta, 0.0);
++
++  free(inputName);
++  free(fileName);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(Compressibility, DilatantFlowInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "Compressibility/DilatantFlowInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "DilatantFlowInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(Compressibility, DilatantFlowInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "Compressibility/DilatantFlowInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "DilatantFlowInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/ConvergenceRateTests.cpp
+@@ -1,114 +1,141 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class ConvergenceRate : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase       = SetPhase,
+-                    .SetTemperature = SetTemperature,
+-                    .SetDensity     = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureOrSimpleShearBCVx,
+-                    .SetBCVz = SetPureOrSimpleShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
+-    return (instance->model.user0 + zeroC) / instance->scaling.T;
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-};
+-
+-TEST_F(ConvergenceRate, NewtonPwl) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "ConvergenceRate/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int newtonSteps = getStepsCount(fileName);
+-  printf("Newton iterations for power-law: %d\n", newtonSteps);
+-
+-  // Newton should converge (0 means immediate convergence, which is valid)
+-  ASSERT_GE(newtonSteps, 0);
+-  // Newton should converge quickly (quadratic convergence, typically < 15)
+-  EXPECT_LT(newtonSteps, 15);
+-
+-  // Check that residuals are below the non-linear tolerance
+-  double finalRes = getFinalResidual(fileName, "rx_abs");
+-  printf("Newton final residual: %e\n", finalRes);
+-  EXPECT_LT(finalRes, 1e-8);
+-
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(ConvergenceRate, PicardPwl) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "ConvergenceRate/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int picardSteps = getStepsCount(fileName);
+-  printf("Picard iterations for power-law: %d\n", picardSteps);
+-
+-  // Picard should converge (0 means immediate convergence, valid for well-conditioned problems)
+-  ASSERT_GE(picardSteps, 0);
+-  // Picard should converge (linearly) within reasonable iterations
+-  EXPECT_LT(picardSteps, 40);
+-
+-  // Check final residual
+-  double finalRes = getFinalResidual(fileName, "rx_abs");
+-  printf("Picard final residual: %e\n", finalRes);
+-  EXPECT_LT(finalRes, 1e-8);
+-
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(ConvergenceRate, NewtonFasterThanPicard) {
+-  // This test requires both Newton and Picard to have already run
+-  // and compares their iteration counts from the HDF5 output
+-  char *newtonFile;
+-  asprintf(&newtonFile, "%s/%s", "NewtonPwl", "Output00001.gzip.h5");
+-  char *picardFile;
+-  asprintf(&picardFile, "%s/%s", "PicardPwl", "Output00001.gzip.h5");
+-
+-  int newtonSteps = getStepsCount(newtonFile);
+-  int picardSteps = getStepsCount(picardFile);
+-  printf("Newton: %d iterations, Picard: %d iterations\n", newtonSteps, picardSteps);
+-
+-  // Newton (quadratic convergence) should use fewer iterations than Picard (linear)
+-  EXPECT_LE(newtonSteps, picardSteps);
+-
+-  free(newtonFile);
+-  free(picardFile);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class ConvergenceRate : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhase,
++                    .SetTemperature = SetTemperature,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureOrSimpleShearBCVx,
++                    .SetBCVz = SetPureOrSimpleShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++};
++
++TEST_F(ConvergenceRate, NewtonPwl) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "ConvergenceRate/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int newtonSteps = getStepsCount(fileName);
++  printf("Newton iterations for power-law: %d\n", newtonSteps);
++
++  // Newton should converge (0 means immediate convergence, which is valid)
++  ASSERT_GE(newtonSteps, 0);
++  // Newton should converge quickly (quadratic convergence, typically < 15)
++  EXPECT_LT(newtonSteps, 15);
++
++  // Check that residuals are below the non-linear tolerance
++  double finalRes = getFinalResidual(fileName, "rx_abs");
++  printf("Newton final residual: %e\n", finalRes);
++  EXPECT_LT(finalRes, 1e-8);
++
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(ConvergenceRate, PicardPwl) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "ConvergenceRate/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int picardSteps = getStepsCount(fileName);
++  printf("Picard iterations for power-law: %d\n", picardSteps);
++
++  // Picard should converge (0 means immediate convergence, valid for well-conditioned problems)
++  ASSERT_GE(picardSteps, 0);
++  // Picard should converge (linearly) within reasonable iterations
++  EXPECT_LT(picardSteps, 40);
++
++  // Check final residual
++  double finalRes = getFinalResidual(fileName, "rx_abs");
++  printf("Picard final residual: %e\n", finalRes);
++  EXPECT_LT(finalRes, 1e-8);
++
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(ConvergenceRate, NewtonFasterThanPicard) {
++  // This test requires both Newton and Picard to have already run
++  // and compares their iteration counts from the HDF5 output
++  char *newtonFile;
++  asprintf(&newtonFile, "%s/%s", "NewtonPwl", "Output00001.gzip.h5");
++  char *picardFile;
++  asprintf(&picardFile, "%s/%s", "PicardPwl", "Output00001.gzip.h5");
++
++  int newtonSteps = getStepsCount(newtonFile);
++  int picardSteps = getStepsCount(picardFile);
++  printf("Newton: %d iterations, Picard: %d iterations\n", newtonSteps, picardSteps);
++
++  // Newton (quadratic convergence) should use fewer iterations than Picard (linear)
++  EXPECT_LE(newtonSteps, picardSteps);
++
++  free(newtonFile);
++  free(picardFile);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(ConvergenceRate, NewtonPwlInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "ConvergenceRate/NewtonPwlInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "NewtonPwlInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(ConvergenceRate, NewtonPwlInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "ConvergenceRate/NewtonPwlInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "NewtonPwlInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/DensityTests.cpp
+@@ -167,3 +167,30 @@ TEST_F(Density, HydrostaticPressure) {
+   free(inputName);
+   free(fileName);
+ }
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(Density, HydrostaticPressureInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "Density/HydrostaticPressureInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "HydrostaticPressureInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(Density, HydrostaticPressureInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "Density/HydrostaticPressureInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "HydrostaticPressureInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/FiniteStrainTests.cpp
+@@ -1,76 +1,103 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class FiniteStrain : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase   = SetPhase,
+-                    .SetDensity = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureOrSimpleShearBCVx,
+-                    .SetBCVz = SetPureOrSimpleShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-};
+-
+-TEST_F(FiniteStrain, PureShearStrain) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "FiniteStrain/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  // Read output after 5 steps
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00005.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-
+-  // Finite strain tensor F = [[Fxx, Fxz],[Fzx, Fzz]]
+-  // In pure shear ALE mode, grid deforms with material so F tracks
+-  // cumulative deformation. After 5 steps of pure shear:
+-  double maxFxx = getMaxFieldValue(fileName, "Centers", "Fxx");
+-  double minFzz = getMinFieldValue(fileName, "Centers", "Fzz");
+-  double meanFxx = getMeanFieldValue(fileName, "Centers", "Fxx");
+-  double meanFzz = getMeanFieldValue(fileName, "Centers", "Fzz");
+-  printf("Max Fxx: %e, Min Fzz: %e\n", maxFxx, minFzz);
+-  printf("Mean Fxx: %e, Mean Fzz: %e\n", meanFxx, meanFzz);
+-
+-  // Fxx and Fzz should be positive (physical requirement)
+-  EXPECT_GT(maxFxx, 0.0);
+-  EXPECT_GT(minFzz, 0.0);
+-
+-  // Check area conservation: det(F) = Fxx*Fzz - Fxz*Fzx ~ 1 for incompressible flow
+-  double detF = meanFxx * meanFzz;
+-  printf("det(F) ~ %e\n", detF);
+-  // det(F) should be close to 1 (volume preserving)
+-  EXPECT_NEAR(detF, 1.0, 0.2);
+-
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class FiniteStrain : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase   = SetPhase,
++                    .SetDensity = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureOrSimpleShearBCVx,
++                    .SetBCVz = SetPureOrSimpleShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++};
++
++TEST_F(FiniteStrain, PureShearStrain) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "FiniteStrain/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  // Read output after 5 steps
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00005.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++
++  // Finite strain tensor F = [[Fxx, Fxz],[Fzx, Fzz]]
++  // In pure shear ALE mode, grid deforms with material so F tracks
++  // cumulative deformation. After 5 steps of pure shear:
++  double maxFxx = getMaxFieldValue(fileName, "Centers", "Fxx");
++  double minFzz = getMinFieldValue(fileName, "Centers", "Fzz");
++  double meanFxx = getMeanFieldValue(fileName, "Centers", "Fxx");
++  double meanFzz = getMeanFieldValue(fileName, "Centers", "Fzz");
++  printf("Max Fxx: %e, Min Fzz: %e\n", maxFxx, minFzz);
++  printf("Mean Fxx: %e, Mean Fzz: %e\n", meanFxx, meanFzz);
++
++  // Fxx and Fzz should be positive (physical requirement)
++  EXPECT_GT(maxFxx, 0.0);
++  EXPECT_GT(minFzz, 0.0);
++
++  // Check area conservation: det(F) = Fxx*Fzz - Fxz*Fzx ~ 1 for incompressible flow
++  double detF = meanFxx * meanFzz;
++  printf("det(F) ~ %e\n", detF);
++  // det(F) should be close to 1 (volume preserving)
++  EXPECT_NEAR(detF, 1.0, 0.2);
++
++  free(inputName);
++  free(fileName);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(FiniteStrain, PureShearStrainInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "FiniteStrain/PureShearStrainInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "PureShearStrainInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(FiniteStrain, PureShearStrainInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "FiniteStrain/PureShearStrainInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "PureShearStrainInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/FreeSurfaceTests.cpp
+@@ -1,113 +1,140 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class FreeSurface : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .BuildInitialTopography = new BuildInitialTopography_ff{
+-                    .SetSurfaceZCoord = SetSurfaceZCoord,
+-            },
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase       = SetPhase,
+-                    .SetTemperature = SetTemperature,
+-                    .SetDensity     = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetNoSlipBCVx,
+-                    .SetBCVz = SetNoSlipBCVz,
+-            },
+-    };
+-  }
+-
+-  static double SetSurfaceZCoord(MdoodzInput *instance, double x_coord) {
+-    return 0.0;
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    // Place a dense block in the upper middle
+-    const double z0 = 0.5 * (instance->model.zmax - instance->model.zmin) * 0.3;
+-    if (coordinates.x * coordinates.x + (coordinates.z - z0) * (coordinates.z - z0) < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
+-    return (instance->model.user0 + zeroC) / instance->scaling.T;
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-
+-  static SetBC SetNoSlipBCVx(MdoodzInput *input, POSITION position, Coordinates coordinates) {
+-    SetBC bc;
+-    if (position == N || position == NW || position == NE ||
+-        position == S || position == SW || position == SE ||
+-        position == W || position == E) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else {
+-      bc.value = 0.0;
+-      bc.type  = -1;
+-    }
+-    return bc;
+-  }
+-
+-  static SetBC SetNoSlipBCVz(MdoodzInput *input, POSITION position, Coordinates coordinates) {
+-    SetBC bc;
+-    if (position == W || position == E ||
+-        position == SW || position == SE || position == NW || position == NE ||
+-        position == S || position == N) {
+-      bc.value = 0.0;
+-      bc.type  = 0;
+-    } else {
+-      bc.value = 0.0;
+-      bc.type  = -1;
+-    }
+-    return bc;
+-  }
+-};
+-
+-TEST_F(FreeSurface, SinkingBlock) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "FreeSurface/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  // Read output after 3 steps
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00003.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-
+-  // With free surface, a denser block (rho=3300 vs 3000) should sink under gravity
+-  // This creates vertical velocities and topographic deflection
+-  double maxVz = getMaxFieldValue(fileName, "VzNodes", "Vz");
+-  double minVz = getMinFieldValue(fileName, "VzNodes", "Vz");
+-  printf("Vz range: [%e, %e]\n", minVz, maxVz);
+-
+-  // The block should generate non-zero vertical velocity (sinking)
+-  double maxAbsVz = fmax(fabs(maxVz), fabs(minVz));
+-  EXPECT_GT(maxAbsVz, 0.0);
+-
+-  // Pressure should be positive (lithostatic-like)
+-  double maxP = getMaxFieldValue(fileName, "Centers", "P");
+-  printf("Max pressure: %e\n", maxP);
+-  EXPECT_GT(maxP, 0.0);
+-
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class FreeSurface : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .BuildInitialTopography = new BuildInitialTopography_ff{
++                    .SetSurfaceZCoord = SetSurfaceZCoord,
++            },
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhase,
++                    .SetTemperature = SetTemperature,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetNoSlipBCVx,
++                    .SetBCVz = SetNoSlipBCVz,
++            },
++    };
++  }
++
++  static double SetSurfaceZCoord(MdoodzInput *instance, double x_coord) {
++    return 0.0;
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    // Place a dense block in the upper middle
++    const double z0 = 0.5 * (instance->model.zmax - instance->model.zmin) * 0.3;
++    if (coordinates.x * coordinates.x + (coordinates.z - z0) * (coordinates.z - z0) < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++
++  static SetBC SetNoSlipBCVx(MdoodzInput *input, POSITION position, Coordinates coordinates) {
++    SetBC bc;
++    if (position == N || position == NW || position == NE ||
++        position == S || position == SW || position == SE ||
++        position == W || position == E) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else {
++      bc.value = 0.0;
++      bc.type  = -1;
++    }
++    return bc;
++  }
++
++  static SetBC SetNoSlipBCVz(MdoodzInput *input, POSITION position, Coordinates coordinates) {
++    SetBC bc;
++    if (position == W || position == E ||
++        position == SW || position == SE || position == NW || position == NE ||
++        position == S || position == N) {
++      bc.value = 0.0;
++      bc.type  = 0;
++    } else {
++      bc.value = 0.0;
++      bc.type  = -1;
++    }
++    return bc;
++  }
++};
++
++TEST_F(FreeSurface, SinkingBlock) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "FreeSurface/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  // Read output after 3 steps
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00003.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++
++  // With free surface, a denser block (rho=3300 vs 3000) should sink under gravity
++  // This creates vertical velocities and topographic deflection
++  double maxVz = getMaxFieldValue(fileName, "VzNodes", "Vz");
++  double minVz = getMinFieldValue(fileName, "VzNodes", "Vz");
++  printf("Vz range: [%e, %e]\n", minVz, maxVz);
++
++  // The block should generate non-zero vertical velocity (sinking)
++  double maxAbsVz = fmax(fabs(maxVz), fabs(minVz));
++  EXPECT_GT(maxAbsVz, 0.0);
++
++  // Pressure should be positive (lithostatic-like)
++  double maxP = getMaxFieldValue(fileName, "Centers", "P");
++  printf("Max pressure: %e\n", maxP);
++  EXPECT_GT(maxP, 0.0);
++
++  free(inputName);
++  free(fileName);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(FreeSurface, SinkingBlockInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "FreeSurface/SinkingBlockInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "SinkingBlockInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(FreeSurface, SinkingBlockInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "FreeSurface/SinkingBlockInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "SinkingBlockInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/NeumannBCTests.cpp
+@@ -1,77 +1,104 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class NeumannBC : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase       = SetPhase,
+-                    .SetTemperature = SetTemperature,
+-                    .SetDensity     = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureShearBCVx,
+-                    .SetBCVz = SetPureShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    return 0;
+-  }
+-
+-  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
+-    return (instance->model.user0 + zeroC) / instance->scaling.T;
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-};
+-
+-TEST_F(NeumannBC, StressBCPureShear) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "NeumannBC/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-
+-  // The built-in SetPureShearBCVx uses type=13 (constant_shear_stress) on N/S
+-  // This implements free-slip: zero shear stress on horizontal boundaries
+-  // Verify that the shear stress is near zero on vertices (which includes boundaries)
+-  double maxSxz = getMaxFieldValue(fileName, "Vertices", "sxz");
+-  double minSxz = getMinFieldValue(fileName, "Vertices", "sxz");
+-  printf("Shear stress range: min=%e, max=%e\n", minSxz, maxSxz);
+-
+-  // In pure shear with free-slip, shear stress should be small everywhere
+-  // (it's exactly zero on boundaries and small in the interior for cstv)
+-  EXPECT_LT(fabs(maxSxz), 1.0);
+-  EXPECT_LT(fabs(minSxz), 1.0);
+-
+-  // Deviatoric normal stress should be non-zero from pure shear deformation
+-  double maxSxxd = getMaxFieldValue(fileName, "Centers", "sxxd");
+-  printf("Max sxxd: %e\n", maxSxxd);
+-  EXPECT_GT(fabs(maxSxxd), 0.0);
+-
+-  // Velocity should be non-zero (driven by bkg_strain_rate)
+-  double maxVx = getMaxFieldValue(fileName, "VxNodes", "Vx");
+-  printf("Max Vx: %e\n", maxVx);
+-  EXPECT_GT(fabs(maxVx), 0.0);
+-
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class NeumannBC : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhase,
++                    .SetTemperature = SetTemperature,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureShearBCVx,
++                    .SetBCVz = SetPureShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    return 0;
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++};
++
++TEST_F(NeumannBC, StressBCPureShear) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "NeumannBC/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++
++  // The built-in SetPureShearBCVx uses type=13 (constant_shear_stress) on N/S
++  // This implements free-slip: zero shear stress on horizontal boundaries
++  // Verify that the shear stress is near zero on vertices (which includes boundaries)
++  double maxSxz = getMaxFieldValue(fileName, "Vertices", "sxz");
++  double minSxz = getMinFieldValue(fileName, "Vertices", "sxz");
++  printf("Shear stress range: min=%e, max=%e\n", minSxz, maxSxz);
++
++  // In pure shear with free-slip, shear stress should be small everywhere
++  // (it's exactly zero on boundaries and small in the interior for cstv)
++  EXPECT_LT(fabs(maxSxz), 1.0);
++  EXPECT_LT(fabs(minSxz), 1.0);
++
++  // Deviatoric normal stress should be non-zero from pure shear deformation
++  double maxSxxd = getMaxFieldValue(fileName, "Centers", "sxxd");
++  printf("Max sxxd: %e\n", maxSxxd);
++  EXPECT_GT(fabs(maxSxxd), 0.0);
++
++  // Velocity should be non-zero (driven by bkg_strain_rate)
++  double maxVx = getMaxFieldValue(fileName, "VxNodes", "Vx");
++  printf("Max Vx: %e\n", maxVx);
++  EXPECT_GT(fabs(maxVx), 0.0);
++
++  free(inputName);
++  free(fileName);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(NeumannBC, StressBCPureShearInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "NeumannBC/StressBCPureShearInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "StressBCPureShearInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(NeumannBC, StressBCPureShearInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "NeumannBC/StressBCPureShearInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "StressBCPureShearInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/RheologyCreepTests.cpp
+@@ -1,162 +1,728 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class RheologyCreep : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase       = SetPhase,
+-                    .SetTemperature = SetTemperature,
+-                    .SetGrainSize   = SetGrainSize,
+-                    .SetDensity     = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureOrSimpleShearBCVx,
+-                    .SetBCVz = SetPureOrSimpleShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
+-    return (instance->model.user0 + zeroC) / instance->scaling.T;
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-
+-  static double SetGrainSize(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.gs_ref[phase];
+-  }
+-};
+-
+-TEST_F(RheologyCreep, DiffusionCreepLinear) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-  // Verify diffusion creep viscosity was computed (positive, bounded)
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("DiffusionCreepLinear viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(RheologyCreep, DiffusionCreepGrainSize) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-  // Verify viscosity was computed and is positive
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("Viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(RheologyCreep, PeierlsCreep) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  // Peierls creep: verify simulation completed and viscosity is physically valid
+-  ASSERT_GE(stepsCount, 0);
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("PeierlsCreep viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(RheologyCreep, GBSCreep) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  // GBS creep: verify simulation completed and viscosity is physically valid
+-  ASSERT_GE(stepsCount, 0);
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("GBSCreep viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(RheologyCreep, CompositePwlLin) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  // Composite: verify simulation completed
+-  ASSERT_GE(stepsCount, 0);
+-  // Viscosity should be bounded
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("Composite viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
+-
+-TEST_F(RheologyCreep, PowerLawCreep) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-  char *fileName;
+-  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
+-  int stepsCount = getStepsCount(fileName);
+-  ASSERT_GE(stepsCount, 0);
+-  // Power-law creep (dislocation): verify viscosity is computed and positive
+-  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
+-  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
+-  printf("PowerLaw viscosity range: min=%e, max=%e\n", minEta, maxEta);
+-  EXPECT_GT(minEta, 0.0);
+-  // Power-law strain rate should be non-zero (dislocation creep is active)
+-  double maxEiiPwl = getMaxFieldValue(fileName, "Centers", "eII_pwl");
+-  printf("Max power-law strain rate: %e\n", maxEiiPwl);
+-  EXPECT_GT(maxEiiPwl, 0.0);
+-  free(inputName);
+-  free(fileName);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <algorithm>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class RheologyCreep : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhase,
++                    .SetTemperature = SetTemperature,
++                    .SetGrainSize   = SetGrainSize,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureOrSimpleShearBCVx,
++                    .SetBCVz = SetPureOrSimpleShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++
++  static double SetGrainSize(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.gs_ref[phase];
++  }
++};
++
++// Fixture for the 2D PinchSwellGSE smoke test. Mirrors SETS/PinchSwellGSE.c — the
++// SetPhase callback creates a horizontal calcite layer perturbed by a cosine
++// (the canonical pinch-and-swell IC from Schmalholz & Duretz 2017 JSG 103).
++// Only SetPhase differs from the RheologyCreep fixture; T / d / rho callbacks
++// are identical in spirit (re-declared here so the class is self-contained).
++class PinchSwellGSEFixture : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhaseLayer,
++                    .SetTemperature = SetTemperature,
++                    .SetGrainSize   = SetGrainSize,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureOrSimpleShearBCVx,
++                    .SetBCVz = SetPureOrSimpleShearBCVz,
++            },
++    };
++  }
++
++  // Cosine-perturbed horizontal layer (phase 1 inside, phase 0 outside).
++  // Verbatim port of SetPhase from SETS/PinchSwellGSE.c.
++  static int SetPhaseLayer(MdoodzInput *instance, Coordinates coordinates) {
++    const double A          = 2e-3 / instance->scaling.L;
++    const double layer_bot0 = -5e-2 / instance->scaling.L;
++    const double layer_top0 = 5e-2 / instance->scaling.L;
++    const double Lx         = (instance->model.xmax - instance->model.xmin);
++    const double layer_top  = layer_top0 - A * cos(coordinates.x * 2.0 * M_PI / Lx);
++    const double layer_bot  = layer_bot0 + A * cos(coordinates.x * 2.0 * M_PI / Lx);
++    if (coordinates.z > layer_bot && coordinates.z < layer_top) return 1;
++    return 0;
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++
++  static double SetGrainSize(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.gs_ref[phase];
++  }
++};
++
++TEST_F(RheologyCreep, DiffusionCreepLinear) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++  // Verify diffusion creep viscosity was computed (positive, bounded)
++  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
++  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
++  printf("DiffusionCreepLinear viscosity range: min=%e, max=%e\n", minEta, maxEta);
++  EXPECT_GT(minEta, 0.0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(RheologyCreep, DiffusionCreepGrainSize) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "RheologyCreep/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "%s/%s", testName, "Output00001.gzip.h5");
++  int stepsCount = getStepsCount(fileName);
++  ASSERT_GE(stepsCount, 0);
++  // Verify viscosity was computed and is positive
++  double maxEta = getMaxFieldValue(fileName, "Centers", "eta_n");
++  double minEta = getMinFieldValue(fileName, "Centers", "eta_n");
++  printf("Viscosity range: min=%e, max=%e\n", minEta, maxEta);
++  EXPECT_GT(minEta, 0.0);
++  free(inputName);
++  free(fileName);
+
+### TESTS/ShearHeatingTests.cpp
+@@ -89,3 +89,50 @@ TEST_F(ShearHeating, ViscousDissipation) {
+   free(fileInit);
+   free(fileFinal);
+ }
++
++TEST_F(ShearHeating, ViscousDissipationPCG) {
++  pcgOverride::set(1, "ViscousDissipationPCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"ShearHeating/ViscousDissipation.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  double maxT_init  = getMaxFieldValue("ViscousDissipationPCG/Output00000.gzip.h5", "Centers", "T");
++  double maxT_final = getMaxFieldValue("ViscousDissipationPCG/Output00003.gzip.h5", "Centers", "T");
++  EXPECT_GE(maxT_final, maxT_init);
++
++  double meanT_init = getMeanFieldValue("ViscousDissipationPCG/Output00000.gzip.h5", "Centers", "T");
++  double meanT_final_val = getMeanFieldValue("ViscousDissipationPCG/Output00003.gzip.h5", "Centers", "T");
++  double dT_num = meanT_final_val - meanT_init;
++  double t_final = getModelParam("ViscousDissipationPCG/Output00003.gzip.h5", 0);
++  double eta_val = 1e22, eps_d = 1e-14, rho_val = 3300.0, Cp_val = 1050.0;
++  double dT_ana = 4.0 * eta_val * eps_d * eps_d * t_final / (rho_val * Cp_val);
++  printf("PCG ViscousDissipation: dT_num=%e, dT_ana=%e\n", dT_num, dT_ana);
++  EXPECT_NEAR(dT_num, dT_ana, fabs(dT_ana) * 0.05);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(ShearHeating, ViscousDissipationInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "ShearHeating/ViscousDissipationInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "ViscousDissipationInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(ShearHeating, ViscousDissipationInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "ShearHeating/ViscousDissipationInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "ViscousDissipationInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/TestHelpers.h
+@@ -1,6 +1,10 @@
+ #ifndef MDOODZ_TEST_HELPERS_H
+ #define MDOODZ_TEST_HELPERS_H
+ 
++extern "C" {
++#include "mdoodz.h"
++}
++
+ #include <hdf5.h>
+ #include <cstdio>
+ #include <cstdlib>
+@@ -9,6 +13,46 @@
+ #include <cstring>
+ #include <vector>
+ 
++// ---------------------------------------------------------------------------
++// MutateInput: PCG-vs-CHOLMOD twin override
++//
++// Many thermal/shear-heating tests have a `*PCG.txt` twin of a base .txt that
++// differs only in `thermal_solver = 1` and `writer_subfolder`. Rather than
++// committing 8 redundant fixture files, the PCG variant test sets:
++//   pcgOverride::set(1, "PCGSubfolderName");
++//   setup.MutateInput = pcgOverride::mutate;
++//   RunMDOODZ("Thermal/Base.txt", &setup);     // shared base fixture
++//   pcgOverride::clear();
++// to inject the two parameter overrides. `writer_subfolder` is heap-owned
++// (ReadChar at InputOutput.c:1096, freed at sim end) so the callback frees the
++// original before strdup-ing the override — string-literal assignment would
++// crash free() on shutdown.
++// ---------------------------------------------------------------------------
++namespace pcgOverride {
++  struct State {
++    int         thermal_solver;  // -1 → no override
++    const char *subfolder;       // nullptr → no override
++  };
++  inline State &state() {
++    static State s{-1, nullptr};
++    return s;
++  }
++  inline void mutate(MdoodzInput *input) {
++    State &s = state();
++    if (s.thermal_solver >= 0) input->model.thermal_solver = s.thermal_solver;
++    if (s.subfolder != nullptr) {
++      free(input->model.writer_subfolder);
++      input->model.writer_subfolder = strdup(s.subfolder);
++    }
++  }
++  inline void set(int solver, const char *subfolder) {
++    state() = { solver, subfolder };
++  }
++  inline void clear() {
++    state() = {-1, nullptr};
++  }
++}
++
+ // Read the Newton iteration count from the HDF5 output
+ static int getStepsCount(const char *hdf5FileName) {
+   hid_t file            = H5Fopen(hdf5FileName, H5F_ACC_RDONLY, H5P_DEFAULT);
+@@ -243,4 +287,39 @@ static double computeL1Error(const std::vector<double> &numerical, const std::ve
+   return sumAbsDiff / (double)n;
+ }
+ 
++// Subtract the spatial mean from an array in place.
++// Used for pressure null-space handling in benchmarks with free-slip-everywhere BCs
++// (e.g., SolKz), where pressure is defined only up to an additive constant.
++static void subtractMean(std::vector<double> &field) {
++  if (field.empty()) return;
++  double sum = 0.0;
++  for (double v : field) sum += v;
++  const double mean = sum / (double)field.size();
++  for (double &v : field) v -= mean;
++}
++
++// Read a single-element integer dataset from HDF5
++static int readScalarInt(const char *hdf5FileName, const char *groupName, const char *datasetName) {
++  hid_t file  = H5Fopen(hdf5FileName, H5F_ACC_RDONLY, H5P_DEFAULT);
++  hid_t group = H5Gopen(file, groupName, H5P_DEFAULT);
++  hid_t dset  = H5Dopen(group, datasetName, H5P_DEFAULT);
++  int value = 0;
++  H5Dread(dset, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &value);
++  H5Dclose(dset);
++  H5Gclose(group);
++  H5Fclose(file);
++  return value;
++}
++
++// Extract a 1D vertical column at x-index ix from a flat ncx×ncz field array
++// Storage is column-major: field[ix + ncx * iz]
++static std::vector<double> readColumnProfile(const char *hdf5FileName, const char *groupName, const char *datasetName, int ix, int ncx, int ncz) {
++  auto field = readFieldAsArray(hdf5FileName, groupName, datasetName);
++  std::vector<double> column(ncz);
++  for (int iz = 0; iz < ncz; iz++) {
++    column[iz] = field[ix + ncx * iz];
++  }
++  return column;
++}
++
+ #endif
+
+### TESTS/ThermalTests.cpp
+@@ -185,3 +185,218 @@ TEST_F(Thermal, DirichletBC) {
+   free(inputName);
+   free(fileName);
+ }
++
++// ===================== L2 Accuracy Tests ===================== //
++
++TEST_F(Thermal, GaussianDiffusionL2) {
++  RunMDOODZ("Thermal/GaussianDiffusionL2.txt", &setup);
++  char *fileFinal;
++  asprintf(&fileFinal, "GaussianDiffusionL2/Output00005.gzip.h5");
++
++  auto T_field = readFieldAsArray(fileFinal, "Centers", "T");
++  auto xc = readCoordArray(fileFinal, "xc_coord");
++  auto zc = readCoordArray(fileFinal, "zc_coord");
++  int Nx_grid = (int)getModelParam(fileFinal, 3);
++  int Nz_grid = (int)getModelParam(fileFinal, 4);
++  int ncx = Nx_grid - 1;
++  int ncz = Nz_grid - 1;
++  double time_SI = getModelParam(fileFinal, 0);
++
++  // Physical parameters
++  double k_SI   = 3.0;
++  double rho_SI = 3300.0;
++  double Cp_SI  = 1050.0;
++  double kappa  = k_SI / (rho_SI * Cp_SI);  // thermal diffusivity
++  double T_bg   = 500.0 + 273.15;            // background T in K
++  double dT     = 200.0;                     // perturbation in K
++  double R      = 10000.0;                   // perturbation radius in m
++
++  // Compute analytic solution at final time
++  double R2_4kt = R * R + 4.0 * kappa * time_SI;
++  std::vector<double> T_ana(T_field.size());
++  for (int iz = 0; iz < ncz; iz++) {
++    for (int ix = 0; ix < ncx; ix++) {
++      double r2 = xc[ix] * xc[ix] + zc[iz] * zc[iz];
++      T_ana[ix + ncx * iz] = T_bg + dT * (R * R / R2_4kt) * exp(-r2 / R2_4kt);
++    }
++  }
++
++  double L2 = computeL2Error(T_field, T_ana);
++  printf("GaussianDiffusionL2 (CHOLMOD): L2 = %e\n", L2);
++  EXPECT_LT(L2, 2e-2);  // FD discretization error on 51x51 grid is ~1.07e-2
++
++  free(fileFinal);
++}
++
++TEST_F(Thermal, GaussianDiffusionL2PCG) {
++  // Shared base fixture + MutateInput override of thermal_solver and writer_subfolder
++  pcgOverride::set(1, "GaussianDiffusionL2PCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"Thermal/GaussianDiffusionL2.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  char *fileFinal;
++  asprintf(&fileFinal, "GaussianDiffusionL2PCG/Output00005.gzip.h5");
++
++  auto T_field = readFieldAsArray(fileFinal, "Centers", "T");
++  auto xc = readCoordArray(fileFinal, "xc_coord");
++  auto zc = readCoordArray(fileFinal, "zc_coord");
++  int Nx_grid = (int)getModelParam(fileFinal, 3);
++  int Nz_grid = (int)getModelParam(fileFinal, 4);
++  int ncx = Nx_grid - 1;
++  int ncz = Nz_grid - 1;
++  double time_SI = getModelParam(fileFinal, 0);
++
++  double k_SI   = 3.0;
++  double rho_SI = 3300.0;
++  double Cp_SI  = 1050.0;
++  double kappa  = k_SI / (rho_SI * Cp_SI);
++  double T_bg   = 500.0 + 273.15;
++  double dT     = 200.0;
++  double R      = 10000.0;
++
++  double R2_4kt = R * R + 4.0 * kappa * time_SI;
++  std::vector<double> T_ana(T_field.size());
++  for (int iz = 0; iz < ncz; iz++) {
++    for (int ix = 0; ix < ncx; ix++) {
++      double r2 = xc[ix] * xc[ix] + zc[iz] * zc[iz];
++      T_ana[ix + ncx * iz] = T_bg + dT * (R * R / R2_4kt) * exp(-r2 / R2_4kt);
++    }
++  }
++
++  double L2_pcg = computeL2Error(T_field, T_ana);
++  printf("GaussianDiffusionL2PCG: L2 = %e\n", L2_pcg);
++  EXPECT_LT(L2_pcg, 2e-2);  // FD discretization error on 51x51 grid is ~1.07e-2
++
++  // Cross-compare: also read CHOLMOD result (assumes GaussianDiffusionL2 ran first in this suite)
++  char *fileCholmod;
++  asprintf(&fileCholmod, "GaussianDiffusionL2/Output00005.gzip.h5");
++  auto T_cholmod = readFieldAsArray(fileCholmod, "Centers", "T");
++  double L2_cholmod = computeL2Error(T_cholmod, T_ana);
++  double L2_diff = fabs(L2_pcg - L2_cholmod);
++  printf("CHOLMOD L2 = %e, PCG L2 = %e, |diff| = %e\n", L2_cholmod, L2_pcg, L2_diff);
++  EXPECT_LT(L2_diff, 1e-6);
++
++  free(fileFinal);
++  free(fileCholmod);
++}
++
++// ===================== PCG Thermal Solver Variants ===================== //
++
++TEST_F(Thermal, GaussianDiffusionPCG) {
++  pcgOverride::set(1, "GaussianDiffusionPCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"Thermal/GaussianDiffusion.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  double maxT_init  = getMaxFieldValue("GaussianDiffusionPCG/Output00000.gzip.h5", "Centers", "T");
++  double maxT_final = getMaxFieldValue("GaussianDiffusionPCG/Output00005.gzip.h5", "Centers", "T");
++  printf("PCG Peak T init: %e, Peak T final: %e\n", maxT_init, maxT_final);
++  EXPECT_LT(maxT_final, maxT_init);
++}
++
++TEST_F(Thermal, SteadyStateGeothermPCG) {
++  pcgOverride::set(1, "SteadyStateGeothermPCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"Thermal/SteadyStateGeotherm.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  char *fileName;
++  asprintf(&fileName, "SteadyStateGeothermPCG/Output00020.gzip.h5");
++  double maxT = getMaxFieldValue(fileName, "Centers", "T");
++  double minT = getMinFieldValue(fileName, "Centers", "T");
++  double meanT = getMeanFieldValue(fileName, "Centers", "T");
++  EXPECT_GT(maxT, minT);
++  EXPECT_GT(meanT, minT);
++  EXPECT_LT(meanT, maxT);
++
++  auto T_field = readFieldAsArray(fileName, "Centers", "T");
++  auto zc = readCoordArray(fileName, "zc_coord");
++  int Nx_grid = (int)getModelParam(fileName, 3);
++  int Nz_grid = (int)getModelParam(fileName, 4);
++  int ncx = Nx_grid - 1;
++  int ncz = Nz_grid - 1;
++  double Lz = getModelParam(fileName, 2);
++  double z_top_SI = Lz / 2.0;
++  double T_top_SI = 273.15;
++  double T_bot_SI = 1600.0;
++  std::vector<double> T_ana(T_field.size());
++  for (int iz = 0; iz < ncz; iz++) {
++    double T_z = T_top_SI + (T_bot_SI - T_top_SI) * (z_top_SI - zc[iz]) / Lz;
++    for (int ix = 0; ix < ncx; ix++) {
++      T_ana[ix + ncx * iz] = T_z;
++    }
++  }
++  double L2_pcg = computeL2Error(T_field, T_ana);
++
++  // Also read CHOLMOD result for side-by-side comparison (assumes SteadyStateGeotherm ran first)
++  char *fileCholmod;
++  asprintf(&fileCholmod, "SteadyStateGeotherm/Output00020.gzip.h5");
++  auto T_cholmod = readFieldAsArray(fileCholmod, "Centers", "T");
++  double L2_cholmod = computeL2Error(T_cholmod, T_ana);
++  printf("Geotherm L2: CHOLMOD = %e, PCG = %e, |diff| = %e\n", L2_cholmod, L2_pcg, fabs(L2_pcg - L2_cholmod));
++  EXPECT_LT(L2_pcg, 1e-4);
++  free(fileName);
++  free(fileCholmod);
++}
++
++TEST_F(Thermal, RadiogenicHeatPCG) {
++  pcgOverride::set(1, "RadiogenicHeatPCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"Thermal/RadiogenicHeat.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  double meanT_init  = getMeanFieldValue("RadiogenicHeatPCG/Output00000.gzip.h5", "Centers", "T");
++  double meanT_final = getMeanFieldValue("RadiogenicHeatPCG/Output00005.gzip.h5", "Centers", "T");
++  double maxT_init   = getMaxFieldValue("RadiogenicHeatPCG/Output00000.gzip.h5", "Centers", "T");
++  double maxT_final  = getMaxFieldValue("RadiogenicHeatPCG/Output00005.gzip.h5", "Centers", "T");
++  EXPECT_GT(meanT_final, meanT_init);
++  EXPECT_GT(maxT_final, maxT_init);
++
++  double Qr = 1e-6, rho_mat = 3300.0, Cp_mat = 1050.0;
++  double time_SI = getModelParam("RadiogenicHeatPCG/Output00005.gzip.h5", 0);
++  double T0_SI = 773.15;
++  double T_ana_mean = T0_SI + Qr * time_SI / (rho_mat * Cp_mat);
++  printf("PCG RadiogenicHeat: meanT_final=%e, T_ana=%e\n", meanT_final, T_ana_mean);
++  EXPECT_NEAR(meanT_final, T_ana_mean, fabs(T_ana_mean - T0_SI) * 0.02);
++}
++
++TEST_F(Thermal, DirichletBCPCG) {
++  pcgOverride::set(1, "DirichletBCPCG");
++  setup.MutateInput = pcgOverride::mutate;
++  RunMDOODZ((char *)"Thermal/DirichletBC.txt", &setup);
++  setup.MutateInput = nullptr;
++  pcgOverride::clear();
++  double minT = getMinFieldValue("DirichletBCPCG/Output00001.gzip.h5", "Centers", "T");
++  double maxT = getMaxFieldValue("DirichletBCPCG/Output00001.gzip.h5", "Centers", "T");
++  printf("PCG T range: min=%e, max=%e\n", minT, maxT);
++  EXPECT_GT(minT, 0.0);
++  EXPECT_GT(maxT, minT);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(Thermal, GaussianDiffusionInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "Thermal/GaussianDiffusionInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "GaussianDiffusionInterpMode1/Output%05d.gzip.h5", 5);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(Thermal, GaussianDiffusionInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "Thermal/GaussianDiffusionInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "GaussianDiffusionInterpMode2/Output%05d.gzip.h5", 5);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/VelocityFieldTests.cpp
+@@ -182,3 +182,30 @@ TEST_F(VelocityField, SimpleShearVelocity) {
+   free(inputName);
+   free(fileName);
+ }
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(VelocityField, PureShearVelocityInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "VelocityField/PureShearVelocityInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "PureShearVelocityInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(VelocityField, PureShearVelocityInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "VelocityField/PureShearVelocityInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "PureShearVelocityInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+
+### TESTS/ViscoElasticTests.cpp
+@@ -1,81 +1,108 @@
+-extern "C" {
+-#include "mdoodz.h"
+-}
+-
+-#include <cstdio>
+-#include <cstdlib>
+-#include <cmath>
+-#include <gtest/gtest.h>
+-#include "TestHelpers.h"
+-
+-class ViscoElastic : public ::testing::Test {
+-protected:
+-  MdoodzSetup setup;
+-
+-  void SetUp() override {
+-    setup = {
+-            .SetParticles = new SetParticles_ff{
+-                    .SetPhase       = SetPhase,
+-                    .SetTemperature = SetTemperature,
+-                    .SetDensity     = SetDensity,
+-            },
+-            .SetBCs = new SetBCs_ff{
+-                    .SetBCVx = SetPureShearBCVx,
+-                    .SetBCVz = SetPureShearBCVz,
+-            },
+-    };
+-  }
+-
+-  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
+-    const double radius = instance->model.user1 / instance->scaling.L;
+-    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
+-      return 1;
+-    } else {
+-      return 0;
+-    }
+-  }
+-
+-  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
+-    return (instance->model.user0 + zeroC) / instance->scaling.T;
+-  }
+-
+-  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
+-    return instance->materials.rho[phase];
+-  }
+-};
+-
+-TEST_F(ViscoElastic, StressAccumulation) {
+-  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
+-  char *inputName;
+-  asprintf(&inputName, "ViscoElastic/%s.txt", testName);
+-  RunMDOODZ(inputName, &setup);
+-
+-  // Read first and last output
+-  char *file1;
+-  asprintf(&file1, "%s/%s", testName, "Output00001.gzip.h5");
+-  char *file5;
+-  asprintf(&file5, "%s/%s", testName, "Output00005.gzip.h5");
+-
+-  int steps1 = getStepsCount(file1);
+-  int steps5 = getStepsCount(file5);
+-  ASSERT_GE(steps1, 0);
+-  ASSERT_GE(steps5, 0);
+-
+-  // Elastic stress accumulation: deviatoric stress should grow over time steps
+-  // In Maxwell visco-elastic model, stress approaches 2*eta*eps_dot for large t/t_Maxwell
+-  double maxSxxd_1 = getMaxFieldValue(file1, "Centers", "sxxd");
+-  double maxSxxd_5 = getMaxFieldValue(file5, "Centers", "sxxd");
+-  printf("Max sxxd step 1: %e, step 5: %e\n", maxSxxd_1, maxSxxd_5);
+-
+-  // Stress should increase (or at least not decrease) as elastic stress builds up  
+-  EXPECT_GE(fabs(maxSxxd_5), fabs(maxSxxd_1) * 0.9);  // allow small numerical tolerance
+-
+-  // Check elastic strain rate is non-zero
+-  double maxEiiEl = getMaxFieldValue(file1, "Centers", "eII_el");
+-  printf("Max elastic strain rate invariant: %e\n", maxEiiEl);
+-  EXPECT_GT(maxEiiEl, 0.0);
+-
+-  free(inputName);
+-  free(file1);
+-  free(file5);
+-}
++extern "C" {
++#include "mdoodz.h"
++}
++
++#include <cstdio>
++#include <cstdlib>
++#include <cmath>
++#include <gtest/gtest.h>
++#include "TestHelpers.h"
++
++class ViscoElastic : public ::testing::Test {
++protected:
++  MdoodzSetup setup;
++
++  void SetUp() override {
++    setup = {
++            .SetParticles = new SetParticles_ff{
++                    .SetPhase       = SetPhase,
++                    .SetTemperature = SetTemperature,
++                    .SetDensity     = SetDensity,
++            },
++            .SetBCs = new SetBCs_ff{
++                    .SetBCVx = SetPureShearBCVx,
++                    .SetBCVz = SetPureShearBCVz,
++            },
++    };
++  }
++
++  static int SetPhase(MdoodzInput *instance, Coordinates coordinates) {
++    const double radius = instance->model.user1 / instance->scaling.L;
++    if (coordinates.x * coordinates.x + coordinates.z * coordinates.z < radius * radius) {
++      return 1;
++    } else {
++      return 0;
++    }
++  }
++
++  static double SetTemperature(MdoodzInput *instance, Coordinates coordinates) {
++    return (instance->model.user0 + zeroC) / instance->scaling.T;
++  }
++
++  static double SetDensity(MdoodzInput *instance, Coordinates coordinates, int phase) {
++    return instance->materials.rho[phase];
++  }
++};
++
++TEST_F(ViscoElastic, StressAccumulation) {
++  const char *testName = testing::UnitTest::GetInstance()->current_test_info()->name();
++  char *inputName;
++  asprintf(&inputName, "ViscoElastic/%s.txt", testName);
++  RunMDOODZ(inputName, &setup);
++
++  // Read first and last output
++  char *file1;
++  asprintf(&file1, "%s/%s", testName, "Output00001.gzip.h5");
++  char *file5;
++  asprintf(&file5, "%s/%s", testName, "Output00005.gzip.h5");
++
++  int steps1 = getStepsCount(file1);
++  int steps5 = getStepsCount(file5);
++  ASSERT_GE(steps1, 0);
++  ASSERT_GE(steps5, 0);
++
++  // Elastic stress accumulation: deviatoric stress should grow over time steps
++  // In Maxwell visco-elastic model, stress approaches 2*eta*eps_dot for large t/t_Maxwell
++  double maxSxxd_1 = getMaxFieldValue(file1, "Centers", "sxxd");
++  double maxSxxd_5 = getMaxFieldValue(file5, "Centers", "sxxd");
++  printf("Max sxxd step 1: %e, step 5: %e\n", maxSxxd_1, maxSxxd_5);
++
++  // Stress should increase (or at least not decrease) as elastic stress builds up  
++  EXPECT_GE(fabs(maxSxxd_5), fabs(maxSxxd_1) * 0.9);  // allow small numerical tolerance
++
++  // Check elastic strain rate is non-zero
++  double maxEiiEl = getMaxFieldValue(file1, "Centers", "eII_el");
++  printf("Max elastic strain rate invariant: %e\n", maxEiiEl);
++  EXPECT_GT(maxEiiEl, 0.0);
++
++  free(inputName);
++  free(file1);
++  free(file5);
++}
++
++
++// --- Interpolation mode tests ---
++
++TEST_F(ViscoElastic, StressAccumulationInterpMode1) {
++  char *inputName;
++  asprintf(&inputName, "ViscoElastic/StressAccumulationInterpMode1.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "StressAccumulationInterpMode1/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
++
++TEST_F(ViscoElastic, StressAccumulationInterpMode2) {
++  char *inputName;
++  asprintf(&inputName, "ViscoElastic/StressAccumulationInterpMode2.txt");
++  RunMDOODZ(inputName, &setup);
++  char *fileName;
++  asprintf(&fileName, "StressAccumulationInterpMode2/Output%05d.gzip.h5", 1);
++  int steps = getStepsCount(fileName);
++  EXPECT_GE(steps, 0);
++  free(inputName);
++  free(fileName);
++}
+

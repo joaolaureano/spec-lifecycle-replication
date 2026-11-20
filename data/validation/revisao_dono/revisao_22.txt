@@ -1,0 +1,534 @@
+===== P130 | RandyChen1985/yunshu-ai-agent-platform PR #1 | capacidade do par: embedchat-upload-attachments
+PR: Pull Request: AI 执行层迁移至 AgentScope 并重构 ChatBI/General/Knowledge 链路
+arquivos ligados: app/api/v1/endpoints/chat.py;app/services/ai/agent_service.py;app/services/ai/executors/data_executor.py;app/services/ai/memory_service.py;frontend/src/components/embed/ChatInput.vue;frontend/src/views/EmbedChat.vue
+--- linhas alteradas (1060; mostrando até 40)
++    permission_options: Optional[Dict[str, Any]] = None
++class ToolPermissionConfirmRequest(BaseModel):
++    confirmed: bool = Field(..., description="是否允许执行该工具调用")
++class ExternalExecutionResultItem(BaseModel):
++    id: str = Field(..., description="tool_call id")
++    name: str = Field(..., description="tool name")
++    output: str = Field(..., description="tool execution output text")
++    state: str = Field(default="success", description="tool result state")
++class ExternalExecutionResumeRequest(BaseModel):
++    results: list[ExternalExecutionResultItem] = Field(
++        ...,
++        description="外部执行工具返回结果列表",
++    )
+-                debug_options=completion_request.debug_options
++                debug_options=completion_request.debug_options,
++                permission_options=completion_request.permission_options,
+-            enable_multi_agent=completion_request.enable_multi_agent
++            enable_multi_agent=completion_request.enable_multi_agent,
++            permission_options=completion_request.permission_options,
++@router.post(
++    "/permissions/{permission_request_id}/confirm",
++    summary="确认或拒绝待执行工具调用",
++    description="确认 AgentScope ASK 工具调用后继续原 Agent 运行，流式返回后续 SSE。",
++)
++async def confirm_tool_permission(
++    permission_request_id: str,
++    confirm_request: ToolPermissionConfirmRequest,
++    user_info: Dict[str, Any] = Depends(require_api_key),
++):
++    async def sse_generator() -> AsyncGenerator[str, None]:
++        async for chunk in agent_service.resume_agentscope_permission_stream(
++            permission_request_id=permission_request_id,
++            confirmed=confirm_request.confirmed,
++            user_info=user_info,
++        ):
++            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
++        yield "data: [DONE]\n\n"
++    return StreamingResponse(sse_generator(), media_type="text/event-stream")
++@router.post(
++    "/external-executions/{external_execution_request_id}/resume",
+--- candidata: agentscope-core-integration [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: AgentScope 作为唯一 AI 运行时
+  | 系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+  > ### Requirement: AgentScope 作为唯一 AI 运行时
+  > 系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+  > - **那么** 不应在运行代码或自动化测试中发现 `langchain`、`ChatOpenAI`、`StructuredTool`、`BaseTool`、`ToolMessage`、`SystemMessage`、`HumanMessage`、`AIMessage` 等 LangChain 依赖
+  > - **当** 用户通过 `/api/v1/chat/completions` 发起通用对话或 ChatBI 请求
+  > - **那么** 请求必须进入 AgentScope runtime 与对应 runner
+  > - **并且** 不得调用旧 LangChain executor 中的 `bind_tools()` 或 `astream()` 路径
+  > - **并且** 不要求新增 `RagAgentRunner` 或 `OpenClawAgentRunner`
+  > 系统 MUST 提供平台中立的消息、工具、事件、错误和 workspace 抽象，业务执行器不得直接依赖 AgentScope 具体对象。
+--- candidata: chatbi-multi-agent-team [PR]
+  | # chatbi-multi-agent-team Specification
+  | ## Purpose
+  | TBD - created by archiving change refactor-to-agentscope. Update Purpose after archive.
+  > # chatbi-multi-agent-team Specification
+  > TBD - created by archiving change refactor-to-agentscope. Update Purpose after archive.
+  > ### Requirement: ChatBI DataAgentRunner 阶段化执行
+  > ChatBI MUST 由 AgentScope native Agent + Toolkit 承接，并由 `DataAgentRunner` 以显式运行状态处理自然语言查数请求。
+  > - **当** 用户发起新的 ChatBI 数据查询
+  > - **那么** `DataAgentRunner` 必须完成问题归一化、结构化业务意图分析、元数据检索、SQL 生成、权限/顺序守卫、SQL 执行、结果审查和最终总结
+  > - **当** 用户发起新的 ChatBI 数据查询
+  > - **那么** `DataAgentRunner` 必须在 schema 检索前生成 `DataQueryIntentFrame`，至少表达业务目标、指标、维度、筛选语义、时间范围和粒度
+--- candidata: embedded-chat [tasks]
+  | # 嵌入式聊天组件 (Embedded Chat Interface)
+  | ## ADDED Requirements
+  | ### Requirement: 沉浸式嵌入聊天页 (Interactive Embedded Chat View)
+  > ### Requirement: 沉浸式嵌入聊天页 (Interactive Embedded Chat View)
+  > 系统 MUST 支持通过 URL 参数和 postMessage 初始化两种方式进行鉴权，以适应不同的嵌入场景。
+  > - **Given** 我访问 `/embed/chat?token=valid_token&agent_id=my-agent`
+  > - **And** 连接到指定的 `agent_id`。
+  > #### Scenario: PostMessage 初始化
+  > - **When** 父窗口发送 `postMessage`，内容为 `{ type: 'INIT_CONFIG', token: '...', agent_id: '...' }`
+  > 系统 MUST 提供机制，使嵌入组件能通过 postMessage 向宿主窗口发送 UI 状态变更请求（如调整大小）。
+  > 嵌入式聊天界面 MUST 支持快捷指令（如 `/clear`, `/help`），且体验需与主调试界面保持一致。指令菜单 MUST 支持通过输入框输入 `/` 触发，并支持键盘或触摸选择。
+--- candidata: system-config [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Configuration Audit Trail (配置审计追踪)
+  | 系统 **MUST** 为所有系统级配置（`system_configs`）的变更保留历史记录。
+  > - **WHEN** 用户或系统更新某个配置项（如 `llm_model_name` 或 `router_system_prompt`）
+  > ### Requirement: Configuration History Query (配置历史查询)
+  > - **WHEN** 管理员请求查询 `router_system_prompt` 的历史
+  > - **WHEN** 管理员在“参数配置”中编辑 `llm_model_name`
+  > - **THEN** `agent_execution_history` 中必须记录 `model_id` (模型标识) 和 `model_config_id` (引用 ID)
+  > - **WHEN** 管理员在“参数配置”中编辑 `llm_model_name`
+  > - **THEN** `agent_execution_history` 中必须记录 `model_id` (模型标识) 和 `model_config_id` (引用 ID)
+  > TBD - created by archiving change centralize-system-config. Update Purpose after archive.
+--- candidata: conversation-memory [tasks]
+  | # 规范：服务端对话记忆 (Conversation Memory)
+  | ## ADDED Requirements
+  | ### Requirement: 服务端历史存储 (Server-Side History Storage)
+  > # 规范：服务端对话记忆 (Conversation Memory)
+  > ### Requirement: 服务端历史存储 (Server-Side History Storage)
+  > 当请求中提供 `conversation_id` 时，系统必须 (MUST) 将对话历史存储在 Redis 中。
+  > #### Scenario: 客户端发送带 conversation_id 的新消息
+  > -   **And** 客户端发送聊天请求，包含 `conversation_id="test-conv-1"`
+  > #### Scenario: AgentDebug 页面初始化
+  > -   **Given** 用户打开 Agent Debug 页面
+  > -   **Then** 页面应自动生成一个新的 UUID 作为 `conversation_id`
+
+===== P131 | theoden8/webspace_app PR #410 | capacidade do par: webspaces
+PR: Scrape latest Firefox version for generated user-agents
+arquivos ligados: lib/screens/settings.dart
+--- linhas alteradas (24; mostrando até 40)
+-import 'dart:math';
++import 'package:webspace/services/firefox_user_agent_service.dart';
+-String generateRandomUserAgent() {
+-  // You can modify these values to add more variety to the generated user-agent strings
+-  List<String> platforms = [
+-    'Windows NT 10.0; Win64; x64',
+-    'Macintosh; Intel Mac OS X 10_15_7',
+-    'Linux x86_64',
+-    'iPhone; CPU iPhone OS 15_7_3 like Mac OS X',
+-    'Android 16; Mobile', // Add an Android platform
+-  ];
+-  String geckoVersion = '151.0';
+-  String geckoTrail = '20100101';
+-  String appName = 'Firefox';
+-  String appVersion = '151.0';
+-  String platform = platforms[Random().nextInt(platforms.length)];
+-  return 'Mozilla/5.0 ($platform; rv:$geckoVersion) Gecko/$geckoTrail $appName/$appVersion';
+-}
++/// Render a Firefox UA for a randomly chosen platform at the current Firefox
++/// version. The version is scraped from Firefox source at runtime by
++/// [FirefoxUserAgentService] (falling back to the bundled default offline),
++/// so the randomize button stays current without an app release.
++String generateRandomUserAgent() =>
++    FirefoxUserAgentService.instance.randomUserAgent();
+--- candidata: desktop-mode [PR+termos]
+  | # Desktop Mode Specification
+  | ## Purpose
+  | Render a site with a desktop layout (UA, viewport, pointer / touch
+  > Render a site with a desktop layout (UA, viewport, pointer / touch
+  > desktop-shaped User-Agent on it, and a mobile layout otherwise — without
+  > The current design **infers** desktop mode from the per-site User-Agent
+  > settings, with a randomize button cycling through Firefox desktop and
+  > mobile UAs). If the UA contains a mobile marker (`Android`, `iPhone`,
+  > `iPad`, `iPod`, `Mobile`, `BlackBerry`, `Windows Phone`, `Opera Mini`,
+  > plugin's `setDesktopMode(true)` path on Android (flips
+  > `"Mobile"`/`"Android"` substrings) and `WKWebpagePreferences.preferredContentMode = .desktop`
+--- candidata: link-intent-routing [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: LIR-001 - Per-Site Domain Claim List
+  | Each site SHALL carry a list of domain claims that declare which URLs it handles. A claim has a `kind` of `exactHost`, `wildcardSubdomain`, or `baseDomain`, and a canonical lowercase `value` with no s
+  > - **AND** the chosen site receives the full URL
+  > ### Requirement: LIR-004 - `webspace://` URL Scheme
+  > The app SHALL register the `webspace` URL scheme on every supported platform (Android intent-filter, iOS/macOS `CFBundleURLTypes`, Linux `.desktop` `MimeType=x-scheme-handler/webspace;`). The canonica
+  > #### Scenario: External app opens `webspace://` URL
+  > - **GIVEN** another app provides a button that calls `Intent.ACTION_VIEW` (Android) / `UIApplication.open` (iOS) / `xdg-open` (Linux) on `webspace://open?url=https%3A%2F%2Ftwitter.com%2Fuser`
+  > - **THEN** WebSpace launches (or is brought to foreground) without a chooser, since no other app handles `webspace://`
+  > - **WHEN** the app receives `webspace://open?url=javascript%3Aalert(1)` or any non-http(s) target
+  > #### Scenario: Cold start via `webspace://` URL
+--- candidata: web-push-notifications [tasks]
+  | # Web Push Notifications
+  | ## ADDED Requirements
+  | ### Requirement: NOTIF-001 - Notification Permission Handling
+  > The system SHALL handle JavaScript `Notification.requestPermission()` calls from web pages and grant or deny based on the per-site notification toggle. Requires container mode (`_useContainers == true
+  > The system SHALL inject a JavaScript polyfill at `DOCUMENT_START` (with `forMainFrameOnly: false`) on every site that defines `window.Notification`, `Notification.permission`, `Notification.requestPer
+  > **Given** a webview is being created for a site (iOS or Android)
+  > **Then** the polyfill returns without invoking the JS bridge
+  > The system SHALL provide a per-site toggle that opts the site into background polling. Only visible when container mode is active. In container mode, there are no domain conflicts, so all background-p
+  > #### Scenario: App enters background without background-poll sites
+  > **Then** both stay loaded concurrently (PROF-003 — no domain conflict)
+  > 3. Inform the user of these limitations on first use.
+--- candidata: lazy-webview-loading [tasks]
+  | # Lazy Webview Loading - Delta for Web Push Notifications
+  | ## MODIFIED Requirements
+  | ### Requirement: LAZY-001 - On-Demand Loading
+  > Webviews SHALL be created only when the user visits a site, EXCEPT for sites with `notificationsEnabled == true` which SHALL be auto-loaded on app startup so their page JS can fire notifications witho
+  > **And** sites without `notificationsEnabled` remain as placeholders until visited
+  > **And** new sites start fresh without preloading
+  > /// Set the current index and mark it as loaded for lazy webview creation.
+  > _currentIndex = index;
+  > index: _currentIndex!,
+  > // ... FindToolbar, UrlBar (only for current index)
+  > - Updated all `_currentIndex` assignments to use helper
+--- candidata: tracking-protection [termos]
+  | # Enhanced Tracking Protection — incognito fingerprint randomization delta
+  | ## MODIFIED Requirements
+  | ### Requirement: ETP-004 - Per-site stability and cross-site uniqueness
+  > The shim's randomized values SHALL be deterministic per `siteId` so a non-incognito site sees the same fingerprint across launches, but distinct seeds SHALL produce distinct shim sources so two sites 
+  > The system SHALL maintain a process-lifetime random nonce, exposed as `LaunchNonce.value` in [lib/services/launch_nonce.dart](../../../../../lib/services/launch_nonce.dart). The nonce SHALL be generat
+  > **And** matches `^[0-9a-f]+$` (hex encoding of `Random.secure` bytes)
+  > #### Scenario: Incognito + Tracking Protection randomizes per launch
+  > **And** therefore the shim source (and every fingerprintable surface seeded by the PRNG) changes across launches
+  > on Firefox's "Enhanced Tracking Protection". When the umbrella is on,
+  > the site is forced into the strongest-supported posture without users
+  > content blocker hides ad/tracker subresources via filter lists, and
+
+===== P132 | datenoio/iterabledata PR #11 | capacidade do par: cbor-format
+PR: Add LLM readiness roadmap: catalog, agent tools, and AI operations
+arquivos ligados: iterable/datatypes/cbor.py;iterable/helpers/detect.py
+--- linhas alteradas (1563; mostrando até 40)
+-        filename: str = None,
++        filename: str | None = None,
+-from __future__ import annotations
+-import importlib
+-from typing import Any, Literal, TypedDict
+-import chardet
+-from ..base import BaseCodec, BaseIterable
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-# Plugin discovery flag
+-_plugins_discovered = False
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+--- candidata: ai [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Block-Based Documentation Generation
+  | The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > independent blocks and returns a structured result containing per-block markdown and data
+  > #### Scenario: Generate selected blocks
+  > - **WHEN** `ai.doc.generate_blocks()` is called with `blocks=["general", "schema"]`
+  > - **THEN** the result contains a `blocks` mapping with entries for `general` and `schema`
+  > - **AND** each block entry contains a `markdown` string and a `data` dictionary
+  > - **AND** the result contains a `source` descriptor and a `full_document_markdown` string
+  > #### Scenario: Default block set
+--- candidata: convert [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: File Format Conversion
+  | The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > ### Requirement: File Format Conversion
+  > The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > The system SHALL support atomic writes for safer production file operations. When atomic writes are enabled, the system SHALL write to a temporary file and atomically rename it to the final destinatio
+  > #### Scenario: Atomic write on successful conversion
+  > - **WHEN** `convert()` is called with `atomic=True` and conversion completes successfully
+  > - **AND** the temporary file is atomically renamed to the final destination using `os.replace()`
+  > - **AND** the temporary file is removed after successful rename
+  > - **AND** the final output file is only visible when fully written
+--- candidata: format-registry [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Declarative Format Descriptors
+  | The system SHALL define each built-in format with a single declarative descriptor that records
+  > ### Requirement: Declarative Format Descriptors
+  > The system SHALL define each built-in format with a single declarative descriptor that records
+  > its canonical id, aliases, implementing module and class, whether its content is text or binary,
+  > whether it is flat/tabular, whether it supports writing, its optional-dependency extra (if any),
+  > and any leading-byte signatures used for content-based detection. The set of descriptors SHALL be
+  > the single source of truth for built-in format metadata.
+  > #### Scenario: Each format has exactly one descriptor
+  > - **WHEN** the format descriptor table is loaded
+--- candidata: database-engines [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Database Engine Support
+  | The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > ### Requirement: Database Engine Support
+  > The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > #### Scenario: PostgreSQL query as iterable source
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="SELECT id, name, created_at FROM users WHERE active = TRUE")`
+  > - **THEN** the system connects to PostgreSQL, executes the query, and returns an iterable that yields dict rows with keys `id`, `name`, `created_at`
+  > #### Scenario: PostgreSQL table name auto-query
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="users")` with a table name instead of SQL query
+  > - **THEN** the system automatically builds and executes `SELECT * FROM users`, returning an iterable of all rows from the table
+--- candidata: cloud-storage [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Cloud Storage URI Support
+  | The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > ### Requirement: Cloud Storage URI Support
+  > The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > - **WHEN** a user calls `open_iterable('s3://bucket/path/file.csv')`
+  > - **THEN** the system detects the S3 URI scheme, opens the file via fsspec, and returns an iterable that works identically to local files
+  > #### Scenario: Read compressed file from GCS
+  > - **WHEN** a user calls `open_iterable('gs://bucket/data.jsonl.gz')`
+  > - **THEN** the system detects the GCS URI, opens the file via fsspec, detects the gzip compression codec, and returns an iterable that transparently decompresses and parses the JSONL format
+  > #### Scenario: Write to Azure Blob Storage
+
+===== P133 | tatargabor/set-core PR #6 | capacidade do par: runtime-directory-convention
+PR: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization)
+arquivos ligados: lib/set_orch/engine.py;lib/set_orch/planner.py
+--- linhas alteradas (538; mostrando até 40)
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
+--- candidata: planner-strategy-routing [tasks+PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - Directive `planner.strategy` with values `serial | parallel | auto` (default `auto`).
+  > - `auto` mode that picks `serial` or `parallel` based on estimated flat-prompt input tokens.
+  > - Function `estimate_flat_prompt_tokens(digest_dir, replan_ctx)` that returns an integer estimate without invoking Claude.
+  > - Removal of the legacy `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic.
+  > - Single-call decompose path becomes the primary code path (the existing flat path at `planner.py:2674-2693` lifted out of the fallback branch).
+  > - Choosing models per strategy (covered by `model_config` and the cost-optimized preset).
+  > - The 3-phase pipeline implementation itself (covered by `orch-plan-python`).
+  > - Replan strategy selection (covered by `replan-scoped-patch`).
+--- candidata: replan-domain-plan-reuse [tasks+PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - On replan, look up `domains-plans-<lineage>.json` and reuse cached domain plans whose input hasn't changed.
+  > - Domain-input hashing (digest summary + requirements + planning brief).
+  > - Reuse logic for the 3-phase parallel path.
+  > - Reuse logic for the serial path (whole-plan reuse on identical digest input).
+  > - Telemetry recording how many domains were reused vs re-planned.
+  > - Generating the saved domain plans (that's `orch-plan-python`).
+  > - Diff-update digest pipeline (that's `digest-diff-update`).
+  > - The replan trigger logic itself (that's `orch-replan-python`).
+--- candidata: orch-plan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python planning orchestration
+  | The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > ### Requirement: Python planning orchestration
+  > The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > #### Scenario: Planning from Python replan
+  > - **WHEN** `auto_replan_cycle()` needs to generate a new plan
+  > - **THEN** it SHALL call `planner.run_planning_pipeline()` which orchestrates the full flow
+  > - **AND** the pipeline SHALL use existing Python functions: `detect_test_infra()`, `build_decomposition_context()`, `validate_plan()`, `enrich_plan_metadata()`
+  > ### Requirement: Design bridge integration in Python planning
+  > The Python planning pipeline SHALL support design bridge integration (Figma/Penpot snapshot) when a design MCP server is registered.
+--- candidata: orch-replan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python auto-replan cycle without bash dependency
+  | The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > ### Requirement: Python auto-replan cycle without bash dependency
+  > The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > #### Scenario: Auto-replan triggered after all changes complete
+  > - **WHEN** all changes reach terminal status and `auto_replan` directive is true
+  > - **THEN** the Python monitor SHALL call `engine.auto_replan_cycle()` directly (Python function)
+  > - **AND** `auto_replan_cycle()` SHALL NOT shell out to bash `planner.sh`
+  > ### Requirement: Python replan collects context via Python functions
+  > The Python `auto_replan_cycle()` SHALL collect replan context by calling Python functions directly.
+--- candidata: orch-digest-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python digest orchestration
+  | The system SHALL provide a Python implementation of the full spec digestion pipeline in `lib/set_orch/digest.py`, callable via `set-orch-core digest run`. The implementation SHALL replicate all behavi
+  > ### Requirement: Python digest orchestration
+  > The system SHALL provide a Python implementation of the full spec digestion pipeline in `lib/set_orch/digest.py`, callable via `set-orch-core digest run`. The implementation SHALL replicate all behavi
+  > #### Scenario: Full digest run
+  > - **WHEN** `set-orch-core digest run --state-file <path> --spec-dir <dir>` is invoked
+  > - **THEN** the system scans the spec directory, calls Claude API for analysis, writes digest output files (index.json, requirements.json), and updates state
+  > #### Scenario: Freshness check skips re-digest
+  > - **WHEN** digest is invoked and spec files have not changed since last digest (hash match)
+  > - **THEN** the system skips API calls and returns the cached digest
+
+===== P134 | norish-recipes/norish PR #468 | capacidade do par: shared-caldav-context
+PR: Rc/0.19.0
+arquivos ligados: apps/web/app/(app)/calendar/context.tsx;apps/web/app/(app)/groceries/context.tsx;apps/web/app/(app)/groceries/stores-context.tsx;apps/web/app/(app)/recipes/[id]/context.tsx;apps/web/app/(app)/settings/admin/context.tsx;apps/web/app/(app)/settings/caldav/context.tsx;apps/web/app/(app)/settings/household/context.tsx;apps/web/app/(app)/settings/user/context.tsx;apps/web/context/archive-import-context.tsx;apps/web/context/household-context.tsx;apps/web/context/permissions-context.tsx;apps/web/context/user-context.tsx;apps/web/hooks/admin/shared-admin-hooks.ts;apps/web/hooks/archive/shared-archive-hooks.ts;apps/web/hooks/caldav/shared-caldav-hooks.ts;apps/web/hooks/calendar/shared-calendar-hooks.ts;apps/web/hooks/favorites/shared-favorites-hooks.ts;apps/web/hooks/groceries/shared-groceries-hooks.ts;apps/web/hooks/households/shared-household-hooks.ts;apps/web/hooks/ratings/shared-ratings-hooks.ts;apps/web/hooks/stores/shared-stores-hooks.ts
+--- linhas alteradas (418; mostrando até 40)
+-import type { CalendarData } from "@/hooks/calendar";
+-  ReactNode,
+-import { Slot } from "@norish/shared/contracts";
+-import { addWeeks, dateKey, getWeekEnd, getWeekStart } from "@norish/shared/lib/helpers";
+-type PlannedItem = {
+-  id: string;
+-  userId: string;
+-  date: string;
+-  slot: Slot;
+-  sortOrder: number;
+-  itemType: "recipe" | "note";
+-  recipeId: string | null;
+-  title: string | null;
+-  createdAt: Date;
+-  updatedAt: Date;
+-};
+-type DateRange = {
+-  start: Date;
+-  end: Date;
+-};
+-type Ctx = {
+-  plannedItemsByDate: CalendarData;
+-  isLoading: boolean;
+-  isLoadingMore: boolean;
+-  dateRange: DateRange;
+-  planMeal: (date: string, slot: Slot, recipeId: string) => void;
+-  planNote: (date: string, slot: Slot, title: string) => void;
+-  deletePlanned: (id: string) => void;
+-  moveItem: (itemId: string, targetDate: string, targetSlot: Slot, targetIndex: number) => void;
+-  updateItem: (itemId: string, title: string) => void;
+-  getItemsForSlot: (date: string, slot: Slot) => PlannedItem[];
+-  expandRange: (direction: "past" | "future") => void;
+-  isDateInRange: (date: Date) => boolean;
+-};
+-const CalendarContext = createContext<Ctx | null>(null);
+-type CalendarContextProviderProps = {
+-  children: ReactNode;
+-  /** Initial range mode - desktop loads current week, mobile loads ±2 weeks */
+-  mode?: "desktop" | "mobile";
+-};
+--- candidata: shared-groceries-context [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Shared groceries context factory is provided from shared-react
+  | The system SHALL expose a `createGroceriesContext` factory from `@norish/shared-react/contexts` that creates a groceries data provider, UI provider, and hooks, accepting platform-specific adapters for
+  > ### Requirement: Shared groceries context factory is provided from shared-react
+  > The system SHALL expose a `createGroceriesContext` factory from `@norish/shared-react/contexts` that creates a groceries data provider, UI provider, and hooks, accepting platform-specific adapters for
+  > #### Scenario: Web creates groceries context with all adapters
+  > - **WHEN** the web app calls `createGroceriesContext` with query, mutations, subscription, and localStorage adapters
+  > - **THEN** the returned `GroceriesContextProvider`, `useGroceriesContext`, and `useGroceriesUIContext` SHALL function identically to the current web implementation
+  > #### Scenario: Mobile groceries screen consumes DTOs directly
+  > - **WHEN** the mobile groceries screen renders its grocery list
+  > - **THEN** all components (section cards, rows, sortable lists, editor sheets) SHALL accept `GroceryDto`, `StoreDto`, and `RecurringGroceryDto` as props without any intermediate mapping layer
+--- candidata: shared-groceries-hooks [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable groceries hook family
+  | `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable groceries hook family
+  > `@norish/shared-react` SHALL expose a `createGroceriesHooks` factory that returns groceries query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared groceries hooks are available to both apps
+  > - **WHEN** web and mobile import shared groceries hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared groceries modules SHALL NOT import platform runtime modules
+  > ### Requirement: Groceries hook family includes query, mutation, cache, and subscription hooks
+  > The `createGroceriesHooks` factory SHALL return hooks covering the grocery list lifecycle.
+--- candidata: shared-calendar-context [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared calendar context factory is provided from shared-react
+  | The system SHALL expose a `createCalendarContext` factory from `@norish/shared-react/contexts` that creates a calendar provider and hook, accepting platform-specific adapters for query, mutations, and
+  > ### Requirement: Shared calendar context factory is provided from shared-react
+  > The system SHALL expose a `createCalendarContext` factory from `@norish/shared-react/contexts` that creates a calendar provider and hook, accepting platform-specific adapters for query, mutations, and
+  > #### Scenario: Web creates calendar context with all adapters
+  > - **WHEN** the web app calls `createCalendarContext` with query, mutations, and subscription adapters
+  > - **THEN** the returned `CalendarContextProvider` and `useCalendarContext` SHALL function identically to the current web implementation
+  > ### Requirement: Calendar context supports desktop and mobile range modes
+  > The factory SHALL accept a `mode` parameter that controls initial date range loading.
+  > #### Scenario: Desktop mode loads current week
+--- candidata: shared-stores-hooks [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Shared React exposes reusable stores hook family
+  | `@norish/shared-react` SHALL expose a `createStoresHooks` factory that returns stores query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > ### Requirement: Shared React exposes reusable stores hook family
+  > `@norish/shared-react` SHALL expose a `createStoresHooks` factory that returns stores query, mutation, cache, and subscription hooks using tRPC binding injection.
+  > #### Scenario: Shared stores hooks are available to both apps
+  > - **WHEN** web and mobile import shared stores hooks
+  > - **THEN** both apps SHALL resolve the same shared-react hook factories
+  > - **AND** shared stores modules SHALL NOT import platform runtime modules
+  > ### Requirement: Stores hook family includes query, mutation, cache, and subscription hooks
+  > The `createStoresHooks` factory SHALL return hooks covering the store management lifecycle.
+--- candidata: shared-stores-context [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Shared stores context factory is provided from shared-react
+  | The system SHALL expose a `createStoresContext` factory from `@norish/shared-react/contexts` that creates a stores provider and hook, accepting platform-specific adapters for query, mutations, and sub
+  > ### Requirement: Shared stores context factory is provided from shared-react
+  > The system SHALL expose a `createStoresContext` factory from `@norish/shared-react/contexts` that creates a stores provider and hook, accepting platform-specific adapters for query, mutations, and sub
+  > #### Scenario: Web creates stores context with all adapters
+  > - **WHEN** the web app calls `createStoresContext` with query, mutations, and subscription adapters
+  > - **THEN** the returned `StoresContextProvider` and `useStoresContext` SHALL function identically to the current web implementation
+  > # shared-stores-context Specification
+  > Defines the shared React shared stores context factory pattern in `@norish/shared-react`, enabling both web and mobile to consume this functionality through a common, app-agnostic factory/adapter patt
+  > ### Requirement: Shared stores context factory is provided from shared-react
+
+===== P135 | strelov1/freehire PR #498 | capacidade do par: traffit-source
+PR: feat(sources): add eArcu ATS source adapter
+arquivos ligados: internal/sources/source.go
+--- linhas alteradas (1; mostrando até 40)
++		NewEarcu(c),
+--- candidata: ai-enrichment [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Jobs needing enrichment are tracked in a durable outbox queue
+  | The system SHALL maintain an `enrichment_outbox` table holding one entry per
+--- candidata: careerspage-source [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: careers-page.com tenant crawl
+  | The system SHALL provide a `careerspage` source adapter that crawls one
+--- candidata: deterministic-facets [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: The six dictionary facets are sourced solely from the deterministic dictionaries
+  | The system SHALL store the deterministic, dictionary-derived facets —
+--- candidata: earcu-source [PR]
+  | ## ADDED Requirements
+  | ### Requirement: eArcu per-company RSS crawl
+  | The system SHALL provide an `earcu` source adapter that crawls a single eArcu career
+--- candidata: erecruiter-source [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: eRecruiter company-board crawl
+  | The system SHALL provide an `erecruiter` source adapter that crawls one company's public

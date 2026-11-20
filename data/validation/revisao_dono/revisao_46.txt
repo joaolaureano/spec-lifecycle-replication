@@ -1,0 +1,350 @@
+===== P279 | licht1stein/brepl PR #14 | capacidade do par: delimiter-validation
+PR: Bundle all dependencies into self-contained uberscript
+arquivos ligados: test/hook_validate_test.clj;test/installer_test.clj
+--- linhas alteradas (12; mostrando até 40)
+-            [clojure.string :as str]))
+-;; Load validator lib
+-(load-file "lib/validator.clj")
+-(require '[brepl.lib.validator :as sut])
++            [clojure.string :as str]
++            [brepl.lib.validator :as sut]))
+-            [cheshire.core :as json]))
+-;; Load installer lib
+-(load-file "lib/installer.clj")
+-(require '[brepl.lib.installer :as sut])
++            [cheshire.core :as json]
++            [brepl.lib.installer :as sut]))
+--- candidata: packaging [PR+termos]
+  | # packaging Specification
+  | ## ADDED Requirements
+  | ### Requirement: Self-Contained Distribution
+  > brepl SHALL be distributable as a single self-contained script file with all dependencies bundled, requiring no network access at runtime.
+  > **And** all lib modules (validator, backup, installer, hook-utils, stop-hooks) are available
+  > **Given** the `brepl` file in the repository is a pre-built uberscript
+  > **When** `nix-build` is run on the brepl package
+  > brepl SHALL provide a build task to generate the self-contained uberscript from source.
+  > **Given** the source files are present in `src/brepl/lib/`
+  > **Then** the `brepl` file is regenerated as an uberscript
+  > **And** all required namespaces are bundled inline
+--- candidata: file-evaluation [tasks+termos]
+  | # File Evaluation
+  | ## ADDED Requirements
+  | ### Requirement: Post-Edit File Evaluation
+  > 2. Execute file evaluation via brepl
+  > ```clojure
+  > ```clojure
+  > Evaluation SHALL use brepl's existing port resolution to find the correct nREPL server.
+  > This reuses brepl's `-f` flag behavior that walks up directory tree.
+  > - Ensuring all required values are initialized
+  > $ brepl hook install
+  > $ brepl hook install --strict-eval
+--- candidata: stop-hooks [tasks+termos]
+  | # stop-hooks Specification
+  | ## Purpose
+  | Enable user-configurable hooks that execute when Claude Code fires the Stop event, allowing automated test runs, validation checks, and cleanup operations after Claude finishes responding.
+  > The system SHALL load stop hook definitions from `.brepl/hooks.edn` in the current working directory.
+  > Given Maya has created .brepl/hooks.edn with valid hook definitions
+  > When brepl hook stop executes
+  > Given no .brepl/hooks.edn file exists in the current directory
+  > When brepl hook stop executes
+  > Then brepl returns success with no hooks executed
+  > Given .brepl/hooks.edn contains malformed EDN or invalid hook structure
+  > When brepl hook stop executes
+
+===== P280 | netclaw-dev/netclaw PR #1398 | capacidade do par: bounded-image-egress
+PR: Loud tool-argument validation: eliminate silent discard/degradation of LLM tool arguments
+arquivos ligados: evals/run-evals.sh
+--- linhas alteradas (11; mostrando até 40)
++assert_tool_timeout_arg_recovery() {
++    # Loud arg validation: if the model emits a near-miss timeout key
++    # (TimeoutSeconds, timeout_seconds), the rejection's did-you-mean must
++    # steer it to the canonical _timeout_seconds within the turn — the
++    # command actually running is the proof of recovery.
++    stdout_contains '\[tool:call\] shell_execute' \
++        && stdout_contains 'netclaw-timeout-eval-ok'
++}
++    run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
++        "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \
++        "Use the shell to run: echo netclaw-timeout-eval-ok — give it a 300 second timeout since it might be slow."
+--- candidata: netclaw-tools [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: File read tool
+  | The system SHALL provide a `file_read` first-party tool that authorizes the
+  > detect the file category using the canonical attachment taxonomy where possible
+  > Images SHALL be eligible for model-visible handoff only when the active model's
+  > references needed to recreate the handoff nudge during recovery.
+  > #### Scenario: Image read on image-capable model becomes model-visible
+  > - **AND** the active model supports image input
+  > #### Scenario: Sub-agent image read can become model-visible
+  > - **AND** the sub-agent's selected model supports image input
+  > #### Scenario: Image read on text-only model returns modality guidance
+--- candidata: netclaw-session [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Persisted adopted-context metadata separates truthful provenance from third-party policy
+  | When the session persists or reuses an adopted-context record, it SHALL preserve
+  > This metadata split SHALL coexist with the existing trust model that adopted
+  > - **WHEN** the session later uses that record for audit, retry, or recovery
+  > This metadata split SHALL coexist with the existing trust model that adopted
+  > - **WHEN** the session later uses that record for audit, retry, or recovery
+  > ### Requirement: Approval recovery tests cover context directly
+  > Session approval recovery tests SHALL include direct coverage for turn-context construction, persistence, restoration, and projection into tool and memory contexts. End-to-end cold-recovery tests SHAL
+  > - **AND** the assertion does not require a full actor cold-recovery scenario for each individual field
+  > #### Scenario: End-to-end recovery test remains for user-visible behavior
+--- candidata: tool-arg-validation [PR]
+  | # tool-arg-validation — Delta Spec
+  | ## ADDED Requirements
+  | ### Requirement: Unknown argument keys reject the call before execution
+  > # tool-arg-validation — Delta Spec
+  > - a meta key (`_rationale`, `_timeout_seconds`, `_background`), matched
+  > valid argument names. MCP tools are exempt (server-side schema validation is
+  > - **GIVEN** a `shell_execute` call with `"TimeoutSeconds": "1200"`
+  > - **THEN** the call is rejected without executing the command
+  > - **AND** the tool result contains `Unrecognized argument 'TimeoutSeconds'`,
+  > a `did you mean '_timeout_seconds'` suggestion, and the valid argument names
+  > - **GIVEN** a `shell_execute` call with `"command": "ls"` (lowercase)
+--- candidata: background-job-execution [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Background job execution
+  | The system SHALL spawn a `BackgroundJobExecutionActor` child of the manager
+  > stdout/stderr to `~/.netclaw/jobs/{id}/output.log`, and monitor for process
+  > decision with normal synchronous shell tool results, not a trust escalation
+  > beyond the original tool execution. On timeout, the actor SHALL kill the entire
+  > - **GIVEN** a `StartBackgroundJob` command is accepted
+  > - **GIVEN** a background job process emits output far larger than the capture
+  > #### Scenario: Process timeout
+  > - **GIVEN** a background job exceeds its timeout
+  > - **WHEN** the timeout fires
+--- candidata: tool-call-metadata [PR]
+  | # tool-call-metadata Delta
+  | ## MODIFIED Requirements
+  | ### Requirement: Per-call timeout hint
+  > ### Requirement: Per-call timeout hint
+  > The `_timeout_seconds` field SHALL allow the LLM to set a per-call timeout. A
+  > - **GIVEN** the LLM requests `_timeout_seconds: 1200` on a shell_execute call
+  > - **THEN** the timeout is set to 1200 seconds
+  > #### Scenario: A small timeout hint is honored, not floored
+  > - **AND** the LLM requests `_timeout_seconds: 10`
+  > - **THEN** the timeout is set to 10 seconds (no floor is imposed)
+  > #### Scenario: No timeout hint uses the inherited default
+
+===== P282 | Yourdaylight/stock_datasource PR #121 | capacidade do par: data-management
+PR: Refactor/orchestrator simplify
+arquivos ligados: src/stock_datasource/modules/datamanage/service.py
+--- linhas alteradas (3; mostrando até 40)
++                username=username,
+-            username=None,
++            username=str(task_data.get("username", "")) or None,
+--- candidata: chat-orchestration [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Chat协调Agent调度
+  | 系统 MUST 在chat入口使用协调Agent进行意图解析与调度。
+
+===== P283 | HazelnutParadise/insyra PR #149 | capacidade do par: env-management
+PR: Enhance/stats
+arquivos ligados: cli/commands/hypothesis.go;cli/commands/pca.go;cli/commands/regression.go;cli/commands/stats_adv.go
+--- linhas alteradas (138; mostrando até 40)
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+--- candidata: dsl-commands [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Load data from file
+  | 系統 SHALL 提供 `load` 命令從檔案載入資料為 DataTable。
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`skewness`、`kurtosis`、`cov`。
+  > #### Scenario: Correlation
+  > - **THEN** 系統呼叫 `stats.Correlation()` 並顯示結果
+  > #### Scenario: Linear regression
+  > - **WHEN** 使用者執行 `regression linear y x1 x2`
+  > - **THEN** 系統呼叫 `stats.LinearRegression()` 並顯示迴歸結果
+  > - **THEN** 系統呼叫 `stats.PCA()` 取前 3 個主成份
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`kmeans`、`hclust`、`cutree`、`dbscan`、`silhouette`、`skewness`、`kurtosis`、`cov`。
+--- candidata: cli-entry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI entry point with cobra
+  | 系統 SHALL 提供 `cmd/insyra/main.go` 作為 CLI 程式入口，使用 cobra 框架建立 root command。
+--- candidata: repl-engine [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: REPL interactive loop
+  | 系統 SHALL 提供互動式 REPL 迴圈，使用 readline 行編輯庫，支援行編輯、歷史瀏覽和信號處理。
+--- candidata: script-runner [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Script file execution
+  | 系統 SHALL 提供 `run` 命令執行 `.isr` 腳本檔。
+
+===== P284 | koki-develop/Cork PR #33 | capacidade do par: task-delete
+PR: feat(updater): add in-app updater via tauri-plugin-updater
+arquivos ligados: src-tauri/src/lib.rs
+--- linhas alteradas (2; mostrando até 40)
++        .plugin(tauri_plugin_updater::Builder::new().build())
++        .plugin(tauri_plugin_process::init())
+--- candidata: updater [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: アプリは起動時に最新リリースを自動チェックする
+  | Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > Cork プロセスは、`getCurrentWebviewWindow().label === "main"` を満たす Window 上で `useUpdater` フックがマウントされた直後の `useEffect` 1 回に限り、`@tauri-apps/plugin-updater` の `check()` を呼び出して `latest.json` を取得し、内部で SemVer 比較しな
+  > `Update available` toast の `Install and Restart` action ボタンが選択された場合、同じ toast id を保持したまま sonner の状態を遷移させ、`tauri-plugin-updater` の `downloadAndInstall` を呼び出さなければならない (MUST)。状態遷移は `available → downloadin
+  > - **WHEN** ダウンロード完了直後（plugin が `Finished` イベントを emit）
+  > CI でビルドされる `Cork.app.tar.gz` は、`TAURI_SIGNING_PRIVATE_KEY` (minisign 秘密鍵) と `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` を環境変数として受け取った `tauri build` が同名の `.sig` ファイル (base64 minisign) を生成し、release アセットとしてアップロ
+  > ビルド時、`tauri.conf.json` の `bundle.macOS.signingIdentity: "-"` によって Tauri が `.app` を ad-hoc 署名しなければならない (MUST)。`tauri-plugin-updater` が新 `.app` を `reqwest` でメモリにダウンロードし、`tar` 展開してから `std::fs::rename` で配
+  > - **AND** `cork --version` が新バージョン番号を返す (`cli/build.rs` が `package.json` の version を埋め込んでいるため)
+  > `tauri-plugin-updater` の endpoint は `https://github.com/koki-develop/Cork/releases/latest/download/latest.json` 単一でなければならない (MUST)。`latest.json` は CI (`release-please.yml` の `release` ジョブ) で生成され、その re
+  > - **THEN** プロセスは aarch64 として振る舞うため、`tauri-plugin-updater` は `darwin-aarch64` プラットフォームエントリを取得し、通常通り更新通知 toast を表示する
+--- candidata: mcp-server [tasks]
+  | # mcp-server
+  | ## ADDED Requirements
+  | ### Requirement: MCP サーバはアプリ起動時に設定に従って起動する
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+  > Cork プロセス起動時、`tauri_plugin_store` の `settings.json` の `mcp` キーから MCP 設定 (`enabled`, `token`) を読み込み、`enabled` が `true` のときに限り MCP サーバを起動する。サーバは `127.0.0.1:8569` (port 8569 固定) で Streamable HTTP トランスポート
+  > MCP 設定 (`enabled`, `token`) は `tauri_plugin_store` の既存ストア `settings.json` の新規トップレベルキー `mcp` 配下にネスト保存される。これらの設定はプロセス全体に対して 1 セット (window 単位や workspace 単位ではない)。`workspace_history` / `workspaces` (per-wo
+--- candidata: per-workspace-statuses [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: statuses 設定は作業ディレクトリ直下の `.cork.json` に保存される
+  | statuses 設定はグローバル `settings.json` ではなく、現在選択中の作業ディレクトリ直下の `.cork.json` ファイルに保存される。`.cork.json` のスキーマは JSON オブジェクト形式で、`statuses` キーに `{ "label": string }` 要素の配列を保持する。Cork は statuses 設定の永続化先として `.cork.js
+  > `tauri_plugin_store` 経由のグローバル `settings.json` に `statuses` を読み書きするコードパスは存在してはならない (MUST NOT)。`get_statuses` / `save_statuses` / `list_tasks` のデフォルトステータス読み出しはすべて `.cork.json` ベースに置き換わる (SHALL)。
+  > `tauri_plugin_store` 経由のグローバル `settings.json` に `statuses` を読み書きするコードパスは存在してはならない (MUST NOT)。`get_statuses` / `save_statuses` / `list_tasks` のデフォルトステータス読み出しはすべて `.cork.json` ベースに置き換わる (SHALL)。
+--- candidata: backend-update-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Update task command
+  | The Tauri backend SHALL provide a `update_task` command that updates a task's frontmatter fields (title, status) and body in a single call, and renames the file when the title changes.
+--- candidata: create-task [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: User can create a task
+  | The system SHALL allow users to create a new task from the board view.
+
+===== P285 | huytdps13400/react-native-ssl-manager PR #5 | capacidade do par: android-network-security-config
+PR: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI
+arquivos ligados: scripts/postinstall.js
+--- linhas alteradas (36; mostrando até 40)
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+--- candidata: expo-plugin [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Expo Plugin Registration
+  | The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > - **THEN** the plugin uses `ssl_config.json` from the project root
+  > - **WHEN** the plugin is added as `["react-native-ssl-manager", { "sslConfigPath": "./custom/path.json" }]`
+  > The Expo plugin SHALL automatically add the `ssl_config.json` file to the iOS Xcode project bundle resources during prebuild.
+  > The Expo plugin SHALL automatically copy the `ssl_config.json` file to the Android `assets` directory and ensure the INTERNET permission is present in `AndroidManifest.xml` during prebuild.
+  > The Expo config plugin and build scripts SHALL allow the Network Security Config
+  > - **WHEN** the plugin is configured with `pinExpiration: "2027-12-31"`
+  > - **THEN** the generated `network_security_config.xml` uses that expiration date
+--- candidata: ssl-pinning-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Set SSL Pinning State
+  | The library SHALL export a `setUseSSLPinning(usePinning: boolean): Promise<void>` function that enables or disables SSL certificate pinning at runtime by persisting the state to native storage (UserDe
+  > #### Scenario: App restart required
+  > - `SslPinningConfig`: an interface with a `sha256Keys` property mapping domain strings to arrays of SHA-256 pin strings
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > ### Requirement: TrustKit initialized at most once per process
+  > The iOS implementation SHALL initialize TrustKit at most once per process and
+  > optional `enforcePinning` flag so pinning can degrade gracefully and avoid a
+  > - **WHEN** `enforcePinning` is `false`
+--- candidata: android-pinned-client-api [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public Pinned OkHttpClient Singleton
+  | The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+--- candidata: ios-urlsession-documentation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: iOS Networking Stack Coverage Documentation
+  | The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section
+  > ### Requirement: iOS Networking Stack Coverage Documentation
+  > The library SHALL document in the README that the iOS implementation (via TrustKit with `kTSKSwizzleNetworkDelegates: true`) automatically covers most URLSession-based networking stacks without additi
+  > - **WHEN** a developer reads the README "Supported Networking Stacks" section
+  > - **WHEN** a developer reads the "Supported Networking Stacks" section
+--- candidata: ssl-configuration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configuration File Format
+  | The library SHALL read SSL pinning configuration from a JSON file with the following structure:
+  > - A required `sha256Keys` object mapping domain hostnames to arrays of SHA-256 certificate pin strings
+  > - **WHEN** the configuration file contains multiple domains under `sha256Keys`
+  > The configuration file MUST be named exactly `ssl_config.json` and placed in the project root directory (same level as `package.json` or `app.json`).
+  > - **WHEN** `ssl_config.json` exists in the project root
+  > - **WHEN** `ssl_config.json` is not found in the expected location
+  > - **THEN** the native layer reads `ssl_config.json` from the main bundle
+  > - **THEN** the native layer reads `ssl_config.json` from the assets directory

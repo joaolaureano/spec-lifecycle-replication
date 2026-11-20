@@ -1,0 +1,573 @@
+===== P261 | Chorus-AIDLC/Chorus PR #359 | capacidade do par: root-idea-resolution
+PR: feat: AgentInstance addressing — idea-rooted pin-once-inherit
+arquivos ligados: src/mcp/tools/public.ts
+--- linhas alteradas (8; mostrando até 40)
++import { isAssignmentOwnedByActor } from "@/lib/uuid-resolver";
+-      // Status update requires assignee check
++      // Status update requires assignee check. The shared helper also passes an
++      // `agent_instance` assignment owned by this agent.
+-        const isAssignee =
+-          (task.assigneeType === "agent" && task.assigneeUuid === auth.actorUuid) ||
+-          (task.assigneeType === "user" && auth.ownerUuid && task.assigneeUuid === auth.ownerUuid);
++        const isAssignee = await isAssignmentOwnedByActor(auth, task.assigneeType, task.assigneeUuid);
+--- candidata: instance-addressed-assignment [PR+termos]
+  | # instance-addressed-assignment Specification
+  | ## Purpose
+  | TBD - created by archiving change add-agent-instance-addressing. Update Purpose after archive.
+  > # instance-addressed-assignment Specification
+  > TBD - created by archiving change add-agent-instance-addressing. Update Purpose after archive.
+  > ### Requirement: agent_instance is a third polymorphic assignee type
+  > Ideas and Tasks SHALL support a third polymorphic assignee type `agent_instance` in addition
+  > to `user` and `agent`. A pinned assignment SHALL be represented as `assigneeType = "agent_instance"`
+  > with `assigneeUuid` referencing an `AgentInstance.uuid`; an un-pinned agent assignment SHALL
+  > remain `assigneeType = "agent"` with `assigneeUuid` referencing an `Agent.uuid`. No additional
+  > pin columns SHALL be added to Idea or Task — the polymorphic `assigneeType`/`assigneeUuid`
+--- candidata: agent-instance [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AgentInstance is a durable (company, agent, host, cwd) identity
+  | The system SHALL persist a first-class `AgentInstance` entity uniquely identified by the
+  > ### Requirement: AgentInstance is a durable (company, agent, host, cwd) identity
+  > tuple `(companyUuid, agentUuid, host, cwd)`. The entity SHALL store only durable identity
+  > fields — `companyUuid`, `agentUuid`, `host`, `cwd`, `createdAt`, `updatedAt` — and SHALL NOT
+  > - **WHEN** a daemon connection is registered for an `(agentUuid, host, cwd)` that has no
+  > - **WHEN** a daemon connection is registered for an `(agentUuid, host, cwd)` that already has
+  > - **WHEN** a daemon for the same `(agentUuid, host, cwd)` disconnects and reconnects, producing
+  > A `DaemonConnection` SHALL carry a nullable `agentInstanceUuid` referencing the
+  > `(agentUuid, host, cwd)`, the system SHALL set `agentInstanceUuid` to the matching
+--- candidata: cli-daemon [tasks]
+  | # cli-daemon
+  | ## ADDED Requirements
+  | ### Requirement: Daemon subcommand and notification subscription
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > #### Scenario: Task assignment wakes Claude Code
+  > - **WHEN** the subscribed agent receives a `task_assigned` notification
+  > When the server reports a `connection_conflict` event for one of the daemon's path-connections (a live daemon already holds the same `(agent, host, cwd)`), the daemon SHALL print a prominent WARNING t
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > #### Scenario: Task assignment wakes Claude Code
+  > - **WHEN** the subscribed agent receives a `task_assigned` notification
+  > `GET /api/entities/{type}/{uuid}/root-idea` (authenticated with its agent API key) and
+--- candidata: conversational-idea-entry [termos]
+  | # Delta Spec: conversational-idea-entry
+  | ## ADDED Requirements
+  | ### Requirement: The create-idea modal SHALL offer a conversational mode when online daemon connections exist
+  > The create-idea modal SHALL keep the static form as its default mode and SHALL show an explicit switch into a conversational mode. The switch SHALL be enabled only when at least one daemon connection 
+  > ### Requirement: The offline hint SHALL reuse the shared daemon-connect guidance without hardcoding the command in i18n
+  > The disabled-state hint SHALL present the daemon startup guidance by composing the shared daemon-connect CTA (or by interpolating the shared `DAEMON_START_COMMAND` constant as a message parameter). Th
+  > - **THEN** the hint shows the copyable daemon startup command sourced from the shared constant, and the i18n messages contain only a `{command}` placeholder rather than the literal command
+  > The conversational mode SHALL list agents that have at least one online daemon connection and, for the selected agent, SHALL let the user pick the target connection instance (host + cwd) using the sha
+  > - **WHEN** the selected agent has two or more online daemon connections
+  > - **THEN** the send action stays disabled until the user picks one instance, and each choice displays host and cwd per the shared instance formatting rules
+  > - **WHEN** the selected agent has exactly one online daemon connection
+--- candidata: report-realtime [termos]
+  | # report-realtime Specification
+  | ## ADDED Requirements
+  | ### Requirement: Creating a report-typed Document SHALL fan out a `document/created` `RealtimeEvent`
+  > When `documentService.createDocument` persists a row with `type === "report"`, the service MUST publish exactly one `RealtimeEvent` on the `change` channel of the shared `eventBus`. The event MUST car
+  > - **WHEN** an authenticated agent calls `chorus_create_report` with `proposalUuid = P.uuid`, a non-empty `title`, and a non-empty Markdown `content`
+  > - **AND** the server MUST emit one `RealtimeEvent` with `entityType = "document"`, `action = "created"`, `entityUuid` equal to the new document's UUID, `projectUuid` equal to `P.projectUuid`, and `act
+  > - **WHEN** an authenticated PM agent calls `chorus_pm_create_document` with `type = "tech_design"` (or `prd`, `adr`, `spec`, `guide`)
+  > - **WHEN** an agent calls `chorus_create_report`
+  > ### Requirement: Creating an idea-rooted report SHALL also fan out an `idea/updated` `RealtimeEvent`
+  > When the report-typed Document being created is linked to a Proposal whose `inputType === "idea"` (i.e. an idea-rooted Proposal), `documentService.createDocument` MUST publish a second `RealtimeEvent`
+  > - **WHEN** an agent calls `chorus_create_report` referencing that Proposal
+
+===== P262 | mckinsey/agents-at-scale-ark PR #1459 | capacidade do par: executor-developer-guide
+PR: feat(sdk): load MCP tools from named execution engines
+arquivos ligados: lib/ark-sdk/gen_sdk/overlay/python/ark_sdk/extensions/query.py
+--- linhas alteradas (80; mostrando até 40)
++    MCPServerConfig,
+-    ToolDefinition,
+-    Replicates the resolution chain from the Go completions engine:
+-    Query CRD → Agent CRD → Model CRD + Tool CRDs → ExecutionEngineRequest
++    Resolution chain: Query CRD → Agent CRD → Model CRD + MCPServer CRDs → ExecutionEngineRequest.
++    Only a QueryRef crosses A2A — all resources are resolved locally from the cluster.
+-    tools = await _build_tool_definitions(ark, agent, namespace)
++    mcp_servers = await _build_mcp_servers(ark, agent, namespace)
+-        tools=tools,
++        mcpServers=mcp_servers,
+-async def _build_tool_definitions(ark, agent, namespace: str) -> List[ToolDefinition]:
+-    tools = []
++async def _resolve_mcp_server(ark, server_name: str, namespace: str) -> Optional[MCPServerConfig]:
++    server_namespace = namespace
++    try:
++        server_crd = await ark.mcpservers.a_get(server_name, server_namespace)
++    except Exception as e:
++        logger.warning(f"Failed to resolve MCPServer '{server_name}': {e}")
++        return None
++    spec = server_crd.spec
++    url = await _resolve_value_source(spec.address, server_namespace)
++    if not url:
++        logger.warning(f"MCPServer '{server_name}' has no resolvable address")
++        return None
++    headers: Dict[str, str] = {}
++    if spec.headers:
++        for header in spec.headers:
++            header_name = _get_attr_or_key(header, "name")
++            header_value_source = _get_attr_or_key(header, "value")
++            if header_name and header_value_source:
++                resolved = await _resolve_value_source(header_value_source, server_namespace)
++                if resolved:
++                    headers[header_name] = resolved
++    transport = getattr(spec, "transport", "http") or "http"
++    timeout = getattr(spec, "timeout", "30s") or "30s"
++    return MCPServerConfig(
++        name=server_name,
++        url=url,
++        transport=transport,
++        timeout=timeout,
+--- candidata: mcp-server-resolution [PR+termos]
+  | # MCP Server Resolution for Named Executors
+  | ## ADDED Requirements
+  | ### Requirement: MCPServerConfig type on ExecutionEngineRequest
+  > # MCP Server Resolution for Named Executors
+  > ### Requirement: MCPServerConfig type on ExecutionEngineRequest
+  > The `ExecutionEngineRequest` SHALL include an `mcpServers` field containing a list of `MCPServerConfig` objects. The `tools` field and `ToolDefinition` type SHALL be removed.
+  > #### Scenario: Agent with MCP tools dispatched to named executor
+  > - **WHEN** a query targets an agent with `executionEngine` set to a named engine and the agent has MCP-type tools
+  > - **THEN** the `ExecutionEngineRequest` SHALL contain an `mcpServers` list with one entry per unique MCPServer referenced by the agent's tools
+  > #### Scenario: Agent with no MCP tools
+  > - **WHEN** a query targets an agent with `executionEngine` set to a named engine and the agent has no MCP-type tools
+--- candidata: query-extension-docs [PR+termos]
+  | # Query Extension Documentation Clarification
+  | ## ADDED Requirements
+  | ### Requirement: Query extension README documents self-resolution pattern
+  > # Query Extension Documentation Clarification
+  > ### Requirement: Query extension README documents self-resolution pattern
+  > The query extension README SHALL explicitly state that only a QueryRef crosses the A2A boundary and that executors resolve all resources from the cluster.
+  > - **THEN** the Resolution section SHALL state that only a QueryRef (name + namespace) is transmitted over A2A, the executor resolves all resources locally from the cluster via its service account, and
+  > ### Requirement: Building execution engines guide documents resolution location
+  > The execution engines developer guide SHALL clarify that resolution happens within the executor pod, not over the wire.
+  > #### Scenario: Developer reads building execution engines guide
+  > - **WHEN** a developer reads `docs/content/developer-guide/building-execution-engines.mdx`
+--- candidata: a2a-query-extension [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Query extension schema definition
+  | The system SHALL define a JSON Schema at `ark/api/extensions/query/v1/schema.json` as the single source of truth for the query extension contract. The schema SHALL define a QueryRef object with requir
+  > ### Requirement: Query extension schema definition
+  > The system SHALL define a JSON Schema at `ark/api/extensions/query/v1/schema.json` as the single source of truth for the query extension contract. The schema SHALL define a QueryRef object with requir
+  > - **THEN** the file contains a valid JSON Schema with `$id` matching the extension URI, and defines `name` and `namespace` as required string properties
+  > ### Requirement: Controller sends QueryRef extension
+  > The controller `executeViaEngine` SHALL attach the query extension to A2A messages using the A2A v0.3.0 extension mechanism. The metadata key SHALL be `{extension-uri}/ref` containing `{ "name": <quer
+  > #### Scenario: Controller sends query to remote completions engine
+  > - **THEN** the A2A message includes the `X-A2A-Extensions` header with the query extension URI and metadata containing the QueryRef with the query's name and namespace
+  > ### Requirement: Completions engine forwards QueryRef extension to named engines
+--- candidata: mcp-auth-ark-api-orchestration [termos]
+  | ## ADDED Requirements
+  | ### Requirement: ark-api exposes POST /auth/start to initiate an authorization flow
+  | ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > ark-api SHALL expose `POST /api/v1/mcp-servers/{name}/auth/start` to initiate an OAuth 2.1 authorization flow for the referenced `MCPServer` and SHALL return `{ auth_id, authorization_url, flow_expire
+  > | 404 | MCPServer not found in the resolved namespace | this requirement (scenario below) |
+  > | 409 | MCPServer is `Authorized` and no `force: true`; OR `status.authorization` is entirely absent | [auth/start refuses non-Required state without force](#requirement-authstart-refuses-non-required
+  > | 422 | MCPServer is `DiscoveryFailed`; OR `registrationEndpoint` is empty AND the Secret carries no cached `client_id` / `client_secret`; OR a Secret named `<server>-oauth` exists without the `ark.mc
+  > - **WHEN** a client calls `POST /api/v1/mcp-servers/{name}/auth/start`
+  > #### Scenario: auth/start is invoked for an unknown MCPServer
+  > - **WHEN** `POST /api/v1/mcp-servers/{name}/auth/start` is called with `{name}` referencing a non-existent MCPServer in the resolved namespace
+  > The four auth endpoints (`auth/start`, `auth/callback`, `auth/status`, `auth/logout`) SHALL NOT introduce a new inbound-authentication contract. They inherit the same trust boundary as every other rou
+
+===== P263 | clay-good/OpenLore PR #218 | capacidade do par: mcp-handlers
+PR: feat: refine the happy path — guided activation, legible surface, and the benchmark-cleared substrate default
+arquivos ligados: src/cli/commands/mcp-presets.test.ts;src/cli/commands/mcp.ts;src/core/services/mcp-handlers/map.ts;src/core/services/mcp-handlers/pathfind.ts
+--- linhas alteradas (166; mostrando até 40)
++import { capabilityFamily, type CapabilityFamily } from '../../core/services/mcp-handlers/tool-contract.js';
+-  // record_decision write, no commit gate. The active default stays `navigation` until the
+-  // benchmark clears `substrate` (ADR-0022 evidence-backed default), so `substrate` must
+-  // NOT be the no-selector default surface.
++  // record_decision write, no commit gate. `substrate` is now the no-selector DEFAULT
++  // surface (decision c79ec7ca superseding ADR-0022, after the DefaultSurfaceRevealsAllFaces
++  // benchmark cleared it across two models and both repo tiers with no regression).
+-  it('substrate is a selectable preset, never the no-selector default (default stays navigation)', () => {
+-    // Until the benchmark clears the wider default, no-selector resolves to navigation.
++  it('substrate IS the no-selector default surface (the benchmark-cleared flip)', () => {
+-    expect(LEAN_DEFAULT_PRESET).toBe('navigation');
+-    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).not.toContain('recall');
+-    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).not.toContain('verify_claim');
++    expect(LEAN_DEFAULT_PRESET).toBe('substrate');
++    // The default now reveals the governance READS that navigation alone hid.
++    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).toContain('recall');
++    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).toContain('verify_claim');
++    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).toContain('blast_radius');
++    // governance WRITES / gate still require an explicit wider preset.
++    expect(selectActiveTools(TOOL_DEFINITIONS, {}).map(t => t.name)).not.toContain('record_decision');
++  });
++  // DefaultSurfaceRevealsAllFaces (change: refine-happy-path-and-defaults): the default
++  // `substrate` surface is FACE-COMPLETE — it exposes at least one tool from each
++  // high-value face (navigate + remember + verify + change) — whereas the lean
++  // navigate-only `navigation` preset does not. The token-economy + face-coverage
++  // evidence is produced by scripts/bench-preset-surface.ts; the task-completion +
++  // selection evidence by scripts/bench-preset-{completion,selection}.ts.
++  const facesOf = (preset: string): Set<CapabilityFamily> => {
++    const fams = new Set<CapabilityFamily>();
++    for (const t of selectActiveTools(TOOL_DEFINITIONS, { preset })) {
++      const f = capabilityFamily(t.name);
++      if (f) fams.add(f);
++    }
++    return fams;
++  };
++  const HIGH_VALUE_FACES: CapabilityFamily[] = ['navigate', 'remember', 'verify', 'change'];
++  it('the default (substrate) surface reveals all high-value faces (navigate + remember + verify + change)', () => {
++    const faces = facesOf(LEAN_DEFAULT_PRESET);
++    for (const face of HIGH_VALUE_FACES) {
++      expect(faces.has(face), `the default surface must expose the "${face}" face`).toBe(true);
+--- candidata: analyzer [tasks+PR+termos]
+  | # analyzer spec delta
+  | ## ADDED Requirements
+  | ### Requirement: PrecisionOrderConsistencyInvariant
+  > The system SHALL provide an offline (CI/dogfood) invariant checker over the call-graph resolution
+  > produce a call edge absent from the more conservative configuration's graph, with
+  > the registered governance finding `callgraph-precision-order-violation` (advisory by default,
+  > check SHALL be deterministic, local, and require no ground truth; it SHALL NOT run in any serving
+  > - **THEN** the checker emits `callgraph-precision-order-violation` identifying the edge and its
+  > #### Scenario: A clean ladder passes silently
+  > - **GIVEN** builds whose precise configurations only refine or remove edges
+  > The system SHALL maintain a dev-only calibration harness that measures call-edge recall per
+--- candidata: cli [tasks+PR+termos]
+  | # CLI Specification
+  | > Generated by openlore on 2025-01-30
+  | > Source files: src/commands/spec.ts, src/commands/change.ts, src/commands/validate.ts, src/commands/schema.ts
+  > > Generated by openlore on 2025-01-30
+  > > Source files: src/commands/spec.ts, src/commands/change.ts, src/commands/validate.ts, src/commands/schema.ts
+  > Provides command-line interface for managing OpenSpec projects, including spec viewing, change management, validation, and schema inspection. Supports both interactive and non-interactive modes with m
+  > | json | boolean | Output as JSON instead of formatted text |
+  > | noInteractive | boolean | Disable interactive prompts |
+  > | verbose | boolean | Enable detailed output |
+  > ### OutputFormat
+  > - **AND** the JSON includes parsed requirements and scenarios
+--- candidata: mcp-quality [tasks+termos]
+  | # mcp-quality spec delta
+  | ## ADDED Requirements
+  | ### Requirement: DataDependentFollowupHints
+  > Conclusion tool responses SHALL carry at most two deterministic follow-up hints, emitted only
+  > response's payload. Each hint SHALL name the suggested tool and cite the triggering field and its
+  > value (a receipt, not advice). Rules SHALL reference existing classifier outputs and constants
+  > unknown tool or a field absent from the target payload shape fails the build. Hints are the
+  > descriptions; they are advisory payload content and SHALL never gate or block. Hint emission
+  > SHALL be deterministic: the same payload yields the same hints.
+  > - **THEN** it carries no follow-up hints — hints never fire unconditionally
+  > #### Scenario: The hint cap holds under multiple matches
+--- candidata: drift [PR]
+  | # drift spec delta
+  | ## ADDED Requirements
+  | ### Requirement: SpecLinkStatusNamesUnwantedAndPredated
+  > # drift spec delta
+  > The spec↔code link vocabulary SHALL name, as registered governance finding codes, two states it
+  > cannot express today: `spec-coverage-unwanted` — an anchored memory/decision or spec-linked symbol
+  > that no requirement requires (coverage a deleted or narrowed spec left behind) — and
+  > `spec-citation-predated` — a citation to a spec/decision revision newer than the indexed store
+  > knows. Both SHALL be deterministic lookups over the graph and store, emitted in the unified
+  > governance-finding shape, advisory by default.
+  > #### Scenario: An orphaned implementation is named Unwanted
+
+===== P264 | 0verL1nk/PaperSage PR #20 | capacidade do par: trace-middleware
+PR: feat: agent centric orchestration
+arquivos ligados: agent/capabilities.py;agent/middlewares/__init__.py;agent/runtime_agent.py;tests/unit/test_agent_capabilities.py
+--- linhas alteradas (166; mostrando até 40)
++from .middlewares.progressive_tool_disclosure import _TOOL_VISIBILITY_ATTR
+-_TOOL_VISIBILITY_ATTR = "_progressive_tool_visibility"
+-    progressive_enabled = _env_flag("AGENT_PROGRESSIVE_TOOL_DISCLOSURE", default=True)
+-    if not progressive_enabled:
+-        for tool_obj in runtime_tools:
+-            setattr(tool_obj, _TOOL_VISIBILITY_ATTR, "fixed")
+-        logger.info(
+-            "Agent tools prepared (legacy): discovered=%s enabled=%s names=%s",
+-            len(discovered_tools),
+-            len(runtime_tools),
+-            ",".join(tool_item.name for tool_item in runtime_tools),
+-        )
+-        return runtime_tools
+-    for tool_name, tool_obj in runtime_tool_map.items():
+-        visibility = "fixed" if tool_name in fixed_tool_names else "lazy"
+-        setattr(tool_obj, _TOOL_VISIBILITY_ATTR, visibility)
+-    setattr(search_tools, _TOOL_VISIBILITY_ATTR, "fixed")
+-        "Agent tools prepared (progressive): discovered=%s fixed=%s lazy=%s registered=%s names=%s",
++        "Agent tools prepared: discovered=%s registered=%s names=%s",
+-        len(fixed_tool_names),
+-        len(lazy_tool_names),
+-# Deprecated: Import from agent.middlewares instead
+-from .middlewares import (  # noqa: E402, F401
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
+-from .progressive_tool_disclosure import (
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
++from .builder import build_middleware_list
++from .orchestration import OrchestrationMiddleware
++from .plan import plan_middleware
++from .todolist import todolist_middleware
++from .tool_selector import build_tool_selector_middleware
++    "OrchestrationMiddleware",
+-    "ProgressiveToolDisclosureMiddleware",
+-    "build_progressive_tool_middleware",
++    "todolist_middleware",
++    "plan_middleware",
+--- candidata: todolist-middleware [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: LangChain TodoListMiddleware Integration
+  | The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.
+  > ### Requirement: LangChain TodoListMiddleware Integration
+  > The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.
+  > - **WHEN** agent is initialized
+  > - **THEN** TodoListMiddleware is registered in the middleware chain
+  > #### Scenario: Todolist tools injection
+  > - **WHEN** agent processes a request
+  > - **THEN** TodoListMiddleware automatically injects todolist management tools
+  > #### Scenario: Remove write_todo tool
+--- candidata: middleware-architecture [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Middleware 目录结构
+  | 系统 SHALL 在 `agent/middlewares/` 目录下组织所有 middleware 实现，包含 `__init__.py` 和具体的 middleware 模块文件。
+  > 系统 SHALL 在 `agent/middlewares/` 目录下组织所有 middleware 实现，包含 `__init__.py` 和具体的 middleware 模块文件。
+  > - **THEN** 存在 `agent/middlewares/__init__.py`、`agent/middlewares/trace.py`、`agent/middlewares/progressive_tool_disclosure.py` 等模块
+  > ### Requirement: 直接继承 LangChain AgentMiddleware
+  > 系统 SHALL 让所有自定义 middleware 直接继承 `langchain.agents.middleware.AgentMiddleware` 基类，无需额外的项目级基类。
+  > #### Scenario: TraceMiddleware 继承 AgentMiddleware
+  > - **WHEN** 定义 TraceMiddleware 类
+  > - **THEN** 使用 `class TraceMiddleware(AgentMiddleware)` 并重写需要的 hook 方法
+  > - **WHEN** middleware 的 before_model hook 需要提前结束执行
+--- candidata: orchestration-middleware [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Context Analysis
+  | The middleware SHALL analyze the conversation context to determine task complexity.
+  > The middleware SHALL analyze the conversation context to determine task complexity.
+  > - **THEN** the middleware does not inject guidance prompts
+  > - **WHEN** the user prompt contains multiple steps or dependencies
+  > - **THEN** the middleware identifies it as a complex task
+  > The middleware SHALL inject guidance prompts when complex tasks are detected.
+  > - **THEN** the middleware injects a system message suggesting create_plan tool
+  > - **THEN** the middleware injects a system message suggesting activate_team_mode tool
+  > - **THEN** the middleware does NOT call planning_service.build_execution_plan
+--- candidata: plan-management [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Plan Creation by Leader
+  | The system SHALL provide a create_plan tool that stores Leader's self-written plan.
+  > #### Scenario: Leader creates plan with own content
+  > - **THEN** the system stores the plan in agent state without generating content
+  > - **AND** the plan content is exactly what Leader provided
+  > - **THEN** the tool does NOT call LLM to generate plan content
+  > - **THEN** the system returns plan_id, goal, and description as written by Leader
+  > - **THEN** the system updates the plan's description field with Leader's new content
+  > - **AND** the tool does NOT regenerate or modify Leader's content
+  > - **WHEN** agent calls delete_plan and a plan exists
+--- candidata: orchestration-tools [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Plan Mode Activation
+  | The system SHALL provide an activate_plan_mode tool that creates execution plans.
+  > - **WHEN** agent calls activate_plan_mode with a goal description
+  > - **THEN** it returns plan_text, steps list, and status="plan_activated"
+  > The system SHALL provide an activate_team_mode tool that enables multi-agent collaboration.
+  > - **WHEN** agent calls activate_team_mode with a task description
+  > - **THEN** it returns summary, rounds count, and status="team_completed"
+  > Both orchestration tools SHALL be marked as lazy for progressive disclosure.
+  > - **WHEN** agent starts a new conversation
+  > - **THEN** orchestration tools are not visible in the initial tool list
+
+===== P265 | opencom-org/opencom PR #36 | capacidade do par: runtime-type-safety-hardening
+PR: update to main
+arquivos ligados: packages/convex/convex/aiAgent.ts;packages/convex/convex/aiAgentActions.ts;packages/convex/convex/aiAgentActionsKnowledge.ts;packages/convex/convex/embeddings.ts;packages/convex/tests/runtimeTypeHardeningGuard.test.ts
+--- linhas alteradas (309; mostrando até 40)
++import { DEFAULT_CONTENT_EMBEDDING_MODEL, resolveContentEmbeddingModel } from "./lib/embeddingModels";
++import { getAIGatewayApiKey, getAIBaseURL, getAIGatewayProviderLabel } from "./lib/aiGateway";
++type AvailableAIModel = {
++  id: string;
++  name: string;
++  provider: string;
++};
++type OpenAIModelListResponse = {
++  data?: Array<{
++    id?: string;
++    created?: number;
++  }>;
++};
++type StoredAIResponse = Doc<"aiResponses">;
++type StoredAIResponseSource = StoredAIResponse["sources"][number];
++type StoredAIResponseWithMessage = StoredAIResponse & {
++  messageId: Id<"messages">;
++};
++type ConversationResponse = Omit<StoredAIResponse, "messageId"> & {
++  messageId: Id<"messages">;
++  deliveredResponseContext: {
++    response: string;
++    sources: StoredAIResponseSource[];
++    confidence: number | null;
++  };
++  generatedResponseContext:
++    | {
++        response: string;
++        sources: StoredAIResponseSource[];
++        confidence: number;
++      }
++    | null;
++};
+-  embeddingModel: "text-embedding-3-small",
++  embeddingModel: DEFAULT_CONTENT_EMBEDDING_MODEL,
++const AVAILABLE_MODEL_DISCOVERY_TIMEOUT_MS = 5000;
++const NON_GENERATION_MODEL_PREFIXES = [
++  "text-embedding-",
++  "omni-moderation-",
++  "whisper-",
+--- candidata: convex-function-ref-boundaries [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Residual backend hotspots MUST prefer fixed refs over broad object-cast selectors
+  | The system MUST implement covered backend hardening hotspots with explicit fixed function refs or narrow local ref helpers instead of broad `unsafeApi` / `unsafeInternal` object casts that expose mult
+  > ### Requirement: Residual backend hotspots MUST prefer fixed refs over broad object-cast selectors
+  > The system MUST implement covered backend hardening hotspots with explicit fixed function refs or narrow local ref helpers instead of broad `unsafeApi` / `unsafeInternal` object casts that expose mult
+  > - **WHEN** a covered backend module needs several internal or public Convex function refs
+  > - **THEN** it resolves each target through fixed named refs or a dedicated local ref helper
+  > The system MUST keep remaining backend `TS2589` workarounds explicitly inventoried and protected by guard tests so new broad escape hatches do not spread beyond approved hotspots.
+  > #### Scenario: New backend escape hatch is introduced
+  > ### Requirement: Covered backend hotspots MUST keep shallow runner casts smaller than feature logic
+  > The system MUST keep any remaining shallow `ctx.runQuery`, `ctx.runMutation`, or `ctx.runAction` cast boundary smaller than the feature logic it supports.
+--- candidata: ai-help-center-linked-sources [PR]
+  | ## ADDED Requirements
+  | ### Requirement: AI response source records MUST include linkable metadata for article sources
+  | AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > ### Requirement: AI response source records MUST include linkable metadata for article sources
+  > AI response source entries associated with Help Center articles SHALL include metadata required for reliable article navigation.
+  > #### Scenario: AI response references published article
+  > - **WHEN** AI response includes a Help Center article source
+  > ### Requirement: Widget AI messages MUST render article sources as clickable links
+  > Widget conversation UI SHALL render article-backed AI sources as clickable elements that open the corresponding article context.
+  > #### Scenario: Visitor taps article source in AI message
+  > - **WHEN** widget displays an AI message with article sources
+--- candidata: inbox-knowledge-vector-search [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox knowledge search MUST use vector search for semantic relevance
+  | The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > ### Requirement: Inbox knowledge search MUST use vector search for semantic relevance
+  > The inbox knowledge picker SHALL use vector search with embeddings to find semantically relevant articles, internal articles, and snippets instead of simple text matching.
+  > #### Scenario: Agent searches for knowledge with semantic query
+  > - **WHEN** an agent enters a query in the inbox knowledge picker
+  > - **THEN** the search SHALL use vector embeddings to find semantically relevant content
+  > #### Scenario: Vector search returns mixed content types
+  > - **WHEN** vector search finds matching content
+  > - **THEN** results SHALL include articles, internal articles, and snippets
+--- candidata: inbox-knowledge-insertion [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Inbox MUST provide one consolidated knowledge picker
+  | The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > ### Requirement: Inbox MUST provide one consolidated knowledge picker
+  > The inbox composer SHALL expose a single searchable knowledge picker for snippets, public articles, and internal articles instead of separate snippet, article-link, and knowledge search controls.
+  > #### Scenario: Agent searches one picker for mixed knowledge
+  > - **WHEN** an agent opens the inbox knowledge picker and enters a query
+  > - **THEN** the picker SHALL return matching snippets, public articles, and internal articles in one result list
+  > - **WHEN** an agent uses the inbox keyboard shortcut for knowledge lookup
+  > - **THEN** the consolidated knowledge picker SHALL open
+  > ### Requirement: Knowledge picker MUST provide explicit insertion behavior by content type
+--- candidata: cross-surface-convex-ref-boundary-hardening [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Remaining hardening gaps MUST have a single explicit owner
+  | Every remaining Convex ref-boundary gap identified by the repo-wide inventory SHALL be assigned to one owning change or an explicit accepted exception.
+  > - **WHEN** a remaining gap cannot use fixed typed refs because the target function name is intentionally caller-selected
+  > - **AND** the exception documents the narrow allowed scope and the guardrail that prevents it from expanding into a general runtime pattern
+  > Older package-specific changes for web, widget, and React Native SDK boundary architecture SHALL remain the implementation owners when the current codebase still matches their intended migration model
+  > Residual implementation owned by this change SHALL be delivered in small file clusters with package verification after each cluster.
+  > - **WHEN** a residual `packages/convex` cleanup or shared guardrail batch is ready to expand
+  > - **WHEN** a change adds a prohibited broad helper or untyped Convex ref boundary in a covered path
+  > ### Requirement: Active residual-hardening proposals MUST distinguish unfinished work from completed slices
+  > - **AND** already completed slices, such as verified sdk-core route migrations or completed embedding concurrency refactors, SHALL remain out of scope unless new evidence shows a remaining gap
+
+===== P266 | aserowy/yeet PR #297 | capacidade do par: theming
+PR: directory icon plugin
+arquivos ligados: yeet-lua/src/hook.rs
+--- linhas alteradas (79; mostrando até 40)
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    if let Err(err) =
+-        try_invoke_on_window_change(lua, viewport_paths, viewports, preview_is_directory)
+-    {
++    if let Err(err) = try_invoke_on_window_change(lua, viewport_paths, viewports, buffer_types) {
+-    preview_is_directory: bool,
++    buffer_types: [Option<&str>; 3],
+-    ctx.set("preview_is_directory", preview_is_directory)?;
+-    for (key, path) in viewport_keys.iter().zip(viewport_paths.iter()) {
+-        if let Some(p) = path {
+-            if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++    for (i, (key, path)) in viewport_keys.iter().zip(viewport_paths.iter()).enumerate() {
++        if let Ok(subtable) = ctx.get::<LuaTable>(*key) {
++            if let Some(p) = path {
++            if let Some(bt) = buffer_types[i] {
++                subtable.set("buffer_type", bt)?;
++            }
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-    fn on_window_change_preview_is_directory_true() {
++    fn on_window_change_preview_buffer_type_directory() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+-            "prefix_column_width should be 2 when preview_is_directory is true"
++            "prefix_column_width should be 2 when preview buffer_type is directory"
+-    fn on_window_change_preview_is_directory_false() {
++    fn on_window_change_preview_buffer_type_content() {
+-                if ctx.preview_is_directory then
++                if ctx.preview.buffer_type == "directory" then
+-            false,
++            [Some("directory"), Some("directory"), Some("content")],
+-            "prefix_column_width should be 0 when preview_is_directory is false"
++            "prefix_column_width should be 0 when preview buffer_type is content"
+-            true,
++            [Some("directory"), Some("directory"), Some("directory")],
+--- candidata: lua [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Global y table is exposed to Lua
+  | The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > The system SHALL expose a global table named `y` to the Lua environment. This table serves as the namespace for all yeet configuration APIs. The `y` table SHALL contain a `theme` subtable for static t
+  > #### Scenario: y.hook subtable is accessible in init.lua
+  > #### Scenario: y.plugin subtable is accessible in init.lua
+  > The system SHALL expose a `y.hook` table in the Lua environment. Each hook name (`on_window_create`, `on_window_change`, `on_bufferline_mutate`) SHALL be a Lua table with an `:add()` method for regist
+  > - **THEN** `y.hook` SHALL be a table with `on_window_create`, `on_window_change`, and `on_bufferline_mutate` as hook objects supporting `:add()`
+  > #### Scenario: User registers on_window_change callback
+--- candidata: plugins/directory-icons [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Plugin sets prefix column width to 2
+  | The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > The `yeet-directory-icons` plugin SHALL set `prefix_column_width` to `2` via the `on_window_create` hook for parent and current directory buffer panes. The plugin SHALL NOT set `prefix_column_width` o
+  > #### Scenario: Plugin sets prefix width on parent and current at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is set to `2` on parent and current panes only
+  > #### Scenario: Plugin does not set preview prefix width at window create
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook for a directory window
+  > - **THEN** `prefix_column_width` is NOT set on the preview pane by `on_window_create`
+  > #### Scenario: Plugin sets preview prefix width for directory preview via on_window_change
+--- candidata: on-window-change-hook [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  | The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > ### Requirement: on_window_change hook fires at the end of each function that changes viewport paths or buffers
+  > The system SHALL invoke `y.hook.on_window_change` at the end of each public function that actually changes viewport paths or buffer assignments. The affected functions are: `navigate::mark`, `navigate
+  > #### Scenario: Preview changes from directory to file
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a directory to a file
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == false`
+  > #### Scenario: Preview changes from file to directory
+  > - **WHEN** the user navigates in a Directory window and the preview target changes from a file to a directory
+  > - **THEN** the system SHALL invoke `y.hook.on_window_change` with a context table where `ctx.type == "directory"` and `ctx.preview_is_directory == true`
+--- candidata: buffer [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Line wrapping
+  | Buffers SHALL support a word wrapping mode that breaks long lines at word boundaries to fit within the viewport width.
+  > - Indent continuation lines to align with the content column of the first line
+  > - **WHEN** a window is created before any directory-icons hook updates width
+  > - **WHEN** `yeet-directory-icons` runs its `on_window_create` hook
+  > #### Scenario: Non-directory buffer can represent icon segment
+  > - **WHEN** a non-directory buffer line is represented through `@yeet-buffer`
+  > The directory window SHALL use shared `@yeet-buffer` icon-column rendering across all three of its buffer instances rather than window-specific icon drawing logic.
+  > #### Scenario: Three directory buffers share icon-column path
+  > - **WHEN** a directory window renders its three `@yeet-buffer` instances
+--- candidata: directory-icons-plugin [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Plugin owns all icon identification and text color logic
+  | The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The `yeet-directory-icons` plugin SHALL contain all logic for determining which icon glyph to display and how to color both the icon glyph and the filename text. The core SHALL NOT contain any icon re
+  > The plugin SHALL check the buffer type via the `ctx.buffer.type` field (from the read-only `buffer` metadata object, populated from the `BufferType` enum's string representation) provided in each `on_
+  > #### Scenario: Plugin processes directory buffer entries
+  > - **WHEN** the hook fires with `ctx.buffer.type` equal to `"directory"`
+  > The plugin SHALL determine whether an entry is a directory by checking if the content string ends with a trailing slash (`/`). No separate `is_directory` flag is needed.
+  > #### Scenario: Plugin identifies directory by trailing slash
+  > - **WHEN** the hook receives a bufferline whose content ends with `/`
+  > - **THEN** the plugin treats the entry as a directory and uses directory icon resolution

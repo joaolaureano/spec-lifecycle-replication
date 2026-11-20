@@ -1,0 +1,4026 @@
+===== P184 | repo localstack/lstk | PR #367: Add global --json flag to `lstk`, so commands can support JSON output | capacidade: cdk-proxy
+--- SPEC VIVA
+# cdk-proxy Specification
+
+## Purpose
+
+Provide an `lstk cdk` command that proxies the AWS CDK CLI against a running LocalStack AWS emulator, injecting the resolved LocalStack endpoints into the `cdk` subprocess environment so the CDK targets LocalStack directly without requiring `cdklocal`/`aws-cdk-local`.
+
+## Requirements
+### Requirement: CDK CLI proxy command
+The system SHALL provide an `lstk cdk` command that forwards all of its arguments to the real AWS CDK CLI (`cdk`) and, before invoking it, configures the subprocess environment to target the running LocalStack instance.
+
+#### Scenario: Pass through CDK arguments
+- **WHEN** the user runs `lstk cdk deploy MyStack --require-approval never`
+- **THEN** lstk invokes the `cdk` binary with `deploy MyStack --require-approval never` intact and propagates its exit code
+
+#### Scenario: Inject LocalStack endpoint into the CDK environment
+- **WHEN** lstk runs a CDK command
+- **THEN** the `cdk` subprocess receives `AWS_ENDPOINT_URL` set to the resolved LocalStack endpoint and `AWS_ENDPOINT_URL_S3` set to the corresponding S3 endpoint (with an `s3.` host prefix when the host is virtual-host-capable)
+
+#### Scenario: Honor an explicit endpoint override
+- **WHEN** `AWS_ENDPOINT_URL` is already set in the environment
+- **THEN** lstk uses that value instead of the auto-resolved endpoint
+
+### Requirement: Direct cdk invocation with no cdklocal dependency
+The system SHALL invoke the real `cdk` binary directly and SHALL NOT require or invoke `cdklocal`/`aws-cdk-local`. The binary name SHALL be configurable via `LSTK_CDK_CMD`, defaulting to `cdk`.
+
+#### Scenario: Resolve the cdk binary from PATH
+- **WHEN** `lstk cdk` runs and `cdk` is on `PATH`
+- **THEN** lstk locates and executes it
+
+#### Scenario: Override the binary name
+- **WHEN** `LSTK_CDK_CMD` is set to an alternative binary name
+- **THEN** lstk invokes that binary instead of `cdk`
+
+#### Scenario: Missing CDK binary
+- **WHEN** the configured CDK binary is not found on `PATH`
+- **THEN** lstk emits an actionable error directing the user to install the AWS CDK CLI and does not attempt to run anything
+
+### Requirement: Minimum CDK version
+The system SHALL require AWS CDK CLI version 2.177.0 or newer, because lstk points CDK at LocalStack purely through environment variables (`AWS_ENDPOINT_URL`/`AWS_ENDPOINT_URL_S3`), which older CDK versions do not honor.
+
+#### Scenario: CDK version is too old
+- **WHEN** the resolved `cdk` binary reports a version older than 2.177.0
+- **THEN** lstk fails with an actionable error explaining the minimum version, and does not run the command (so it cannot silently target real AWS)
+
+### Requirement: Mock credentials and AWS environment isolation
+The system SHALL provide LocalStack-compatible mock credentials to the `cdk` subprocess and SHALL strip ambient AWS configuration that could redirect CDK to real AWS. lstk SHALL NOT require, read, or inject the LocalStack auth token for CDK-to-LocalStack API calls; the auth token only activates the emulator container.
+
+CDK always operates against the default LocalStack account `000000000000`; lstk SHALL set a fixed mock `AWS_ACCESS_KEY_ID=test` and SHALL NOT derive the account from a flag or from the ambient `AWS_ACCESS_KEY_ID`.
+
+#### Scenario: Provide mock credentials and region
+- **WHEN** lstk runs a CDK command
+- **THEN** the subprocess environment contains `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test`, and the resolved region in `AWS_REGION`/`AWS_DEFAULT_REGION`
+
+#### Scenario: Strip ambient AWS configuration
+- **WHEN** the user's environment contains `AWS_PROFILE`, `AWS_DEFAULT_PROFILE`, `AWS_SESSION_TOKEN`, or real `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` values
+- **THEN** lstk removes or overrides them in the subprocess environment so CDK cannot resolve credentials or a profile that point at real AWS
+
+#### Scenario: A 12-digit AWS_ACCESS_KEY_ID does not change the account
+- **WHEN** the user's environment contains a 12-digit `AWS_ACCESS_KEY_ID` (an account id)
+- **THEN** lstk overrides it with `test` so CDK still operates against the default account `000000000000`
+
+### Requirement: Region selection
+The system SHALL accept the lstk-specific `--region` flag in leading position (before the CDK subcommand) and encode it into the subprocess environment, with the same parsing and precedence as `lstk terraform`. The system SHALL NOT accept an `--account` flag for CDK.
+
+#### Scenario: Region precedence
+- **WHEN** `--region` is omitted
+- **THEN** lstk resolves the region from `AWS_REGION`, falling back to `us-east-1`
+
+#### Scenario: Reject the --account flag
+- **WHEN** `--account` is provided to `lstk cdk` in leading position, with any value
+- **THEN** lstk fails at the command boundary with an error explaining that `--account` is not supported and that CDK always uses the default LocalStack account `000000000000`, and does not invoke `cdk`
+
+#### Scenario: Flags only in leading position
+- **WHEN** `--region` appears after the CDK subcommand (e.g. `lstk cdk deploy --region us-west-2`)
+- **THEN** lstk forwards it to `cdk` unchanged rather than consuming it
+
+### Requirement: Emulator gating for AWS-contacting commands
+The system SHALL require a running AWS emulator for CDK subcommands that contact AWS APIs and SHALL run a fixed set of offline subcommands without that requirement.
+
+#### Scenario: AWS-contacting command without a running emulator
+- **WHEN** the user runs an AWS-contacting subcommand (e.g. `lstk cdk deploy`) and the AWS emulator is not running
+- **THEN** lstk emits an actionable "LocalStack is not running" error (with a command to start it) and does not invoke `cdk`
+
+#### Scenario: A different emulator is running
+- **WHEN** an AWS-contacting CDK command is run while a non-AWS emulator (e.g. Snowflake or Azure) is running but the AWS emulator is not
+- **THEN** lstk fails with an AWS-specific error naming the running emulator rather than a misleading generic "not running" message
+
+#### Scenario: Offline command without a running emulator
+- **WHEN** the user runs an offline subcommand (e.g. `lstk cdk synth`, `lstk cdk ls`, `lstk cdk init`)
+- **THEN** lstk runs it without requiring a running emulator
+
+### Requirement: Streamed passthrough output
+The system SHALL stream the CDK subprocess's stdin, stdout, and stderr through unobstructed and SHALL NOT display a spinner or capture CDK output into lifecycle events.
+
+#### Scenario: Unobstructed streaming
+- **WHEN** a long-running CDK command (e.g. `lstk cdk deploy`) produces incremental output
+- **THEN** lstk streams that output directly to the terminal without a spinner or reformatting, and forwards interactive prompts via stdin
+
+#### Scenario: Propagate failure
+- **WHEN** the CDK command exits non-zero
+- **THEN** lstk returns a silent error carrying that exit status so the top-level handler does not reprint it
+
+--- ARQUIVOS DO PR (21)
+modified  +1     -1     CLAUDE.md
+modified  +3     -0     cmd/aws.go
+modified  +6     -1     cmd/az.go
+modified  +3     -0     cmd/cdk.go   <== código ligado à spec
+modified  +1     -0     cmd/extension.go
+added     +61    -0     cmd/json_flag_test.go
+modified  +48    -0     cmd/proxy.go
+modified  +17    -0     cmd/proxy_test.go
+modified  +84    -30    cmd/root.go
+modified  +3     -0     cmd/sam.go
+modified  +3     -0     cmd/terraform.go   <== código ligado à spec
+modified  +3     -1     docs/extensions-authoring.md
+modified  +1     -0     internal/env/env.go
+modified  +5     -4     internal/extension/context.go
+added     +2     -0     openspec/changes/add-json-flag/.openspec.yaml
+added     +89    -0     openspec/changes/add-json-flag/design.md
+added     +34    -0     openspec/changes/add-json-flag/proposal.md
+added     +93    -0     openspec/changes/add-json-flag/specs/json-flag/spec.md
+added     +58    -0     openspec/changes/add-json-flag/tasks.md
+added     +194   -0     test/integration/json_flag_test.go
+modified  +2     -0     test/integration/test-samples/extensions/lstk-ref/main.go
+--- DIFF DO CÓDIGO LIGADO
+### cmd/cdk.go
+@@ -46,6 +46,9 @@ Examples:
+ 			if gf.nonInteractive {
+ 				cfg.NonInteractive = true
+ 			}
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+ 			if gf.configPath != "" {
+ 				if err := cmd.Flags().Set("config", gf.configPath); err != nil {
+ 					return err
+
+### cmd/terraform.go
+@@ -46,6 +46,9 @@ Examples:
+ 			if gf.nonInteractive {
+ 				cfg.NonInteractive = true
+ 			}
++			if jsonPrecedesCommandName(cmd.CalledAs()) {
++				cfg.JSON = true
++			}
+ 			if gf.configPath != "" {
+ 				if err := cmd.Flags().Set("config", gf.configPath); err != nil {
+ 					return err
+
+===== P185 | repo ChenChenyaqi/learn-anything | PR #98: refactor: decompose site components, composables, and utils | capacidade: site-generator
+--- SPEC VIVA
+## SUPERSEDED
+
+> **Status: Superseded.** The `SiteGenerator` class and `src/site/files.ts` have been removed. Site files are now pre-built via `vite build` into `site-dist/` at publish time and shipped in the npm package. The `serve` command directly spawns the pre-built HTTP server — no runtime file generation or `npm install` required.
+
+Archived requirements follow for historical reference:
+
+---
+
+### Requirement: SiteGenerator writes all template files on first generation
+
+The system SHALL write all site template files (Vue components, composables, styles, router, config files, package.json) to the `.learn/` directory when the `SiteGenerator.generate()` method is called and the target directory has no existing site setup.
+
+#### Scenario: First generation creates complete directory structure
+
+- **WHEN** `SiteGenerator.generate()` is called and `.learn/src/` does not exist
+- **THEN** the system creates `.learn/package.json`, `.learn/index.html`, `.learn/vite.config.ts`, `.learn/tsconfig.json`, `.learn/src/main.ts`, `.learn/src/App.vue`, `.learn/src/router/index.ts`, all component files under `.learn/src/components/`, all composable files under `.learn/src/composables/`, all style files under `.learn/src/styles/`, all utility files under `.learn/src/utils/`, and `.learn/.gitignore`
+
+#### Scenario: First generation writes theme components
+
+- **WHEN** `SiteGenerator.generate()` is called for the first time
+- **THEN** all files under `src/components/`, `src/composables/`, and `src/styles/` are written to disk
+
+### Requirement: SiteGenerator preserves theme files on subsequent generation
+
+The system SHALL skip writing component, composable, and style files if they already exist, unless the `--force` option is passed.
+
+#### Scenario: Subsequent generation skips existing theme files
+
+- **WHEN** `SiteGenerator.generate()` is called and `.learn/src/components/Dashboard.vue` already exists
+- **THEN** the system does NOT overwrite `Dashboard.vue` or any other existing file under `src/components/`, `src/composables/`, or `src/styles/`
+
+#### Scenario: Force flag overwrites theme files
+
+- **WHEN** `SiteGenerator.generate({ force: true })` is called
+- **THEN** the system overwrites ALL component/composable/style files regardless of whether they already exist
+
+### Requirement: SiteGenerator always overwrites config files
+
+The system SHALL always overwrite `vite.config.ts`, `tsconfig.json`, `index.html`, `package.json`, and `src/main.ts` on every generation, regardless of whether they already exist.
+
+#### Scenario: Subsequent generation overwrites config files
+
+- **WHEN** `SiteGenerator.generate()` is called and `vite.config.ts` already exists
+- **THEN** the system overwrites `vite.config.ts` with the latest template content
+
+#### Scenario: Subsequent generation overwrites package.json
+
+- **WHEN** `SiteGenerator.generate()` is called and `package.json` already exists
+- **THEN** the system overwrites `package.json` with the latest template content
+
+### Requirement: SiteGenerator writes .gitignore
+
+The system SHALL write `.learn/.gitignore` with entries for `node_modules/` and `dist/` on every generation.
+
+#### Scenario: .gitignore is created or updated
+
+- **WHEN** `SiteGenerator.generate()` is called
+- **THEN** `.learn/.gitignore` exists and contains at minimum `node_modules/` and `dist/`
+
+### Requirement: SiteGenerator uses embedded file content
+
+The system SHALL read all template file content from `packages/cli/src/site/files.ts`, which exports `SITE_FILES` as a `Record<string, string>` mapping relative file paths to file content strings. The `SiteGenerator` class SHALL NOT read from the filesystem at runtime to obtain template content.
+
+#### Scenario: Template content comes from embedded mapping
+
+- **WHEN** `SiteGenerator.generate()` writes a file to `.learn/`
+- **THEN** the file content is sourced from the `SITE_FILES` constant, not from reading `packages/cli/site/` or any other directory on disk
+
+--- ARQUIVOS DO PR (86)
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/design.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-api/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-card-practice/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-results-summary/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-sidebar-tab/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/tasks.md
+added     +43    -0     openspec/specs/quiz-api/spec.md
+added     +117   -0     openspec/specs/quiz-card-practice/spec.md
+added     +72    -0     openspec/specs/quiz-results-summary/spec.md
+added     +63    -0     openspec/specs/quiz-sidebar-tab/spec.md
+modified  +3     -1     packages/cli/site/package.json
+modified  +37    -205   packages/cli/site/src/App.vue
+removed   +0     -171   packages/cli/site/src/components/AppSidebar.vue
+modified  +1     -1     packages/cli/site/src/components/LoadingOverlay.vue
+renamed   +3     -2     packages/cli/site/src/components/content/ContentViewer.vue
+renamed   +2     -2     packages/cli/site/src/components/content/TableOfContents.vue
+renamed   +3     -11    packages/cli/site/src/components/content/TocLayout.vue
+renamed   +1     -1     packages/cli/site/src/components/content/useToc.ts
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizCard.vue
+added     +27    -0     packages/cli/site/src/components/quiz/QuizCloseButton.vue
+added     +42    -0     packages/cli/site/src/components/quiz/QuizDialogShell.vue
+added     +56    -0     packages/cli/site/src/components/quiz/QuizFooter.vue
+added     +44    -0     packages/cli/site/src/components/quiz/QuizLoadingView.vue
+modified  +142   -520   packages/cli/site/src/components/quiz/QuizModal.vue
+added     +118   -0     packages/cli/site/src/components/quiz/QuizPlayView.vue
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizSummary.vue
+added     +68    -0     packages/cli/site/src/components/quiz/grading.ts
+added     +39    -0     packages/cli/site/src/components/quiz/header/QuizHeader.vue
+added     +50    -0     packages/cli/site/src/components/quiz/header/QuizHelpPopover.vue
+added     +54    -0     packages/cli/site/src/components/quiz/quizApi.ts
+renamed   +10    -46    packages/cli/site/src/components/quiz/results/QuizResults.vue
+added     +57    -0     packages/cli/site/src/components/quiz/results/QuizResultsFooter.vue
+added     +63    -0     packages/cli/site/src/components/quiz/types.ts
+added     +91    -0     packages/cli/site/src/components/quiz/useQuizKeyboard.ts
+added     +81    -0     packages/cli/site/src/components/quiz/useQuizProgress.ts
+added     +116   -0     packages/cli/site/src/components/quiz/useQuizQueue.ts
+added     +95    -0     packages/cli/site/src/components/quiz/useQuizSession.ts
+renamed   +11    -32    packages/cli/site/src/components/search/SearchModal.vue
+renamed   +1     -1     packages/cli/site/src/components/search/useSearch.ts
+renamed   +0     -0     packages/cli/site/src/components/search/useSearchModal.ts
+added     +104   -0     packages/cli/site/src/components/sidebar/AppSidebar.vue
+renamed   +3     -2     packages/cli/site/src/components/sidebar/SearchTrigger.vue
+modified  +2     -2     packages/cli/site/src/components/sidebar/SidebarDashboard.vue
+added     +40    -0     packages/cli/site/src/components/sidebar/SidebarTreeNode.vue
+renamed   +1     -1     packages/cli/site/src/components/sidebar/footer/LanguageSwitch.vue
+renamed   +2     -2     packages/cli/site/src/components/sidebar/footer/SidebarFooter.vue
+renamed   +35    -58    packages/cli/site/src/components/sidebar/tabs/SidebarExerciseTree.vue
+renamed   +55    -61    packages/cli/site/src/components/sidebar/tabs/SidebarQuizTree.vue
+added     +121   -0     packages/cli/site/src/components/sidebar/tabs/SidebarTabs.vue
+renamed   +34    -57    packages/cli/site/src/components/sidebar/tabs/SidebarTopicTree.vue
+added     +37    -0     packages/cli/site/src/components/sidebar/tabs/useAutoExpand.ts
+renamed   +0     -0     packages/cli/site/src/components/sidebar/tabs/useTreeExpansion.ts
+added     +47    -0     packages/cli/site/src/composables/fileContentCache.ts
+added     +78    -0     packages/cli/site/src/composables/locales/en.ts
+added     +79    -0     packages/cli/site/src/composables/locales/zh-CN.ts
+added     +65    -0     packages/cli/site/src/composables/topicDataTypes.ts
+added     +19    -0     packages/cli/site/src/composables/useDarkMode.ts
+added     +140   -0     packages/cli/site/src/composables/useFileNavigation.ts
+modified  +5     -231   packages/cli/site/src/composables/useI18n.ts   <== código ligado à spec
+added     +74    -0     packages/cli/site/src/composables/useModalA11y.ts
+added     +17    -0     packages/cli/site/src/composables/usePlatform.ts
+removed   +0     -398   packages/cli/site/src/composables/useQuiz.ts
+added     +32    -0     packages/cli/site/src/composables/useQuizLauncher.ts
+added     +48    -0     packages/cli/site/src/composables/useSSE.ts
+added     +76    -0     packages/cli/site/src/composables/useSearchLauncher.ts
+modified  +26    -129   packages/cli/site/src/composables/useTopicData.ts   <== código ligado à spec
+modified  +2     -2     packages/cli/site/src/router/index.ts
+added     +80    -0     packages/cli/site/src/utils/highlight.ts
+modified  +5     -81    packages/cli/site/src/utils/markdown.ts
+added     +17    -0     packages/cli/site/src/utils/slug.ts
+renamed   +2     -2     packages/cli/site/src/views/Dashboard.vue
+renamed   +6     -6     packages/cli/site/src/views/TopicPage.vue
+renamed   +1     -1     packages/cli/site/test/markdown.test.ts
+added     +214   -0     packages/cli/site/test/useModalA11y.test.ts
+renamed   +4     -10    packages/cli/site/test/useQuiz.test.ts
+added     +164   -0     packages/cli/site/test/useQuizKeyboard.test.ts
+added     +127   -0     packages/cli/site/test/useQuizProgress.test.ts
+renamed   +5     -5     packages/cli/site/test/useSearch.test.ts
+renamed   +3     -3     packages/cli/site/test/useSearchModal.test.ts
+renamed   +2     -2     packages/cli/site/test/useToc.test.ts
+renamed   +3     -3     packages/cli/site/test/useTopicData.test.ts
+modified  +2     -2     packages/cli/site/tsconfig.json
+modified  +5     -0     packages/cli/site/vite.config.ts   <== código ligado à spec
+added     +15    -0     packages/cli/site/vitest.config.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/cli/site/src/composables/useI18n.ts
+@@ -1,244 +1,18 @@
+ import { ref } from 'vue';
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++
++export type { I18nKey } from './locales/en';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Types                                                             */
+ /* ------------------------------------------------------------------ */
+ 
+ export type Locale = 'en' | 'zh-CN';
+ 
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+-  | 'quiz.backToList'
+-  | 'quiz.questionProgress'
+-  | 'quiz.true'
+-  | 'quiz.false'
+-  | 'quiz.typeAnswer'
+-  | 'quiz.fixError'
+-  | 'quiz.typeMultipleChoice'
+-  | 'quiz.typeTrueFalse'
+-  | 'quiz.typeFillBlank'
+-  | 'quiz.typeErrorCorrection'
+-  | 'quiz.yourAnswer'
+-  | 'quiz.correctAnswer'
+-  | 'quiz.manualEvaluation'
+-  | 'quiz.helpTitle'
+-  | 'quiz.hintChoice'
+-  | 'quiz.hintTrueFalse'
+-  | 'quiz.hintNav'
+-  | 'quiz.hintSubmit'
+-  | 'quiz.allQuizzes'
+-  | 'quiz.groupProgress'
+-  | 'quiz.sequential'
+-  | 'quiz.random'
+-  | 'quiz.retryGroup'
+-  | 'quiz.nextGroup'
+-  | 'quiz.viewSummary'
+-  | 'quiz.allComplete'
+-  | 'quiz.totalScore'
+-  | 'quiz.loadError'
+-  | 'search.placeholder'
+-  | 'search.noResults'
+-  | 'search.open'
+-  | 'search.shortcutMac'
+-  | 'search.shortcutNonMac'
+-  | 'lang.switch'
+-  | 'theme.switch'
+-  | 'loading.note'
+-  | 'toc.title';
+-
+ type Messages = Record<I18nKey, string>;
+ 
+-/* ------------------------------------------------------------------ */
+-/*  Message tables                                                    */
+-/* ------------------------------------------------------------------ */
+-
+-const messages: Record<Locale, Messages> = {
+-  en: {
+-    'dashboard.title': 'Learning Dashboard',
+-    'dashboard.noTopics': 'No topics yet',
+-    'dashboard.startLearning': 'Run `learn-anything init` to start your first topic',
+-    'dashboard.topicCount': '{count} {count, plural, one {topic} other {topics}}',
+-    'topic.progress': 'Progress',
+-    'topic.domains': 'Domains',
+-    'topic.concepts': 'Concepts',
+-    'topic.mastered': 'Mastered',
+-    'topic.notFound': 'Topic not found',
+-    'domain.notes': 'Notes',
+-    'domain.exercises': 'Exercises',
+-    'domain.noNotes': 'No session notes yet',
+-    'domain.noExercises': 'No exercises yet',
+-    'domain.backToMap': '← Back to Knowledge Map',
+-    'domain.selectFile': 'Select a file to view its content',
+-    'status.mastered': 'Mastered',
+-    'status.inProgress': 'In Progress',
+-    'status.needsPractice': 'Needs Practice',
+-    'status.unexplored': 'Unexplored',
+-    'lang.switch': '中文',
+-    'theme.switch': 'Toggle theme',
+-    'sidebar.topics': 'Topics',
+-    'sidebar.exercises': 'Exercises',
+-    'sidebar.quizzes': 'Quizzes',
+-    'sidebar.noNotes': 'No sessions',
+-    'sidebar.noExercises': 'No exercises',
+-    'sidebar.orphanTip': 'This folder is not part of the knowledge map',
+-    'quiz.empty': 'No quizzes yet',
+-    'quiz.start': 'Start quiz',
+-    'quiz.previous': 'Previous',
+-    'quiz.next': 'Next',
+-    'quiz.submit': 'Submit',
+-    'quiz.retry': 'Retry Quiz',
+-    'quiz.complete': 'Quiz Complete',
+-    'quiz.score': 'Score',
+-    'quiz.correct': 'Correct',
+-    'quiz.incorrect': 'Incorrect',
+-    'quiz.referenceAnswer': 'Reference Answer',
+-    'quiz.backToList': 'Back to list',
+-    'quiz.questionProgress': 'Question {current} / {total}',
+-    'quiz.true': 'True',
+-    'quiz.false': 'False',
+-    'quiz.typeAnswer': 'Type your answer…',
+-    'quiz.fixError': 'Identify and fix the error…',
+-    'quiz.typeMultipleChoice': 'Multiple Choice',
+-    'quiz.typeTrueFalse': 'True / False',
+-    'quiz.typeFillBlank': 'Fill in the Blank',
+-    'quiz.typeErrorCorrection': 'Error Correction',
+-    'quiz.yourAnswer': 'Your answer',
+-    'quiz.correctAnswer': 'Correct answer',
+-    'quiz.manualEvaluation': 'Requires manual evaluation',
+-    'quiz.helpTitle': 'Keyboard Shortcuts',
+-    'quiz.hintChoice': 'Press A / B / C / D to select an option',
+-    'quiz.hintTrueFalse': 'Press 1 / 2 for True / False',
+-    'quiz.hintNav': '← / → to switch questions',
+-    'quiz.hintSubmit': 'Press {key} + Enter to submit',
+-    'quiz.allQuizzes': 'All Quizzes',
+-    'quiz.groupProgress': 'Group {current} / {total}',
+-    'quiz.sequential': 'Practice in order',
+-    'quiz.random': 'Practice shuffled',
+-    'quiz.retryGroup': 'Retry this group',
+-    'quiz.nextGroup': 'Next group',
+-    'quiz.viewSummary': 'View all results',
+-    'quiz.allComplete': 'All Complete',
+-    'quiz.totalScore': 'Total Score',
+-    'quiz.loadError': 'Failed to load quiz. Please try again.',
+-    'search.placeholder': 'Search notes…',
+-    'search.noResults': 'No matching notes',
+-    'search.open': 'Open search',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': 'Opening note…',
+-    'toc.title': 'On this page',
+-  },
+-  'zh-CN': {
+-    'dashboard.title': '学习仪表盘',
+-    'dashboard.noTopics': '暂无学习主题',
+-    'dashboard.startLearning': '运行 `learn-anything init` 开始你的第一个学习主题',
+-    'dashboard.topicCount': '{count} 个主题',
+-    'topic.progress': '学习进度',
+-    'topic.domains': '知识域',
+-    'topic.concepts': '概念',
+-    'topic.mastered': '已掌握',
+-    'topic.notFound': '未找到主题',
+-    'domain.notes': '笔记',
+-    'domain.exercises': '练习',
+-    'domain.noNotes': '暂无笔记',
+-    'domain.noExercises': '暂无练习',
+-    'domain.backToMap': '← 返回知识地图',
+-    'domain.selectFile': '选择文件查看内容',
+-    'status.mastered': '已掌握',
+-    'status.inProgress': '学习中',
+-    'status.needsPractice': '需练习',
+-    'status.unexplored': '未探索',
+-    'lang.switch': 'English',
+-    'theme.switch': '切换主题',
+-    'sidebar.topics': '笔记',
+-    'sidebar.exercises': '练习',
+-    'sidebar.quizzes': '测验',
+-    'sidebar.noNotes': '没有笔记',
+-    'sidebar.noExercises': '没有练习',
+-    'sidebar.orphanTip': '此目录不在知识地图中',
+-    'quiz.empty': '暂无测验',
+-    'quiz.start': '开始测验',
+-    'quiz.previous': '上一题',
+-    'quiz.next': '下一题',
+-    'quiz.submit': '提交',
+-    'quiz.retry': '重新测验',
+-    'quiz.complete': '测验完成',
+-    'quiz.score': '得分',
+-    'quiz.correct': '正确',
+-    'quiz.incorrect': '错误',
+-    'quiz.referenceAnswer': '参考答案',
+-    'quiz.backToList': '返回列表',
+-    'quiz.questionProgress': '第 {current} / {total} 题',
+-    'quiz.true': '正确',
+-    'quiz.false': '错误',
+-    'quiz.typeAnswer': '输入你的答案…',
+-    'quiz.fixError': '找出并修正错误…',
+-    'quiz.typeMultipleChoice': '选择题',
+-    'quiz.typeTrueFalse': '判断题',
+-    'quiz.typeFillBlank': '填空题',
+-    'quiz.typeErrorCorrection': '纠错题',
+-    'quiz.yourAnswer': '你的答案',
+-    'quiz.correctAnswer': '正确答案',
+-    'quiz.manualEvaluation': '需要人工评估',
+-    'quiz.helpTitle': '键盘快捷键',
+-    'quiz.hintChoice': '按 A / B / C / D 选择选项',
+-    'quiz.hintTrueFalse': '按 1 / 2 选择对错',
+-    'quiz.hintNav': '← / → 切换题目',
+-    'quiz.hintSubmit': '按 {key} + Enter 提交',
+-    'quiz.allQuizzes': '全部测验',
+-    'quiz.groupProgress': '第 {current} / {total} 组',
+-    'quiz.sequential': '顺序练习',
+-    'quiz.random': '随机练习',
+-    'quiz.retryGroup': '重做本组',
+-    'quiz.nextGroup': '下一组',
+-    'quiz.viewSummary': '查看总成绩',
+-    'quiz.allComplete': '全部完成',
+-    'quiz.totalScore': '总得分',
+-    'quiz.loadError': '加载测验失败，请重试。',
+-    'search.placeholder': '搜索笔记…',
+-    'search.noResults': '没有匹配的笔记',
+-    'search.open': '打开搜索',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': '正在打开笔记',
+-    'toc.title': '本页内容',
+-  },
+-};
++const messages: Record<Locale, Messages> = { en, 'zh-CN': zhCN };
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Shared state (singleton across components)                        */
+
+### packages/cli/site/src/composables/useTopicData.ts
+@@ -10,74 +10,33 @@
+ /* ================================================================== */
+ 
+ import { ref } from 'vue';
++import type {
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++} from './topicDataTypes';
++import { createSSEListener } from './useSSE';
++import { clearFileContentCache, setFileContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+-/*  Types                                                             */
++/*  Types (re-exported for consumers)                                 */
+ /* ------------------------------------------------------------------ */
+ 
+-export type ConceptStatus = 'mastered' | 'in_progress' | 'needs_practice' | 'unexplored';
+-
+-export interface Concept {
+-  name: string;
+-  slug: string;
+-  status: ConceptStatus;
+-  confidence: number;
+-  practice_count: number;
+-  explain_count: number;
+-  last_explained: string | null;
+-  last_practiced: string | null;
+-  details: string[];
+-}
+-
+-export interface Domain {
+-  name: string;
+-  slug: string;
+-  concepts: Concept[];
+-}
+-
+-export interface StateV1 {
+-  version: 1;
+-  topic: string;
+-  slug: string;
+-  created: string;
+-  domains: Domain[];
+-}
+-
+-export interface TopicSummary {
+-  slug: string;
+-  name: string;
+-  domainCount: number;
+-  totalConcepts: number;
+-  masteredCount: number;
+-  percentage: number;
+-}
++export type {
++  ConceptStatus,
++  Concept,
++  Domain,
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++  SelectedFilePayload,
++} from './topicDataTypes';
+ 
+-export interface SessionFile {
+-  filename: string;
+-  path: string;
+-}
+-
+-export interface ExerciseFile {
+-  name: string;
+-  path: string;
+-}
+-
+-export interface ExerciseGroup {
+-  conceptSlug: string;
+-  conceptName: string;
+-  files: ExerciseFile[];
+-}
+-
+-export interface SelectedFilePayload {
+-  path: string;
+-  type: 'markdown' | 'code';
+-  sourceTab?: 'topics' | 'exercises' | 'quizzes';
+-  /**
+-   * Filled in asynchronously after the file content loads.
+-   * The selection itself (path/type) is available synchronously.
+-   */
+-  content?: string;
+-}
++export { loadFileContent, loadSessionContent, loadExerciseContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  In-memory indexes (populated by initTopicData)                     */
+@@ -93,7 +52,6 @@ const sessionsBySlug = new Map<string, Map<string, SessionFile[]>>();
+ const exerciseGroupsBySlug = new Map<string, ExerciseGroup[]>();
+ const orphanSessionsBySlug = new Map<string, SessionFile[]>();
+ const orphanExercisesBySlug = new Map<string, ExerciseFile[]>();
+-const fileContents = new Map<string, string>();
+ 
+ let topicSummaryCache: TopicSummary[] | null = null;
+ 
+@@ -103,8 +61,6 @@ export function getDataVersion(): number {
+   return dataVersion.value;
+ }
+ 
+-const FILE_CACHE_MAX = 200;
+-
+ /* ------------------------------------------------------------------ */
+ /*  Helpers                                                            */
+ /* ------------------------------------------------------------------ */
+@@ -119,7 +75,7 @@ function clearIndexes() {
+   exerciseGroupsBySlug.clear();
+   orphanSessionsBySlug.clear();
+   orphanExercisesBySlug.clear();
+-  fileContents.clear();
++  clearFileContentCache();
+   topicSummaryCache = null;
+ }
+ 
+@@ -153,7 +109,7 @@ export function __injectTestData(data: {
+     orphanSessionsBySlug.set(slug, files);
+   for (const [slug, files] of Object.entries(data.orphanExercises))
+     orphanExercisesBySlug.set(slug, files);
+-  for (const [path, content] of Object.entries(data.fileContents)) fileContents.set(path, content);
++  for (const [path, content] of Object.entries(data.fileContents)) setFileContent(path, content);
+   ready = true;
+ }
+ 
+@@ -247,52 +203,13 @@ export async function initTopicData(): Promise<void> {
+ /* ------------------------------------------------------------------ */
+ 
+ export function listenForChanges(callback: () => void): () => void {
+-  let src: EventSource | null = null;
+-  let stopped = false;
+-  let retryDelay = 1000;
+-  let reconnecting = false;
+-  const MAX_RETRY_DELAY = 30000;
+-
+-  function handleReload() {
++  return createSSEListener('/api/events', () => {
+     clearIndexes();
+     initTopicData().then(() => {
+       dataVersion.value++;
+       callback();
+     });
+-  }
+-
+-  function connect() {
+-    if (stopped) return;
+-    src = new EventSource('/api/events');
+-    src.addEventListener('message', (e) => {
+-      if (e.data === 'reload') {
+-        retryDelay = 1000;
+-        handleReload();
+-      }
+-    });
+-    src.addEventListener('open', () => {
+-      retryDelay = 1000;
+-      if (reconnecting) {
+-        reconnecting = false;
+-        handleReload();
+-      }
+-    });
+-    src.onerror = () => {
+-      reconnecting = true;
+-      src?.close();
+-      src = null;
+-      if (!stopped) {
+-        setTimeout(connect, retryDelay);
+-        retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
+-      }
+-    };
+-  }
+-
+-  connect();
+-  return () => {
+-    stopped = true;
+-    src?.close();
+-  };
++  });
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -331,23 +248,3 @@ export function scanRootSessions(slug: string): SessionFile[] {
+ export function scanRootExercises(slug: string): ExerciseFile[] {
+   return orphanExercisesBySlug.get(slug) ?? [];
+ }
+-
+-export async function loadFileContent(path: string): Promise<string | null> {
+-  if (fileContents.has(path)) return fileContents.get(path)!;
+-  try {
+-    const resp = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+-    if (!resp.ok) return null;
+-    const text = await resp.text();
+-    if (fileContents.size >= FILE_CACHE_MAX) {
+-      const oldest = fileContents.keys().next().value;
+-      if (oldest) fileContents.delete(oldest);
+-    }
+-    fileContents.set(path, text);
+-    return text;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-export const loadSessionContent = loadFileContent;
+-export const loadExerciseContent = loadFileContent;
+
+### packages/cli/site/vite.config.ts
+@@ -75,6 +75,11 @@ export default defineConfig(() => {
+         },
+       },
+     ],
++    resolve: {
++      alias: {
++        '@': resolve(__dirname, 'src'),
++      },
++    },
+     build: {
+       outDir: 'dist',
+       assetsDir: 'assets',
+
+===== P186 | repo atilladeniz/Kubeli | PR #163: feat: structured error handling across Rust and frontend | capacidade: architecture
+--- SPEC VIVA
+# Architecture Specification
+
+## Purpose
+Define the overall system architecture for Kubeli - a modern Kubernetes management desktop application built with Tauri and Vite/React.
+
+## Requirements
+
+### Requirement: Desktop Application Architecture
+The system SHALL be built as a native desktop application using Tauri with a Vite/React frontend.
+
+#### Scenario: Cross-platform support
+- GIVEN the application is built
+- WHEN distributed to users
+- THEN it runs natively on macOS, Linux, and Windows
+
+#### Scenario: Lightweight footprint
+- GIVEN the application is running
+- WHEN measuring resource usage
+- THEN memory usage is < 150MB idle, < 300MB active
+- AND CPU usage is < 2% when idle
+
+### Requirement: Frontend Stack
+The system SHALL use Vite 7+ with React 19+ for the frontend.
+
+#### Scenario: Static export
+- GIVEN Vite is configured
+- WHEN building for Tauri
+- THEN output is static HTML/JS/CSS in the `dist` directory
+
+#### Scenario: TypeScript
+- GIVEN source code is written
+- WHEN compiling
+- THEN TypeScript 5.x strict mode is enforced
+
+### Requirement: Backend Stack
+The system SHALL use Rust with Tauri 2.9+ for the backend.
+
+#### Scenario: Kubernetes client
+- GIVEN the backend needs K8s access
+- WHEN making API calls
+- THEN kube-rs library handles all Kubernetes operations
+
+#### Scenario: Async runtime
+- GIVEN I/O operations are needed
+- WHEN processing requests
+- THEN Tokio handles async operations efficiently
+
+### Requirement: IPC Communication
+The system SHALL use Tauri IPC for frontend-backend communication.
+
+#### Scenario: Command invocation
+- GIVEN the frontend needs data
+- WHEN invoking a Tauri command
+- THEN the Rust backend processes and returns results
+
+#### Scenario: Event streaming
+- GIVEN real-time updates are needed
+- WHEN watching resources or streaming logs
+- THEN Tauri events push data to the frontend
+
+### Requirement: State Management
+The system SHALL manage application state efficiently.
+
+#### Scenario: Global state
+- GIVEN application-wide state is needed
+- WHEN managing clusters and settings
+- THEN Zustand or React Context handles global state
+
+#### Scenario: Server state
+- GIVEN Kubernetes data needs caching
+- WHEN fetching resources
+- THEN Zustand stores and feature hooks manage caching and synchronization
+
+## Technology Stack
+
+### Frontend
+- Vite 7.x
+- React 19.x
+- TypeScript 5.x
+- Zustand (global state)
+- Custom feature hooks + cache stores (server-state access pattern)
+- Tailwind CSS (styling)
+- lucide-react (icons)
+
+### Backend (Rust)
+- tauri 2.9.x
+- kube 3.x
+- tokio 1.49.x
+- serde 1.0.219
+- reqwest 0.12.22
+
+### Tauri Plugins
+- tauri-plugin-fs
+- tauri-plugin-dialog
+- tauri-plugin-shell
+- tauri-plugin-store
+- tauri-plugin-updater
+- tauri-plugin-window-state
+- tauri-plugin-deep-link
+- tauri-plugin-log
+- tauri-plugin-os
+- tauri-plugin-opener
+- tauri-plugin-process
+
+## Directory Structure
+
+### Frontend
+```
+src/
+├── App.tsx
+├── main.tsx
+├── components/
+│   ├── ui/
+│   ├── layout/
+│   └── features/
+├── lib/
+│   ├── tauri/
+│   ├── hooks/
+│   ├── stores/
+│   ├── utils/
+│   └── types/
+├── i18n/
+└── app/                      # global styles/tests
+```
+
+### Backend
+```
+src-tauri/
+├── src/
+│   ├── main.rs
+│   ├── commands/
+│   │   ├── clusters.rs
+│   │   ├── resources.rs
+│   │   ├── logs.rs
+│   │   ├── shell.rs
+│   │   ├── helm.rs
+│   │   ├── flux.rs
+│   │   ├── portforward.rs
+│   │   ├── watch.rs
+│   │   └── network.rs
+│   ├── ai/
+│   ├── mcp/
+│   ├── k8s/
+│   │   ├── client.rs
+│   │   ├── config.rs
+│   │   └── mod.rs
+│   └── network/
+├── Cargo.toml
+└── tauri.conf.json
+```
+
+## Performance Requirements
+
+| Metric | Target |
+|--------|--------|
+| Application startup | < 2 seconds |
+| Resource list load | < 1 second (100 pods) |
+| Log streaming latency | < 500ms |
+| Memory (idle) | < 150 MB |
+| Memory (active) | < 300 MB |
+| CPU (idle) | < 2% |
+| Bundle size | < 50 MB |
+
+## Security Requirements
+
+### Requirement: Credential Security
+The system MUST secure all cluster credentials.
+
+#### Scenario: Keychain storage
+- GIVEN credentials are provided
+- WHEN storing them
+- THEN OS keychain is used (Keychain/Secret Service/Credential Manager)
+
+#### Scenario: TLS enforcement
+- GIVEN cluster connections are made
+- WHEN communicating with API server
+- THEN TLS 1.2+ is required
+
+### Requirement: Update Security
+The system MUST verify update authenticity.
+
+#### Scenario: Signed updates
+- GIVEN an update is available
+- WHEN downloading
+- THEN signature is verified before installation
+
+--- ARQUIVOS DO PR (55)
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/design.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/specs/error-handling/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-28-improve-error-handling/specs/resource-management/spec.md
+renamed   +34    -34    openspec/changes/archive/2026-02-28-improve-error-handling/tasks.md
+added     +86    -0     openspec/specs/error-handling/spec.md
+modified  +22    -1     openspec/specs/resource-management/spec.md
+modified  +17    -14    src-tauri/src/commands/clusters.rs
+modified  +151   -135   src-tauri/src/commands/graph.rs
+modified  +26    -31    src-tauri/src/commands/helm.rs
+modified  +31    -35    src-tauri/src/commands/logs.rs
+modified  +153   -293   src-tauri/src/commands/resources.rs
+modified  +9     -8     src-tauri/src/commands/watch.rs
+added     +271   -0     src-tauri/src/error.rs
+modified  +15    -6     src-tauri/src/k8s/client.rs
+modified  +1     -0     src-tauri/src/main.rs
+modified  +3     -1     src/components/features/dashboard/Dashboard.tsx
+modified  +1     -1     src/components/features/dashboard/views/PodLogsView.tsx
+modified  +6     -2     src/components/features/dashboard/views/_createResourceView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/EventsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/LeasesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/cluster/NodesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/gitops/FluxKustomizationsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/gitops/HelmReleasesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/networking/ServicesView.tsx
+modified  +2     -1     src/components/features/dashboard/views/workloads/DeploymentsView.tsx
+modified  +2     -1     src/components/features/dashboard/views/workloads/PodsView.tsx
+modified  +5     -5     src/components/features/home/components/ConnectionErrorAlert.tsx
+modified  +2     -2     src/components/features/logs/LogViewer.tsx
+modified  +2     -2     src/components/features/resources/CreateResourcePanel.tsx
+modified  +4     -6     src/components/features/resources/ResourceDetail.tsx
+added     +128   -0     src/components/features/resources/ResourceError.tsx
+modified  +7     -9     src/components/features/resources/ResourceList.tsx
+modified  +3     -14    src/components/features/visualization/ResourceDiagram.tsx
+modified  +4     -3     src/components/layout/sidebar/sections/NamespaceSection.tsx
+modified  +1     -1     src/components/layout/tabbar/hooks/useTabCloseConfirmation.ts
+modified  +1     -1     src/i18n/messages/de.json
+modified  +1     -1     src/i18n/messages/en.json
+modified  +5     -3     src/lib/hooks/k8s/types.ts
+modified  +9     -2     src/lib/hooks/k8s/useClusterScoped.ts
+modified  +54    -18    src/lib/hooks/k8s/useK8sResource.ts
+modified  +11    -4     src/lib/hooks/k8s/useOptionalNamespace.ts
+modified  +2     -2     src/lib/hooks/useLogs.ts
+modified  +11    -10    src/lib/stores/__tests__/cluster-store.test.ts
+modified  +2     -1     src/lib/stores/__tests__/diagram-store.test.ts
+modified  +11    -10    src/lib/stores/__tests__/resource-store.test.ts
+modified  +15    -14    src/lib/stores/cluster-store.ts
+modified  +15    -3     src/lib/stores/diagram-store.ts
+modified  +8     -9     src/lib/stores/log-store.ts
+modified  +12    -11    src/lib/stores/resource-store.ts
+modified  +7     -1     src/lib/tauri/commands/core.ts   <== código ligado à spec
+added     +79    -0     src/lib/types/errors.ts
+modified  +1     -0     src/lib/types/index.ts
+modified  +4     -1     src/lib/types/kubernetes.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/lib/tauri/commands/core.ts
+@@ -1,6 +1,7 @@
+ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+ 
+ import { mockInvoke } from "../mock";
++import { toKubeliError } from "../../types/errors";
+ 
+ export const invoke = <T>(command: string, payload?: unknown): Promise<T> => {
+   if (process.env.VITE_TAURI_MOCK === "true") {
+@@ -10,5 +11,10 @@ export const invoke = <T>(command: string, payload?: unknown): Promise<T> => {
+     ) as Promise<T>;
+   }
+ 
+-  return tauriInvoke<T>(command, payload as Record<string, unknown> | undefined);
++  return tauriInvoke<T>(
++    command,
++    payload as Record<string, unknown> | undefined
++  ).catch((e: unknown) => {
++    throw toKubeliError(e);
++  });
+ };
+
+===== P187 | repo netclaw-dev/netclaw | PR #1486: refactor(actors): per-entity actor protocol taxonomy | capacidade: tool-approval-gates
+--- SPEC VIVA
+## Purpose
+
+Define how the daemon gates tool execution behind interactive user approval.
+Covers per-audience policy configuration, hard deny rules, command pattern
+matching, the `IToolApprovalMatcher` extension point, mid-turn approval pauses,
+the channel-mediated `ToolInteractionRequest`/`ToolInteractionResponse`
+protocol, persistent approval storage in `~/.netclaw/config/tool-approvals.json`,
+directory-scoped shell approvals (root-based, verb-agnostic), and the
+`ToolPathPolicy` symlink-resolving safety backstop that ensures broader
+directory grants never widen access to protected paths.
+## Requirements
+### Requirement: Tool approval configuration per audience
+
+The system SHALL support per-audience tool approval configuration via
+`ToolApprovalConfig` on `ToolAudienceProfile`. Each audience profile SHALL
+independently specify a `DefaultMode` (Auto, Approval, Deny) and per-tool
+overrides in `ToolOverrides`. The default `DefaultMode` SHALL be `Auto` (no
+approval required). Runtime audience defaults SHALL NOT implicitly place
+`shell_execute` in `Approval` mode. Instead, the init-generated Personal config
+SHALL explicitly write
+`ApprovalPolicy.ToolOverrides.shell_execute = Approval` as the recommended
+shell-safe default.
+
+#### Scenario: Shell requires approval in init-generated Personal config
+
+- **GIVEN** a Personal audience session whose generated config explicitly sets
+  `ApprovalPolicy.ToolOverrides.shell_execute` to `Approval`
+- **WHEN** the agent invokes `shell_execute`
+- **THEN** `ToolAccessPolicy` marks the call as approval-gated
+- **AND** `DispatchingToolExecutor` consults `IToolApprovalService` before execution
+- **AND** if the command pattern is not approved, an approval prompt is emitted
+
+#### Scenario: Tool in Auto mode executes without approval
+
+- **GIVEN** a tool whose approval mode is `Auto` for the session's audience
+- **WHEN** the agent invokes the tool
+- **THEN** the tool executes immediately without an approval prompt
+
+#### Scenario: Tool in Deny mode is always blocked
+
+- **GIVEN** a tool whose approval mode is `Deny` for the session's audience
+- **WHEN** the agent invokes the tool
+- **THEN** the tool is denied with reason `tool_denied_by_approval_policy`
+- **AND** no approval prompt is offered
+
+#### Scenario: Per-audience independence
+
+- **GIVEN** Personal sets `shell_execute` to `Approval` and Team sets it to `Deny`
+- **WHEN** a Personal session invokes `shell_execute`
+- **THEN** `ToolAccessPolicy` marks the call as approval-gated
+- **AND** `DispatchingToolExecutor` may prompt if `IToolApprovalService` reports unapproved patterns
+- **AND** when a Team session invokes `shell_execute`
+- **THEN** the system denies immediately without prompting
+
+### Requirement: Configurable hard deny list
+
+The system SHALL enforce a configurable hard deny list of command patterns that
+are blocked before the approval gate is consulted. Denied commands SHALL never
+be approvable. The system SHALL ship with sensible defaults: commands that kill
+the Netclaw daemon process, `rm -rf /`, `rm -rf ~/`, and fork bombs. Operators
+SHALL be able to add or remove patterns via configuration.
+
+#### Scenario: Hard-denied command blocked before approval
+
+- **GIVEN** a command matching the hard deny list (e.g., `netclaw daemon stop`)
+- **WHEN** the agent invokes `shell_execute` with that command
+- **THEN** the command is denied with reason `hard_deny_self_destructive`
+- **AND** no approval prompt is offered
+- **AND** the denial is logged
+
+#### Scenario: Hard deny enforced even in HostAllowed mode
+
+- **GIVEN** `ShellMode` is `HostAllowed` (no approval config)
+- **WHEN** the agent runs a hard-denied command
+- **THEN** the command is still blocked
+
+#### Scenario: Operator adds custom hard deny pattern
+
+- **GIVEN** the operator adds `docker rm` to the hard deny list in config
+- **WHEN** the agent runs `docker rm my-container`
+- **THEN** the command is denied
+
+#### Scenario: Compound command with hard-denied segment
+
+- **GIVEN** a compound command `git add . && netclaw daemon stop`
+- **WHEN** the agent invokes `shell_execute`
+- **THEN** the entire command is denied because one segment matches hard deny
+
+### Requirement: Shell command pattern matching
+
+The system SHALL extract verb-chain prefix patterns from shell commands
+using tokenization. The verb chain SHALL consist of non-flag tokens from
+the start of the command until the first flag (`-`), path, URL, or
+call-specific value argument. A token SHALL be classified as a
+call-specific value iff it is not a flag, not path-shaped, and contains
+a digit — one morphological rule, not a taxonomy of value shapes.
+Extraction is greedy: bare-word operands that are neither flags, paths,
+URLs, nor digit-bearing values (all-alpha subcommands, remote names,
+branch names, refs) SHALL remain in the verb chain — the extractor SHALL
+NOT attempt to distinguish all-alpha subcommands from positional
+operands.
+
+> **Why digit-bearing tokens are excluded:** Tokens containing digits
+> (`123`, `8080`, `0.4.2`, `v0.4.2`, `aa211dcb`, `feature2`) are
+> overwhelmingly call-specific values — ticket IDs, ports, timeouts,
+> versions, SHAs, refs — that vary between invocations of the same verb
+> chain. Baking them into the pattern produces overly-specific approval
+> entries that do not generalize: `git tag v0.4.2` vs `git tag v0.5.0`
+> would create two unrelated entries, forcing separate approval for each
+> release. This generalizes the earlier bare-integer rule (issue #1331).
+> All-alpha operands are intentionally NOT classified: no shape rule can
+> distinguish a branch name (`dev`) from a subcommand (`worktree`), and
+> mis-stripping a subcommand would silently widen a grant. Flags are
+> exempt (`-3`, `--max-count=10` carry invocation intent); path-shaped
+> tokens are exempt so digit-bearing paths still reach directory scoping.
+
+Where greedy extraction has folded a trailing value token into the verb
+chain (e.g. `git tag v0.4.2`, where `v0.4.2` is lowercase-leading and
+therefore verb-like to the parser), the system SHALL trim trailing
+call-specific value tokens from the chain, always retaining at least the
+command word. Trimming SHALL be trailing-only: mid-chain digit-bearing
+tokens (`aws s3 ls`) SHALL NOT be removed. Trimming SHALL apply
+identically on the gate (candidate) path and the persisted/display
+pattern path so the two normalize to the same verb chain.
+
+A multi-line argument — one containing an embedded line break (LF or
+CR), which can only arise inside quoting — SHALL also terminate pattern
+extraction, excluding the argument and everything after it (issue
+#1402). Multi-line quoted strings are call-specific content (message
+bodies, inline scripts) that varies between invocations of the same
+verb chain, and an embedded line break corrupts the stored pattern's
+display and the approval store's formatting; a lone CR additionally
+permits cursor-repositioning spoofing in terminal-rendered prompts. A
+preceding flag (e.g. `--message`) SHALL be retained in the pattern — it
+carries invocation intent. The same termination rule SHALL apply to
+redirect targets: a quoted redirect target carrying an embedded line
+break (e.g. `>> "$LOGDIR⏎file"`) terminates the redirect walk so the
+break never reaches the stored pattern.
+
+For shell approval units, `&&`, `||`, and `;` SHALL split into separate
+units, while `|` SHALL remain inside the current unit. For `bash -c` or
+`sh -c` wrappers, the inner command SHALL be extracted and scanned
+recursively.
+
+When `ShellTokenizer.SplitCompoundCommand` detects bash control-flow
+tokens or unbalanced quotes/brackets, it SHALL return an empty
+verb-chain list. The approval gate SHALL then offer only `Once` and
+`Deny`. See the "Pattern extraction refuses bash control-flow"
+requirement for details.
+
+The matcher SHALL operate on `ApprovalEntry` records keyed by
+`(verb, directory)`. The "is this string a verb chain or a directory
+root?" inspection logic of v1 SHALL NOT be present in the v2 matcher.
+
+Approval persistence SHALL store one `ApprovalEntry` per extracted verb
+chain. Compound commands SHALL produce N entries from one user click on
+`Always here` or `Always anywhere`.
+
+#### Scenario: Verb chain extracted from simple command
+
+- **GIVEN** the command `git push origin main`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `git push origin main`
+- **AND** the all-alpha operands `origin` and `main` remain in the verb
+  chain because greedy extraction does not strip positional operands
+
+#### Scenario: Verb chain strips bare integer positional argument
+
+- **GIVEN** the command `freshdesk ticket get 123`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `freshdesk ticket get`
+- **AND** the digit-bearing token `123` is excluded because it is
+  call-specific
+
+#### Scenario: Verb chain generalizes across different integer values
+
+- **GIVEN** commands `nc host 8080` and `nc host 9090`
+- **WHEN** patterns are extracted for both
+- **THEN** both produce the same pattern `nc host`
+- **AND** approval granted for one integer value covers all values of the same verb chain
+
+#### Scenario: Verb chain terminates at value token (not just skips it)
+
+- **GIVEN** the command `timeout 30 curl http://example.com`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `timeout`
+- **AND** everything after the value token (including wrapped subcommands like `curl`) is dropped from the pattern
+
+#### Scenario: Digit-bearing operand terminates the pattern
+
+- **GIVEN** the command `docker run --name test123 --port=8080`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `docker run --name`
+- **AND** the digit-bearing operand `test123` and everything after it are
+  excluded because digit-bearing non-flag, non-path tokens are
+  call-specific values
+- **AND** the flag `--name` is retained because flags are exempt from
+  value classification
+
+#### Scenario: Version arguments normalize to one verb chain regardless of prefix
+
+- **GIVEN** commands `git tag v0.4.2` and `git tag 0.4.2`
+- **WHEN** candidate verbs and patterns are extracted for both
+- **THEN** both produce the verb chain `git tag`
+- **AND** a standing `git tag` grant auto-approves both forms
+- **AND** the lowercase-leading form is handled by trimming the trailing
+  value token the greedy walk folded into the chain
+
+#### Scenario: Multi-line quoted argument terminates the pattern
+
+- **GIVEN** the command `freshdesk ticket reply --message "Hi,⏎Thanks."`
+  where the quoted argument spans two lines
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `freshdesk ticket reply --message`
+- **AND** the multi-line body and everything after it are excluded
+  because multi-line arguments are call-specific content
+- **AND** the flag `--message` is retained because flags carry
+  invocation intent
+
+#### Scenario: Digit-bearing ref folded into the chain is trimmed
+
+- **GIVEN** the command `git show aa211dcb`
+- **WHEN** the candidate verb is extracted
+- **THEN** the verb chain is `git show`
+- **AND** the alpha-leading SHA normalizes the same way as a
+  digit-leading SHA (`git show 1234abcd`)
+
+#### Scenario: Trailing-only trim never removes mid-chain tokens
+
+- **GIVEN** the command `aws s3 ls`
+- **WHEN** the candidate verb is extracted
+- **THEN** the verb chain is `aws s3 ls`
+- **AND** the mid-chain digit-bearing token `s3` is untouched because
+  only trailing value tokens are trimmed
+
+#### Scenario: Verb chain stops at flag
+
+- **GIVEN** the command `ls -la /tmp`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `ls`
+- **AND** the flag and path are not part of the persisted verb chain
+
+#### Scenario: Multi-level verb chain
+
+- **GIVEN** the command `docker compose up -d`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `docker compose up`
+
+#### Scenario: Control operators create separate approval units
+
+- **GIVEN** the command `git add . && git commit -m "fix" && git push`
+- **WHEN** approval is checked
+- **THEN** `git add`, `git commit`, and `git push` are checked as
+  separate approval units against the v2 matcher
+
+#### Scenario: Compound segments batched in one prompt
+
+- **GIVEN** none of `git add`, `git commit`, `git push` are approved
+- **WHEN** the command `git add . && git commit -m "fix" && git push`
+  is checked
+- **THEN** a single approval prompt lists all three verbs as bullets
+- **AND** one click on `Always here` persists three `(verb, cwd)` entries
+
+#### Scenario: bash -c inner command scanned recursively
+
+- **GIVEN** the command `bash -c "git push --force"`
+- **WHEN** approval and hard deny are checked
+- **THEN** the inner command `git push --force` is extracted and scanned
+- **AND** verb chain `git push` is checked through the v2 matcher
+
+### Requirement: IToolApprovalMatcher extension point
+
+The system SHALL define an `IToolApprovalMatcher` interface for tool-specific
+pattern extraction and matching. Shell SHALL implement verb-chain matching. A
+default implementation SHALL provide tool-name-level matching for tools without
+a custom matcher.
+
+#### Scenario: Shell uses verb-chain matcher
+
+- **GIVEN** a `shell_execute` tool call with command `npm install lodash`
+- **WHEN** the approval system extracts the pattern
+- **THEN** `ShellApprovalMatcher` extracts `npm install`
+
+#### Scenario: Approved pattern matches invocation
+
+- **GIVEN** `git push` is in the Personal approval list for `shell_execute`
+- **WHEN** the agent runs `git push --tags origin main`
+- **THEN** `ShellApprovalMatcher.IsApproved` returns true (prefix match)
+
+### Requirement: Mid-turn approval pause
+
+The system SHALL pause individual tool execution tasks when approval is required
+without blocking other tool calls in the same batch. The pause SHALL use a
+`TaskCompletionSource` that completes when the session actor receives an approval
+response. The pause SHALL wait indefinitely for user response — the system
+SHALL NOT auto-deny on a timer. Operators take as long as they need to
+evaluate a prompt; a clock-driven auto-deny silently transitions the
+workflow to a denied state and manufactures race conditions (late clicks
+landing in already-terminated workflows) for zero security benefit.
+
+Tool-batch start, per-tool results, approval requests, approval resolutions,
+and abandonment closures SHALL be journaled so the pause survives idle
+passivation, turn failure, and actor restart without relying on snapshots to
+carry unjournaled in-flight state. On recovery the session SHALL restore pending
+interactions from the journal and, when an approval response arrives, SHALL
+re-drive only unresolved tool calls that are eligible to run. An approval
+response whose call is not pending and cannot be reconstructed from session
+history SHALL fail loud with a user-visible "approval prompt expired" message;
+it SHALL NOT be silently discarded.
+
+#### Scenario: Approval-pending tool blocks while others complete
+
+- **GIVEN** a batch of 3 tool calls: `web_search`, `shell_execute`, `file_read`
+- **AND** `shell_execute` requires approval
+- **WHEN** the batch executes
+- **THEN** `web_search` and `file_read` execute in parallel immediately
+- **AND** `shell_execute` blocks waiting for approval
+- **AND** the session actor remains responsive to messages
+
+#### Scenario: Approval pause waits indefinitely for user response
+
+- **GIVEN** an approval prompt has been emitted
+- **AND** the user has not yet clicked any button
+- **WHEN** an arbitrarily long time passes (minutes, hours, until daemon restart)
+- **THEN** the workflow remains paused on the TaskCompletionSource
+- **AND** no clock-driven transition to `TimedOut` occurs
+- **AND** when the user eventually clicks, the workflow resumes from that state
+
+#### Scenario: Approved tool executes and returns result
+
+- **GIVEN** a tool is blocked waiting for approval
+- **WHEN** the user approves (once or always)
+- **THEN** the tool executes and returns its result
+- **AND** the approval is cached (session-only or persistent depending on choice)
+
+#### Scenario: Denied tool returns denial message
+
+- **GIVEN** a tool is blocked waiting for approval
+- **WHEN** the user denies
+- **THEN** the tool returns "Command denied by user" as the tool result
+- **AND** no command is executed
+
+#### Scenario: Pending approval persisted to the session journal
+
+- **GIVEN** a tool call has emitted an approval prompt and the turn is paused
+- **WHEN** the session persists the approval request
+- **THEN** the journal SHALL include the pending tool interaction, keyed by call id
+- **AND** the persisted interaction SHALL carry the requester identity, audience,
+  and trust context needed to re-drive the call faithfully
+
+#### Scenario: Pending approval survives idle passivation and cold recovery
+
+- **GIVEN** a session with a pending approval prompt is idle-passivated and stopped
+- **WHEN** the session is cold-respawned and recovers from its journal/snapshot path
+- **THEN** the recovered session SHALL restore the pending tool interaction
+- **AND** an approval response arriving afterward SHALL re-drive the tool batch
+  and continue the turn
+- **AND** the same requester-only `CanApprove` check and grant-persistence rules
+  apply as on the live path
+
+#### Scenario: Re-drive does not repeat completed sibling calls
+
+- **GIVEN** a tool batch was interrupted after one sibling completed and journaled its result
+- **AND** another sibling was still pending approval when the session stopped
+- **WHEN** the recovered session re-drives unresolved calls from the last durable assistant tool-call message
+- **THEN** the already-completed sibling call SHALL NOT execute again
+- **AND** its journaled tool result SHALL remain in the transcript used for the follow-up LLM call
+
+#### Scenario: Approval response for an expired call fails loud
+
+- **GIVEN** a session has no pending interaction for the responded call id
+- **AND** the call cannot be reconstructed from session history
+- **WHEN** an approval response arrives for that call id
+- **THEN** the session SHALL emit a user-visible message that the approval
+  prompt has expired and the request should be re-issued
+- **AND** the session SHALL NOT silently drop the response
+
+### Requirement: ToolInteractionRequest/Response protocol
+
+The system SHALL define a `ToolInteractionRequest` session output and
+`ToolInteractionResponse` session command for channel-mediated approval
+interactions.
+The interaction `Kind` SHALL identify the interaction type (`approval` for v1).
+`ToolInteractionRequest` SHALL be a lifecycle output (always delivered regardless
+of `OutputFilter`).
+
+`ToolInteractionRequest` SHALL include a `DirectoryRoots` field containing
+reusable directory roots extracted from the tool invocation. When non-empty and
+the user selects `Approve for this chat` or `Approve always`, the session actor
+SHALL record the directory roots instead of exact shell approval patterns.
+
+#### Scenario: Approval request emitted as session output
+
+- **GIVEN** a tool requires approval
+- **WHEN** the pipeline detects the approval requirement
+- **THEN** a `ToolInteractionRequest` with `Kind=approval` is emitted
+- **AND** it includes `CallId`, `ToolName`, the command/pattern, and available
+  options (approve once, approve for this chat, approve always, deny)
+
+#### Scenario: Approval request includes directory roots
+
+- **GIVEN** a shell command targets a file under `/home/.netclaw/logs/`
+- **WHEN** the approval request is generated
+- **THEN** `ToolInteractionRequest.DirectoryRoots` contains `/home/.netclaw/logs/`
+- **AND** the request still includes the exact blocked approval pattern for retry
+
+#### Scenario: Channel routes response back to session
+
+- **GIVEN** a `ToolInteractionRequest` has been emitted
+- **WHEN** the user selects an option (for MVP Slack, via text reply)
+- **THEN** the channel sends a `ToolInteractionResponse` to the session actor
+- **AND** the response includes `CallId` and the selected option key
+
+### Requirement: Approval provenance stays inclusive while third-party adopted policy is separate
+
+Approval prompts and stored approval context SHALL preserve truthful adopted
+provenance for any non-empty adopted window.
+
+For approval context:
+
+- `HasAdoptedContext` SHALL mean the adopted window is non-empty.
+- Adopted-speaker provenance SHALL list all adopted sender ids present in that
+  window, including self-only adopted history.
+- `HasThirdPartyAdoptedContext` MAY be carried as a separate policy field, but it
+  SHALL be derived independently and SHALL NOT replace or trim the full adopted
+  provenance.
+
+This clarification SHALL NOT alter the trust model: approval requests still
+originate only from the current authorized executable message, and adopted
+context remains quoted, non-executable background.
+
+#### Scenario: Self-only adopted history still appears in approval provenance
+
+- **GIVEN** the current authorized message requires tool approval
+- **AND** the adopted window is non-empty
+- **AND** every adopted sender id matches the current authorized sender
+- **WHEN** the approval prompt and stored context are created
+- **THEN** `HasAdoptedContext` is true
+- **AND** adopted-speaker provenance includes that sender id
+- **AND** `HasThirdPartyAdoptedContext` is false
+
+#### Scenario: Third-party adopted history preserves full provenance
+
+- **GIVEN** the current authorized message requires tool approval
+- **AND** the adopted window includes sender ids `U111` and `U222`
+- **WHEN** the approval prompt and stored context are created
+- **THEN** adopted-speaker provenance includes both `U111` and `U222`
+- **AND** `HasThirdPartyAdoptedContext` is true
+
+#### Scenario: Empty adopted window omits adopted provenance entirely
+
+- **GIVEN** the current authorized message requires tool approval
+- **AND** the turn has no adopted window
+- **WHEN** the approval prompt and stored context are created
+- **THEN** `HasAdoptedContext` is false
+- **AND** no adopted-speaker provenance is included
+
+### Requirement: Persistent approval storage
+
+The system SHALL store persistent approvals in
+`~/.netclaw/config/tool-approvals.json` using a `version: 2` typed
+schema. Each entry SHALL be an `ApprovalEntry` with a required `verb`
+field (the verb chain, e.g. `git remote`) and an optional `directory`
+field (an absolute path, or `null` for the global wildcard). The file
+SHALL contain per-audience sections with per-tool `ApprovalEntry` lists.
+The file SHALL NOT be monitored by `ConfigWatcherService`.
+
+When the daemon reads a `tool-approvals.json` file that does not have
+`version: 2`, the file SHALL be quarantined to
+`tool-approvals.json.v1.bak` and an empty v2 store SHALL be returned.
+The daemon SHALL write the empty v2 store on the next persist call. No
+automatic translation of v1 entries SHALL be performed.
+
+The matcher SHALL approve a candidate invocation when there exists an
+`ApprovalEntry` whose `verb` equals the candidate's extracted verb
+chain AND (`directory` is `null` OR the candidate's cwd is under
+`directory`).
+
+The file SHALL also be operator-editable via the `netclaw approvals`
+CLI (see the `netclaw-cli` capability). The daemon SHALL pick up
+out-of-band edits — whether made by direct file editing or by the
+CLI — on the next approval check, without requiring a restart.
+
+#### Scenario: Always here persists typed (verb, directory) entries
+
+- **GIVEN** the user clicks `Always here` for verbs `git remote` and
+  `git rev-parse` in cwd `~/repos/foo/`
+- **WHEN** the approval is processed
+- **THEN** `tool-approvals.json` contains
+  `[{"verb":"git remote","directory":"~/repos/foo/"},
+    {"verb":"git rev-parse","directory":"~/repos/foo/"}]`
+- **AND** the daemon does NOT restart
+
+#### Scenario: Always anywhere persists null-directory entry
+
+- **GIVEN** the user clicks `Always anywhere` for verb `freshdesk`
+- **WHEN** the approval is processed
+- **THEN** `tool-approvals.json` contains
+  `{"verb":"freshdesk","directory":null}`
+
+#### Scenario: v1 file quarantined on first read
+
+- **GIVEN** `tool-approvals.json` exists without a `version` field
+  (or with `version` other than `2`)
+- **WHEN** the daemon loads the file
+- **THEN** the file is moved to `tool-approvals.json.v1.bak`
+- **AND** `Load()` returns an empty v2 store
+- **AND** no v1 entries are translated to v2
+
+#### Scenario: Matcher approves under directory entry
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"git remote","directory":"~/repos/foo/"}`
+- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/foo/`
+- **THEN** the matcher returns approved
+- **AND** no prompt is rendered
+
+#### Scenario: Matcher approves under null-directory entry
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"freshdesk","directory":null}`
+- **WHEN** the agent invokes `freshdesk --since=24h` with cwd
+  `~/.netclaw/sessions/<id>/`
+- **THEN** the matcher returns approved regardless of cwd
+
+#### Scenario: Matcher rejects when cwd is outside entry directory
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"git remote","directory":"~/repos/foo/"}`
+- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/bar/`
+- **THEN** the matcher returns not-approved
+- **AND** the approval gate prompts the user
+
+#### Scenario: Approve once is retry-scoped only
+
+- **GIVEN** the user clicks `Once` for command `docker build`
+- **WHEN** the approval is processed
+- **THEN** the blocked `docker build` call is retried immediately
+- **AND** a later `docker build` call in the same session prompts again
+- **AND** `tool-approvals.json` is NOT modified
+
+#### Scenario: Operator-applied revocation visible without restart
+
+- **GIVEN** the daemon is running with a persisted entry
+  `{"verb":"git push","directory":null}`
+- **WHEN** an operator removes that entry via `netclaw approvals revoke`
+- **AND** a new approval check evaluates `git push`
+- **THEN** the daemon re-loads the file and observes the entry is gone
+- **AND** the user is prompted for approval again
+- **AND** the daemon was not restarted
+
+### Requirement: Global grant precedence over folder-scoped grants
+
+A persisted global `ApprovalEntry` (`directory: null`) SHALL authorize its
+verb in every directory. When both a global entry and one or more
+folder-scoped entries exist for the same verb within the same audience and
+tool, the global entry SHALL be sufficient for approval in any directory;
+the folder-scoped entries become redundant for matching but SHALL be
+retained on disk. Adding a global grant SHALL NOT remove, supersede, or
+rewrite existing folder-scoped grants for the same verb — retaining them
+preserves the operator's ability to revoke the global grant and fall back
+to the narrower folder-scoped grants.
+
+The matcher SHALL evaluate a candidate against every persisted
+`ApprovalEntry` for the verb and approve when any entry matches. It SHALL
+NOT stop at the first verb-matching entry whose directory check fails.
+
+#### Scenario: Global grant approves verb in an unrelated directory
+
+- **GIVEN** `tool-approvals.json` contains both
+  `{"verb":"dotnet","directory":"~/repos/foo/"}` and
+  `{"verb":"dotnet","directory":null}`
+- **WHEN** the agent invokes `dotnet --info` with cwd `~/repos/bar/`
+- **THEN** the matcher returns approved via the global entry
+- **AND** no prompt is rendered
+
+#### Scenario: Adding a global grant retains folder-scoped grants
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"dotnet","directory":"~/repos/foo/"}`
+- **WHEN** the user clicks `Always anywhere` for verb `dotnet`
+- **THEN** `tool-approvals.json` contains both the existing folder-scoped
+  entry and a new `{"verb":"dotnet","directory":null}` entry
+- **AND** the folder-scoped entry is NOT removed or rewritten
+
+#### Scenario: Revoking a global grant restores folder-scoped scope
+
+- **GIVEN** `tool-approvals.json` contains both
+  `{"verb":"dotnet","directory":"~/repos/foo/"}` and
+  `{"verb":"dotnet","directory":null}`
+- **WHEN** an operator removes the `{"verb":"dotnet","directory":null}`
+  entry via `netclaw approvals revoke`
+- **THEN** `dotnet` invocations with cwd under `~/repos/foo/` still
+  auto-approve via the retained folder-scoped entry
+- **AND** `dotnet` invocations outside `~/repos/foo/` prompt again
+
+### Requirement: Channel approval capability
+
+Channels SHALL declare whether they support interactive approval via a
+capability flag. When a tool requires approval and the active channel does NOT
+support it, the system SHALL immediately deny the tool with reason
+`channel_does_not_support_approval`. The system SHALL NOT hang or timeout.
+
+Channels that support interactive approval SHALL render approval prompts using
+their richest available interaction surface and SHALL always provide a
+deterministic text fallback path with equivalent decision options when the
+rich interaction surface is unavailable or not configured.
+
+#### Scenario: Unsupported channel auto-denies
+
+- **GIVEN** the headless channel (no interactive user)
+- **AND** `shell_execute` is in Approval mode
+- **WHEN** the agent invokes `shell_execute`
+- **THEN** the tool is immediately denied with
+  `channel_does_not_support_approval`
+
+#### Scenario: Supported channel renders approval prompt
+
+- **GIVEN** the Slack channel (supports interactive approval)
+- **AND** `shell_execute` is in Approval mode
+- **WHEN** the agent invokes an unapproved `shell_execute` command
+- **THEN** the channel renders the approval prompt as a text A/B/C/D reply flow
+
+#### Scenario: Mattermost channel renders interactive approval buttons
+
+- **GIVEN** the Mattermost channel (supports interactive approval)
+- **AND** interactive approvals are configured for the Mattermost channel
+- **AND** `shell_execute` is in Approval mode
+- **WHEN** the agent invokes an unapproved `shell_execute` command
+- **THEN** the channel renders the approval prompt as Mattermost interactive
+  buttons
+- **AND** a clicked button is routed as a `ToolInteractionResponse`
+
+#### Scenario: Mattermost channel falls back to deterministic text options
+
+- **GIVEN** the Mattermost channel (supports interactive approval)
+- **AND** interactive approvals are not configured for the Mattermost channel
+- **WHEN** the agent invokes an unapproved `shell_execute` command
+- **THEN** the channel renders a deterministic A/B/C/D text approval prompt
+- **AND** text replies map to equivalent approval decisions
+
+### Requirement: Directory-root approvals for shell_execute
+
+For `shell_execute`, persistent approvals SHALL be stored as typed
+`(verb, directory)` `ApprovalEntry` records, NOT as separate verb
+patterns and directory-root entries. The matcher SHALL approve a
+candidate invocation when an `ApprovalEntry` exists whose `verb` matches
+the candidate's verb chain AND (`directory` is `null` OR the candidate's
+cwd is under `directory`).
+
+`Once` SHALL retry only the blocked call; it SHALL NOT create any
+session or persistent approval.
+
+`This chat` SHALL store `(verb, prompt's directory)` entries in
+session-scoped memory only.
+
+`Always here` SHALL persist `(verb, prompt's directory)` entries to
+`tool-approvals.json`.
+
+`Always anywhere` SHALL persist `(verb, null)` entries to
+`tool-approvals.json` — the global wildcard.
+
+The system SHALL enforce path normalization, boundary-safe containment,
+path traversal checks, and `ToolPathPolicy` as the safety backstop.
+`ToolPathPolicy` SHALL resolve symlinks along every component of a
+candidate path so that a planted symlink under an approved directory
+cannot be used to reach a protected path that lies outside that
+directory.
+
+The minimum-depth check from v1 (rejecting roots like `/` or `/etc/`)
+SHALL still apply to the directory portion of `(verb, directory)`
+entries: `Always here` SHALL NOT persist a directory shallower than
+two path segments. When the prompt's directory is too shallow, the
+prompt SHALL omit the `Always here` button (only `Once`, `This chat`,
+`Always anywhere`, `Deny` remain), so the user cannot accidentally
+write a too-shallow root.
+
+#### Scenario: Once retries only the blocked call
+
+- **GIVEN** a shell command `cat ~/repos/foo/notes.md` requires approval
+- **WHEN** the user clicks `Once`
+- **THEN** only the current blocked call is retried
+- **AND** no `ApprovalEntry` is recorded
+- **AND** a later `cat ~/repos/foo/other.md` prompts again
+
+#### Scenario: Always here stores (verb, directory) entry
+
+- **GIVEN** a shell command `grep -l "timeout" daemon.log` with cwd
+  `~/.netclaw/logs/`
+- **WHEN** the user clicks `Always here`
+- **THEN** `{"verb":"grep","directory":"~/.netclaw/logs/"}` is written
+  to `tool-approvals.json`
+- **AND** a future `wc -l app.log` with cwd `~/.netclaw/logs/` does NOT
+  match this entry (different verb)
+- **AND** a future `grep "info" archive.log` with cwd
+  `~/.netclaw/logs/` is auto-approved (same verb, same directory)
+
+#### Scenario: Always anywhere stores (verb, null) entry
+
+- **GIVEN** a shell command `freshdesk --since=24h` requires approval
+- **WHEN** the user clicks `Always anywhere`
+- **THEN** `{"verb":"freshdesk","directory":null}` is written to
+  `tool-approvals.json`
+- **AND** a scheduled task firing `freshdesk` in any cwd is
+  auto-approved on next invocation
+
+#### Scenario: Boundary-safe matching prevents prefix collisions
+
+- **GIVEN** `{"verb":"cat","directory":"/home/user/"}` is approved
+- **WHEN** the agent runs `cat data.txt` with cwd `/home/usersecret/`
+- **THEN** the candidate does NOT match the entry
+- **AND** the approval gate prompts the user
+
+#### Scenario: Symlink in cwd breaks the approval match
+
+- **GIVEN** `{"verb":"cat","directory":"/home/user/safe/"}` is approved
+- **AND** `/home/user/safe/leak` is a directory symlink resolving
+  to `/etc`
+- **WHEN** the agent runs `cat passwd` with cwd `/home/user/safe/leak/`
+- **THEN** the symlink-segment check breaks the auto-approval
+- **AND** `ToolPathPolicy.CommandReferencesDeniedPath` blocks execution
+  if the canonical path is protected
+
+#### Scenario: Shallow directory prevents Always here
+
+- **GIVEN** an approval prompt for `cat /etc/passwd` (cwd `/etc/`)
+- **WHEN** the prompt is rendered
+- **THEN** the `Always here` button is omitted
+- **AND** only `Once`, `This chat`, `Always anywhere`, `Deny` are shown
+
+### Requirement: Safe-verb auto-allow short-circuit in declared safe spaces
+
+The system SHALL maintain a per-OS curated list of demonstrably read-only
+verb chains (`safe-verbs.linux.json` and `safe-verbs.windows.json`) shipped
+with the daemon and overridable at `~/.netclaw/config/safe-verbs.<os>.json`.
+A `ScopedShellSafeVerbPolicy` SHALL evaluate each shell invocation against
+the safe-verbs list AND the audience-aware safe-space roots resolved by
+`ToolAudienceProfileResolver`. When the candidate verb chain is on the
+safe-verbs list AND the candidate's cwd resolves under at least one
+safe-space root AND the path contains no symlink segments
+(`ContainsSymlinkSegment` returns false), the approval gate SHALL
+short-circuit to "approved" with no user prompt. Otherwise the existing
+approval gate SHALL apply.
+
+Safe-space roots SHALL be:
+
+- For Personal and Team audiences: `session_dir` (always) plus
+  `project_dir` from `WorkingContext` (when set).
+- For Public audience: `session_dir` only. Public sessions SHALL NOT
+  expand their safe space via `project_dir`, mirroring the read-roots
+  restriction `ScopedFileAccessPolicy` enforces for file_read.
+
+The hard-deny list (layer 1) SHALL apply unchanged. The safe-verb
+short-circuit SHALL only relax the interactive approval gate (layer 2).
+`ToolPathPolicy.CommandReferencesDeniedPath` SHALL still block execution
+if a denied path is referenced.
+
+#### Scenario: Read-only verb in project directory auto-runs
+
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the Linux safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `grep -r "error" .` and cwd `~/repos/foo/`
+- **THEN** the approval gate short-circuits to "approved"
+- **AND** no prompt is rendered to the user
+- **AND** `tool-approvals.json` is NOT modified
+
+#### Scenario: Read-only verb in session directory auto-runs
+
+- **GIVEN** a Personal session with no `project_dir` set
+- **AND** `cat` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `cat inbox/notes.md` and cwd `~/.netclaw/sessions/<id>/`
+- **THEN** the approval gate short-circuits to "approved"
+- **AND** no prompt is rendered
+
+#### Scenario: Read-only verb outside safe spaces still prompts
+
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with cwd `/etc/`
+- **THEN** the approval gate prompts the user
+- **AND** the prompt body shows `/etc/` as the directory header
+
+#### Scenario: Mutating verb in safe space still prompts
+
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `git push` is NOT on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `git push origin main` and cwd `~/repos/foo/`
+- **THEN** the approval gate prompts the user
+- **AND** the user can grant `(git push, ~/repos/foo/)` via "Always here"
+
+#### Scenario: Public audience cannot use project_dir as safe space
+
+- **GIVEN** a Public session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/`
+- **THEN** the approval gate prompts the user
+- **AND** Public's only safe space remains `session_dir`
+
+#### Scenario: Symlink under safe-space root cannot extend safe scope
+
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `~/repos/foo/leak` is a symlink resolving to `/etc`
+- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/leak/`
+  and command `cat passwd`
+- **THEN** the safe-verb short-circuit SHALL NOT apply
+  (`ContainsSymlinkSegment` returns true)
+- **AND** the approval gate prompts the user (or `ToolPathPolicy`
+  hard-denies if the resolved path is protected)
+
+#### Scenario: User-overridden safe-verbs file extends defaults
+
+- **GIVEN** the user has written
+  `~/.netclaw/config/safe-verbs.linux.json` containing the verb `eza`
+- **WHEN** the daemon loads safe-verbs configuration
+- **THEN** `eza` is treated as a safe verb in addition to the shipped defaults
+- **AND** `eza` invocations in safe spaces auto-run without prompting
+
+### Requirement: Five-button approval prompt with verb-and-directory framing
+
+When the approval gate prompts the user, the prompt SHALL render five
+buttons in one row: `Once`, `This chat`, `Always here`, `Always anywhere`,
+`Deny`. The buttons `Always anywhere` and `Deny` SHALL be styled as
+danger (Slack `style: "danger"`, Discord `ButtonStyle.Danger`). All
+button labels SHALL fit within Slack's 76-character and Discord's
+80-character button-text caps.
+
+The prompt body SHALL show the cwd in the header
+(`Approve in <cwd> ?`) and the extracted verb chains as a bulleted list.
+Single-verb commands MAY collapse the list into the header
+(`Approve <verb> in <cwd> ?`). The body SHALL NOT render separate
+"Patterns" or "Directory Roots" sections.
+
+The display text for a shell command SHALL be single-line. A command
+containing embedded line breaks (LF or CR) SHALL be reconstructed from
+its parse tree: statement separators render as explicit operators (`;`,
+`&&`, `||`, `|`) and each multi-line argument or redirect target is
+replaced with a `(N lines, M chars)` size summary instead of its
+verbatim content (issue #1402) — channel renderers embed the display
+text in single-line code fences, and dumping a multi-line quoted blob
+verbatim corrupts the prompt layout. When the parser cannot decompose
+the command, line breaks SHALL be flattened to spaces.
+
+Commands containing heredocs or subshell groupings SHALL NOT be
+display-reconstructed: the parser drops heredoc bodies from the tree
+(only the `<<EOF` marker survives as a redirect target), so a
+reconstruction would silently omit executable content the approver must
+see — and subshell grouping does not survive the flat clause list, so a
+reconstruction would misstate which statements a pipe or `&&` guard
+applies to. Both fall back to the flattened raw command — ugly but
+fully disclosed.
+
+Button semantics:
+
+- `Once` SHALL run the command this one time and persist nothing.
+- `This chat` SHALL allow the extracted verbs in the prompt's directory
+  for the rest of the session, stored in session-scoped memory only.
+- `Always here` SHALL persist `(verb, prompt's directory)` entries to
+  `tool-approvals.json` for each extracted verb.
+- `Always anywhere` SHALL persist `(verb, null)` entries for each
+  extracted verb — the global wildcard.
+- `Deny` SHALL refuse this call only. Denying a verb SHALL NOT ban it
+  for future invocations.
+
+#### Scenario: Compound command shows verbs as bullets
+
+- **GIVEN** the agent invokes `shell_execute` with command
+  `cd ~/repos/foo && git remote -v && git rev-parse HEAD`
+  and cwd `~/repos/foo/`
+- **WHEN** the approval prompt is rendered on Slack
+- **THEN** the body header reads `Approve in ~/repos/foo/ ?`
+- **AND** the verbs `cd`, `git remote`, `git rev-parse` appear as bullets
+- **AND** the action row contains five buttons
+- **AND** `Always anywhere` and `Deny` are styled as danger
+
+#### Scenario: Always here persists folder-scoped entries
+
+- **GIVEN** an approval prompt for verbs `git remote`, `git rev-parse`
+  in cwd `~/repos/foo/`
+- **WHEN** the user clicks `Always here`
+- **THEN** `tool-approvals.json` gains entries
+  `{"verb": "git remote", "directory": "~/repos/foo/"}` and
+  `{"verb": "git rev-parse", "directory": "~/repos/foo/"}`
+- **AND** the resolution message reads
+  `Saved: git remote, git rev-parse in ~/repos/foo/`
+
+#### Scenario: Always anywhere persists global entries
+
+- **GIVEN** an approval prompt for verb `freshdesk` in cwd `~/.netclaw/sessions/<id>/`
+- **WHEN** the user clicks `Always anywhere`
+- **THEN** `tool-approvals.json` gains entry
+  `{"verb": "freshdesk", "directory": null}`
+- **AND** the resolution message reads `Saved: freshdesk anywhere`
+
+#### Scenario: This chat persists session-scoped only
+
+- **GIVEN** an approval prompt for verb `jsonlint` in cwd `~/repos/foo/`
+- **WHEN** the user clicks `This chat`
+- **THEN** session-scoped memory records `(jsonlint, ~/repos/foo/)`
+- **AND** `tool-approvals.json` is NOT modified
+- **AND** a new session prompts again
+
+#### Scenario: Deny refuses only the current call
+
+- **GIVEN** an approval prompt for verb `git push`
+- **WHEN** the user clicks `Deny`
+- **THEN** the current call is refused
+- **AND** `tool-approvals.json` is NOT modified
+- **AND** a later `git push` call still prompts
+
+#### Scenario: Multi-line quoted argument summarized in display text
+
+- **GIVEN** the agent invokes `shell_execute` with command
+  `freshdesk ticket reply 605 --message "Hi,⏎We've rolled out a fix. Please verify."`
+  where the quoted argument spans two lines
+- **WHEN** the approval prompt is rendered
+- **THEN** the display text reads
+  `freshdesk ticket reply 605 --message (2 lines, 42 chars)`
+- **AND** the display text contains no newline characters
+
+### Requirement: Resolution message single-line format
+
+After an approval response is processed, the channel SHALL render a
+single-line resolution message replacing today's separate `Patterns` and
+`Directory Roots` sections. The line SHALL identify the verbs and the
+scope. Permitted formats:
+
+- `Saved: <verb-list> in <directory>` — for `Always here`.
+- `Saved: <verb-list> anywhere` — for `Always anywhere`.
+- `Saved for this chat: <verb-list> in <directory>` — for `This chat`.
+- `Approved (no save)` — for `Once`.
+- `Denied` — for `Deny`.
+
+#### Scenario: Resolution shows folder scope for Always here
+
+- **GIVEN** the user has clicked `Always here` for verbs
+  `jsonlint, git pull` in `~/repos/foo/`
+- **WHEN** the resolution message is rendered
+- **THEN** the message reads `Saved: jsonlint, git pull in ~/repos/foo/`
+- **AND** no `Patterns` or `Directory Roots` headers are emitted
+
+#### Scenario: Resolution shows global scope for Always anywhere
+
+- **GIVEN** the user has clicked `Always anywhere` for verb `freshdesk`
+- **WHEN** the resolution message is rendered
+- **THEN** the message reads `Saved: freshdesk anywhere`
+
+### Requirement: Pattern extraction refuses bash control-flow
+
+`ShellTokenizer.SplitCompoundCommand` SHALL detect bash control-flow
+tokens (`for`, `while`, `do`, `done`, `then`, `fi`, `case`, `esac`) and
+unbalanced quotes/brackets. When detected, the tokenizer SHALL return an
+empty verb-chain list. The approval gate SHALL respond by offering only
+the `Once` and `Deny` buttons (no `This chat`, `Always here`, or
+`Always anywhere`) and the prompt body SHALL show a hint: "complex
+command — only one-shot approval available". No persistent grant SHALL
+be possible for unparseable commands.
+
+#### Scenario: For-loop produces empty verb-chain list
+
+- **GIVEN** the command
+  `for pid in $(pgrep netclawd); do echo "$pid"; done`
+- **WHEN** `ShellTokenizer.SplitCompoundCommand` runs
+- **THEN** the returned verb-chain list is empty
+
+#### Scenario: Approval prompt for messy command offers only Once and Deny
+
+- **GIVEN** the agent invokes `shell_execute` with the for-loop above
+  and cwd outside any safe space
+- **WHEN** the approval prompt is rendered
+- **THEN** only `Once` and `Deny` buttons are present
+- **AND** the body shows the "complex command" hint
+
+#### Scenario: Unbalanced quotes treated as messy
+
+- **GIVEN** the command `echo "unterminated`
+- **WHEN** the tokenizer runs
+- **THEN** the verb-chain list is empty
+- **AND** the approval gate offers only `Once` and `Deny`
+
+### Requirement: Approval entry creation timestamp
+
+`ApprovalEntry` SHALL carry an optional `createdAt` field — a
+`DateTimeOffset` serialized as the ISO-8601 JSON property `createdAt` —
+recording when the grant was first persisted. The field SHALL be
+populated by `ToolApprovalStore.AddApproval` at write time using an
+injected `TimeProvider` (`TimeProvider.System` in production), so the
+daemon and the operator CLI stamp grants identically.
+
+The `createdAt` field SHALL be additive and optional on disk. Reading a
+`tool-approvals.json` file whose entries lack `createdAt` SHALL succeed
+and yield entries with a `null` timestamp. The on-disk schema version
+SHALL remain `2`; adding `createdAt` SHALL NOT bump the version and
+SHALL NOT cause an existing file to be quarantined.
+
+`createdAt` SHALL NOT participate in approval-entry equality. Two
+entries with the same verb and directory but different (or absent)
+timestamps SHALL still be considered the same grant by
+`ToolApprovalEntryComparer`. `AddApproval` SHALL remain idempotent: when
+an equivalent grant already exists, the existing entry — and therefore
+its original `createdAt` — SHALL be left in place and SHALL NOT be
+restamped.
+
+#### Scenario: New grant is stamped with the current time
+
+- **GIVEN** a `ToolApprovalStore` constructed with a `TimeProvider`
+- **WHEN** `AddApproval` persists a new `(verb, directory)` entry
+- **THEN** the stored entry's `createdAt` equals the provider's current
+  time
+- **AND** the serialized JSON includes a `createdAt` property
+
+#### Scenario: Legacy entry without a timestamp reads back as null
+
+- **GIVEN** a `version: 2` `tool-approvals.json` whose entries have no
+  `createdAt` property
+- **WHEN** the store loads the file
+- **THEN** each entry's `createdAt` is `null`
+- **AND** the file is NOT quarantined to `tool-approvals.json.v1.bak`
+- **AND** the store's schema version remains `2`
+
+#### Scenario: Idempotent re-grant preserves the original timestamp
+
+- **GIVEN** a persisted entry `(git push, /home/user/repos/foo)` stamped
+  at time T1
+- **WHEN** `AddApproval` is called again for the same verb and directory
+  at a later time T2
+- **THEN** `AddApproval` reports no new entry was appended
+- **AND** the stored entry's `createdAt` is still T1
+
+#### Scenario: Timestamp does not affect matching or equality
+
+- **GIVEN** a persisted entry `(git push, null)` stamped at any time
+- **WHEN** the agent invokes `git push` and the matcher evaluates the
+  entry
+- **THEN** the match result is identical to the result for an entry with
+  a `null` `createdAt`
+- **AND** `ToolApprovalEntryComparer.Equals` treats the two entries as
+  equal
+
+### Requirement: Approval-gate near-miss diagnostics
+
+The approval gate SHALL log a near-miss diagnostic when it marks a
+candidate pattern unapproved AND at least one persisted `ApprovalEntry`
+exists for the same audience and tool whose `verb` equals the
+candidate's verb chain. The diagnostic SHALL explain why each same-verb
+grant failed to match and SHALL identify the grant (verb, directory
+scope, and `createdAt`) and the reason it did not match — for example
+the candidate's effective directory is not under the grant's directory,
+a symlink segment lies along the path between the grant directory and
+the effective directory, or the verbs differ only by case.
+
+The diagnostic SHALL be emitted to the daemon log only. It SHALL NOT
+appear in the approval prompt body and SHALL NOT alter the gate's
+decision — it is read-only instrumentation. When no persisted entry
+shares the candidate's verb, no near-miss diagnostic SHALL be emitted
+(a first-time prompt has nothing to diagnose).
+
+#### Scenario: Directory-scoped near-miss is logged
+
+- **GIVEN** a persisted entry `(git push, /home/user/repos/foo)`
+- **WHEN** the agent invokes `git push` with cwd
+  `/home/user/repos/bar` and the gate marks it unapproved
+- **THEN** the daemon logs a near-miss diagnostic naming the grant, its
+  `createdAt`, and the reason the cwd is not under the grant directory
+- **AND** the approval prompt body is unchanged
+
+#### Scenario: First-time prompt emits no near-miss diagnostic
+
+- **GIVEN** no persisted entry exists whose verb equals `terraform apply`
+- **WHEN** the agent invokes `terraform apply` and the gate marks it
+  unapproved
+- **THEN** no near-miss diagnostic is logged
+- **AND** the approval prompt is emitted normally
+
+#### Scenario: Diagnostic does not change the gate decision
+
+- **GIVEN** a persisted entry whose verb matches the candidate but whose
+  directory does not
+- **WHEN** the gate evaluates the candidate
+- **THEN** the candidate remains unapproved
+- **AND** the user is still prompted
+
+### Requirement: Sub-agent approval bridge preserves prompt correlation
+
+Sub-agent approval prompts SHALL use the same channel-agnostic `ToolInteractionRequest` contract as parent-session tool prompts. The request SHALL use a parent-scoped correlation call id that is unique per bridged approval request while preserving the child call id as part of the correlation value. The request SHALL preserve tool name, display text, exact blocked patterns, candidate verbs, per-candidate directories, cwd, messy-command flag, computed approval options, requester identity, principal, audience-derived authority, and adopted-context safety metadata from the parent turn authority context.
+
+#### Scenario: Sub-agent prompt includes approval candidates and options
+- **GIVEN** a sub-agent shell tool call requires approval
+- **WHEN** the parent approval bridge emits the prompt
+- **THEN** the prompt includes the exact blocked patterns shown to the user
+- **AND** the prompt includes candidate verbs and per-candidate directories for grant persistence
+- **AND** the prompt includes the same computed approval options the parent approval gate produced
+
+#### Scenario: Sub-agent prompt carries adopted-context safety metadata
+- **GIVEN** a sub-agent was spawned from a parent turn with adopted context
+- **WHEN** the sub-agent emits an approval prompt
+- **THEN** the prompt includes adopted-context and third-party adopted-context flags
+- **AND** the prompt includes adopted speaker ids when present
+
+#### Scenario: Duplicate child call ids do not share approval state
+- **GIVEN** two bridged sub-agent approval waits have the same child-local tool call id
+- **WHEN** the parent approval bridge emits prompts for both waits
+- **THEN** each prompt uses a distinct parent-scoped call id
+- **AND** approving one prompt cannot complete or authorize the other wait
+
+### Requirement: Sub-agent approval responses do not execute expired work
+
+Approval responses for sub-agent prompts SHALL execute a tool only while the originating sub-agent wait is still live and correlated to the pending call id. A response that arrives after the sub-agent wait was cancelled, completed, or abandoned SHALL fail closed as expired and SHALL NOT execute the gated tool.
+
+#### Scenario: Late approval after cancellation is expired
+- **GIVEN** a sub-agent approval prompt is pending
+- **AND** the parent cancels the `spawn_agent` call before the user responds
+- **WHEN** the user later approves the stale prompt
+- **THEN** the sub-agent tool is not executed
+- **AND** the response is treated as expired or no-longer-pending
+
+#### Scenario: Live session response requires live approval wait
+- **GIVEN** the parent session still has persisted prompt metadata for a sub-agent approval
+- **AND** the child sub-agent approval wait has already been cancelled or completed
+- **WHEN** an approval response arrives while the parent session is processing
+- **THEN** the response is rejected as expired
+- **AND** no approval grant is applied to execute stale sub-agent work
+
+#### Scenario: Durable grant is written only after live wait is claimed
+- **GIVEN** a sub-agent approval response requests a session or persistent grant
+- **AND** the child approval wait is cancelled before the parent claims the response
+- **WHEN** the response is handled
+- **THEN** no durable approval grant is written
+- **AND** the response is rejected as expired
+
+#### Scenario: No bridge fails closed
+- **GIVEN** a sub-agent tool call requires approval
+- **AND** no parent approval bridge is available
+- **WHEN** the tool executor reports that approval is required
+- **THEN** no approval prompt is emitted
+- **AND** the gated tool is not executed
+- **AND** the sub-agent completes with a failed `SubAgentResult`
+
+### Requirement: Approval pause persistence carries turn context
+
+When a tool approval prompt is emitted from a session turn, the persisted approval request SHALL carry the original turn context as a single durable context record. The approval request MAY continue to carry tool-specific prompt data, option keys, candidates, and compatibility fields, but authority-bearing session context SHALL have one canonical persisted representation for new events.
+
+#### Scenario: Approval request persists context record
+
+- **GIVEN** a tool call requires approval during a session turn
+- **WHEN** the session persists the approval request
+- **THEN** the journaled event includes the turn context for the original request
+- **AND** the pending interaction restored from that event carries the same context
+
+#### Scenario: Tool-specific prompt data remains separate
+
+- **GIVEN** an approval request includes command patterns, candidate verbs, option keys, and directory candidates
+- **WHEN** the turn context is persisted with the approval request
+- **THEN** tool-specific prompt data remains separate from the turn context
+- **AND** the turn context does not become a dumping ground for approval-rendering state
+
+### Requirement: Approval responses use persisted requester context
+
+Approval response authorization SHALL use the requester and principal from the persisted turn context for the pending approval. A recovered approval response SHALL enforce the same requester-only approval rule as the live path, unless the original requester principal represents verified automation where channel-member approval is allowed.
+
+#### Scenario: Non-requester approval rejected after recovery
+
+- **GIVEN** a pending approval was restored with requester `U-requester`
+- **WHEN** sender `U-other` approves the prompt
+- **THEN** the approval response is rejected
+- **AND** the tool is not redriven
+
+#### Scenario: Verified automation approval remains approvable by channel member
+
+- **GIVEN** a pending approval was restored with a verified automation principal
+- **WHEN** a valid channel member approves the prompt
+- **THEN** the approval response is accepted according to the same rule used on the live path
+- **AND** the redrive uses the original turn context
+
+### Requirement: Subagent approval evaluation uses the inherited parent cwd
+
+The approval gate SHALL treat a subagent's `shell_execute` invocation as
+having the cwd inherited from the parent session at spawn time, captured per
+the `session-cwd` capability's "Resolved shell cwd flows to spawned subagents
+as read-only snapshot" requirement. Persisted folder-scoped grants whose
+directory contains the inherited cwd SHALL therefore auto-approve the
+subagent invocation under the same rules as the parent session. Persisted
+global grants (`directory: null`) SHALL continue to auto-approve regardless
+of cwd, including when the inherited cwd is `null`. The matcher SHALL NOT
+introduce a new short-circuit that bypasses persisted grants when the
+inherited cwd is `null`; the existing
+`ApprovalPatternMatching.MatchesShellApproval` semantics apply.
+
+#### Scenario: Folder-scoped parent grant covers subagent invocation
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
+- **AND** the parent session's resolved cwd at subagent spawn is
+  `/home/user/repos/foo/`
+- **WHEN** the spawned subagent invokes `dotnet build` with no explicit
+  `WorkingDirectory` argument
+- **THEN** the matcher returns approved
+- **AND** no approval prompt is rendered to the user
+
+#### Scenario: Global grant covers subagent invocation with null cwd
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"netclaw stats","directory":null}`
+- **AND** the spawned subagent has no inherited cwd (the parent had none
+  either)
+- **WHEN** the subagent invokes `netclaw stats`
+- **THEN** the matcher returns approved regardless of the null cwd
+- **AND** no approval prompt is rendered
+
+#### Scenario: Folder-scoped parent grant does not match subagent with null cwd
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
+- **AND** the spawned subagent has no inherited cwd
+- **WHEN** the subagent invokes `dotnet build` with no explicit
+  `WorkingDirectory` argument
+- **THEN** the folder-scoped grant SHALL NOT match (no effective directory)
+- **AND** the approval gate prompts the user with the header form
+  `Approve dotnet build in (no working directory)?` as documented in this
+  capability's "Five-button approval prompt with verb-and-directory framing"
+  requirement
+- **AND** the daemon log SHALL emit an `approval_near_miss` diagnostic with
+  reason `NoCandidateDirectory` so the operator can see why the grant did
+  not match
+
+### Requirement: Subagent inherits parent session-scoped approvals
+
+The approval gate SHALL walk from a subagent's scope id toward its parent
+session and SHALL treat any session-scoped approval (a `This chat` click)
+recorded against the parent session id as also authorizing the subagent's
+verbs. The subagent scope id has the form
+`{parentSessionId}/subagent/{name}/{runId}`; the walk SHALL terminate at the
+first non-`/subagent/` segment so unrelated sessions never share
+session-scoped approvals. This requirement codifies the existing
+`ToolApprovalActor.IsSessionApproved` scope-walk behavior so future
+refactors SHALL NOT regress it; it does not introduce a new code path.
+
+#### Scenario: This-chat grant in parent authorizes subagent invocation
+
+- **GIVEN** the parent session granted `This chat` for verb `gh pr view` in
+  the current chat
+- **WHEN** a spawned subagent in that chat invokes `gh pr view 123`
+- **THEN** the matcher returns approved via the session-scoped grant
+- **AND** no approval prompt is rendered
+
+--- ARQUIVOS DO PR (160)
+added     +2     -0     openspec/changes/archive/2026-06-24-actor-protocol-taxonomy/.openspec.yaml
+added     +167   -0     openspec/changes/archive/2026-06-24-actor-protocol-taxonomy/design.md
+added     +86    -0     openspec/changes/archive/2026-06-24-actor-protocol-taxonomy/proposal.md
+added     +156   -0     openspec/changes/archive/2026-06-24-actor-protocol-taxonomy/specs/actor-message-protocol/spec.md
+added     +57    -0     openspec/changes/archive/2026-06-24-actor-protocol-taxonomy/tasks.md
+added     +170   -0     openspec/specs/actor-message-protocol/spec.md
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/ChannelPipelineAckTargetTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Channels/Contracts/DiscordSessionBindingContractTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/Contracts/MattermostSessionBindingContractTests.cs
+modified  +4     -2     src/Netclaw.Actors.Tests/Channels/Contracts/SessionBindingContractTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Channels/Contracts/SlackSessionBindingContractTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/DiscordApprovalPromptBuilderTests.cs   <== código ligado à spec
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/DiscordConversationActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/DiscordGatewayActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/ExecutionOutputAccumulatorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/MattermostApprovalPromptBuilderTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/MattermostConversationActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/MattermostProactiveThreadTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/SlackActorHierarchyTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/SlackApprovalBlockBuilderTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Channels/SlackFileFlowIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/SlackReplyClientTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Channels/TestHelpers/FailingSessionPipeline.cs
+modified  +4     -3     src/Netclaw.Actors.Tests/Channels/TestHelpers/RecordingSessionPipeline.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Channels/TestHelpers/ScriptedSessionPipeline.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Channels/TurnContextTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Jobs/BackgroundJobExecutionActorTests.cs
+modified  +2     -0     src/Netclaw.Actors.Tests/Jobs/BackgroundJobIntegrationTests.cs
+modified  +2     -0     src/Netclaw.Actors.Tests/Jobs/BackgroundJobManagerActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Jobs/CheckBackgroundJobToolTests.cs
+modified  +3     -43    src/Netclaw.Actors.Tests/Protocol/SerializationRoundTripTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Protocol/ToolInteractionResponseParserTests.cs
+modified  +5     -4     src/Netclaw.Actors.Tests/Reminders/ReminderExecutionActorTests.cs
+modified  +2     -0     src/Netclaw.Actors.Tests/Reminders/ReminderManagerActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Reminders/SetReminderToolTests.cs
+modified  +4     -3     src/Netclaw.Actors.Tests/Sessions/ApprovalRehydrationTests.cs
+modified  +2     -0     src/Netclaw.Actors.Tests/Sessions/BackgroundJobReapOnPassivationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/BackgroundJobSessionStateTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/CompactionIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/EmptyResponseEscalationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ErrorCorrelationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/LlmSessionImageDeliveryTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Sessions/LlmSessionIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/LlmSessionStreamingTimeoutTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/LlmSessionWatchdogTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/MaxToolIterationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ModalityGateTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ModelCapabilityActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ParentSessionApprovalBridgeTests.cs   <== código ligado à spec
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/Pipelines/BackgroundRoutingTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionLogActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionMemoryObserverActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionStateCompactionTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionStateTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionSubscriberManagerTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/SessionToolExecutionPipelineTests.cs
+modified  +3     -2     src/Netclaw.Actors.Tests/Sessions/SubAgentSpawnIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ToolExecutionIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/Sessions/ToolLoopCompactionTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/SubAgents/SubAgentActorTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/SubAgents/SubAgentObservabilityTests.cs
+modified  +1     -0     src/Netclaw.Actors.Tests/SubAgents/SubAgentSpawnerTests.cs
+modified  +4     -3     src/Netclaw.Actors/Channels/ChannelPipeline.cs
+modified  +1     -0     src/Netclaw.Actors/Channels/ExecutionOutputAccumulator.cs
+modified  +1     -0     src/Netclaw.Actors/Channels/ISessionLifecycleObserver.cs
+modified  +3     -3     src/Netclaw.Actors/Channels/MessageSource.cs
+modified  +1     -0     src/Netclaw.Actors/Channels/SessionPipelineHandle.cs
+modified  +1     -0     src/Netclaw.Actors/Channels/TurnContext.cs
+modified  +1     -0     src/Netclaw.Actors/Jobs/BackgroundJobExecutionActor.cs
+modified  +2     -0     src/Netclaw.Actors/Jobs/BackgroundJobManagerActor.cs
+modified  +44    -23    src/Netclaw.Actors/Jobs/BackgroundJobProtocol.cs
+modified  +1     -0     src/Netclaw.Actors/Jobs/CheckBackgroundJobTool.cs
+modified  +1     -0     src/Netclaw.Actors/Protocol/ApprovalButtonValueCodec.cs
+removed   +0     -37    src/Netclaw.Actors/Protocol/Broadcasts.cs
+removed   +0     -38    src/Netclaw.Actors/Protocol/CommandResponses.cs
+removed   +0     -96    src/Netclaw.Actors/Protocol/Commands.cs
+removed   +0     -278   src/Netclaw.Actors/Protocol/Events.cs
+modified  +25    -9     src/Netclaw.Actors/Protocol/ModelCapabilityMessages.cs
+removed   +0     -434   src/Netclaw.Actors/Protocol/SessionOutput.cs
+modified  +2     -0     src/Netclaw.Actors/Protocol/SessionOutputDto.cs
+modified  +1     -0     src/Netclaw.Actors/Protocol/SessionOutputDtoMapper.cs
+modified  +1     -0     src/Netclaw.Actors/Protocol/SessionSubscription.cs
+modified  +2     -0     src/Netclaw.Actors/Protocol/ToolInteractionResponseParser.cs
+modified  +1     -0     src/Netclaw.Actors/Reminders/CancelReminderTool.cs
+modified  +1     -0     src/Netclaw.Actors/Reminders/ListRemindersTool.cs
+modified  +2     -0     src/Netclaw.Actors/Reminders/ReminderExecutionActor.cs
+modified  +1     -0     src/Netclaw.Actors/Reminders/ReminderManagerActor.cs
+modified  +65    -43    src/Netclaw.Actors/Reminders/ReminderProtocol.cs
+modified  +1     -0     src/Netclaw.Actors/Reminders/SetReminderTool.cs
+modified  +5     -41    src/Netclaw.Actors/Serialization/NetclawProtoMapper.cs
+modified  +1     -8     src/Netclaw.Actors/Serialization/NetclawProtobufSerializer.cs
+modified  +0     -14    src/Netclaw.Actors/Serialization/Protos/netclaw_messages.proto
+modified  +1     -0     src/Netclaw.Actors/Sessions/Handlers/SessionSubscriberManager.cs
+modified  +1     -1     src/Netclaw.Actors/Sessions/IApprovalChannel.cs
+modified  +7     -10    src/Netclaw.Actors/Sessions/LlmSessionActor.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/ModelCapabilityActor.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/ParentSessionApprovalBridge.cs
+modified  +2     -0     src/Netclaw.Actors/Sessions/Pipelines/SessionToolExecutionPipeline.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/SessionLogActor.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/SessionMemoryCheckpointFactory.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/SessionMemoryObserverActor.cs
+added     +102   -0     src/Netclaw.Actors/Sessions/SessionProtocol.Commands.cs
+added     +298   -0     src/Netclaw.Actors/Sessions/SessionProtocol.Events.cs
+added     +440   -0     src/Netclaw.Actors/Sessions/SessionProtocol.Outputs.cs
+added     +31    -0     src/Netclaw.Actors/Sessions/SessionProtocol.Responses.cs
+added     +59    -0     src/Netclaw.Actors/Sessions/SessionProtocol.cs
+modified  +1     -0     src/Netclaw.Actors/Sessions/SessionState.cs
+modified  +2     -1     src/Netclaw.Actors/Sessions/ToolApprovalState.cs
+modified  +1     -1     src/Netclaw.Actors/Sessions/WorkingContext.cs
+modified  +1     -0     src/Netclaw.Actors/SubAgents/SpawnAgentTool.cs
+modified  +1     -0     src/Netclaw.Actors/SubAgents/SubAgentActor.cs
+modified  +1     -1     src/Netclaw.Actors/SubAgents/SubAgentNotification.cs
+modified  +18    -2     src/Netclaw.Actors/SubAgents/SubAgentProtocol.cs
+modified  +1     -0     src/Netclaw.Actors/SubAgents/SubAgentSpawner.cs
+modified  +1     -0     src/Netclaw.Actors/Tools/AkkaToolApprovalService.cs
+modified  +1     -0     src/Netclaw.Actors/Tools/ToolApprovalActor.cs
+modified  +38    -16    src/Netclaw.Actors/Tools/ToolApprovalMessages.cs
+modified  +1     -0     src/Netclaw.Channels.Discord/DiscordApprovalPromptBuilder.cs   <== código ligado à spec
+modified  +1     -0     src/Netclaw.Channels.Discord/DiscordConversationActor.cs
+modified  +1     -0     src/Netclaw.Channels.Discord/DiscordIngressMessages.cs
+modified  +1     -0     src/Netclaw.Channels.Discord/DiscordProcessingOutputRenderer.cs
+modified  +4     -2     src/Netclaw.Channels.Discord/DiscordSessionBindingActor.cs
+modified  +1     -0     src/Netclaw.Channels.Mattermost/MattermostApprovalPromptBuilder.cs
+modified  +1     -0     src/Netclaw.Channels.Mattermost/MattermostConversationActor.cs
+modified  +1     -0     src/Netclaw.Channels.Mattermost/MattermostIngressMessages.cs
+modified  +5     -3     src/Netclaw.Channels.Mattermost/MattermostSessionBindingActor.cs
+modified  +1     -0     src/Netclaw.Channels.Slack/SlackApprovalBlockBuilder.cs   <== código ligado à spec
+modified  +1     -0     src/Netclaw.Channels.Slack/SlackConversationActor.cs
+modified  +4     -2     src/Netclaw.Channels.Slack/SlackThreadBindingActor.cs
+modified  +1     -0     src/Netclaw.Channels/ChannelConversationActor.cs
+modified  +1     -0     src/Netclaw.Channels/ChannelDeliveryContracts.cs
+modified  +1     -0     src/Netclaw.Channels/ChannelGatewayActor.cs
+modified  +1     -0     src/Netclaw.Cli.Tests/Cli/DaemonClientMappingTests.cs
+modified  +1     -0     src/Netclaw.Cli.Tests/Cli/DaemonClientReconnectIntegrationTests.cs
+modified  +1     -0     src/Netclaw.Cli.Tests/Cli/DaemonClientSessionTests.cs
+modified  +1     -0     src/Netclaw.Cli.Tests/Tui/ChatPageTests.cs
+modified  +1     -0     src/Netclaw.Cli/Daemon/DaemonClient.cs
+modified  +1     -0     src/Netclaw.Cli/HeadlessChannel.cs
+modified  +1     -0     src/Netclaw.Cli/Tui/ChatPage.cs
+modified  +1     -0     src/Netclaw.Cli/Tui/ChatViewModel.cs
+modified  +3     -2     src/Netclaw.Daemon.Tests/Configuration/ChannelIntegrationRegistrationTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Configuration/ChannelRegistryRegistrationTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Configuration/MattermostActionEndpointExtensionsTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Gateway/SessionCatalogServiceTests.cs
+modified  +3     -2     src/Netclaw.Daemon.Tests/Gateway/SessionRegistryTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Gateway/SignalRMessageExtractorTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Reminder/ReminderEndpointAuthorizationTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Reminder/ReminderTargetResolutionPathTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Services/DaemonRestartCoordinatorTests.cs
+modified  +1     -0     src/Netclaw.Daemon.Tests/Services/RestartRecoveryServiceTests.cs
+modified  +2     -1     src/Netclaw.Daemon/Configuration/MattermostActionEndpointExtensions.cs
+modified  +1     -0     src/Netclaw.Daemon/Gateway/DaemonRuntimeStatusService.cs
+modified  +1     -0     src/Netclaw.Daemon/Gateway/DaemonStatsService.cs
+modified  +1     -0     src/Netclaw.Daemon/Gateway/SessionCatalogService.cs
+modified  +1     -0     src/Netclaw.Daemon/Gateway/SessionRegistry.cs
+modified  +2     -0     src/Netclaw.Daemon/Gateway/SignalRSessionActor.cs
+modified  +1     -0     src/Netclaw.Daemon/Reminders/ReminderEndpointRouteBuilderExtensions.cs
+modified  +1     -0     src/Netclaw.Daemon/Services/RestartRecoveryService.cs
+modified  +1     -0     src/Netclaw.Daemon/Services/SessionDrainHelper.cs
+modified  +1     -0     src/Netclaw.Daemon/Webhooks/WebhookExecutionActor.cs
+--- DIFF DO CÓDIGO LIGADO
+### src/Netclaw.Actors.Tests/Channels/DiscordApprovalPromptBuilderTests.cs
+@@ -6,6 +6,7 @@
+ using Netclaw.Actors.Protocol;
+ using Netclaw.Channels.Discord;
+ using Xunit;
++using static Netclaw.Actors.Sessions.SessionProtocol;
+ 
+ namespace Netclaw.Actors.Tests.Channels;
+ 
+
+### src/Netclaw.Actors.Tests/Sessions/ParentSessionApprovalBridgeTests.cs
+@@ -8,6 +8,7 @@
+ using Netclaw.Configuration;
+ using Netclaw.Tools;
+ using Xunit;
++using static Netclaw.Actors.Sessions.SessionProtocol;
+ 
+ namespace Netclaw.Actors.Tests.Sessions;
+ 
+
+### src/Netclaw.Channels.Discord/DiscordApprovalPromptBuilder.cs
+@@ -6,6 +6,7 @@
+ using System.Text;
+ using Netclaw.Actors.Protocol;
+ using Netclaw.Channels;
++using static Netclaw.Actors.Sessions.SessionProtocol;
+ 
+ namespace Netclaw.Channels.Discord;
+ 
+
+### src/Netclaw.Channels.Slack/SlackApprovalBlockBuilder.cs
+@@ -5,6 +5,7 @@
+ // -----------------------------------------------------------------------
+ using Netclaw.Actors.Protocol;
+ using SlackNet.Blocks;
++using static Netclaw.Actors.Sessions.SessionProtocol;
+ 
+ namespace Netclaw.Channels.Slack;
+ 
+
+===== P188 | repo arabold/docs-mcp-server | PR #431: Fix embedding dimension resolution for custom models | capacidade: mime-type-detection
+--- SPEC VIVA
+# mime-type-detection Specification
+
+## Purpose
+Defines how MIME types are detected from file extensions, how dual content types (source vs processed) are tracked and propagated, and how downstream consumers use each type.
+
+## Requirements
+
+### Requirement: Consistent MIME Type Detection
+
+The system SHALL use `MimeTypeUtils.detectMimeTypeFromPath()` for all file extension to MIME type detection. Direct calls to `mime.getType()` outside of `mimeTypeUtils.ts` are prohibited.
+
+#### Scenario: Local file MIME detection
+- **WHEN** a local file is processed via `LocalFileStrategy`
+- **THEN** the MIME type is detected using `MimeTypeUtils.detectMimeTypeFromPath()`
+
+#### Scenario: Archive entry MIME detection
+- **WHEN** a file inside an archive is processed
+- **THEN** the MIME type is detected using `MimeTypeUtils.detectMimeTypeFromPath()`
+
+#### Scenario: GitHub file MIME detection
+- **WHEN** a GitHub repository file is evaluated for processing
+- **THEN** the MIME type is detected using `MimeTypeUtils.detectMimeTypeFromPath()`
+
+### Requirement: Custom MIME Type Priority
+
+The system SHALL check custom extension mappings before falling back to the `mime` npm package. This ensures developer-focused file types are correctly identified even when the `mime` package returns incorrect or missing types.
+
+#### Scenario: TypeScript detection overrides video/mp2t
+- **GIVEN** a file with `.ts` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-typescript` (not `video/mp2t`)
+
+#### Scenario: Rust detection overrides RLS services
+- **GIVEN** a file with `.rs` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-rust` (not `application/rls-services+xml`)
+
+#### Scenario: Unknown extension falls back to mime package
+- **GIVEN** a file with an extension not in custom mappings
+- **WHEN** MIME type is detected
+- **THEN** the system falls back to `mime.getType()` for detection
+
+### Requirement: Documentation Format Support
+
+The system SHALL recognize common documentation markup formats and assign appropriate text MIME types.
+
+#### Scenario: RST file detection
+- **GIVEN** a file with `.rst` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-rst`
+
+#### Scenario: AsciiDoc file detection
+- **GIVEN** a file with `.adoc` or `.asciidoc` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-asciidoc`
+
+#### Scenario: Org-mode file detection
+- **GIVEN** a file with `.org` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-org` (not `application/vnd.lotus-organizer`)
+
+### Requirement: Programming Language Support
+
+The system SHALL recognize common programming language source files and assign appropriate text MIME types for syntax highlighting.
+
+#### Scenario: Python file detection
+- **GIVEN** a file with `.py`, `.pyw`, or `.pyi` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-python`
+
+#### Scenario: Modern TypeScript module detection
+- **GIVEN** a file with `.mts` or `.cts` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-typescript`
+
+#### Scenario: Functional language detection
+- **GIVEN** a file with `.hs` (Haskell), `.elm`, `.ex` (Elixir), or `.clj` (Clojure) extension
+- **WHEN** MIME type is detected
+- **THEN** the result is the appropriate `text/x-*` MIME type
+
+#### Scenario: Modern web framework detection
+- **GIVEN** a file with `.vue`, `.svelte`, or `.astro` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is the appropriate `text/x-*` MIME type
+
+### Requirement: Configuration File Support
+
+The system SHALL recognize common configuration file formats and assign appropriate text MIME types.
+
+#### Scenario: TOML file detection
+- **GIVEN** a file with `.toml` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-toml`
+
+#### Scenario: Environment file detection
+- **GIVEN** a file with `.env` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-dotenv`
+
+#### Scenario: Terraform file detection
+- **GIVEN** a file with `.tf` or `.tfvars` extension
+- **WHEN** MIME type is detected
+- **THEN** the result is `text/x-terraform`
+
+### Requirement: Language Identifier Extraction
+
+The system SHALL extract programming language identifiers from MIME types for syntax highlighting in code blocks.
+
+#### Scenario: RST language extraction
+- **GIVEN** a MIME type of `text/x-rst`
+- **WHEN** language is extracted
+- **THEN** the result is `rst`
+
+#### Scenario: New language extraction
+- **GIVEN** a MIME type for a newly supported language (e.g., `text/x-julia`)
+- **WHEN** language is extracted
+- **THEN** the result is the appropriate language identifier (e.g., `julia`)
+
+### Requirement: Dual Content Type Tracking
+
+The system SHALL store two distinct MIME type values for each indexed page:
+1. `source_content_type`: The MIME type of the original fetched resource (e.g., `text/html`, `application/pdf`, `text/x-typescript`), as reported by the HTTP Content-Type header or detected from the file extension.
+2. `content_type`: The MIME type of the post-processing content stored in chunks (e.g., `text/markdown` after HTML-to-markdown conversion, or the original MIME type if the pipeline does not transform the format).
+
+Both values SHALL be stored on the `pages` table. Chunks inherit the page-level values via JOIN.
+
+#### Scenario: HTML page indexed via web scraper
+- **GIVEN** an HTML page fetched from a URL with Content-Type `text/html`
+- **WHEN** the page is processed by `HtmlPipeline` and stored
+- **THEN** `source_content_type` is `text/html`
+- **AND** `content_type` is `text/markdown`
+
+#### Scenario: PDF document indexed via web scraper
+- **GIVEN** a PDF fetched from a URL with Content-Type `application/pdf`
+- **WHEN** the document is processed by `DocumentPipeline` and stored
+- **THEN** `source_content_type` is `application/pdf`
+- **AND** `content_type` is `text/markdown`
+
+#### Scenario: TypeScript file indexed via local file strategy
+- **GIVEN** a `.ts` file processed via `LocalFileStrategy`
+- **WHEN** the file is processed by `SourceCodePipeline` and stored
+- **THEN** `source_content_type` is `text/x-typescript`
+- **AND** `content_type` is `text/x-typescript`
+
+#### Scenario: Markdown file indexed directly
+- **GIVEN** a `.md` file fetched with Content-Type `text/markdown`
+- **WHEN** the file is processed by `MarkdownPipeline` and stored
+- **THEN** `source_content_type` is `text/markdown`
+- **AND** `content_type` is `text/markdown`
+
+### Requirement: Consistent Content Type Propagation
+
+All scraper strategies SHALL populate both `sourceContentType` and `contentType` fields in their `ProcessItemResult`. The values SHALL be derived as follows:
+- `sourceContentType`: Always `rawContent.mimeType` from the fetcher
+- `contentType`: Always `processed.contentType` from the pipeline result, falling back to `rawContent.mimeType` if the pipeline does not set a value
+
+#### Scenario: WebScraperStrategy populates both types
+- **GIVEN** an HTML page fetched by `HttpFetcher` with mimeType `text/html`
+- **WHEN** `WebScraperStrategy` processes the page through `HtmlPipeline`
+- **THEN** `ProcessItemResult.sourceContentType` is `text/html`
+- **AND** `ProcessItemResult.contentType` is `text/markdown`
+
+#### Scenario: LocalFileStrategy populates both types
+- **GIVEN** a Python file detected by `FileFetcher` with mimeType `text/x-python`
+- **WHEN** `LocalFileStrategy` processes the file through `SourceCodePipeline`
+- **THEN** `ProcessItemResult.sourceContentType` is `text/x-python`
+- **AND** `ProcessItemResult.contentType` is `text/x-python`
+
+#### Scenario: GitHubRepoProcessor populates both types
+- **GIVEN** a Rust file detected with mimeType `text/x-rust`
+- **WHEN** `GitHubRepoProcessor` processes the file through `SourceCodePipeline`
+- **THEN** `ProcessItemResult.sourceContentType` is `text/x-rust`
+- **AND** `ProcessItemResult.contentType` is `text/x-rust`
+
+### Requirement: Content Type Consumer Semantics
+
+Downstream consumers SHALL use the appropriate MIME type field for their purpose:
+- **Assembly strategy selection** SHALL use `content_type` (processed) to determine how to reassemble chunks.
+- **Content rendering** (web UI, MCP search results) SHALL use `content_type` (processed) to decide rendering format (markdown vs. code block).
+- **Display labels** (MIME type badge in web UI) SHALL use `source_content_type` (original) to inform users of the original document format.
+- **Search API results** SHALL expose both values: `mimeType` (processed, for backward compatibility) and `sourceMimeType` (original).
+
+#### Scenario: Assembly strategy uses processed type for HTML-converted content
+- **GIVEN** a page with `source_content_type` = `text/html` and `content_type` = `text/markdown`
+- **WHEN** the assembly strategy factory selects a strategy
+- **THEN** `MarkdownAssemblyStrategy` is selected based on `content_type`
+
+#### Scenario: Web UI displays original type in badge
+- **GIVEN** a search result for a page with `source_content_type` = `text/html` and `content_type` = `text/markdown`
+- **WHEN** the result is rendered in the web UI
+- **THEN** the MIME type badge displays `text/html`
+- **AND** the content is rendered as markdown
+
+#### Scenario: Search API returns both types
+- **GIVEN** a search result for a page with both MIME types stored
+- **WHEN** the search API returns the result
+- **THEN** `mimeType` contains the processed content type
+- **AND** `sourceMimeType` contains the original source type
+
+### Requirement: Schema Migration for Dual Content Types
+
+The system SHALL provide a database migration that adds `source_content_type` to the `pages` table. The migration SHALL copy existing `content_type` values into `source_content_type` as a best-effort backfill for historical data.
+
+#### Scenario: Migration adds source_content_type column
+- **WHEN** the migration runs on an existing database
+- **THEN** the `pages` table has both `source_content_type` and `content_type` columns
+- **AND** existing rows have `source_content_type` populated from the previous `content_type` value
+
+#### Scenario: Re-indexing corrects historical data
+- **GIVEN** a library previously indexed with only one MIME type stored
+- **WHEN** the library is re-indexed
+- **THEN** both `source_content_type` and `content_type` are set correctly
+
+--- ARQUIVOS DO PR (14)
+modified  +1     -1     docs/guides/embedding-models.md
+added     +2     -0     openspec/changes/handle-variable-embedding-dimensions/.openspec.yaml
+added     +66    -0     openspec/changes/handle-variable-embedding-dimensions/design.md
+added     +29    -0     openspec/changes/handle-variable-embedding-dimensions/proposal.md
+added     +79    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-generation/spec.md
+added     +75    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-model-change-safety/spec.md
+added     +96    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-resolution/spec.md
+added     +35    -0     openspec/changes/handle-variable-embedding-dimensions/tasks.md
+modified  +171   -7     src/store/DocumentStore.test.ts
+modified  +216   -94    src/store/DocumentStore.ts   <== código ligado à spec
+modified  +34    -0     src/store/embeddings/EmbeddingConfig.test.ts
+modified  +52    -2     src/store/embeddings/EmbeddingConfig.ts
+modified  +80    -57    src/utils/config.test.ts
+modified  +189   -15    src/utils/config.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/store/DocumentStore.ts
+@@ -2,7 +2,7 @@ import type { Embeddings } from "@langchain/core/embeddings";
+ import Database, { type Database as DatabaseType } from "better-sqlite3";
+ import * as sqliteVec from "sqlite-vec";
+ import type { ScrapeResult, ScraperOptions } from "../scraper/types";
+-import type { AppConfig } from "../utils/config";
++import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
+ import { logger } from "../utils/logger";
+ import { compareVersionsDescending } from "../utils/version";
+ import { applyMigrations } from "./applyMigrations";
+@@ -70,8 +70,8 @@ export class DocumentStore {
+   private readonly config: AppConfig;
+ 
+   private readonly db: DatabaseType;
+-  private embeddings!: Embeddings;
+-  private readonly dbDimension: number;
++  private embeddings: Embeddings | null = null;
++  private dbDimension: number;
+   private readonly searchWeightVec: number;
+   private readonly searchWeightFts: number;
+   private readonly searchOverfetchFactor: number;
+@@ -80,7 +80,7 @@ export class DocumentStore {
+   private readonly embeddingBatchSize: number;
+   private readonly embeddingBatchChars: number;
+   private readonly embeddingInitTimeoutMs: number;
+-  private modelDimension!: number;
++  private modelDimension: number | null = null;
+   private readonly embeddingConfig?: EmbeddingModelConfig | null;
+   private isVectorSearchEnabled: boolean = false;
+ 
+@@ -510,6 +510,21 @@ export class DocumentStore {
+     stmt.run("embedding_dimension", String(dimension));
+   }
+ 
++  private getStoredDimensionForCurrentModel(): number | null {
++    const config = this.embeddingConfig;
++    if (!config) {
++      return null;
++    }
++
++    const stored = this.getEmbeddingMetadata();
++    if (stored.model !== config.modelSpec || stored.dimension === null) {
++      return null;
++    }
++
++    const dimension = Number(stored.dimension);
++    return Number.isInteger(dimension) && dimension >= 1 ? dimension : null;
++  }
++
+   /**
+    * Compares the configured embedding model and dimension against stored metadata.
+    * Throws EmbeddingModelChangedError if either has changed since the last run.
+@@ -537,8 +552,8 @@ export class DocumentStore {
+       return;
+     }
+ 
+-    const currentModel = this.config.app.embeddingModel;
+-    const currentDimension = String(this.config.embeddings.vectorDimension);
++    const currentModel = this.embeddingConfig.modelSpec;
++    const currentDimension = String(this.dbDimension);
+ 
+     const modelChanged = stored.model !== currentModel;
+     const dimensionChanged =
+@@ -626,50 +641,22 @@ export class DocumentStore {
+ 
+     // Create embedding model
+     try {
+-      this.embeddings = createEmbeddingModel(config.modelSpec, {
+-        requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
+-        vectorDimension: this.dbDimension,
+-      });
+-
+-      // Use known dimensions if available, otherwise detect via test query
+-      if (config.dimensions !== null) {
+-        this.modelDimension = config.dimensions;
+-      } else {
+-        // Fallback: determine the model's actual dimension by embedding a test string
+-        // Use a timeout to fail fast if the embedding service is unreachable
+-        const testPromise = this.embeddings.embedQuery("test");
+-        let timeoutId: NodeJS.Timeout | undefined;
+-        const timeoutPromise = new Promise<never>((_, reject) => {
+-          timeoutId = setTimeout(() => {
+-            reject(
+-              new Error(
+-                `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
+-              ),
+-            );
+-          }, this.embeddingInitTimeoutMs);
+-        });
+-
+-        try {
+-          const testVector = await Promise.race([testPromise, timeoutPromise]);
+-          this.modelDimension = testVector.length;
+-        } finally {
+-          if (timeoutId !== undefined) {
+-            clearTimeout(timeoutId);
+-          }
+-        }
+-
+-        // Cache the discovered dimensions for future use
+-        EmbeddingConfig.setKnownModelDimensions(config.model, this.modelDimension);
++      if (this.embeddings === null) {
++        this.embeddings = this.createEmbeddingClient(this.dbDimension);
+       }
+ 
++      const modelDimension = this.modelDimension ?? this.dbDimension;
++
+       // For models wrapped in FixedDimensionEmbeddings with truncation enabled
+       // (e.g., Gemini with MRL support), the effective output dimension is capped
+       // at the target dimension. Use the effective dimension for validation.
+       if (
+         this.embeddings instanceof FixedDimensionEmbeddings &&
+         this.embeddings.allowTruncate
+       ) {
+-        this.modelDimension = Math.min(this.modelDimension, this.dbDimension);
++        this.modelDimension = Math.min(modelDimension, this.dbDimension);
++      } else {
++        this.modelDimension = modelDimension;
+       }
+ 
+       if (this.modelDimension > this.dbDimension) {
+@@ -679,58 +666,188 @@ export class DocumentStore {
+       // If we reach here, embeddings are successfully initialized
+       this.isVectorSearchEnabled = true;
+       logger.debug(
+-        `Embeddings initialized: ${config.provider}:${config.model} (${this.modelDimension}d)`,
++        `Embeddings initialized: ${config.provider}:${config.model} (${this.dbDimension}d)`,
+       );
+ 
+       // Persist the active embedding model identity for change detection on next startup
+       this.setEmbeddingMetadata(config.modelSpec, this.dbDimension);
+     } catch (error) {
+-      // Handle model-related errors with helpful messages
+-      if (error instanceof Error) {
+-        if (
+-          error.message.includes("does not exist") ||
+-          error.message.includes("MODEL_NOT_FOUND")
+-        ) {
+-          throw new ModelConfigurationError(
+-            `Invalid embedding model: ${config.model}\n` +
+-              `   The model "${config.model}" is not available or you don't have access to it.\n` +
+-              "   See README.md for supported models or run with --help for more details.",
+-          );
+-        }
+-        if (
+-          error.message.includes("API key") ||
+-          error.message.includes("401") ||
+-          error.message.includes("authentication")
+-        ) {
+-          throw new ModelConfigurationError(
+-            `Authentication failed for ${config.provider} embedding provider\n` +
+-              "   Please check your API key configuration.\n" +
+-              "   See README.md for configuration options or run with --help for more details.",
+-          );
++      this.throwEmbeddingInitializationError(error, config);
++    }
++  }
++
++  private createEmbeddingClient(vectorDimension: number): Embeddings {
++    const config = this.embeddingConfig;
++    if (!config) {
++      throw new StoreError("Cannot create embedding client without configuration");
++    }
++
++    return createEmbeddingModel(config.modelSpec, {
++      requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
++      vectorDimension,
++    });
++  }
++
++  private async detectEmbeddingDimension(embeddings: Embeddings): Promise<number> {
++    const testPromise = embeddings.embedQuery("test");
++    let timeoutId: NodeJS.Timeout | undefined;
++    const timeoutPromise = new Promise<never>((_, reject) => {
++      timeoutId = setTimeout(() => {
++        reject(
++          new Error(
++            `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
++          ),
++        );
++      }, this.embeddingInitTimeoutMs);
++    });
++
++    try {
++      const testVector = await Promise.race([testPromise, timeoutPromise]);
++      return testVector.length;
++    } finally {
++      if (timeoutId !== undefined) {
++        clearTimeout(timeoutId);
++      }
++    }
++  }
++
++  private async resolveEffectiveEmbeddingDimension(
++    options: { ignoreStoredMetadata?: boolean } = {},
++  ): Promise<void> {
++    this.validateVectorDimension(this.dbDimension);
++
++    if (this.embeddingConfig === null || this.embeddingConfig === undefined) {
++      return;
++    }
++
++    const config = this.embeddingConfig;
++    if (!areCredentialsAvailable(config.provider)) {
++      return;
++    }
++
++    try {
++      const storedDimension = options.ignoreStoredMetadata
++        ? null
++        : this.getStoredDimensionForCurrentModel();
++      if (storedDimension !== null) {
++        if (!isVectorDimensionExplicit(this.config)) {
++          this.dbDimension = storedDimension;
+         }
+-        // Handle network-related errors (timeout, connection refused, etc.)
+-        if (
+-          error.message.includes("timed out") ||
+-          error.message.includes("ECONNREFUSED") ||
+-          error.message.includes("ENOTFOUND") ||
+-          error.message.includes("ETIMEDOUT") ||
+-          error.message.includes("ECONNRESET") ||
+-          error.message.includes("network") ||
+-          error.message.includes("fetch failed")
+-        ) {
+-          throw new ModelConfigurationError(
+-            `Failed to connect to ${config.provider} embedding service\n` +
+-              `   ${error.message}\n` +
+-              `   Please check that the embedding service is running and accessible.\n` +
+-              `   If using a local model (e.g., Ollama), ensure the service is started.`,
++        this.modelDimension = this.dbDimension;
++        logger.debug(
++          `Vector dimension loaded from metadata: ${this.dbDimension} for ${config.provider}:${config.model}`,
++        );
++        return;
++      }
++
++      const stored = this.getEmbeddingMetadata();
++      if (
++        !options.ignoreStoredMetadata &&
++        stored.model !== null &&
++        stored.model !== config.modelSpec
++      ) {
++        if (!isVectorDimensionExplicit(this.config) && config.dimensions !== null) {
++          this.validateDetectedVectorDimension(
++            config.dimensions,
++            "known model dimension lookup",
+           );
++          this.dbDimension = config.dimensions;
++          this.modelDimension = config.dimensions;
+         }
++        return;
+       }
+-      // Re-throw other embedding errors (like DimensionError) as-is
+-      throw error;
++
++      let nativeDimension = config.dimensions;
++      let nativeDimensionSource = "known model dimension lookup";
++
++      if (nativeDimension === null) {
++        this.embeddings = this.createEmbeddingClient(this.dbDimension);
++        nativeDimension = await this.detectEmbeddingDimension(this.embeddings);
++        nativeDimensionSource = "embedding provider probe";
++      }
++
++      this.validateDetectedVectorDimension(nativeDimension, nativeDimensionSource);
++
++      if (config.dimensions === null) {
++        EmbeddingConfig.setKnownModelDimensions(config.model, nativeDimension);
++      }
++
++      this.modelDimension = nativeDimension;
++
++      if (!isVectorDimensionExplicit(this.config)) {
++        this.dbDimension = nativeDimension;
++        logger.info(
++          `📐 Vector dimension auto-resolved to ${this.dbDimension} for ${config.provider}:${config.model}`,
++        );
++      }
++    } catch (error) {
++      this.throwEmbeddingInitializationError(error, config);
++    }
++  }
++
++  private validateVectorDimension(dim: number): void {
++    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
++      throw new StoreError(
++        `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
++      );
+     }
+   }
+ 
++  private validateDetectedVectorDimension(dim: number, source: string): void {
++    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
++      throw new StoreError(
++        `Invalid detected embedding dimension from ${source}: ${dim}. Must be a positive integer.`,
++      );
++    }
++  }
++
++  private throwEmbeddingInitializationError(
+
+===== P189 | repo epam/ai-dial-chat | PR #7623: feat(chat): update code block download button (Issue #7589) | capacidade: sticky-code-block-header
+--- SPEC VIVA
+# Spec: Sticky Code Block Header
+
+## Purpose
+
+This capability ensures that the code block header (language label, Copy button, and Download button) remains visible at the top of the code block while the user scrolls through a long code snippet, improving accessibility and usability.
+
+## Requirements
+
+### Requirement: Code block header remains visible while scrolling
+The code block header (language label + Copy and Download buttons) SHALL remain visible at the top of the code block when the user scrolls vertically through a long code snippet. The header MUST use `position: sticky` and stay within the bounds of the code block container.
+
+#### Scenario: Header stays at top during vertical scroll
+- **WHEN** a code block is tall enough to require vertical scrolling
+- **THEN** the header (language label and action buttons) SHALL remain pinned to the top of the code block's visible area as the user scrolls down
+
+#### Scenario: Header does not overlap adjacent content outside the code block
+- **WHEN** the user scrolls past the bottom of a code block
+- **THEN** the sticky header SHALL no longer be visible (it leaves the sticky region when the code block scrolls out of view)
+
+#### Scenario: Multiple code blocks on the same page each have their own sticky header
+- **WHEN** a chat message contains more than one code block
+- **THEN** each code block SHALL have its own independently sticky header, constrained to its own container
+
+### Requirement: Copy and Download controls remain accessible during scroll
+The Copy and Download icon buttons in the code block header SHALL be accessible (visible and clickable) at all times while the user is scrolling through a long code snippet, without requiring the user to scroll back to the top.
+
+#### Scenario: Copy button is reachable mid-scroll
+- **WHEN** the user has scrolled partway through a long code block
+- **THEN** the Copy button SHALL be visible and clickable in the sticky header
+
+#### Scenario: Controls are not rendered during streaming
+- **WHEN** the last message is still streaming
+- **THEN** the Copy and Download buttons SHALL NOT appear (existing behavior, unchanged)
+
+--- ARQUIVOS DO PR (13)
+modified  +1     -0     apps/chat/public/locales/en/markdown.json
+renamed   +9     -5     apps/chat/src/components/Markdown/ChangeDownloadFileNameModal.tsx
+modified  +33    -37    apps/chat/src/components/Markdown/CodeBlock.tsx   <== código ligado à spec
+modified  +8     -8     apps/chat/src/components/Markdown/Table.tsx
+modified  +1     -0     apps/chat/src/constants/i18n.ts
+modified  +5     -0     apps/chat/src/utils/app/import-export.ts
+added     +2     -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/.openspec.yaml
+added     +50    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/design.md
+added     +27    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/proposal.md
+added     +31    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/specs/codeblock-download/spec.md
+added     +22    -0     openspec/changes/archive/2026-07-06-codeblock-download-ui/tasks.md
+added     +37    -0     openspec/specs/codeblock-download/spec.md
+modified  +10    -1     openspec/specs/export/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### apps/chat/src/components/Markdown/CodeBlock.tsx
+@@ -1,5 +1,5 @@
+-import { IconCheck, IconCopy } from '@tabler/icons-react';
+-import { CSSProperties, FC, memo, useCallback } from 'react';
++import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
++import { CSSProperties, FC, memo, useCallback, useState } from 'react';
+ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+ import {
+   oneDark,
+@@ -16,7 +16,8 @@ import {
+   languageFilenameMapping,
+   languageNameMapping,
+ } from '@/src/utils/app/codeblock';
+-import { getDownLoadCurrentDate } from '@/src/utils/app/import-export';
++import { triggerDownload } from '@/src/utils/app/file';
++import { getDefaultExportFileName } from '@/src/utils/app/import-export';
+ 
+ import { Translation } from '@/src/types/translation';
+ 
+@@ -26,7 +27,8 @@ import { UISelectors } from '@/src/store/selectors';
+ import { MarkdownI18nKeys } from '@/src/constants/i18n';
+ import { DEFAULT_ICON_SIZES } from '@/src/constants/icons';
+ 
+-import Download from '@/public/images/icons/download.svg';
++import { ChangeDownloadFileNameModal } from '@/src/components/Markdown/ChangeDownloadFileNameModal';
++
+ import { DialGhostIconButton, ElementSize } from '@epam/ai-dial-ui-kit';
+ 
+ interface Props {
+@@ -49,38 +51,26 @@ export const CodeBlock: FC<Props> = memo(
+ 
+     const { copied: isCopied, onCopy: copyToClipboard } = useCopy(value);
+ 
++    const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
++
+     const lowercaseLanguage = language.toLowerCase();
+     const displayLanguage =
+       languageNameMapping[lowercaseLanguage] || lowercaseLanguage;
+ 
+-    const downloadAsFile = useCallback(() => {
+-      // languageExtensionMapping allows set empty extension
+-      const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
+-      // use the specific filename if it exists in languageFilenameMapping
+-      const suggestedFileName =
+-        languageFilenameMapping[displayLanguage] ??
+-        `ai-chat-code-${getDownLoadCurrentDate()}${fileExtension}`;
+-      const fileName = window.prompt(
+-        t(MarkdownI18nKeys.EnterFileName),
+-        suggestedFileName,
+-      );
+-
+-      if (!fileName) {
+-        // User pressed cancel on prompt
+-        return;
+-      }
+-
+-      const blob = new Blob([value], { type: 'attachment/plain' });
+-      const url = URL.createObjectURL(blob);
+-      const link = document.createElement('a');
+-      link.download = fileName;
+-      link.href = url;
+-      link.style.display = 'none';
+-      document.body.appendChild(link);
+-      link.click();
+-      document.body.removeChild(link);
+-      URL.revokeObjectURL(url);
+-    }, [displayLanguage, t, value]);
++    // languageExtensionMapping allows set empty extension
++    const fileExtension = languageExtensionMapping[displayLanguage] ?? '.txt';
++    const suggestedFileName =
++      languageFilenameMapping[displayLanguage] ??
++      getDefaultExportFileName(`ai-chat-code${fileExtension}`);
++
++    const handleDownloadConfirm = useCallback(
++      (filename: string) => {
++        const blob = new Blob([value], { type: 'attachment/plain' });
++        const url = URL.createObjectURL(blob);
++        triggerDownload(url, filename);
++      },
++      [value],
++    );
+ 
+     return (
+       <div
+@@ -131,12 +121,9 @@ export const CodeBlock: FC<Props> = memo(
+                   tooltip: t(MarkdownI18nKeys.Download),
+                 }}
+                 className="flex items-center rounded bg-none hover:text-accent-primary"
+-                onClick={downloadAsFile}
++                onClick={() => setIsDownloadModalOpen(true)}
+                 icon={
+-                  <Download
+-                    width={DEFAULT_ICON_SIZES.SMALL}
+-                    height={DEFAULT_ICON_SIZES.SMALL}
+-                  />
++                  <IconDownload size={DEFAULT_ICON_SIZES.SMALL} stroke={1.5} />
+                 }
+                 aria-label="Download"
+               />
+@@ -163,6 +150,15 @@ export const CodeBlock: FC<Props> = memo(
+             {value}
+           </SyntaxHighlighter>
+         </div>
++
++        <ChangeDownloadFileNameModal
++          isOpen={isDownloadModalOpen}
++          defaultFilename={suggestedFileName}
++          heading={t(MarkdownI18nKeys.DownloadCodeBlock)}
++          onConfirm={handleDownloadConfirm}
++          onClose={() => setIsDownloadModalOpen(false)}
++          dataQa="download-codeblock-modal"
++        />
+       </div>
+     );
+   },
+
+===== P190 | repo Yourdaylight/stock_datasource | PR #124: Worktree qmt plugin | capacidade: data-management
+--- SPEC VIVA
+# data-management Specification
+
+## Purpose
+数据管理模块负责数据源监控、同步任务管理、数据质量检测和插件管理。提供基于交易日历的数据缺失检测、批量同步任务创建与执行跟踪、插件状态查询与详情展示、AI日志诊断等能力。
+## Requirements
+### Requirement: 基于交易日的数据缺失检测
+
+系统 SHALL 基于交易日历检测各插件对应ODS表的数据缺失情况。
+
+- 系统 SHALL 从 `ods_trade_calendar` 表获取交易日列表
+- 系统 SHALL 仅检查 `schedule.frequency = "daily"` 且 `schedule_enabled = true` 的插件
+- 系统 SHALL 返回每个插件的缺失日期列表
+- 系统 SHALL 支持手动触发检测
+- 系统 SHALL 支持配置检测天数范围（7/15/30/60/90/180/365天）
+- 定时自动检测由 `UnifiedScheduler` 负责（见 unified-data-scheduler spec）
+
+#### Scenario: 检测到数据缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** `schedule_enabled = true`
+- **AND** 交易日 `2026-01-08` 是开市日
+- **AND** `ods_daily` 表中不存在 `trade_date = '2026-01-08'` 的数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期包含 `2026-01-08`
+
+#### Scenario: 数据完整无缺失
+
+- **GIVEN** 插件 `tushare_daily` 的调度频率为 `daily`
+- **AND** 所有交易日都有对应数据
+- **WHEN** 用户请求数据缺失检测
+- **THEN** 系统返回 `tushare_daily` 的缺失日期列表为空
+
+#### Scenario: 未启用调度的插件不参与检测
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_rt_k` 的缺失情况
+
+#### Scenario: 周更新插件不参与每日检测
+
+- **GIVEN** 插件 `tushare_stock_basic` 的调度频率为 `weekly`
+- **WHEN** 用户请求每日数据缺失检测
+- **THEN** 系统不检测 `tushare_stock_basic` 的缺失情况
+
+---
+
+### Requirement: 同步任务管理
+
+系统 SHALL 提供同步任务的创建、执行、状态跟踪和历史查询功能。
+
+- 系统 SHALL 支持创建增量同步、全量同步、回填同步任务
+- 系统 SHALL 支持至少3个任务并行执行
+- 系统 SHALL 在单次任务涉及多个日期时，在限速允许范围内并行处理多个日期
+- 系统 SHALL 根据插件配置的 `rate_limit` 动态调整日期并发数
+- 系统 SHALL 实时更新任务执行进度
+- 系统 SHALL 记录任务执行历史到数据库
+- 系统 SHALL 保留30天的任务历史，超过30天自动清理
+- 系统 SHALL 过滤 `config.json` 中 `enabled = false` 的插件，不参与调度执行
+- 系统 SHALL 过滤 `runtime_config.json` 中 `schedule_enabled = false` 的插件
+
+#### Scenario: 创建增量同步任务
+
+- **GIVEN** 用户选择插件 `tushare_daily`
+- **AND** 选择同步类型为 `incremental`
+- **WHEN** 用户触发同步
+- **THEN** 系统创建任务并返回 `task_id`
+- **AND** 任务状态为 `pending`
+
+#### Scenario: 任务执行进度更新
+
+- **GIVEN** 同步任务正在执行
+- **AND** 已处理 500 条记录，共 1000 条
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `progress = 50`
+- **AND** `records_processed = 500`
+
+#### Scenario: 任务执行完成
+
+- **GIVEN** 同步任务执行完成
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'completed'`
+- **AND** `completed_at` 有值
+
+#### Scenario: 任务执行失败
+
+- **GIVEN** 同步任务执行过程中发生错误
+- **WHEN** 用户查询任务状态
+- **THEN** 系统返回 `status = 'failed'`
+- **AND** `error_message` 包含错误信息及完整堆栈跟踪
+
+#### Scenario: 多任务并行执行
+
+- **GIVEN** 当前有2个任务正在执行
+- **AND** 用户触发第3个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第3个任务立即开始执行
+- **AND** 3个任务同时处于 `running` 状态
+
+#### Scenario: 并行任务达到上限
+
+- **GIVEN** 当前有3个任务正在执行
+- **AND** 用户触发第4个同步任务
+- **WHEN** 系统处理新任务
+- **THEN** 第4个任务状态为 `pending`
+- **AND** 等待有任务完成后自动执行
+
+#### Scenario: 单任务多日期并行处理
+
+- **GIVEN** 用户触发回填任务，包含日期 `['2026-01-05', '2026-01-06', '2026-01-07']`
+- **AND** 插件 `rate_limit = 500`（每分钟500次）
+- **WHEN** 系统执行任务
+- **THEN** 系统根据限速计算并发数（如3个日期并行）
+- **AND** 同时拉取多个日期的数据
+
+#### Scenario: 限速较低时减少并发
+
+- **GIVEN** 用户触发回填任务，包含5个日期
+- **AND** 插件 `rate_limit = 60`（每分钟60次）
+- **WHEN** 系统执行任务
+- **THEN** 系统降低日期并发数（如1-2个日期并行）
+- **AND** 确保不超过API限速
+
+#### Scenario: 禁用插件不参与调度
+
+- **GIVEN** 插件 `akshare_hk_stock_list` 的 `config.json` 中 `enabled = false`
+- **WHEN** 用户触发全量手动同步
+- **THEN** 系统跳过该插件
+- **AND** 日志输出 "Skipping disabled plugin: akshare_hk_stock_list"
+
+---
+
+### Requirement: 批量任务管理
+
+系统 SHALL 以批量执行（BatchExecution）为维度管理和展示同步任务。
+
+- 系统 SHALL 为每次调度执行创建 `ScheduleExecutionRecord`，关联所有子任务
+- 系统 SHALL 支持查看批量任务详情，包括所有子任务状态和错误信息汇总
+- 系统 SHALL 支持停止正在运行的批量任务
+- 系统 SHALL 支持部分重试（仅重试失败/取消的子任务，在原任务上原地重试）
+- 系统 SHALL 支持批量删除执行记录
+- 系统 SHALL 支持按状态和触发类型筛选执行记录
+- 系统 SHALL 在错误信息汇总中提供一键复制功能（兼容 HTTP 非安全环境）
+
+#### Scenario: 查看批量任务详情
+
+- **GIVEN** 存在执行ID为 `abc12345` 的批量任务
+- **AND** 包含3个子任务，其中1个失败
+- **WHEN** 用户查看详情
+- **THEN** 系统返回 `BatchExecutionDetail`
+- **AND** `error_summary` 汇总所有失败任务的错误信息
+
+#### Scenario: 停止运行中的批量任务
+
+- **GIVEN** 批量任务 `abc12345` 状态为 `running`
+- **WHEN** 用户点击"停止任务"
+- **THEN** 系统取消所有未完成的子任务
+- **AND** 批量任务状态变为 `stopped`
+
+#### Scenario: 部分重试失败任务
+
+- **GIVEN** 批量任务 `abc12345` 已完成，其中2个子任务失败
+- **WHEN** 用户点击"重试失败任务"
+- **THEN** 系统仅重新执行2个失败的子任务
+- **AND** 在原任务记录上更新状态，不创建新的执行记录
+
+#### Scenario: 一键复制错误信息
+
+- **GIVEN** 批量任务包含失败子任务
+- **AND** 用户点击"一键复制"按钮
+- **WHEN** 系统执行复制
+- **THEN** 错误汇总文本复制到剪贴板
+- **AND** 在 HTTPS 环境使用 `navigator.clipboard` API
+- **AND** 在 HTTP 环境使用 `textarea + execCommand` 降级方案
+
+---
+
+### Requirement: 插件数据状态查询
+
+系统 SHALL 提供各插件的数据状态查询，包括最新数据日期、缺失天数、数据预览。
+
+- 系统 SHALL 返回插件对应ODS表的最新数据日期
+- 系统 SHALL 返回插件的调度频率（daily/weekly）
+- 系统 SHALL 返回插件的缺失日期数量
+- 系统 SHALL 提供数据预览接口
+
+#### Scenario: 查询插件数据状态
+
+- **GIVEN** 插件 `tushare_daily` 对应表 `ods_daily`
+- **AND** 表中最新数据日期为 `2026-01-09`
+- **AND** 有 2 个交易日缺失数据
+- **WHEN** 用户查询插件状态
+- **THEN** 系统返回 `latest_date = '2026-01-09'`
+- **AND** `missing_count = 2`
+- **AND** `schedule_frequency = 'daily'`
+
+#### Scenario: 预览插件数据
+
+- **GIVEN** 用户请求预览 `tushare_daily` 的数据
+- **AND** 指定日期为 `2026-01-09`
+- **WHEN** 系统查询数据
+- **THEN** 返回该日期的前100条数据记录
+
+---
+
+### Requirement: 插件调度频率展示
+
+系统 SHALL 在插件列表中展示各插件的调度频率和执行时间。
+
+- 系统 SHALL 从插件 `config.json` 读取 `schedule` 配置
+- 系统 SHALL 区分显示 `daily` 和 `weekly` 频率
+- 系统 SHALL 显示计划执行时间
+
+#### Scenario: 展示每日更新插件
+
+- **GIVEN** 插件 `tushare_daily` 的 `schedule.frequency = 'daily'`
+- **AND** `schedule.time = '18:00'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每日"
+- **AND** 显示执行时间为 "18:00"
+
+#### Scenario: 展示每周更新插件
+
+- **GIVEN** 插件 `tushare_stock_basic` 的 `schedule.frequency = 'weekly'`
+- **AND** `schedule.day_of_week = 'monday'`
+- **WHEN** 用户查看插件列表
+- **THEN** 显示调度频率为 "每周一"
+
+---
+
+### Requirement: 数据跳转展示
+
+系统 SHALL 支持从插件列表直接跳转查看插件数据。
+
+- 系统 SHALL 在插件行提供"查看数据"操作
+- 系统 SHALL 弹出数据预览弹窗
+- 系统 SHALL 支持按日期筛选数据
+
+#### Scenario: 跳转查看插件数据
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看数据"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出数据预览弹窗
+- **AND** 展示 `ods_daily` 表的最新数据
+
+#### Scenario: 按日期筛选数据
+
+- **GIVEN** 数据预览弹窗已打开
+- **AND** 用户选择日期 `2026-01-09`
+- **WHEN** 用户点击筛选
+- **THEN** 弹窗展示该日期的数据
+
+---
+
+### Requirement: 插件详情查看
+
+系统 SHALL 提供插件详情查看功能，展示插件的配置、数据结构和运行状态。
+
+- 系统 SHALL 展示插件的 `config.json` 配置信息
+- 系统 SHALL 展示插件的 `schema.json` 数据结构定义
+- 系统 SHALL 展示插件的运行状态（最新数据、缺失情况）
+- 系统 SHALL 以可读的方式格式化展示字段定义
+
+#### Scenario: 查看插件详情
+
+- **GIVEN** 用户在插件列表页面
+- **AND** 点击 `tushare_daily` 行的"查看详情"按钮
+- **WHEN** 系统响应点击
+- **THEN** 弹出插件详情弹窗
+- **AND** 展示插件基本信息（名称、版本、描述）
+- **AND** 展示调度配置（频率、执行时间）
+- **AND** 展示数据结构（表名、字段列表、分区键、排序键）
+
+#### Scenario: 查看插件数据结构
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"数据结构"标签
+- **WHEN** 系统展示数据结构
+- **THEN** 显示表名 `ods_daily`
+- **AND** 显示字段列表（字段名、数据类型、是否可空、注释）
+- **AND** 显示分区键 `toYYYYMM(trade_date)`
+- **AND** 显示排序键 `["ts_code", "trade_date"]`
+
+#### Scenario: 查看插件API接口信息
+
+- **GIVEN** 插件详情弹窗已打开
+- **AND** 用户切换到"接口配置"标签
+- **WHEN** 系统展示接口配置
+- **THEN** 显示数据源类型（tushare/akshare）
+- **AND** 显示API接口名称
+- **AND** 显示参数定义（如有）
+
+---
+
+### Requirement: 插件包导入导出（预留）
+
+系统 SHALL 预留插件包导入导出接口，为后续AI生成插件功能做准备。
+
+- 系统 SHALL 定义标准的插件包格式（.plugin.zip）
+- 系统 SHALL 预留导出API接口
+- 系统 SHALL 预留导入API接口
+- 本期不实现具体功能，仅定义接口规范
+
+> **注意**: 此功能为预留设计，当前版本不实现。
+
+#### Scenario: 导出插件包（预留）
+
+- **GIVEN** 用户选择导出插件 `tushare_daily`
+- **WHEN** 系统执行导出
+- **THEN** 生成包含 manifest.json、config.json、schema.json、plugin.py 的 zip 包
+
+#### Scenario: 导入插件包（预留）
+
+- **GIVEN** 用户上传插件包 `custom_plugin.plugin.zip`
+- **WHEN** 系统验证并导入
+- **THEN** 解压并注册新插件
+- **AND** 创建对应的ODS表
+
+---
+
+### Requirement: AI日志诊断
+
+系统 SHALL 提供AI驱动的日志诊断功能，分析系统日志并给出修复建议。
+
+- 系统 SHALL 读取最近的系统日志
+- 系统 SHALL 识别已知的错误模式
+- 系统 SHALL 为每个问题提供严重程度、类别和修复建议
+- 系统 SHALL 支持按错误级别过滤日志
+
+#### Scenario: 诊断发现配置问题
+
+- **GIVEN** 日志中包含 "TUSHARE_TOKEN environment variable not set"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `config`
+- **AND** 建议为 "请在.env文件中添加 TUSHARE_TOKEN=your_token"
+
+#### Scenario: 诊断发现数据问题
+
+- **GIVEN** 日志中包含 "No trading days found in calendar"
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回严重程度为 `critical`
+- **AND** 类别为 `data`
+- **AND** 建议为 "请先运行交易日历插件同步数据"
+
+#### Scenario: 系统运行正常
+
+- **GIVEN** 日志中没有错误或警告
+- **WHEN** 用户执行AI诊断
+- **THEN** 系统返回摘要为 "系统运行正常，未发现明显问题"
+- **AND** 建议列表为空
+
+---
+
+### Requirement: 插件调度配置
+
+系统 SHALL 支持通过 `schedule_enabled` 和 `schedule_note` 配置项控制插件是否参与定时调度。
+
+- 系统 SHALL 在 `config.json` 中支持 `schedule_enabled` 配置项
+- 系统 SHALL 在 `config.json` 中支持 `schedule_note` 配置项说明不参与调度的原因
+- 系统 SHALL 在 `runtime_config.json` 中支持运行时覆盖 `schedule_enabled` 设置
+- 以下插件默认设置 `schedule_enabled: false`：
+  - `tushare_rt_k` - 实时数据插件，仅交易时段有数据
+  - `tushare_stk_mins` - 需要指定股票代码，不适合批量调度
+  - `tushare_trade_calendar` - 交易日历变化不频繁，建议每半年手动执行
+
+#### Scenario: 禁用插件不参与定时调度
+
+- **GIVEN** 插件 `tushare_rt_k` 的 `schedule_enabled = false`
+- **WHEN** 定时调度执行
+- **THEN** 系统跳过 `tushare_rt_k`
+- **AND** 日志输出 "Skipping disabled plugin: tushare_rt_k"
+
+
+--- ARQUIVOS DO PR (46)
+modified  +3     -5     .github/workflows/docker-build.yml
+modified  +18    -22    .github/workflows/release.yml
+modified  +7     -1     .releaserc.json
+added     +1     -0     VERSION
+modified  +16    -0     frontend/src/App.vue
+modified  +10    -0     frontend/src/api/datamanage.ts
+modified  +2     -0     frontend/src/env.d.ts
+modified  +6     -2     frontend/src/views/datamanage/DataManageView.vue
+modified  +35    -0     frontend/src/views/datamanage/components/PluginDetailDialog.vue
+modified  +47    -6     frontend/src/views/datamanage/components/SyncDialog.vue
+modified  +12    -1     frontend/vite.config.ts
+added     +145   -0     openspec/changes/add-qmt-plugin/design.md
+added     +32    -0     openspec/changes/add-qmt-plugin/proposal.md
+added     +116   -0     openspec/changes/add-qmt-plugin/specs/qmt-market-data/spec.md
+added     +49    -0     openspec/changes/add-qmt-plugin/tasks.md
+modified  +4     -0     src/stock_datasource/config/runtime_config.py
+modified  +9     -0     src/stock_datasource/config/settings.py
+added     +12    -0     src/stock_datasource/core/data_sources/__init__.py
+added     +37    -0     src/stock_datasource/core/data_sources/base.py
+added     +25    -0     src/stock_datasource/core/data_sources/registry.py
+added     +1     -0     src/stock_datasource/data_sources/__init__.py
+added     +6     -0     src/stock_datasource/data_sources/qmt/__init__.py
+added     +53    -0     src/stock_datasource/data_sources/qmt/historical.py
+added     +144   -0     src/stock_datasource/data_sources/qmt/normalizer.py
+modified  +50    -0     src/stock_datasource/modules/datamanage/router.py
+modified  +13    -0     src/stock_datasource/modules/datamanage/schemas.py   <== código ligado à spec
+modified  +51    -1     src/stock_datasource/modules/datamanage/service.py   <== código ligado à spec
+added     +19    -0     src/stock_datasource/modules/qmt_gateway/__init__.py
+added     +125   -0     src/stock_datasource/modules/qmt_gateway/client.py
+added     +15    -0     src/stock_datasource/modules/qmt_realtime/__init__.py
+added     +36    -0     src/stock_datasource/modules/qmt_realtime/cache_store.py
+added     +26    -0     src/stock_datasource/modules/qmt_realtime/collector.py
+added     +61    -0     src/stock_datasource/modules/qmt_realtime/normalizer.py
+added     +21    -0     src/stock_datasource/modules/qmt_realtime/service.py
+added     +29    -0     src/stock_datasource/modules/qmt_realtime/sync_service.py
+modified  +2     -0     src/stock_datasource/plugins/tushare_daily/config.json
+modified  +46    -1     src/stock_datasource/plugins/tushare_daily/plugin.py
+modified  +2     -0     src/stock_datasource/plugins/tushare_stk_mins/config.json
+modified  +47    -1     src/stock_datasource/plugins/tushare_stk_mins/plugin.py
+modified  +4     -0     src/stock_datasource/services/task_queue.py
+modified  +16    -7     src/stock_datasource/services/task_worker.py
+added     +201   -0     tests/test_datamanage_data_source_selection.py
+added     +270   -0     tests/test_qmt_gateway_provider.py
+added     +224   -0     tests/test_qmt_plugin_provider_routing.py
+added     +119   -0     tests/test_qmt_realtime.py
+modified  +2     -0     uv.lock
+--- DIFF DO CÓDIGO LIGADO
+### src/stock_datasource/modules/datamanage/schemas.py
+@@ -62,6 +62,8 @@ class TriggerSyncRequest(BaseModel):
+     trade_dates: list[str] | None = None  # For backfill
+     force_overwrite: bool = False  # Whether to overwrite existing data
+     include_optional: bool = True  # Whether to include optional dependencies
++    data_source: str | None = None  # Optional per-sync provider override
++    ts_code: str | None = None  # Required for per-symbol providers (e.g., QMT)
+     # Parallelism settings (optional, use global settings if not provided)
+     max_concurrent_tasks: int | None = Field(
+         None, ge=1, le=10, description="Max parallel tasks (1-10)"
+@@ -85,6 +87,12 @@ class CheckDataExistsRequest(BaseModel):
+     )
+ 
+ 
++class UpdatePluginDataSourceRequest(BaseModel):
++    """Request model for updating a plugin's default data source."""
++
++    data_source: str
++
++
+ class SyncConfigRequest(BaseModel):
+     """Request model for updating sync configuration."""
+ 
+@@ -130,6 +138,7 @@ class SyncTask(BaseModel):
+     total_records: int = 0
+     error_message: str | None = None
+     trade_dates: list[str] = []
++    data_source: str | None = None
+     created_at: datetime | None = None
+     started_at: datetime | None = None
+     completed_at: datetime | None = None
+@@ -187,6 +196,8 @@ class PluginConfig(BaseModel):
+     retry_attempts: int = 3
+     description: str | None = None
+     schedule: PluginSchedule | None = None
++    data_source: str | None = None
++    available_data_sources: list[str] = []
+     parameters_schema: dict[str, Any] = {}
+ 
+ 
+@@ -206,6 +217,8 @@ class PluginInfo(BaseModel):
+     missing_count: int = 0
+     last_run_at: str | None = None
+     last_run_status: str | None = None
++    data_source: str | None = None
++    available_data_sources: list[str] = []
+     dependencies: list[str] = []
+     optional_dependencies: list[str] = []
+ 
+
+### src/stock_datasource/modules/datamanage/service.py
+@@ -5,7 +5,7 @@
+ from datetime import date, datetime, timedelta
+ from typing import Any
+ 
+-from stock_datasource.config.runtime_config import save_runtime_config
++from stock_datasource.config.runtime_config import load_runtime_config, save_runtime_config
+ from stock_datasource.config.settings import settings
+ from stock_datasource.core.plugin_manager import plugin_manager
+ from stock_datasource.core.trade_calendar import trade_calendar_service
+@@ -42,6 +42,37 @@ def __init__(self):
+         self._cache_days: int | None = None  # Track cached days range
+         self._cache_ttl = 86400  # 24 hour cache (one day)
+ 
++    def _get_plugin_data_source_config(
++        self, plugin_name: str, config_data: dict[str, Any]
++    ) -> tuple[str | None, list[str]]:
++        available = config_data.get("available_data_sources", [])
++        default_source = config_data.get("data_source")
++        runtime_sources = load_runtime_config().get("plugin_data_sources", {})
++        data_source = runtime_sources.get(plugin_name, default_source)
++        return data_source, available
++
++    def update_plugin_data_source(self, plugin_name: str, data_source: str) -> PluginDetail:
++        plugin = plugin_manager.get_plugin(plugin_name)
++        if not plugin:
++            raise ValueError(f"Plugin {plugin_name} not found")
++
++        config_data = plugin.get_config()
++        _, available = self._get_plugin_data_source_config(plugin_name, config_data)
++        if data_source not in available:
++            raise ValueError(
++                f"Unsupported data_source '{data_source}' for {plugin_name}. "
++                f"Available: {', '.join(available)}"
++            )
++
++        current = load_runtime_config().get("plugin_data_sources", {})
++        current[plugin_name] = data_source
++        save_runtime_config(plugin_data_sources=current)
++
++        detail = self.get_plugin_detail(plugin_name)
++        if detail is None:
++            raise ValueError(f"Plugin {plugin_name} not found")
++        return detail
++
+     def get_trading_days(self, days: int = 30, exchange: str = "SSE") -> list[str]:
+         """Get recent trading days from TradeCalendarService.
+ 
+@@ -496,6 +527,10 @@ def get_plugin_list(self) -> list[PluginInfo]:
+                 schedule = plugin.get_schedule()
+                 frequency = schedule.get("frequency", "daily")
+                 time = schedule.get("time", "18:00")
++                config_data = plugin.get_config()
++                data_source, available_data_sources = self._get_plugin_data_source_config(
++                    plugin_name, config_data
++                )
+ 
+                 schema = plugin.get_schema()
+                 table_name = schema.get("table_name", f"ods_{plugin_name}")
+@@ -516,6 +551,8 @@ def get_plugin_list(self) -> list[PluginInfo]:
+                         "date_column": date_column,
+                         "category": category,
+                         "role": role,
++                        "data_source": data_source,
++                        "available_data_sources": available_data_sources,
+                         "dependencies": dependencies,
+                         "optional_dependencies": optional_dependencies,
+                     }
+@@ -577,6 +614,8 @@ def get_plugin_list(self) -> list[PluginInfo]:
+                     missing_count=missing_count,
+                     last_run_at=None,
+                     last_run_status=None,
++                    data_source=meta["data_source"],
++                    available_data_sources=meta["available_data_sources"],
+                     dependencies=meta["dependencies"],
+                     optional_dependencies=meta["optional_dependencies"],
+                 )
+@@ -604,6 +643,9 @@ def get_plugin_detail(self, plugin_name: str) -> PluginDetail | None:
+ 
+         # Get config
+         config_data = plugin.get_config()
++        data_source, available_data_sources = self._get_plugin_data_source_config(
++            plugin_name, config_data
++        )
+         schedule_data = config_data.get("schedule", {})
+ 
+         schedule = PluginSchedule(
+@@ -619,6 +661,8 @@ def get_plugin_detail(self, plugin_name: str) -> PluginDetail | None:
+             retry_attempts=config_data.get("retry_attempts", 3),
+             description=config_data.get("description", plugin.description),
+             schedule=schedule,
++            data_source=data_source,
++            available_data_sources=available_data_sources,
+             parameters_schema=config_data.get("parameters_schema", {}),
+         )
+ 
+@@ -1616,6 +1660,8 @@ def create_task(
+         username: str | None = None,
+         use_queue: bool = True,
+         execution_id: str | None = None,
++        data_source: str | None = None,
++        ts_code: str | None = None,
+     ) -> SyncTask:
+         """Create a new sync task.
+ 
+@@ -1663,6 +1709,8 @@ def create_task(
+                 user_id=user_id,
+                 timeout_seconds=timeout_seconds,
+                 username=username,
++                data_source=data_source,
++                ts_code=ts_code,
+             )
+         except RedisUnavailableError as e:
+             raise ValueError(f"Redis unavailable: {e}")
+@@ -1679,6 +1727,7 @@ def create_task(
+             progress=0,
+             records_processed=0,
+             trade_dates=trade_dates or [],
++            data_source=data_source,
+             created_at=datetime.now(),
+             user_id=user_id,
+             username=username,
+@@ -1812,6 +1861,7 @@ def _parse_dt(value: str) -> datetime | None:
+             progress=float(task_data.get("progress", 0)),
+             records_processed=int(task_data.get("records_processed", 0)),
+             trade_dates=task_data.get("trade_dates", []) or [],
++            data_source=str(task_data.get("data_source", "")) or None,
+             created_at=_parse_dt(str(task_data.get("created_at", "")))
+             or datetime.now(),
+             started_at=_parse_dt(str(task_data.get("started_at", ""))),
+
+===== P191 | repo PhilippPolterauer/cargo-samply | PR #47: use "`=`" with `--samply-args` throughout docs | capacidade: discovery
+--- SPEC VIVA
+# discovery Specification
+
+## Purpose
+Defines how targets (binaries, examples, tests) are discovered and prioritized within workspaces.
+## Requirements
+### Requirement: Authoritative Target Discovery
+The system SHALL use `cargo metadata` to discover targets, ensuring auto-discovered targets are found.
+
+#### Scenario: Auto-discovered binary
+- **WHEN** a project has `src/bin/tool.rs` but no `[[bin]]` in `Cargo.toml`
+- **THEN** `cargo samply --bin tool` finds and runs the binary
+
+### Requirement: Package Prioritization
+When running in a workspace, the system SHALL prioritize targets in the package defined by the current working directory, unless `--package` is specified.
+
+#### Scenario: Workspace member
+- **WHEN** running inside `crates/member-a`
+- **THEN** the default binary is chosen from `member-a`, not other workspace members
+
+
+--- ARQUIVOS DO PR (8)
+modified  +1     -1     CHANGELOG.md
+modified  +8     -4     README.md
+modified  +1     -1     openspec/changes/archive/2025-12-27-improve-robustness-and-ux/proposal.md
+modified  +1     -1     openspec/changes/archive/2025-12-27-improve-robustness-and-ux/specs/cli/spec.md
+modified  +1     -1     openspec/specs/cli/spec.md
+modified  +3     -1     src/cli.rs   <== código ligado à spec
+modified  +4     -1     src/lib.rs
+modified  +13    -0     tests/samply-args.trycmd
+--- DIFF DO CÓDIGO LIGADO
+### src/cli.rs
+@@ -104,7 +104,9 @@ pub struct Config {
+     #[arg(long, default_value = "--bench")]
+     pub bench_flag: String,
+ 
+-    /// Arguments to pass to samply (e.g. `--samply-args "--rate 2000"`)
++    /// Arguments to pass to samply (e.g. `--samply-args="--rate 2000"`).
++    /// Use `=` so the full string is parsed as the value of `--samply-args`,
++    /// even when it starts with `--`.
+     #[arg(long)]
+     pub samply_args: Option<String>,
+ 
+
+===== P192 | repo huytdps13400/react-native-ssl-manager | PR #5: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI | capacidade: android-pinned-client-api
+--- SPEC VIVA
+# android-pinned-client-api Specification
+
+## Purpose
+TBD - created by archiving change add-android-network-security-config. Update Purpose after archive.
+## Requirements
+### Requirement: Public Pinned OkHttpClient Singleton
+The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_config.json`.
+
+#### Scenario: Get pinned client when SSL pinning enabled
+- **WHEN** SSL pinning is enabled
+- **AND** a native module calls `PinnedOkHttpClient.getInstance(context)`
+- **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+- **AND** the client is a singleton (same instance on repeated calls)
+
+#### Scenario: Get client when SSL pinning disabled
+- **WHEN** SSL pinning is disabled
+- **AND** a native module calls `PinnedOkHttpClient.getInstance(context)`
+- **THEN** a plain OkHttpClient without certificate pinning is returned
+
+#### Scenario: Config change invalidates singleton
+- **WHEN** `setUseSSLPinning` is called to change the pinning state
+- **AND** `PinnedOkHttpClient.getInstance(context)` is called after
+- **THEN** a new client reflecting the updated pinning state is returned
+
+### Requirement: Glide Integration Documentation
+The library SHALL document how to integrate the pinned OkHttpClient with Glide via a custom `AppGlideModule`.
+
+#### Scenario: Glide integration example
+- **WHEN** a developer reads the integration documentation
+- **THEN** they find a code example showing how to create a `@GlideModule` that uses `PinnedOkHttpClient.getInstance(context)` as the OkHttp integration for Glide
+
+### Requirement: Coil/Ktor Integration Documentation
+The library SHALL document how to use the pinned OkHttpClient with Coil's `ImageLoader` and Ktor's OkHttp engine.
+
+#### Scenario: Coil integration example
+- **WHEN** a developer reads the integration documentation
+- **THEN** they find a code example showing how to build a Coil `ImageLoader` with `PinnedOkHttpClient.getInstance(context)` as the `okHttpClient`
+
+#### Scenario: Ktor OkHttp engine example
+- **WHEN** a developer reads the integration documentation
+- **THEN** they find a code example showing how to configure Ktor's `OkHttp` engine with `PinnedOkHttpClient.getInstance(context)` as the `preconfigured` client
+
+### Requirement: Ktor CIO Engine Documentation
+The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `PinnedOkHttpClient`.
+
+#### Scenario: Ktor CIO engine manual pinning example
+- **WHEN** a developer reads the integration documentation
+- **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+- **AND** the example includes the necessary Kotlin imports and API calls
+
+
+--- ARQUIVOS DO PR (40)
+modified  +7     -0     .github/actions/setup/action.yml
+modified  +29    -53    .github/workflows/ci.yml
+removed   +0     -8     .npmignore
+modified  +57    -0     CHANGELOG.md
+modified  +96    -18    README.md
+added     +149   -0     __tests__/eager-init.test.js
+added     +120   -0     __tests__/graceful-degradation.test.js
+modified  +9     -12    __tests__/integration-cronet-coil-glide.test.js
+modified  +5     -15    __tests__/nsc-generation.test.js
+modified  +18    -6     __tests__/nsc-xml-generation.test.js
+modified  +3     -1     __tests__/pinned-okhttpclient.test.js
+modified  +5     -0     android/build.gradle
+modified  +15    -0     android/src/main/AndroidManifest.xml
+modified  +16    -1     android/src/main/AndroidManifestNew.xml
+modified  +4     -1     android/src/main/java/com/usesslpinning/PinnedOkHttpClient.kt
+modified  +9     -5     android/src/main/java/com/usesslpinning/SslPinningFactory.kt
+added     +23    -0     android/src/main/java/com/usesslpinning/SslPinningInitializer.kt
+added     +62    -0     android/src/main/java/com/usesslpinning/SslPinningPolicy.kt
+modified  +86    -12    android/src/main/java/com/usesslpinning/UseSslPinningModuleImpl.kt
+modified  +8     -0     android/src/newarch/com/usesslpinning/UseSslPinningModule.kt
+modified  +10    -0     android/src/oldarch/com/usesslpinning/UseSslPinningModule.kt
+added     +59    -0     android/src/test/java/com/usesslpinning/SslPinningPolicyTest.kt
+modified  +44    -29    android/ssl-pinning-setup.gradle
+modified  +63    -113   app.plugin.js
+modified  +4     -0     example/ios/Podfile
+modified  +213   -133   ios/SharedLogic.swift
+modified  +34    -0     ios/UseSslPinningModule.mm
+modified  +53    -26    ios/UseSslPinningModule.swift
+added     +70    -0     openspec/changes/add-eager-ssl-init/design.md
+added     +61    -0     openspec/changes/add-eager-ssl-init/proposal.md
+added     +28    -0     openspec/changes/add-eager-ssl-init/specs/expo-plugin/spec.md
+added     +79    -0     openspec/changes/add-eager-ssl-init/specs/ssl-pinning-api/spec.md
+added     +44    -0     openspec/changes/add-eager-ssl-init/tasks.md
+modified  +15    -4     package.json
+modified  +55    -9     scripts/nsc-utils.js
+modified  +23    -13    scripts/postinstall.js   <== código ligado à spec
+modified  +2     -0     src/NativeUseSslPinning.ts
+modified  +13    -0     src/UseSslPinning.types.ts
+modified  +66    -4     src/index.tsx
+modified  +1     -0     yarn.lock
+--- DIFF DO CÓDIGO LIGADO
+### scripts/postinstall.js
+@@ -106,30 +106,35 @@ if (fs.existsSync(sslConfigPath)) {
+ }
+ 
+ // Generate Network Security Config XML for Android
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
+ const androidDir = path.join(projectRoot, 'android');
+ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+   console.log('🔄 Generating Android Network Security Config XML...');
+ 
+   try {
+     const sslConfig = JSON.parse(fs.readFileSync(sslConfigPath, 'utf8'));
+     const sha256Keys = sslConfig.sha256Keys;
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+ 
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
+       );
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+       const xmlPath = path.join(xmlDir, 'network_security_config.xml');
+ 
+       if (fs.existsSync(xmlPath)) {
+         // Merge with existing NSC
+         const existingXml = fs.readFileSync(xmlPath, 'utf8');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, mergedXml);
+         console.log(
+           '✅ Merged SSL pins into existing network_security_config.xml'
+@@ -139,7 +144,7 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         if (!fs.existsSync(xmlDir)) {
+           fs.mkdirSync(xmlDir, { recursive: true });
+         }
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+         fs.writeFileSync(xmlPath, xml);
+         console.log('✅ Generated network_security_config.xml');
+       }
+@@ -168,10 +173,15 @@ if (fs.existsSync(androidDir) && fs.existsSync(sslConfigPath)) {
+         }
+       }
+     } else {
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+     }
+   } catch (error) {
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+   }
+ } else if (!fs.existsSync(androidDir)) {
+   console.log('ℹ️ No android/ directory found, skipping NSC XML generation');
+

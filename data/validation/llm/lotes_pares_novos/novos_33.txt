@@ -1,0 +1,3537 @@
+===== P272 | repo Hedgehogues/awesome-claude | PR #2: Release 0.6.1 | capacidade: sdd-archive-cases
+--- SPEC VIVA
+## Purpose
+Test cases for sdd:archive covering blocking on missing test-plan, archiving without copying test-plan to specs, and index update.
+## Requirements
+### Requirement: cases/sdd/archive.md exists with at least three cases
+`skills/skill/cases/sdd/archive.md` SHALL exist and contain at least three cases: blocking when `test-plan.md` is missing, happy-path archiving without copying `test-plan.md` to `specs/` (per Modified `test-plan-link`), and `index.yaml` update after archive.
+
+#### Scenario: archive blocks when test-plan.md is missing
+- **WHEN** `skill:test-skill sdd:archive` runs with stub `change-missing-test-plan`
+- **THEN** output contains "test-plan.md is missing — required before archiving"
+- **THEN** no archive directory is created
+
+#### Scenario: archive succeeds without copying test-plan.md to specs/
+- **WHEN** `skill:test-skill sdd:archive` runs with stub `change-with-sdd-yaml`
+- **THEN** skill completes the archive flow without blocking
+- **THEN** output indicates `test-plan.md` remains in archived change directory and is NOT copied to `openspec/specs/<capability>/`
+
+#### Scenario: archive updates index.yaml
+- **WHEN** `skill:test-skill sdd:archive` runs with stub `change-with-sdd-yaml`
+- **THEN** output contains evidence that `openspec/specs/index.yaml` was updated or created
+
+### Requirement: cases/sdd/archive.md содержит сценарии inline spec-verify
+
+`skills/skill/cases/sdd/archive.md` SHALL дополнительно содержать три сценария для inline L1/L2/L3 spec-verify, который теперь часть `/sdd:archive` (приехало из удалённой capability `sdd-spec-verify-cases` — её до этого не существовало как отдельной spec'и, но логика была в `sdd-remaining-cases`):
+
+1. **passed** — все Requirements live spec'ов прошли L1+L2+L3, `/sdd:archive` завершается успешно, `.sdd-state.yaml` удаляется.
+2. **REMOVED-инверсия** — spec содержит `## REMOVED Requirements`, артефакт физически отсутствует, L1 inverted pass, verdict `done`.
+3. **archive-fail с red-banner** — spec-verify обнаружил `missing` Requirement после merge specs, `/sdd:archive` выводит red-banner и останавливается без авто-rollback, state остаётся `archive-failed`, `.sdd-state.yaml` НЕ удаляется.
+
+#### Scenario: passed — все ADDED Requirements done
+
+- **WHEN** `skill:test-skill sdd:archive` runs with stub `change-with-sdd-yaml` где все артефакты для ADDED Requirements существуют и содержательны
+- **THEN** archive completes
+- **THEN** state переходит в `archived`
+- **THEN** `.sdd-state.yaml` удалён
+
+#### Scenario: REMOVED-инверсия — файл отсутствует
+
+- **WHEN** stub содержит spec с `## REMOVED Requirements` упоминанием удалённого файла, и файл физически отсутствует
+- **THEN** verdict для этого Requirement = `done` (L1 inverted pass)
+- **THEN** archive completes
+
+#### Scenario: archive-fail — red-banner
+
+- **WHEN** spec-verify обнаружил `missing` Requirement после merge specs в `openspec/specs/`
+- **THEN** output содержит red-banner с текстом `🔴 SPECS MODIFIED — manual rollback required` и инструкциями `git restore openspec/specs/` или `/sdd:propose`
+- **THEN** state остаётся `archive-failed`
+- **THEN** `.sdd-state.yaml` НЕ удалён
+- **THEN** файлы в `openspec/specs/` НЕ откатываются автоматически
+
+
+--- ARQUIVOS DO PR (456)
+modified  +1     -0     .gitignore
+modified  +60    -3     CHANGELOG.md
+modified  +2     -0     README.md
+removed   +0     -34    commands/sdd/help.md
+modified  +0     -4     docs/README_DETAILED.md
+modified  +23    -0     docs/SKILL_DESIGN.md
+modified  +21    -1     manifest.yaml
+added     +2     -0     openspec/changes/archive-merges-into-impl/.openspec.yaml
+added     +4     -0     openspec/changes/archive-merges-into-impl/.sdd.yaml
+added     +30    -0     openspec/changes/archive-merges-into-impl/design.md
+added     +26    -0     openspec/changes/archive-merges-into-impl/proposal.md
+added     +50    -0     openspec/changes/archive-merges-into-impl/specs/archive-merges-into-support/spec.md
+added     +24    -0     openspec/changes/archive-merges-into-impl/tasks.md
+added     +32    -0     openspec/changes/archive-merges-into-impl/test-plan.md
+added     +95    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.log/contradiction-2026-05-03T03-57.md
+added     +91    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.log/contradiction-2026-05-03T04-03.md
+renamed   +0     -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.openspec.yaml
+added     +8     -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/.sdd.yaml
+added     +3     -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/README.md
+added     +70    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/design.md
+added     +43    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/proposal.md
+added     +37    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/specs/sdd-openspec-cli-guard/spec.md
+added     +18    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/tasks.md
+added     +27    -0     openspec/changes/archive/2026-05-02-sdd-openspec-cli-guard/test-plan.md
+added     +36    -0     openspec/changes/archive/2026-05-02-skill-run-logs/.log/apply-20260503T041724.md
+added     +29    -0     openspec/changes/archive/2026-05-02-skill-run-logs/.log/archive-20260503T042124.md
+added     +70    -0     openspec/changes/archive/2026-05-02-skill-run-logs/.log/contradiction-20260503T142301.md
+added     +2     -0     openspec/changes/archive/2026-05-02-skill-run-logs/.openspec.yaml
+added     +6     -0     openspec/changes/archive/2026-05-02-skill-run-logs/.sdd.yaml
+added     +48    -0     openspec/changes/archive/2026-05-02-skill-run-logs/design.md
+added     +32    -0     openspec/changes/archive/2026-05-02-skill-run-logs/proposal.md
+added     +30    -0     openspec/changes/archive/2026-05-02-skill-run-logs/specs/human-friendly-skill-output/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-02-skill-run-logs/specs/skill-run-log-archiving/spec.md
+added     +29    -0     openspec/changes/archive/2026-05-02-skill-run-logs/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-05-02-skill-run-logs/test-plan.md
+added     +59    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/apply-20260503T164020.md
+added     +29    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/archive-20260503T220415.md
+added     +74    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T154442.md
+added     +69    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T160130.md
+added     +68    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T160756.md
+added     +58    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T161427.md
+added     +58    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/contradiction-20260503T162752.md
+added     +29    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.log/propose-20260503T124146.md
+added     +2     -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/.sdd.yaml
+added     +55    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/design.md
+added     +60    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/proposal.md
+added     +168   -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/specs/human-friendly-features-section/spec.md
+added     +48    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/tasks.md
+added     +14    -0     openspec/changes/archive/2026-05-03-human-friendly-features-section/test-plan.md
+added     +36    -0     openspec/changes/archive/2026-05-03-install-modes/.log/archive-20260503T174729.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/.sdd.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/design.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/claude-init-mode/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/contributor-workflow/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/deps-skill/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/dev-mode/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/dev-setup-skill/spec.md
+renamed   +1     -1     openspec/changes/archive/2026-05-03-install-modes/specs/install-modes/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/manifest/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/sdd-test-coverage/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/skill-eval-framework/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/skill-release/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/specs/user-interface-principle/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-install-modes/test-plan.md
+added     +26    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/apply-20260503T220918.md
+added     +29    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/archive-20260503T221748.md
+added     +49    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/contradiction-20260503T220056.md
+added     +47    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/contradiction-20260503T220450.md
+added     +26    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.log/propose-20260503T181345.md
+added     +2     -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/.sdd.yaml
+added     +38    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/design.md
+added     +25    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/proposal.md
+added     +49    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/specs/namespace-skill-recommendations/spec.md
+added     +8     -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-recommend-namespace-usage/test-plan.md
+added     +2     -0     openspec/changes/archive/2026-05-03-remove-sdd-help/.openspec.yaml
+added     +3     -0     openspec/changes/archive/2026-05-03-remove-sdd-help/.sdd.yaml
+added     +38    -0     openspec/changes/archive/2026-05-03-remove-sdd-help/design.md
+added     +29    -0     openspec/changes/archive/2026-05-03-remove-sdd-help/proposal.md
+added     +19    -0     openspec/changes/archive/2026-05-03-remove-sdd-help/specs/sdd-help-removed/spec.md
+added     +18    -0     openspec/changes/archive/2026-05-03-remove-sdd-help/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-remove-sdd-help/test-plan.md
+added     +25    -0     openspec/changes/archive/2026-05-03-rules-index/.log/archive-20260503T165739.md
+added     +52    -0     openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T162858.md
+added     +41    -0     openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T163103.md
+added     +40    -0     openspec/changes/archive/2026-05-03-rules-index/.log/contradiction-20260503T163504.md
+added     +25    -0     openspec/changes/archive/2026-05-03-rules-index/.log/propose-20260503T162610.md
+added     +2     -0     openspec/changes/archive/2026-05-03-rules-index/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-rules-index/.sdd.yaml
+added     +38    -0     openspec/changes/archive/2026-05-03-rules-index/design.md
+added     +28    -0     openspec/changes/archive/2026-05-03-rules-index/proposal.md
+added     +8     -0     openspec/changes/archive/2026-05-03-rules-index/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-rules-index/test-plan.md
+added     +19    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T232930-output.md
+added     +63    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T232930.md
+added     +17    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T233515-output.md
+added     +46    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/contradiction-20260503T233515.md
+added     +25    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.log/propose-20260503T231825.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.openspec.yaml
+added     +7     -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/.sdd.yaml
+added     +89    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/design.md
+added     +42    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/proposal.md
+added     +70    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/apply-merges-into-context/spec.md
+added     +25    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/apply-merges-into-context/test-plan.md
+added     +84    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/contradiction-deps-validation/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/contradiction-deps-validation/test-plan.md
+added     +69    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/contradiction-index-awareness/spec.md
+added     +29    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/specs/contradiction-index-awareness/test-plan.md
+added     +36    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-sdd-declared-deps/test-plan.md
+added     +19    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/apply-20260503T165619.md
+added     +31    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/archive-20260503T221751.md
+added     +67    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T161104.md
+added     +52    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T161855.md
+added     +46    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T162701.md
+added     +43    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T163528.md
+added     +22    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/contradiction-20260503T164254.md
+added     +24    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.log/propose-20260503T160314.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/.sdd.yaml
+added     +56    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/design.md
+added     +28    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/proposal.md
+added     +40    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/specs/sdd-implicit-change-selection/spec.md
+added     +11    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-sdd-implicit-change-selection/test-plan.md
+added     +39    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/.log/apply-2026-05-03T03-43.md
+added     +6     -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/.sdd.yaml
+added     +41    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/design.md
+added     +29    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/proposal.md
+added     +35    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/specs/archive-merges-into-support/spec.md
+added     +16    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/specs/archive-merges-into-support/test-plan.md
+added     +34    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/specs/contradiction-draft-specs/spec.md
+added     +20    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/specs/contradiction-draft-specs/test-plan.md
+added     +23    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/tasks.md
+added     +27    -0     openspec/changes/archive/2026-05-03-sdd-merges-into-gaps/test-plan.md
+added     +20    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232034-output.md
+added     +65    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232034.md
+added     +14    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232742-output.md
+added     +63    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/contradiction-20260503T232742.md
+added     +25    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.log/propose-20260503T124740.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.openspec.yaml
+added     +4     -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/.sdd.yaml
+added     +46    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/design.md
+added     +36    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/proposal.md
+added     +39    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/specs/skill-run-log-archiving/spec.md
+added     +25    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-sdd-skill-logs-to-repo-root/test-plan.md
+added     +24    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.log/archive-20260503T164221.md
+added     +96    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T125649.md
+added     +74    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T154059.md
+added     +61    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.log/contradiction-20260503T155421.md
+added     +28    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.log/propose-20260503T124654.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.openspec.yaml
+added     +9     -0     openspec/changes/archive/2026-05-03-sdd-state-manager/.sdd.yaml
+added     +37    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/apply-log.md
+added     +60    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/design.md
+added     +30    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/proposal.md
+added     +37    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/specs/sdd-state-declarations/spec.md
+added     +39    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/specs/sdd-state-manager/spec.md
+added     +36    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-sdd-state-manager/test-plan.md
+added     +37    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/apply-20260503T223359.md
+added     +27    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/archive-20260503T224757.md
+added     +69    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/contradiction-20260503T123032.md
+added     +49    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/contradiction-20260503T222847.md
+added     +27    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.log/propose-20260503T042337.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.openspec.yaml
+added     +7     -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/.sdd.yaml
+added     +37    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/design.md
+added     +27    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/proposal.md
+added     +19    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/specs/sdd-archive/spec.md
+added     +37    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/specs/sdd-state-archived-in-sdd/spec.md
+added     +12    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-sdd-state-merge-on-archive/test-plan.md
+added     +36    -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.log/apply-2026-05-03T05-30.md
+added     +25    -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.log/archive-20260503T174840.md
+added     +2     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/.sdd.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/design.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/specs/sdd-apply/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/specs/sdd-archive/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/specs/sdd-state-skill-hooks/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/specs/sdd-state/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-sdd-state-skill-hooks/test-plan.md
+added     +18    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/apply-20260503T225137-output.md
+added     +34    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/apply-20260503T225137.md
+added     +19    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/archive-20260503T225333-output.md
+added     +22    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/archive-20260503T225333.md
+added     +75    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/contradiction-20260503T223808.md
+added     +47    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/contradiction-20260503T224548.md
+added     +36    -0     openspec/changes/archive/2026-05-03-skill-output-replay/.log/propose-20260503T123700.md
+added     +2     -0     openspec/changes/archive/2026-05-03-skill-output-replay/.openspec.yaml
+added     +6     -0     openspec/changes/archive/2026-05-03-skill-output-replay/.sdd.yaml
+added     +39    -0     openspec/changes/archive/2026-05-03-skill-output-replay/design.md
+added     +29    -0     openspec/changes/archive/2026-05-03-skill-output-replay/proposal.md
+added     +15    -0     openspec/changes/archive/2026-05-03-skill-output-replay/specs/claude-way-agent-guard/spec.md
+added     +10    -0     openspec/changes/archive/2026-05-03-skill-output-replay/specs/skill-run-log-archiving/spec.md
+added     +44    -0     openspec/changes/archive/2026-05-03-skill-output-replay/specs/write-then-replay-output/spec.md
+added     +21    -0     openspec/changes/archive/2026-05-03-skill-output-replay/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-skill-output-replay/test-plan.md
+added     +46    -0     openspec/changes/archive/2026-05-03-structured-apply-output/.log/apply-20260503T175602.md
+added     +25    -0     openspec/changes/archive/2026-05-03-structured-apply-output/.log/archive-20260503T180308.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-structured-apply-output/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-structured-apply-output/.sdd.yaml
+renamed   +0     -0     openspec/changes/archive/2026-05-03-structured-apply-output/design.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-structured-apply-output/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-05-03-structured-apply-output/specs/structured-apply-output/spec.md
+renamed   +2     -2     openspec/changes/archive/2026-05-03-structured-apply-output/tasks.md
+added     +10    -0     openspec/changes/archive/2026-05-03-structured-apply-output/test-plan.md
+added     +25    -0     openspec/changes/change-type-in-sdd-yaml/.log/propose-20260503T160145.md
+added     +2     -0     openspec/changes/change-type-in-sdd-yaml/.openspec.yaml
+added     +4     -0     openspec/changes/change-type-in-sdd-yaml/.sdd.yaml
+added     +46    -0     openspec/changes/change-type-in-sdd-yaml/design.md
+added     +36    -0     openspec/changes/change-type-in-sdd-yaml/proposal.md
+added     +10    -0     openspec/changes/change-type-in-sdd-yaml/test-plan.md
+added     +2     -0     openspec/changes/identity-claude-only/.openspec.yaml
+added     +4     -0     openspec/changes/identity-claude-only/.sdd.yaml
+added     +28    -0     openspec/changes/identity-claude-only/design.md
+added     +27    -0     openspec/changes/identity-claude-only/proposal.md
+added     +25    -0     openspec/changes/identity-claude-only/specs/sdd-ownership/spec.md
+added     +16    -0     openspec/changes/identity-claude-only/tasks.md
+added     +10    -0     openspec/changes/identity-claude-only/test-plan.md
+added     +2     -0     openspec/changes/install-namespace-split/.openspec.yaml
+added     +5     -0     openspec/changes/install-namespace-split/.sdd.yaml
+added     +3     -0     openspec/changes/install-namespace-split/README.md
+added     +61    -0     openspec/changes/install-namespace-split/design.md
+added     +38    -0     openspec/changes/install-namespace-split/proposal.md
+added     +27    -0     openspec/changes/install-namespace-split/tasks.md
+added     +10    -0     openspec/changes/install-namespace-split/test-plan.md
+added     +24    -0     openspec/changes/mcp-absent-ask-user/.log/propose-20260503T162608.md
+added     +2     -0     openspec/changes/mcp-absent-ask-user/.openspec.yaml
+added     +4     -0     openspec/changes/mcp-absent-ask-user/.sdd.yaml
+added     +31    -0     openspec/changes/mcp-absent-ask-user/design.md
+added     +23    -0     openspec/changes/mcp-absent-ask-user/proposal.md
+added     +10    -0     openspec/changes/mcp-absent-ask-user/test-plan.md
+modified  +10    -0     openspec/changes/namespace-first-structure/design.md
+added     +68    -0     openspec/changes/post-release-version-bump/.log/contradiction-20260503T181522.md
+added     +55    -0     openspec/changes/post-release-version-bump/.log/contradiction-20260503T220317.md
+added     +24    -0     openspec/changes/post-release-version-bump/.log/propose-20260503T154310.md
+added     +2     -0     openspec/changes/post-release-version-bump/.openspec.yaml
+added     +7     -0     openspec/changes/post-release-version-bump/.sdd.yaml
+added     +76    -0     openspec/changes/post-release-version-bump/design.md
+added     +33    -0     openspec/changes/post-release-version-bump/proposal.md
+added     +26    -0     openspec/changes/post-release-version-bump/specs/bump-full-namespace/spec.md
+added     +27    -0     openspec/changes/post-release-version-bump/specs/bump-namespace/spec.md
+added     +29    -0     openspec/changes/post-release-version-bump/specs/bump-ref-support/spec.md
+added     +26    -0     openspec/changes/post-release-version-bump/specs/claude-entry-point/spec.md
+added     +38    -0     openspec/changes/post-release-version-bump/tasks.md
+added     +20    -0     openspec/changes/post-release-version-bump/test-plan.md
+added     +24    -0     openspec/changes/proposal-human-context/.log/propose-20260503T163445.md
+added     +2     -0     openspec/changes/proposal-human-context/.openspec.yaml
+added     +4     -0     openspec/changes/proposal-human-context/.sdd.yaml
+added     +48    -0     openspec/changes/proposal-human-context/design.md
+added     +40    -0     openspec/changes/proposal-human-context/proposal.md
+added     +10    -0     openspec/changes/proposal-human-context/test-plan.md
+added     +38    -0     openspec/changes/remove-sdd-help/design.md
+added     +19    -0     openspec/changes/remove-sdd-help/specs/sdd-help-removed/spec.md
+added     +23    -0     openspec/changes/scripts-access-via-mcp/.log/apply-20260503T160949.md
+added     +85    -0     openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T152829.md
+added     +81    -0     openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T154055.md
+added     +77    -0     openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T155103.md
+added     +73    -0     openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T155600.md
+added     +61    -0     openspec/changes/scripts-access-via-mcp/.log/contradiction-20260503T160114.md
+added     +25    -0     openspec/changes/scripts-access-via-mcp/.log/propose-20260503T130053.md
+added     +2     -0     openspec/changes/scripts-access-via-mcp/.openspec.yaml
+added     +4     -0     openspec/changes/scripts-access-via-mcp/.sdd.yaml
+added     +49    -0     openspec/changes/scripts-access-via-mcp/design.md
+added     +30    -0     openspec/changes/scripts-access-via-mcp/proposal.md
+added     +8     -0     openspec/changes/scripts-access-via-mcp/tasks.md
+added     +10    -0     openspec/changes/scripts-access-via-mcp/test-plan.md
+added     +29    -0     openspec/changes/sdd-command-self-invoke-loop/.log/apply-20260503T220916.md
+added     +47    -0     openspec/changes/sdd-command-self-invoke-loop/.log/contradiction-20260503T181324.md
+added     +46    -0     openspec/changes/sdd-command-self-invoke-loop/.log/contradiction-20260503T220019.md
+added     +21    -0     openspec/changes/sdd-command-self-invoke-loop/.log/propose-20260503T180129.md
+added     +2     -0     openspec/changes/sdd-command-self-invoke-loop/.openspec.yaml
+added     +3     -0     openspec/changes/sdd-command-self-invoke-loop/.sdd.yaml
+added     +65    -0     openspec/changes/sdd-command-self-invoke-loop/design.md
+added     +48    -0     openspec/changes/sdd-command-self-invoke-loop/proposal.md
+added     +35    -0     openspec/changes/sdd-command-self-invoke-loop/specs/sdd-command-dispatch/spec.md
+added     +13    -0     openspec/changes/sdd-command-self-invoke-loop/tasks.md
+added     +26    -0     openspec/changes/sdd-command-self-invoke-loop/test-plan.md
+added     +2     -0     openspec/changes/sdd-propose-no-skill-coupling/.openspec.yaml
+added     +4     -0     openspec/changes/sdd-propose-no-skill-coupling/.sdd.yaml
+added     +38    -0     openspec/changes/sdd-propose-no-skill-coupling/design.md
+added     +27    -0     openspec/changes/sdd-propose-no-skill-coupling/proposal.md
+added     +29    -0     openspec/changes/sdd-propose-no-skill-coupling/specs/test-plan-link/spec.md
+added     +21    -0     openspec/changes/sdd-propose-no-skill-coupling/tasks.md
+added     +2     -0     openspec/changes/sdd-propose-openspec-guard/.openspec.yaml
+added     +5     -0     openspec/changes/sdd-propose-openspec-guard/.sdd.yaml
+added     +38    -0     openspec/changes/sdd-propose-openspec-guard/design.md
+added     +27    -0     openspec/changes/sdd-propose-openspec-guard/proposal.md
+added     +12    -0     openspec/changes/sdd-propose-openspec-guard/specs/sdd-propose-openspec-guard/spec.md
+added     +14    -0     openspec/changes/sdd-propose-openspec-guard/specs/sdd-propose/spec.md
+added     +13    -0     openspec/changes/sdd-propose-openspec-guard/tasks.md
+added     +13    -0     openspec/changes/sdd-propose-openspec-guard/test-plan.md
+added     +28    -0     openspec/changes/sdd-yaml-indented-dump/.log/propose-20260503T222153.md
+added     +2     -0     openspec/changes/sdd-yaml-indented-dump/.openspec.yaml
+added     +4     -0     openspec/changes/sdd-yaml-indented-dump/.sdd.yaml
+added     +40    -0     openspec/changes/sdd-yaml-indented-dump/design.md
+added     +26    -0     openspec/changes/sdd-yaml-indented-dump/proposal.md
+added     +24    -0     openspec/changes/sdd-yaml-indented-dump/specs/sdd-yaml-indented-dump/spec.md
+added     +9     -0     openspec/changes/sdd-yaml-indented-dump/tasks.md
+added     +17    -0     openspec/changes/sdd-yaml-indented-dump/test-plan.md
+added     +23    -0     openspec/changes/skill-post-release/.log/propose-20260503T175523.md
+added     +2     -0     openspec/changes/skill-post-release/.openspec.yaml
+added     +4     -0     openspec/changes/skill-post-release/.sdd.yaml
+added     +36    -0     openspec/changes/skill-post-release/design.md
+added     +31    -0     openspec/changes/skill-post-release/proposal.md
+added     +20    -0     openspec/changes/skill-post-release/test-plan.md
+added     +26    -0     openspec/changes/skill-rich-description-and-call-order/.log/propose-20260503T125714.md
+added     +2     -0     openspec/changes/skill-rich-description-and-call-order/.openspec.yaml
+added     +5     -0     openspec/changes/skill-rich-description-and-call-order/.sdd.yaml
+added     +87    -0     openspec/changes/skill-rich-description-and-call-order/design.md
+added     +35    -0     openspec/changes/skill-rich-description-and-call-order/proposal.md
+added     +10    -0     openspec/changes/skill-rich-description-and-call-order/test-plan.md
+added     +65    -0     openspec/changes/skill-script-path-resolution/.log/contradiction-20260503T154924.md
+added     +27    -0     openspec/changes/skill-script-path-resolution/.log/propose-20260503T152950.md
+added     +2     -0     openspec/changes/skill-script-path-resolution/.openspec.yaml
+added     +5     -0     openspec/changes/skill-script-path-resolution/.sdd.yaml
+added     +80    -0     openspec/changes/skill-script-path-resolution/design.md
+added     +47    -0     openspec/changes/skill-script-path-resolution/proposal.md
+added     +31    -0     openspec/changes/skill-script-path-resolution/test-plan.md
+added     +33    -0     openspec/changes/sre-gitlab-incident-pr/.log/propose-20260503T152610.md
+added     +2     -0     openspec/changes/sre-gitlab-incident-pr/.openspec.yaml
+added     +7     -0     openspec/changes/sre-gitlab-incident-pr/.sdd.yaml
+added     +48    -0     openspec/changes/sre-gitlab-incident-pr/design.md
+added     +25    -0     openspec/changes/sre-gitlab-incident-pr/proposal.md
+added     +38    -0     openspec/changes/sre-gitlab-incident-pr/specs/sre-gitlab-client/spec.md
+added     +28    -0     openspec/changes/sre-gitlab-incident-pr/specs/sre-gitlab-incident-mr/spec.md
+added     +25    -0     openspec/changes/sre-gitlab-incident-pr/specs/sre-incident-template/spec.md
+added     +39    -0     openspec/changes/sre-gitlab-incident-pr/tasks.md
+added     +29    -0     openspec/changes/sre-gitlab-incident-pr/test-plan.md
+added     +2     -0     openspec/changes/test-results-hidden-dir/.openspec.yaml
+added     +4     -0     openspec/changes/test-results-hidden-dir/.sdd.yaml
+added     +32    -0     openspec/changes/test-results-hidden-dir/design.md
+added     +34    -0     openspec/changes/test-results-hidden-dir/proposal.md
+added     +22    -0     openspec/changes/test-results-hidden-dir/specs/skill-eval-framework/spec.md
+added     +29    -0     openspec/changes/test-results-hidden-dir/tasks.md
+added     +10    -0     openspec/changes/test-results-hidden-dir/test-plan.md
+added     +66    -0     openspec/specs/apply-merges-into-context/spec.md
+added     +38    -0     openspec/specs/archive-merges-into-support/spec.md
+added     +43    -0     openspec/specs/claude-init-mode/spec.md
+added     +19    -0     openspec/specs/claude-way-agent-guard/spec.md
+added     +80    -0     openspec/specs/contradiction-deps-validation/spec.md
+added     +37    -0     openspec/specs/contradiction-draft-specs/spec.md
+modified  +25    -5     openspec/specs/contradiction-full-scan/spec.md
+added     +65    -0     openspec/specs/contradiction-index-awareness/spec.md
+added     +30    -0     openspec/specs/contributor-workflow/spec.md
+added     +31    -0     openspec/specs/deps-skill/spec.md
+added     +21    -0     openspec/specs/dev-mode/spec.md
+added     +24    -0     openspec/specs/dev-setup-skill/spec.md
+added     +166   -0     openspec/specs/human-friendly-features-section/spec.md
+added     +34    -0     openspec/specs/human-friendly-skill-output/spec.md
+modified  +21    -0     openspec/specs/index.yaml
+added     +28    -0     openspec/specs/install-modes/spec.md
+added     +29    -0     openspec/specs/manifest/spec.md
+added     +53    -0     openspec/specs/namespace-skill-recommendations/spec.md
+added     +19    -0     openspec/specs/sdd-help-removed/spec.md
+added     +44    -0     openspec/specs/sdd-implicit-change-selection/spec.md
+added     +39    -0     openspec/specs/sdd-openspec-cli-guard/spec.md
+added     +41    -0     openspec/specs/sdd-state-archived-in-sdd/spec.md
+added     +41    -0     openspec/specs/sdd-state-declarations/spec.md
+added     +43    -0     openspec/specs/sdd-state-manager/spec.md
+added     +34    -0     openspec/specs/sdd-test-coverage/spec.md
+added     +50    -0     openspec/specs/skill-eval-framework/spec.md
+added     +18    -0     openspec/specs/skill-release/spec.md
+added     +54    -0     openspec/specs/skill-run-log-archiving/spec.md
+added     +227   -0     openspec/specs/structured-apply-output/spec.md
+added     +48    -0     openspec/specs/write-then-replay-output/spec.md
+modified  +2     -0     skills/dev/.manifest
+modified  +14    -0     skills/dev/bump-version/skill.md
+added     +19    -0     skills/dev/install/cases/install.md
+modified  +2     -0     skills/report/.manifest
+modified  +14    -0     skills/report/bump-version/skill.md
+modified  +2     -0     skills/research/.manifest
+modified  +14    -0     skills/research/bump-version/skill.md
+added     +25    -0     skills/scripts/cases/state_manager.md
+added     +121   -0     skills/scripts/state_manager.py
+modified  +2     -0     skills/sdd/.manifest
+modified  +63    -0     skills/sdd/apply/cases/apply.md
+modified  +88    -30    skills/sdd/apply/skill.md
+added     +18    -0     skills/sdd/apply/state.yaml
+modified  +14    -0     skills/sdd/archive/cases/archive.md
+modified  +36    -24    skills/sdd/archive/skill.md
+added     +13    -0     skills/sdd/archive/state.yaml
+modified  +44    -0     skills/sdd/audit/skill.md
+modified  +14    -0     skills/sdd/bump-version/skill.md
+modified  +12    -0     skills/sdd/contradiction/cases/contradiction.md
+modified  +98    -10    skills/sdd/contradiction/scripts/contradiction.py
+modified  +121   -27    skills/sdd/contradiction/skill.md
+added     +9     -0     skills/sdd/contradiction/state.yaml
+modified  +8     -2     skills/sdd/explore/skill.md
+removed   +0     -51    skills/sdd/help/cases/help.md
+removed   +0     -136   skills/sdd/help/skill.md
+modified  +36    -4     skills/sdd/propose/skill.md
+added     +5     -0     skills/sdd/propose/state.yaml
+modified  +44    -1     skills/sdd/scripts/_sdd_yaml.py   <== código ligado à spec
+modified  +14    -6     skills/sdd/scripts/apply_report.py
+modified  +19    -15    skills/sdd/scripts/archive_report.py
+added     +31    -0     skills/sdd/scripts/cases/state_hook.md
+modified  +20    -0     skills/sdd/scripts/state.py   <== código ligado à spec
+added     +124   -0     skills/sdd/scripts/state_hook.py
+added     +5     -0     skills/sdd/state.yaml
+modified  +2     -0     skills/skill/.manifest
+added     +6     -0     skills/skill/cases/sdd/apply-merges-into-context/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-01-archive-skill-md-7-sdd-yaml-merges-into-l1-l2-l3-c.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-02-archive-skill-md-index-yaml-description-merges-int.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-03-contradiction-py-relevant-names.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-04-contradiction-py-creates-openspec-changes-name-spe.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-05-draft-draft.md
+added     +6     -0     skills/skill/cases/sdd/archive-merges-into-support/ac-06-summary-contradiction-py-draft-specs-loaded.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-deps-validation/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-01-archive-skill-md-7-sdd-yaml-merges-into-l1-l2-l3-c.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-02-archive-skill-md-index-yaml-description-merges-int.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-03-contradiction-py-relevant-names.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-04-contradiction-py-creates-openspec-changes-name-spe.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-05-draft-draft.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-draft-specs/ac-06-summary-contradiction-py-draft-specs-loaded.md
+added     +6     -0     skills/skill/cases/sdd/contradiction-index-awareness/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/human-friendly-features-section/ac-01-capability-title-kebab-name.md
+added     +6     -0     skills/skill/cases/sdd/human-friendly-features-section/ac-02-done-partial.md
+added     +6     -0     skills/skill/cases/sdd/human-friendly-features-section/ac-03-partial-capability-n.md
+added     +6     -0     skills/skill/cases/sdd/human-friendly-features-section/ac-04-capability-title-name-fallback.md
+added     +6     -0     skills/skill/cases/sdd/human-friendly-skill-output/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/namespace-skill-recommendations/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/scripts-access-via-mcp/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/sdd-openspec-cli-guard/ac-01-sdd-propose-unknown-skill-openspec-propose.md
+added     +6     -0     skills/skill/cases/sdd/sdd-openspec-cli-guard/ac-02-sdd-explore-unknown-skill-openspec-explore.md
+added     +6     -0     skills/skill/cases/sdd/sdd-openspec-cli-guard/ac-03-sdd-apply-unknown-skill-openspec-apply-change.md
+added     +6     -0     skills/skill/cases/sdd/sdd-openspec-cli-guard/ac-04-sdd-archive-unknown-skill-openspec-archive-change.md
+added     +6     -0     skills/skill/cases/sdd/sdd-openspec-cli-guard/ac-05-openspec-4-openspec-not-found-install-npm-install.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-archived-in-sdd/ac-01-todo-criterion-one.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-01-state-hook-py-stdin-json-change-name-args-freshest.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-02-state-hook-py-sdd-apply-verify-status-ok-state-py.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-03-state-hook-py-exit-0-change-transition.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-04-posttooluse-hook-claude-settings-json-skill.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-05-skill-md-state-py-transition.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-06-skill-md-apply-archive-contradiction-state-py-upda.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-07-verify-status-state-py-ok-failed-n-a.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-08-end-to-end-workflow-propose-contradiction-apply-ar.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-09-workflow-hook-settings-json-state.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-10-sdd-archive-verify-status-ok-hook-archived-state-f.md
+added     +6     -0     skills/skill/cases/sdd/sdd-state-skill-hooks/ac-11-sdd-archive-verify-status-failed-hook-archive-fail.md
+added     +6     -0     skills/skill/cases/sdd/skill-run-log-archiving/ac-01-todo-criterion-one.md
+added     +92    -0     skills/skill/cases/skill/bump-version.md
+added     +34    -0     skills/skill/cases/skill/post-release.md
+modified  +13    -1     skills/skill/setup/skill.md
+added     +44    -0     skills/skill/test-skill/stubs/with-hooks-config.md
+added     +19    -0     skills/sre/incident-mr/cases/incident-mr.md
+--- DIFF DO CÓDIGO LIGADO
+### skills/sdd/scripts/_sdd_yaml.py
+@@ -11,6 +11,8 @@
+     _sdd_yaml.py move-capability <change-dir> <name> <from-field> <to-field>
+         from-field/to-field ∈ {creates, merges-into}
+     _sdd_yaml.py set-owner <change-dir> <email>
++    _sdd_yaml.py merge-state <change-dir>
++    _sdd_yaml.py update-index-description <index-yaml-path> <capability> <description>
+ """
+ import json
+ import os
+@@ -45,7 +47,23 @@ def save(change_dir: str, data: dict) -> None:
+ 
+ 
+ def get_creates(change_dir: str) -> list[str]:
+-    return load(change_dir).get("creates") or []
++    creates = load(change_dir).get("creates") or []
++    return [entry if isinstance(entry, str) else entry.get("name", "") for entry in creates]
++
++
++def read_creates_with_meta(change_dir: str) -> list[dict]:
++    """Return creates entries normalized to [{name: str, title: str | None}].
++
++    Supports both string entries ("name") and object entries ({name, title}).
++    """
++    creates = load(change_dir).get("creates") or []
++    result = []
++    for entry in creates:
++        if isinstance(entry, str):
++            result.append({"name": entry, "title": None})
++        elif isinstance(entry, dict):
++            result.append({"name": entry.get("name", ""), "title": entry.get("title")})
++    return result
+ 
+ 
+ def get_merges_into(change_dir: str) -> list[str]:
+@@ -87,6 +105,29 @@ def cmd_move_capability(change_dir: str, name: str, src: str, dst: str) -> int:
+     return 0
+ 
+ 
++def merge_state(change_dir: str) -> None:
++    state_path = os.path.join(change_dir, ".sdd-state.yaml")
++    if not os.path.exists(state_path):
++        return
++    with open(state_path, encoding="utf-8") as f:
++        state = yaml.safe_load(f) or {}
++    data = load(change_dir)
++    if not data:
++        return
++    for field in ("stage", "last_step_at"):
++        if field in state:
++            data[field] = state[field]
++    save(change_dir, data)
++
++
++def cmd_merge_state(change_dir: str) -> int:
++    if not os.path.exists(_path(change_dir)):
++        print(f"ERROR: .sdd.yaml not found in {change_dir}", file=sys.stderr)
++        return 2
++    merge_state(change_dir)
++    return 0
++
++
+ def cmd_set_owner(change_dir: str, email: str) -> int:
+     if not isinstance(email, str) or not email.strip():
+         print("ERROR: owner must be a non-empty string", file=sys.stderr)
+@@ -118,6 +159,8 @@ def main() -> int:
+         return cmd_move_capability(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+     if cmd == "set-owner" and len(sys.argv) == 4:
+         return cmd_set_owner(sys.argv[2], sys.argv[3])
++    if cmd == "merge-state" and len(sys.argv) == 3:
++        return cmd_merge_state(sys.argv[2])
+     print(__doc__, file=sys.stderr)
+     return 2
+ 
+
+### skills/sdd/scripts/state.py
+@@ -6,6 +6,7 @@
+     state.py update <path> <field> <value>
+     state.py transition <path> <new-stage>
+     state.py delete <path>
++    state.py is-final <stage>
+ 
+ Lifecycle: file lives in openspec/changes/<change-id>/.sdd-state.yaml.
+ Created at-first-touch with stage='unknown' if missing on read/update.
+@@ -22,6 +23,10 @@
+     sys.exit(1)
+ 
+ 
++FIELD_VALIDATORS = {
++    "verify_status": {"ok", "failed", "n/a"},
++}
++
+ VALID_STAGES = {
+     "unknown",
+     "proposed",
+@@ -50,6 +55,8 @@
+     "archive-failed": {"archiving", "archived", "verify-ok"},
+ }
+ 
++FINAL_STAGES = {"archived"}
++
+ 
+ def now_iso() -> str:
+     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+@@ -83,6 +90,13 @@ def cmd_read(path: str) -> int:
+ 
+ 
+ def cmd_update(path: str, field: str, value: str) -> int:
++    if field in FIELD_VALIDATORS and value not in FIELD_VALIDATORS[field]:
++        print(
++            f"ERROR: invalid value '{value}' for field '{field}'. "
++            f"Valid: {sorted(FIELD_VALIDATORS[field])}",
++            file=sys.stderr,
++        )
++        return 2
+     data = load(path)
+     data[field] = value
+     save(path, data)
+@@ -117,6 +131,10 @@ def cmd_delete(path: str) -> int:
+     return 0
+ 
+ 
++def cmd_is_final(stage: str) -> int:
++    return 0 if stage in FINAL_STAGES else 1
++
++
+ def main() -> int:
+     if len(sys.argv) < 2:
+         print(__doc__, file=sys.stderr)
+@@ -130,6 +148,8 @@ def main() -> int:
+         return cmd_transition(sys.argv[2], sys.argv[3])
+     if cmd == "delete" and len(sys.argv) == 3:
+         return cmd_delete(sys.argv[2])
++    if cmd == "is-final" and len(sys.argv) == 3:
++        return cmd_is_final(sys.argv[2])
+     print(__doc__, file=sys.stderr)
+     return 2
+ 
+
+===== P273 | repo arabold/docs-mcp-server | PR #431: Fix embedding dimension resolution for custom models | capacidade: configuration
+--- SPEC VIVA
+# configuration Specification
+
+## Purpose
+Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands. Includes bootstrap-time environment normalization.
+## Requirements
+### Requirement: Nested Document Configuration Under Scraper
+
+The system SHALL organize document processing settings under `scraper.document.*` in the configuration hierarchy.
+
+#### Scenario: Document Max Size Configuration
+
+- **GIVEN** a configuration file with `scraper.document.maxSize` set to `52428800`
+- **WHEN** the `DocumentPipeline` processes a document
+- **THEN** it SHALL use `52428800` as the maximum allowed document size
+
+#### Scenario: Default Document Max Size
+
+- **GIVEN** no custom configuration for `scraper.document.maxSize`
+- **WHEN** the configuration is loaded
+- **THEN** the default value of `10485760` (10MB) SHALL be used
+
+### Requirement: Generic Environment Variable Overrides
+The system SHALL support overriding any configuration setting via environment variables using a predictable naming convention. Environment-derived configuration values SHALL be normalized by trimming surrounding whitespace and stripping matching surrounding single or double quotes before schema parsing.
+
+#### Scenario: Environment Variable Naming Convention
+- **GIVEN** a config path `scraper.document.maxSize`
+- **WHEN** the environment variable `DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE` is set
+- **THEN** its value SHALL override the config file and default values
+
+#### Scenario: Quoted configuration override from Docker Compose
+- **GIVEN** the environment variable `DOCS_MCP_EMBEDDING_MODEL` is provided as `"openai:nomic-embed-text"`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `app.embeddingModel` value SHALL be `openai:nomic-embed-text`
+
+#### Scenario: Whitespace-padded configuration override
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_MAX_PAGES` is provided as `  "500"  `
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.maxPages` value SHALL be parsed as `500`
+
+#### Scenario: CamelCase to Upper Snake Case Conversion
+- **GIVEN** a config path segment `maxNestingDepth`
+- **WHEN** converted to environment variable format
+- **THEN** it SHALL become `MAX_NESTING_DEPTH`
+
+#### Scenario: Deeply Nested Path Conversion
+- **GIVEN** a config path `splitter.json.maxNestingDepth`
+- **WHEN** converted to environment variable name
+- **THEN** it SHALL become `DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH`
+
+#### Scenario: Nested security override naming
+- **GIVEN** a config path `scraper.security.fileAccess.followSymlinks`
+- **WHEN** converted to environment variable name
+- **THEN** it SHALL become `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS`
+
+#### Scenario: Array override provided as JSON
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS` is provided as `["docs.internal.example","wiki.corp.local"]`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.security.network.allowedHosts` value SHALL be parsed as a string array
+
+#### Scenario: Array override provided as inline array string
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS` is provided as `["$DOCUMENTS", "/srv/docs"]`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.security.fileAccess.allowedRoots` value SHALL be parsed as a string array
+
+### Requirement: Environment Variable Precedence
+
+The system SHALL apply configuration overrides in a defined priority order.
+
+#### Scenario: Auto-Generated Env Var Takes Precedence Over Explicit Alias
+
+- **GIVEN** both `PORT=3000` and `DOCS_MCP_SERVER_PORTS_DEFAULT=4000` are set
+- **WHEN** the configuration is loaded
+- **THEN** `server.ports.default` SHALL be `4000` (auto-generated wins)
+
+#### Scenario: CLI Args Override Environment Variables
+
+- **GIVEN** `DOCS_MCP_APP_STORE_PATH=/env/path` is set
+- **AND** `--storePath=/cli/path` is passed
+- **WHEN** the configuration is loaded
+- **THEN** `app.storePath` SHALL be `/cli/path`
+
+### Requirement: Bootstrap Environment Normalization
+
+The application bootstrap SHALL normalize runtime environment variable values after `.env` files are loaded and before application modules interpret `process.env`. Normalization SHALL trim surrounding whitespace and strip matching surrounding single or double quotes, while leaving internal characters unchanged.
+
+#### Scenario: Quoted provider base URL at startup
+
+- **GIVEN** `OPENAI_API_BASE` is supplied by the host environment as `"http://localhost:11434/v1"`
+- **WHEN** the application bootstrap completes
+- **THEN** runtime modules SHALL observe `OPENAI_API_BASE` as `http://localhost:11434/v1`
+
+#### Scenario: Quoted GitHub token at startup
+
+- **GIVEN** `GITHUB_TOKEN` is supplied by the host environment as `"ghp_test_token"`
+- **WHEN** GitHub authentication headers are resolved
+- **THEN** the generated `Authorization` header SHALL use `Bearer ghp_test_token`
+
+#### Scenario: Quoted Playwright path at startup
+
+- **GIVEN** `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` is supplied as `"/usr/bin/chromium"`
+- **WHEN** Playwright browser configuration is evaluated
+- **THEN** the path existence check SHALL use `/usr/bin/chromium`
+
+#### Scenario: Internal quotes are preserved
+
+- **GIVEN** an environment variable value contains internal quotes but no matching outer quotes
+- **WHEN** bootstrap normalization runs
+- **THEN** the value SHALL remain otherwise unchanged
+
+### Requirement: Config CLI Get Command
+
+The system SHALL provide a `config get <path>` CLI command to retrieve individual configuration values.
+
+#### Scenario: Get Scalar Value
+
+- **GIVEN** the configuration has `scraper.maxPages` set to `1000`
+- **WHEN** the user runs `docs-mcp-server config get scraper.maxPages`
+- **THEN** the output SHALL be `1000`
+
+#### Scenario: Get Nested Object
+
+- **GIVEN** the configuration has `scraper.fetcher` with multiple settings
+- **WHEN** the user runs `docs-mcp-server config get scraper.fetcher`
+- **THEN** the output SHALL be the JSON representation of the nested object
+
+#### Scenario: Get Invalid Path
+
+- **GIVEN** the path `foo.bar.baz` does not exist in the schema
+- **WHEN** the user runs `docs-mcp-server config get foo.bar.baz`
+- **THEN** an error message SHALL indicate the path is invalid
+
+### Requirement: Config CLI Set Command
+
+The system SHALL provide a `config set <path> <value>` CLI command to persist configuration changes.
+
+#### Scenario: Set Numeric Value
+
+- **GIVEN** a valid config path `scraper.document.maxSize`
+- **WHEN** the user runs `docs-mcp-server config set scraper.document.maxSize 52428800`
+- **THEN** the value SHALL be persisted to the config file as a number
+
+#### Scenario: Set Boolean Value
+
+- **GIVEN** a valid config path `app.telemetryEnabled`
+- **WHEN** the user runs `docs-mcp-server config set app.telemetryEnabled false`
+- **THEN** the value SHALL be persisted to the config file as a boolean
+
+#### Scenario: Set String Value
+
+- **GIVEN** a valid config path `app.embeddingModel`
+- **WHEN** the user runs `docs-mcp-server config set app.embeddingModel text-embedding-ada-002`
+- **THEN** the value SHALL be persisted to the config file as a string
+
+#### Scenario: Set Invalid Path Rejected
+
+- **GIVEN** the path `invalid.setting` does not exist in the schema
+- **WHEN** the user runs `docs-mcp-server config set invalid.setting value`
+- **THEN** an error message SHALL indicate the path is invalid
+- **AND** no changes SHALL be made to the config file
+
+#### Scenario: Set Blocked in Read-Only Mode
+
+- **GIVEN** the user specified an explicit config file with `--config`
+- **WHEN** the user runs `docs-mcp-server config set scraper.maxPages 500`
+- **THEN** an error message SHALL indicate that explicit config files are read-only
+
+### Requirement: Config Output Format Options
+
+The system SHALL support `--json` and `--yaml` flags to control output format for `config` and `config get` commands.
+
+#### Scenario: Default Output Format for Scalars
+
+- **GIVEN** the user runs `docs-mcp-server config get scraper.maxPages`
+- **WHEN** no format flag is specified
+- **THEN** the output SHALL be the plain scalar value (e.g., `1000`)
+
+#### Scenario: Default Output Format for Objects
+
+- **GIVEN** the user runs `docs-mcp-server config get scraper.fetcher`
+- **WHEN** no format flag is specified
+- **THEN** the output SHALL be JSON-formatted
+
+#### Scenario: JSON Format Flag
+
+- **GIVEN** the user runs `docs-mcp-server config --json`
+- **WHEN** the config is displayed
+- **THEN** the output SHALL be JSON-formatted
+
+#### Scenario: YAML Format Flag
+
+- **GIVEN** the user runs `docs-mcp-server config --yaml`
+- **WHEN** the config is displayed
+- **THEN** the output SHALL be YAML-formatted
+
+#### Scenario: Format Flag on Get Command
+
+- **GIVEN** the user runs `docs-mcp-server config get scraper --yaml`
+- **WHEN** the value is displayed
+- **THEN** the output SHALL be YAML-formatted
+
+### Requirement: Skip-Known-Trackers Flag Under Scraper
+
+The system SHALL expose a `scraper.skipKnownTrackers` boolean in the typed configuration schema, defaulting to `true`, that governs whether the built-in sub-resource blocklist is consulted during Playwright-driven page rendering. The flag SHALL participate in the standard configuration override chain (config file < environment variables < CLI arguments) and SHALL be persisted through the normal `loadConfig` auto-save path so that existing on-disk config files gain the new key with its default value on first start after upgrade.
+
+#### Scenario: Default value when not configured
+- **GIVEN** no configuration file or environment override sets `scraper.skipKnownTrackers`
+- **WHEN** the application loads its configuration
+- **THEN** the resolved value of `scraper.skipKnownTrackers` is `true`
+
+#### Scenario: Configuration file override
+- **GIVEN** a configuration file with `scraper.skipKnownTrackers` set to `false`
+- **WHEN** the application loads its configuration
+- **THEN** the resolved value of `scraper.skipKnownTrackers` is `false`
+
+#### Scenario: Environment variable override
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS` is set to `false`
+- **WHEN** the application loads its configuration
+- **THEN** the resolved value of `scraper.skipKnownTrackers` is `false`
+- **AND** the environment value takes precedence over a conflicting file value
+
+#### Scenario: Upgrade path supplies the new key
+- **GIVEN** an existing on-disk configuration file written by a prior release that lacks `scraper.skipKnownTrackers`
+- **WHEN** the application starts and `loadConfig` runs
+- **THEN** the resolved configuration contains `scraper.skipKnownTrackers: true`
+- **AND** previously set keys in that file retain their values
+
+### Requirement: Scrape Failure Rate Threshold Configuration
+The configuration system SHALL expose `scraper.abortOnFailureRate` as the child-page failure-rate threshold used to abort unhealthy scrape targets. The value SHALL be a floating-point fraction in the inclusive range `[0.0, 1.0]`, where `0.0` means any completed child-page failure above the minimum sample triggers an abort and `1.0` means the scraper never aborts based on failure rate alone.
+
+#### Scenario: Config file sets scrape failure rate threshold
+- **WHEN** the configuration file sets `scraper.abortOnFailureRate` to a numeric value in the inclusive range `[0.0, 1.0]`
+- **THEN** the scraper SHALL interpret that value as the maximum allowed fraction of terminally failed child pages among completed child-page attempts
+
+#### Scenario: Environment variable overrides scrape failure rate threshold
+- **WHEN** the environment variable `DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE` is set
+- **THEN** the environment variable value SHALL override config file and default values for `scraper.abortOnFailureRate`
+
+#### Scenario: Default scrape failure rate threshold is one half
+- **WHEN** no explicit configuration for `scraper.abortOnFailureRate` is provided
+- **THEN** the loaded configuration SHALL set `scraper.abortOnFailureRate` to `0.5`
+
+### Requirement: Updated Default HTTP Retry Configuration
+The configuration system SHALL default `scraper.fetcher.maxRetries` to `3`.
+
+#### Scenario: Default fetch retry count is three
+- **WHEN** no explicit configuration for `scraper.fetcher.maxRetries` is provided
+- **THEN** the loaded configuration SHALL set `scraper.fetcher.maxRetries` to `3`
+
+#### Scenario: Explicit fetch retry override still wins
+- **WHEN** the user provides an explicit value for `scraper.fetcher.maxRetries`
+- **THEN** the loaded configuration SHALL use the explicit value instead of the default
+
+### Requirement: Scraper Security Configuration
+The system SHALL expose configuration for outbound network and local file access controls under `scraper.security`.
+
+#### Scenario: Network mode defaults to open
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.mode` SHALL default to `open`
+
+#### Scenario: Allowlist mode is selectable via configuration
+- **GIVEN** `scraper.security.network.mode` is `allowlist`
+- **WHEN** the configuration is loaded
+- **THEN** the outbound network policy SHALL permit only targets that match `allowedHosts` or `allowedCidrs`
+- **AND** `allowPrivateNetworks` SHALL not affect access decisions in allowlist mode
+
+#### Scenario: Allowed host patterns accept globs and regex
+- **GIVEN** `scraper.security.network.allowedHosts` contains `docs.internal.example`, `*.corp.local`, and `/^docs\d+\.example\.com$/`
+- **WHEN** the configuration is loaded
+- **THEN** entries SHALL be parsed as host patterns matching the bare hostname
+- **AND** literal entries SHALL match exactly, glob entries SHALL match via minimatch, and `/.../` entries SHALL match via JavaScript regular expressions
+
+#### Scenario: Private network access defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** private network access for scraper-driven HTTP(S) fetches SHALL default to disabled
+
+#### Scenario: Host allowlist can permit a specific internal hostname
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedHosts` contains `docs.internal.example`
+- **WHEN** the configuration is loaded
+- **THEN** requests explicitly targeting `docs.internal.example` SHALL be eligible for access despite the default private-network restriction
+- **AND** direct IP requests SHALL still require `allowedCidrs` or `allowPrivateNetworks`
+
+#### Scenario: CIDR allowlist can permit a specific internal subnet
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedCidrs` contains `10.42.0.0/16`
+- **WHEN** the configuration is loaded
+- **THEN** requests whose resolved address falls within `10.42.0.0/16` SHALL be eligible for access despite the default private-network restriction
+
+#### Scenario: Empty network allowlists do not permit private targets
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedHosts` is empty
+- **AND** `scraper.security.network.allowedCidrs` is empty
+- **WHEN** the configuration is loaded
+- **THEN** no private or special-use network targets SHALL be permitted by configuration
+
+#### Scenario: Private network override enables broad internal access
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `true`
+- **WHEN** the configuration is loaded
+- **THEN** private, loopback, link-local, and other special-use network targets SHALL be eligible for access
+
+#### Scenario: Invalid TLS verification defaults to disabled override
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.allowInvalidTls` SHALL default to `false`
+
+#### Scenario: Broad invalid TLS override enables all HTTPS targets
+- **GIVEN** `scraper.security.network.allowInvalidTls` is `true`
+- **WHEN** the configuration is loaded
+- **THEN** HTTPS requests SHALL be eligible to bypass invalid certificate errors
+
+#### Scenario: File access mode defaults to allowed roots
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** local file access mode SHALL default to `allowedRoots`
+
+#### Scenario: Documents root is configured by default
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** the allowed file roots SHALL include `$DOCUMENTS`
+
+#### Scenario: Internal archive handoff does not require temp root configuration
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the system processes a supported web archive root via an internal temporary file
+- **THEN** the default file access configuration SHALL not require the OS temporary directory to be added to `allowedRoots`
+
+#### Scenario: Empty file root allowlist denies user-requested file access
+- **GIVEN** `scraper.security.fileAccess.mode` is `allowedRoots`
+- **AND** `scraper.security.fileAccess.allowedRoots` is empty
+- **WHEN** the configuration is loaded
+- **THEN** user-requested `file://` access SHALL not be permitted by configuration
+
+#### Scenario: Unresolvable documents token grants no access
+- **GIVEN** `scraper.security.fileAccess.allowedRoots` contains `$DOCUMENTS`
+- **AND** the runtime cannot resolve a documents directory for the current platform or account
+- **WHEN** the configuration is loaded and file access policy is evaluated
+- **THEN** `$DOCUMENTS` SHALL not expand to an implicit fallback path
+- **AND** no access SHALL be granted from that token alone
+
+#### Scenario: Supported allowed-root tokens
+- **GIVEN** `scraper.security.fileAccess.allowedRoots` accepts tokens that expand at runtime
+- **WHEN** the configuration is loaded
+- **THEN** the supported tokens SHALL include `$HOME`, `$DOCUMENTS`, `$DOWNLOADS`, `$DESKTOP`, and `$CWD`
+- **AND** any other value SHALL be treated as a literal filesystem path
+- **AND** a token that cannot be resolved at runtime SHALL grant no access by itself
+
+#### Scenario: Hidden path access defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** hidden file and directory access SHALL default to disabled
+
+#### Scenario: Symlink following defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** symlink following for local file access SHALL default to disabled
+
+### Requirement: Vector Dimension Configuration
+The system SHALL support a configurable vector dimension via the `embeddings.vectorDimension` configuration key. This value determines the size of the `documents_vec` virtual table column and the target dimension for vector padding/truncation.
+
+The configuration key SHALL follow the standard configuration precedence:
+1. Built-in default: `1536` (lowest priority)
+2. Configuration file (`config.yaml`, key `embeddings.vectorDimension`)
+3. Environment variable (`DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION`)
+4. CLI arguments (highest priority)
+
+The Zod schema SHALL validate that `vectorDimension` is a positive integer (`>= 1`). Values of 0, negative numbers, or non-integers SHALL be rejected at configuration load time.
+
+#### Scenario: Default vector dimension
+- **WHEN** no `vectorDimension` override is specified
+- **THEN** the system SHALL use 1536 as the vector dimension
+
+#### Scenario: Custom vector dimension via environment variable
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `768`
+- **THEN** the system SHALL use 768 as the vector dimension
+- **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
+
+#### Scenario: Invalid vector dimension rejected
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `0`
+- **THEN** the system SHALL reject the configuration with an error message
+- **AND** startup SHALL fail
+
+#### Scenario: Non-integer vector dimension rejected
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `768.5`
+- **THEN** the system SHALL reject the configuration with an error message
+
+
+--- ARQUIVOS DO PR (14)
+modified  +1     -1     docs/guides/embedding-models.md
+added     +2     -0     openspec/changes/handle-variable-embedding-dimensions/.openspec.yaml
+added     +66    -0     openspec/changes/handle-variable-embedding-dimensions/design.md
+added     +29    -0     openspec/changes/handle-variable-embedding-dimensions/proposal.md
+added     +79    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-generation/spec.md
+added     +75    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-model-change-safety/spec.md
+added     +96    -0     openspec/changes/handle-variable-embedding-dimensions/specs/embedding-resolution/spec.md
+added     +35    -0     openspec/changes/handle-variable-embedding-dimensions/tasks.md
+modified  +171   -7     src/store/DocumentStore.test.ts   <== código ligado à spec
+modified  +216   -94    src/store/DocumentStore.ts
+modified  +34    -0     src/store/embeddings/EmbeddingConfig.test.ts
+modified  +52    -2     src/store/embeddings/EmbeddingConfig.ts
+modified  +80    -57    src/utils/config.test.ts
+modified  +189   -15    src/utils/config.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/store/DocumentStore.test.ts
+@@ -1,12 +1,18 @@
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ import type { ScrapeResult } from "../scraper/types";
+ import type { Chunk } from "../splitter/types";
+-import { loadConfig } from "../utils/config";
++import { loadConfig, markVectorDimensionSource } from "../utils/config";
+ import { DocumentStore } from "./DocumentStore";
+ import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
+-import { EmbeddingModelChangedError } from "./errors";
++import { DimensionError, EmbeddingModelChangedError } from "./errors";
+ import { VersionStatus } from "./types";
+ 
++const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
++const mockEmbeddingCalls = vi.hoisted(() => ({ query: 0, documents: 0 }));
++
+ // Mock only the embedding service to generate deterministic embeddings for testing
+ // This allows us to test ranking logic while using real SQLite database
+ vi.mock("./embeddings/EmbeddingFactory", async () => {
+@@ -18,9 +24,10 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
+     ...actual,
+     createEmbeddingModel: () => ({
+       embedQuery: vi.fn(async (text: string) => {
++        mockEmbeddingCalls.query += 1;
+         // Generate deterministic embeddings based on text content for consistent testing
+         const words = text.toLowerCase().split(/\s+/);
+-        const embedding = new Array(1536).fill(0);
++        const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+ 
+         // Create meaningful semantic relationships for testing
+         words.forEach((word, wordIndex) => {
+@@ -31,7 +38,7 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
+           const baseIndex = (wordHash % 100) * 15; // Distribute across embedding dimensions
+ 
+           for (let i = 0; i < 15; i++) {
+-            const index = (baseIndex + i) % 1536;
++            const index = (baseIndex + i) % mockEmbeddingDimension.value;
+             embedding[index] += 1.0 / (wordIndex + 1); // Earlier words get higher weight
+           }
+         });
+@@ -41,10 +48,11 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
+         return magnitude > 0 ? embedding.map((val) => val / magnitude) : embedding;
+       }),
+       embedDocuments: vi.fn(async (texts: string[]) => {
++        mockEmbeddingCalls.documents += 1;
+         // Generate embeddings for each text using the same logic as embedQuery
+         return texts.map((text) => {
+           const words = text.toLowerCase().split(/\s+/);
+-          const embedding = new Array(1536).fill(0);
++          const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+ 
+           words.forEach((word, wordIndex) => {
+             const wordHash = Array.from(word).reduce(
+@@ -54,7 +62,7 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
+             const baseIndex = (wordHash % 100) * 15;
+ 
+             for (let i = 0; i < 15; i++) {
+-              const index = (baseIndex + i) % 1536;
++              const index = (baseIndex + i) % mockEmbeddingDimension.value;
+               embedding[index] += 1.0 / (wordIndex + 1);
+             }
+           });
+@@ -113,6 +121,7 @@ describe("DocumentStore - With Embeddings", () => {
+   let store: DocumentStore;
+ 
+   beforeEach(async () => {
++    mockEmbeddingDimension.value = 1536;
+     // Create explicit embedding configuration for tests
+     const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
+       "openai:text-embedding-3-small",
+@@ -464,6 +473,7 @@ describe("DocumentStore - With Embeddings", () => {
+     let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+ 
+     beforeEach(() => {
++      mockEmbeddingDimension.value = 1536;
+       // Get reference to the mocked embedDocuments function if embeddings are enabled
+       // @ts-expect-error Accessing private property for testing
+       if (store.embeddings?.embedDocuments) {
+@@ -1616,8 +1626,13 @@ describe("DocumentStore - Common Functionality", () => {
+ describe("DocumentStore - Embedding Model Change Safety", () => {
+   let store: DocumentStore;
+   let originalApiKey: string | undefined;
++  let tempDir: string;
+ 
+   beforeEach(() => {
++    mockEmbeddingDimension.value = 1536;
++    mockEmbeddingCalls.query = 0;
++    mockEmbeddingCalls.documents = 0;
++    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-store-"));
+     // Set dummy API key so areCredentialsAvailable("openai") returns true
+     // and initializeEmbeddings() proceeds (the actual API call is mocked)
+     originalApiKey = process.env.OPENAI_API_KEY;
+@@ -1634,6 +1649,7 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
+     } else {
+       process.env.OPENAI_API_KEY = originalApiKey;
+     }
++    rmSync(tempDir, { recursive: true, force: true });
+   });
+ 
+   /**
+@@ -1643,6 +1659,7 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
+   async function createStore(
+     modelSpec: string,
+     dimension?: number,
++    dbPath = ":memory:",
+   ): Promise<DocumentStore> {
+     const cfg = loadConfig();
+     if (modelSpec) {
+@@ -1653,8 +1670,9 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
+     }
+     if (dimension !== undefined) {
+       cfg.embeddings.vectorDimension = dimension;
++      markVectorDimensionSource(cfg, true);
+     }
+-    const s = new DocumentStore(":memory:", cfg);
++    const s = new DocumentStore(dbPath, cfg);
+     await s.initialize();
+     return s;
+   }
+@@ -1728,6 +1746,15 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
+       expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+     });
+ 
++    it("should not throw after restarting with an auto-detected unknown model dimension", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model");
++
++      // Metadata was persisted with the resolved dimension, not the default config value.
++      expect(store.getEmbeddingMetadata().dimension).toBe("1024");
++      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
++    });
++
+     // 9.7 Test checkEmbeddingModelChange does not throw on first run (no stored metadata)
+     it("should not throw on first run when no metadata exists", async () => {
+       // Create store but clear metadata to simulate first run
+@@ -1857,6 +1884,143 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
+       expect(count.cnt).toBe(0);
+     });
+ 
++    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model");
++
++      // @ts-expect-error Accessing private property for testing
++      const ddl = store.db
++        .prepare(
++          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
++        )
++        .get() as { sql: string };
++      expect(ddl.sql).toContain("1024");
++
++      const metadata = store.getEmbeddingMetadata();
++      expect(metadata.model).toBe("openai:custom-1024-model");
++      expect(metadata.dimension).toBe("1024");
++    });
++
++    it("should reuse stored dimensions for unknown models without another startup probe", async () => {
++      const dbPath = join(tempDir, "unknown-locked.sqlite");
++      mockEmbeddingDimension.value = 1024;
++      const firstStore = await createStore(
++        "openai:custom-locked-model",
++        undefined,
++        dbPath,
++      );
++      expect(mockEmbeddingCalls.query).toBe(1);
++      expect(firstStore.getEmbeddingMetadata().dimension).toBe("1024");
++      await firstStore.shutdown();
++
++      mockEmbeddingCalls.query = 0;
++      mockEmbeddingDimension.value = 2048;
++      store = await createStore("openai:custom-locked-model", undefined, dbPath);
++
++      expect(mockEmbeddingCalls.query).toBe(0);
++      const metadata = store.getEmbeddingMetadata();
++      expect(metadata.model).toBe("openai:custom-locked-model");
++      expect(metadata.dimension).toBe("1024");
++
++      // @ts-expect-error Accessing private property for testing
++      const ddl = store.db
++        .prepare(
++          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
++        )
++        .get() as { sql: string };
++      expect(ddl.sql).toContain("1024");
++    });
++
++    it("should auto-detect dimensions for variable-dimension known models", async () => {
++      mockEmbeddingDimension.value = 6144;
++      store = await createStore("openai:NovaSearch/stella_en_400M_v5");
++
++      // @ts-expect-error Accessing private property for testing
++      const ddl = store.db
++        .prepare(
++          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
++        )
++        .get() as { sql: string };
++      expect(ddl.sql).toContain("6144");
++
++      const metadata = store.getEmbeddingMetadata();
++      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
++      expect(metadata.dimension).toBe("6144");
++    });
++
++    it("should reuse stored dimensions for variable-dimension known models without another startup probe", async () => {
++      const dbPath = join(tempDir, "variable-locked.sqlite");
++      mockEmbeddingDimension.value = 6144;
++      const firstStore = await createStore(
++        "openai:NovaSearch/stella_en_400M_v5",
++        undefined,
++        dbPath,
++      );
++      expect(mockEmbeddingCalls.query).toBe(1);
++      expect(firstStore.getEmbeddingMetadata().dimension).toBe("6144");
++      await firstStore.shutdown();
++
++      mockEmbeddingCalls.query = 0;
++      mockEmbeddingDimension.value = 8192;
++      store = await createStore("openai:NovaSearch/stella_en_400M_v5", undefined, dbPath);
++
++      expect(mockEmbeddingCalls.query).toBe(0);
++      const metadata = store.getEmbeddingMetadata();
++      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
++      expect(metadata.dimension).toBe("6144");
++
++      // @ts-expect-error Accessing private property for testing
++      const ddl = store.db
++        .prepare(
++          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
++        )
++        .get() as { sql: string };
++      expect(ddl.sql).toContain("6144");
++    });
++
++    it("should respect explicit vector dimension overrides for unknown models", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model", 1536);
++
++      // @ts-expect-error Accessing private property for testing
++      const ddl = store.db
++        .prepare(
++          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
++        )
++        .get() as { sql: string };
++      expect(ddl.sql).toContain("1536");
++
++      const metadata = store.getEmbeddingMetadata();
++      expect(metadata.dimension).toBe("1536");
++    });
++
++    it("should reject explicit dimensions smaller than non-MRL model output", async () => {
++      mockEmbeddingDimension.value = 1024;
++
++      await expect(createStore("openai:custom-1024-model", 256)).rejects.toThrow(
++        DimensionError,
++      );
++      store = await createStore("");
++    });
++
++    it("should reject invalid dimensions from provider probing", async () => {
++      mockEmbeddingDimension.value = 0;
++
++      await expect(createStore("openai:empty-vector-model")).rejects.toThrow(
++        "Invalid detected embedding dimension from embedding provider probe: 0. Must be a positive integer.",
++      );
++      store = await createStore("");
++    });
++
++    it("should reject invalid dimensions from known model lookup", async () => {
++      EmbeddingConfig.setKnownModelDimensions("invalid-known-dimension-model", 0);
++
++      await expect(createStore("openai:invalid-known-dimension-model")).rejects.toThrow(
++        "Invalid detected embedding dimension from known model dimension lookup: 0. Must be a positive integer.",
++      );
++      store = await createStore("");
++    });
++
+     it("should be a no-op when dimension matches existing table", async () => {
+       store = await createStore("openai:text-embedding-3-small");
+ 
+
+===== P274 | repo ChenChenyaqi/learn-anything | PR #98: refactor: decompose site components, composables, and utils | capacidade: site-build
+--- SPEC VIVA
+## ADDED Requirements
+
+> **Note:** Updated to reflect actual implementation — site is now pre-built via `vite build` into `site-dist/` and shipped in the npm package. No `files.ts` embedding required.
+
+### Requirement: Build script builds site with Vite and copies to site-dist
+
+The system SHALL provide a build script (`scripts/bundle-site.mjs`) that: (1) runs `vite build` in `packages/cli/site/` to produce `site/dist/`, (2) copies `site/dist/` contents + `site/serve.mjs` to `packages/cli/site-dist/`, and (3) writes `.gitignore` to `site-dist/`.
+
+#### Scenario: Build script produces site-dist
+
+- **WHEN** the build script runs
+- **THEN** `site-dist/` contains all built assets (`index.html`, `assets/*.js`, `assets/*.css`), `serve.mjs`, and `.gitignore`
+
+#### Scenario: Build script clears previous output
+
+- **WHEN** the build script runs and `site-dist/` already exists
+- **THEN** the previous `site-dist/` is removed before copying new files
+
+#### Scenario: serve.mjs consistency check
+
+- **WHEN** the build script copies `serve.mjs` from `site/` to `site-dist/`
+- **THEN** the script verifies both copies have identical content and exits with error if they diverge
+
+### Requirement: site-dist is gitignored and generated at publish time
+
+The system SHALL NOT commit `site-dist/` to version control. It SHALL be generated by the `prepublishOnly` script and included in the npm package via the `files` field in `package.json`.
+
+#### Scenario: site-dist excluded from git
+
+- **WHEN** `git status` is checked in the repo
+- **THEN** `site-dist/` is not tracked and listed in `.gitignore`
+
+#### Scenario: site-dist included in npm package
+
+- **WHEN** `npm pack` is run
+- **THEN** the tarball includes `site-dist/index.html`, `site-dist/serve.mjs`, and all `site-dist/assets/` files
+
+### Requirement: Build script is integrated into the CLI build pipeline
+
+The system SHALL run the bundle script as the first step of `pnpm build` (before `tsc`) in the CLI package.
+
+#### Scenario: pnpm build runs site bundling
+
+- **WHEN** `pnpm build` or `pnpm -F learn-anything-cli build` is executed
+- **THEN** the site bundling script runs before TypeScript compilation
+
+### Requirement: Build script uses Node.js built-in APIs only
+
+The system SHALL implement the build script using Node.js built-in modules (`fs`, `path`, `child_process`). The `vite` CLI is invoked as a subprocess; no additional npm dependencies are required beyond the project's existing devDependencies.
+
+--- ARQUIVOS DO PR (86)
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/design.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-api/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-card-practice/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-results-summary/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/specs/quiz-sidebar-tab/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-06-26-quiz-card-practice-ui/tasks.md
+added     +43    -0     openspec/specs/quiz-api/spec.md
+added     +117   -0     openspec/specs/quiz-card-practice/spec.md
+added     +72    -0     openspec/specs/quiz-results-summary/spec.md
+added     +63    -0     openspec/specs/quiz-sidebar-tab/spec.md
+modified  +3     -1     packages/cli/site/package.json
+modified  +37    -205   packages/cli/site/src/App.vue
+removed   +0     -171   packages/cli/site/src/components/AppSidebar.vue
+modified  +1     -1     packages/cli/site/src/components/LoadingOverlay.vue
+renamed   +3     -2     packages/cli/site/src/components/content/ContentViewer.vue
+renamed   +2     -2     packages/cli/site/src/components/content/TableOfContents.vue
+renamed   +3     -11    packages/cli/site/src/components/content/TocLayout.vue
+renamed   +1     -1     packages/cli/site/src/components/content/useToc.ts
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizCard.vue
+added     +27    -0     packages/cli/site/src/components/quiz/QuizCloseButton.vue
+added     +42    -0     packages/cli/site/src/components/quiz/QuizDialogShell.vue
+added     +56    -0     packages/cli/site/src/components/quiz/QuizFooter.vue
+added     +44    -0     packages/cli/site/src/components/quiz/QuizLoadingView.vue
+modified  +142   -520   packages/cli/site/src/components/quiz/QuizModal.vue
+added     +118   -0     packages/cli/site/src/components/quiz/QuizPlayView.vue
+modified  +2     -2     packages/cli/site/src/components/quiz/QuizSummary.vue
+added     +68    -0     packages/cli/site/src/components/quiz/grading.ts
+added     +39    -0     packages/cli/site/src/components/quiz/header/QuizHeader.vue
+added     +50    -0     packages/cli/site/src/components/quiz/header/QuizHelpPopover.vue
+added     +54    -0     packages/cli/site/src/components/quiz/quizApi.ts
+renamed   +10    -46    packages/cli/site/src/components/quiz/results/QuizResults.vue
+added     +57    -0     packages/cli/site/src/components/quiz/results/QuizResultsFooter.vue
+added     +63    -0     packages/cli/site/src/components/quiz/types.ts
+added     +91    -0     packages/cli/site/src/components/quiz/useQuizKeyboard.ts
+added     +81    -0     packages/cli/site/src/components/quiz/useQuizProgress.ts
+added     +116   -0     packages/cli/site/src/components/quiz/useQuizQueue.ts
+added     +95    -0     packages/cli/site/src/components/quiz/useQuizSession.ts
+renamed   +11    -32    packages/cli/site/src/components/search/SearchModal.vue
+renamed   +1     -1     packages/cli/site/src/components/search/useSearch.ts
+renamed   +0     -0     packages/cli/site/src/components/search/useSearchModal.ts
+added     +104   -0     packages/cli/site/src/components/sidebar/AppSidebar.vue
+renamed   +3     -2     packages/cli/site/src/components/sidebar/SearchTrigger.vue
+modified  +2     -2     packages/cli/site/src/components/sidebar/SidebarDashboard.vue
+added     +40    -0     packages/cli/site/src/components/sidebar/SidebarTreeNode.vue
+renamed   +1     -1     packages/cli/site/src/components/sidebar/footer/LanguageSwitch.vue
+renamed   +2     -2     packages/cli/site/src/components/sidebar/footer/SidebarFooter.vue
+renamed   +35    -58    packages/cli/site/src/components/sidebar/tabs/SidebarExerciseTree.vue
+renamed   +55    -61    packages/cli/site/src/components/sidebar/tabs/SidebarQuizTree.vue
+added     +121   -0     packages/cli/site/src/components/sidebar/tabs/SidebarTabs.vue
+renamed   +34    -57    packages/cli/site/src/components/sidebar/tabs/SidebarTopicTree.vue
+added     +37    -0     packages/cli/site/src/components/sidebar/tabs/useAutoExpand.ts
+renamed   +0     -0     packages/cli/site/src/components/sidebar/tabs/useTreeExpansion.ts
+added     +47    -0     packages/cli/site/src/composables/fileContentCache.ts
+added     +78    -0     packages/cli/site/src/composables/locales/en.ts
+added     +79    -0     packages/cli/site/src/composables/locales/zh-CN.ts
+added     +65    -0     packages/cli/site/src/composables/topicDataTypes.ts
+added     +19    -0     packages/cli/site/src/composables/useDarkMode.ts
+added     +140   -0     packages/cli/site/src/composables/useFileNavigation.ts
+modified  +5     -231   packages/cli/site/src/composables/useI18n.ts   <== código ligado à spec
+added     +74    -0     packages/cli/site/src/composables/useModalA11y.ts
+added     +17    -0     packages/cli/site/src/composables/usePlatform.ts
+removed   +0     -398   packages/cli/site/src/composables/useQuiz.ts
+added     +32    -0     packages/cli/site/src/composables/useQuizLauncher.ts
+added     +48    -0     packages/cli/site/src/composables/useSSE.ts
+added     +76    -0     packages/cli/site/src/composables/useSearchLauncher.ts
+modified  +26    -129   packages/cli/site/src/composables/useTopicData.ts   <== código ligado à spec
+modified  +2     -2     packages/cli/site/src/router/index.ts
+added     +80    -0     packages/cli/site/src/utils/highlight.ts
+modified  +5     -81    packages/cli/site/src/utils/markdown.ts
+added     +17    -0     packages/cli/site/src/utils/slug.ts
+renamed   +2     -2     packages/cli/site/src/views/Dashboard.vue
+renamed   +6     -6     packages/cli/site/src/views/TopicPage.vue
+renamed   +1     -1     packages/cli/site/test/markdown.test.ts
+added     +214   -0     packages/cli/site/test/useModalA11y.test.ts
+renamed   +4     -10    packages/cli/site/test/useQuiz.test.ts
+added     +164   -0     packages/cli/site/test/useQuizKeyboard.test.ts
+added     +127   -0     packages/cli/site/test/useQuizProgress.test.ts
+renamed   +5     -5     packages/cli/site/test/useSearch.test.ts
+renamed   +3     -3     packages/cli/site/test/useSearchModal.test.ts
+renamed   +2     -2     packages/cli/site/test/useToc.test.ts
+renamed   +3     -3     packages/cli/site/test/useTopicData.test.ts
+modified  +2     -2     packages/cli/site/tsconfig.json
+modified  +5     -0     packages/cli/site/vite.config.ts   <== código ligado à spec
+added     +15    -0     packages/cli/site/vitest.config.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/cli/site/src/composables/useI18n.ts
+@@ -1,244 +1,18 @@
+ import { ref } from 'vue';
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++
++export type { I18nKey } from './locales/en';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Types                                                             */
+ /* ------------------------------------------------------------------ */
+ 
+ export type Locale = 'en' | 'zh-CN';
+ 
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+-  | 'quiz.backToList'
+-  | 'quiz.questionProgress'
+-  | 'quiz.true'
+-  | 'quiz.false'
+-  | 'quiz.typeAnswer'
+-  | 'quiz.fixError'
+-  | 'quiz.typeMultipleChoice'
+-  | 'quiz.typeTrueFalse'
+-  | 'quiz.typeFillBlank'
+-  | 'quiz.typeErrorCorrection'
+-  | 'quiz.yourAnswer'
+-  | 'quiz.correctAnswer'
+-  | 'quiz.manualEvaluation'
+-  | 'quiz.helpTitle'
+-  | 'quiz.hintChoice'
+-  | 'quiz.hintTrueFalse'
+-  | 'quiz.hintNav'
+-  | 'quiz.hintSubmit'
+-  | 'quiz.allQuizzes'
+-  | 'quiz.groupProgress'
+-  | 'quiz.sequential'
+-  | 'quiz.random'
+-  | 'quiz.retryGroup'
+-  | 'quiz.nextGroup'
+-  | 'quiz.viewSummary'
+-  | 'quiz.allComplete'
+-  | 'quiz.totalScore'
+-  | 'quiz.loadError'
+-  | 'search.placeholder'
+-  | 'search.noResults'
+-  | 'search.open'
+-  | 'search.shortcutMac'
+-  | 'search.shortcutNonMac'
+-  | 'lang.switch'
+-  | 'theme.switch'
+-  | 'loading.note'
+-  | 'toc.title';
+-
+ type Messages = Record<I18nKey, string>;
+ 
+-/* ------------------------------------------------------------------ */
+-/*  Message tables                                                    */
+-/* ------------------------------------------------------------------ */
+-
+-const messages: Record<Locale, Messages> = {
+-  en: {
+-    'dashboard.title': 'Learning Dashboard',
+-    'dashboard.noTopics': 'No topics yet',
+-    'dashboard.startLearning': 'Run `learn-anything init` to start your first topic',
+-    'dashboard.topicCount': '{count} {count, plural, one {topic} other {topics}}',
+-    'topic.progress': 'Progress',
+-    'topic.domains': 'Domains',
+-    'topic.concepts': 'Concepts',
+-    'topic.mastered': 'Mastered',
+-    'topic.notFound': 'Topic not found',
+-    'domain.notes': 'Notes',
+-    'domain.exercises': 'Exercises',
+-    'domain.noNotes': 'No session notes yet',
+-    'domain.noExercises': 'No exercises yet',
+-    'domain.backToMap': '← Back to Knowledge Map',
+-    'domain.selectFile': 'Select a file to view its content',
+-    'status.mastered': 'Mastered',
+-    'status.inProgress': 'In Progress',
+-    'status.needsPractice': 'Needs Practice',
+-    'status.unexplored': 'Unexplored',
+-    'lang.switch': '中文',
+-    'theme.switch': 'Toggle theme',
+-    'sidebar.topics': 'Topics',
+-    'sidebar.exercises': 'Exercises',
+-    'sidebar.quizzes': 'Quizzes',
+-    'sidebar.noNotes': 'No sessions',
+-    'sidebar.noExercises': 'No exercises',
+-    'sidebar.orphanTip': 'This folder is not part of the knowledge map',
+-    'quiz.empty': 'No quizzes yet',
+-    'quiz.start': 'Start quiz',
+-    'quiz.previous': 'Previous',
+-    'quiz.next': 'Next',
+-    'quiz.submit': 'Submit',
+-    'quiz.retry': 'Retry Quiz',
+-    'quiz.complete': 'Quiz Complete',
+-    'quiz.score': 'Score',
+-    'quiz.correct': 'Correct',
+-    'quiz.incorrect': 'Incorrect',
+-    'quiz.referenceAnswer': 'Reference Answer',
+-    'quiz.backToList': 'Back to list',
+-    'quiz.questionProgress': 'Question {current} / {total}',
+-    'quiz.true': 'True',
+-    'quiz.false': 'False',
+-    'quiz.typeAnswer': 'Type your answer…',
+-    'quiz.fixError': 'Identify and fix the error…',
+-    'quiz.typeMultipleChoice': 'Multiple Choice',
+-    'quiz.typeTrueFalse': 'True / False',
+-    'quiz.typeFillBlank': 'Fill in the Blank',
+-    'quiz.typeErrorCorrection': 'Error Correction',
+-    'quiz.yourAnswer': 'Your answer',
+-    'quiz.correctAnswer': 'Correct answer',
+-    'quiz.manualEvaluation': 'Requires manual evaluation',
+-    'quiz.helpTitle': 'Keyboard Shortcuts',
+-    'quiz.hintChoice': 'Press A / B / C / D to select an option',
+-    'quiz.hintTrueFalse': 'Press 1 / 2 for True / False',
+-    'quiz.hintNav': '← / → to switch questions',
+-    'quiz.hintSubmit': 'Press {key} + Enter to submit',
+-    'quiz.allQuizzes': 'All Quizzes',
+-    'quiz.groupProgress': 'Group {current} / {total}',
+-    'quiz.sequential': 'Practice in order',
+-    'quiz.random': 'Practice shuffled',
+-    'quiz.retryGroup': 'Retry this group',
+-    'quiz.nextGroup': 'Next group',
+-    'quiz.viewSummary': 'View all results',
+-    'quiz.allComplete': 'All Complete',
+-    'quiz.totalScore': 'Total Score',
+-    'quiz.loadError': 'Failed to load quiz. Please try again.',
+-    'search.placeholder': 'Search notes…',
+-    'search.noResults': 'No matching notes',
+-    'search.open': 'Open search',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': 'Opening note…',
+-    'toc.title': 'On this page',
+-  },
+-  'zh-CN': {
+-    'dashboard.title': '学习仪表盘',
+-    'dashboard.noTopics': '暂无学习主题',
+-    'dashboard.startLearning': '运行 `learn-anything init` 开始你的第一个学习主题',
+-    'dashboard.topicCount': '{count} 个主题',
+-    'topic.progress': '学习进度',
+-    'topic.domains': '知识域',
+-    'topic.concepts': '概念',
+-    'topic.mastered': '已掌握',
+-    'topic.notFound': '未找到主题',
+-    'domain.notes': '笔记',
+-    'domain.exercises': '练习',
+-    'domain.noNotes': '暂无笔记',
+-    'domain.noExercises': '暂无练习',
+-    'domain.backToMap': '← 返回知识地图',
+-    'domain.selectFile': '选择文件查看内容',
+-    'status.mastered': '已掌握',
+-    'status.inProgress': '学习中',
+-    'status.needsPractice': '需练习',
+-    'status.unexplored': '未探索',
+-    'lang.switch': 'English',
+-    'theme.switch': '切换主题',
+-    'sidebar.topics': '笔记',
+-    'sidebar.exercises': '练习',
+-    'sidebar.quizzes': '测验',
+-    'sidebar.noNotes': '没有笔记',
+-    'sidebar.noExercises': '没有练习',
+-    'sidebar.orphanTip': '此目录不在知识地图中',
+-    'quiz.empty': '暂无测验',
+-    'quiz.start': '开始测验',
+-    'quiz.previous': '上一题',
+-    'quiz.next': '下一题',
+-    'quiz.submit': '提交',
+-    'quiz.retry': '重新测验',
+-    'quiz.complete': '测验完成',
+-    'quiz.score': '得分',
+-    'quiz.correct': '正确',
+-    'quiz.incorrect': '错误',
+-    'quiz.referenceAnswer': '参考答案',
+-    'quiz.backToList': '返回列表',
+-    'quiz.questionProgress': '第 {current} / {total} 题',
+-    'quiz.true': '正确',
+-    'quiz.false': '错误',
+-    'quiz.typeAnswer': '输入你的答案…',
+-    'quiz.fixError': '找出并修正错误…',
+-    'quiz.typeMultipleChoice': '选择题',
+-    'quiz.typeTrueFalse': '判断题',
+-    'quiz.typeFillBlank': '填空题',
+-    'quiz.typeErrorCorrection': '纠错题',
+-    'quiz.yourAnswer': '你的答案',
+-    'quiz.correctAnswer': '正确答案',
+-    'quiz.manualEvaluation': '需要人工评估',
+-    'quiz.helpTitle': '键盘快捷键',
+-    'quiz.hintChoice': '按 A / B / C / D 选择选项',
+-    'quiz.hintTrueFalse': '按 1 / 2 选择对错',
+-    'quiz.hintNav': '← / → 切换题目',
+-    'quiz.hintSubmit': '按 {key} + Enter 提交',
+-    'quiz.allQuizzes': '全部测验',
+-    'quiz.groupProgress': '第 {current} / {total} 组',
+-    'quiz.sequential': '顺序练习',
+-    'quiz.random': '随机练习',
+-    'quiz.retryGroup': '重做本组',
+-    'quiz.nextGroup': '下一组',
+-    'quiz.viewSummary': '查看总成绩',
+-    'quiz.allComplete': '全部完成',
+-    'quiz.totalScore': '总得分',
+-    'quiz.loadError': '加载测验失败，请重试。',
+-    'search.placeholder': '搜索笔记…',
+-    'search.noResults': '没有匹配的笔记',
+-    'search.open': '打开搜索',
+-    'search.shortcutMac': '⌘K',
+-    'search.shortcutNonMac': 'Ctrl K',
+-    'loading.note': '正在打开笔记',
+-    'toc.title': '本页内容',
+-  },
+-};
++const messages: Record<Locale, Messages> = { en, 'zh-CN': zhCN };
+ 
+ /* ------------------------------------------------------------------ */
+ /*  Shared state (singleton across components)                        */
+
+### packages/cli/site/src/composables/useTopicData.ts
+@@ -10,74 +10,33 @@
+ /* ================================================================== */
+ 
+ import { ref } from 'vue';
++import type {
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++} from './topicDataTypes';
++import { createSSEListener } from './useSSE';
++import { clearFileContentCache, setFileContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+-/*  Types                                                             */
++/*  Types (re-exported for consumers)                                 */
+ /* ------------------------------------------------------------------ */
+ 
+-export type ConceptStatus = 'mastered' | 'in_progress' | 'needs_practice' | 'unexplored';
+-
+-export interface Concept {
+-  name: string;
+-  slug: string;
+-  status: ConceptStatus;
+-  confidence: number;
+-  practice_count: number;
+-  explain_count: number;
+-  last_explained: string | null;
+-  last_practiced: string | null;
+-  details: string[];
+-}
+-
+-export interface Domain {
+-  name: string;
+-  slug: string;
+-  concepts: Concept[];
+-}
+-
+-export interface StateV1 {
+-  version: 1;
+-  topic: string;
+-  slug: string;
+-  created: string;
+-  domains: Domain[];
+-}
+-
+-export interface TopicSummary {
+-  slug: string;
+-  name: string;
+-  domainCount: number;
+-  totalConcepts: number;
+-  masteredCount: number;
+-  percentage: number;
+-}
++export type {
++  ConceptStatus,
++  Concept,
++  Domain,
++  StateV1,
++  TopicSummary,
++  SessionFile,
++  ExerciseFile,
++  ExerciseGroup,
++  SelectedFilePayload,
++} from './topicDataTypes';
+ 
+-export interface SessionFile {
+-  filename: string;
+-  path: string;
+-}
+-
+-export interface ExerciseFile {
+-  name: string;
+-  path: string;
+-}
+-
+-export interface ExerciseGroup {
+-  conceptSlug: string;
+-  conceptName: string;
+-  files: ExerciseFile[];
+-}
+-
+-export interface SelectedFilePayload {
+-  path: string;
+-  type: 'markdown' | 'code';
+-  sourceTab?: 'topics' | 'exercises' | 'quizzes';
+-  /**
+-   * Filled in asynchronously after the file content loads.
+-   * The selection itself (path/type) is available synchronously.
+-   */
+-  content?: string;
+-}
++export { loadFileContent, loadSessionContent, loadExerciseContent } from './fileContentCache';
+ 
+ /* ------------------------------------------------------------------ */
+ /*  In-memory indexes (populated by initTopicData)                     */
+@@ -93,7 +52,6 @@ const sessionsBySlug = new Map<string, Map<string, SessionFile[]>>();
+ const exerciseGroupsBySlug = new Map<string, ExerciseGroup[]>();
+ const orphanSessionsBySlug = new Map<string, SessionFile[]>();
+ const orphanExercisesBySlug = new Map<string, ExerciseFile[]>();
+-const fileContents = new Map<string, string>();
+ 
+ let topicSummaryCache: TopicSummary[] | null = null;
+ 
+@@ -103,8 +61,6 @@ export function getDataVersion(): number {
+   return dataVersion.value;
+ }
+ 
+-const FILE_CACHE_MAX = 200;
+-
+ /* ------------------------------------------------------------------ */
+ /*  Helpers                                                            */
+ /* ------------------------------------------------------------------ */
+@@ -119,7 +75,7 @@ function clearIndexes() {
+   exerciseGroupsBySlug.clear();
+   orphanSessionsBySlug.clear();
+   orphanExercisesBySlug.clear();
+-  fileContents.clear();
++  clearFileContentCache();
+   topicSummaryCache = null;
+ }
+ 
+@@ -153,7 +109,7 @@ export function __injectTestData(data: {
+     orphanSessionsBySlug.set(slug, files);
+   for (const [slug, files] of Object.entries(data.orphanExercises))
+     orphanExercisesBySlug.set(slug, files);
+-  for (const [path, content] of Object.entries(data.fileContents)) fileContents.set(path, content);
++  for (const [path, content] of Object.entries(data.fileContents)) setFileContent(path, content);
+   ready = true;
+ }
+ 
+@@ -247,52 +203,13 @@ export async function initTopicData(): Promise<void> {
+ /* ------------------------------------------------------------------ */
+ 
+ export function listenForChanges(callback: () => void): () => void {
+-  let src: EventSource | null = null;
+-  let stopped = false;
+-  let retryDelay = 1000;
+-  let reconnecting = false;
+-  const MAX_RETRY_DELAY = 30000;
+-
+-  function handleReload() {
++  return createSSEListener('/api/events', () => {
+     clearIndexes();
+     initTopicData().then(() => {
+       dataVersion.value++;
+       callback();
+     });
+-  }
+-
+-  function connect() {
+-    if (stopped) return;
+-    src = new EventSource('/api/events');
+-    src.addEventListener('message', (e) => {
+-      if (e.data === 'reload') {
+-        retryDelay = 1000;
+-        handleReload();
+-      }
+-    });
+-    src.addEventListener('open', () => {
+-      retryDelay = 1000;
+-      if (reconnecting) {
+-        reconnecting = false;
+-        handleReload();
+-      }
+-    });
+-    src.onerror = () => {
+-      reconnecting = true;
+-      src?.close();
+-      src = null;
+-      if (!stopped) {
+-        setTimeout(connect, retryDelay);
+-        retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
+-      }
+-    };
+-  }
+-
+-  connect();
+-  return () => {
+-    stopped = true;
+-    src?.close();
+-  };
++  });
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -331,23 +248,3 @@ export function scanRootSessions(slug: string): SessionFile[] {
+ export function scanRootExercises(slug: string): ExerciseFile[] {
+   return orphanExercisesBySlug.get(slug) ?? [];
+ }
+-
+-export async function loadFileContent(path: string): Promise<string | null> {
+-  if (fileContents.has(path)) return fileContents.get(path)!;
+-  try {
+-    const resp = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+-    if (!resp.ok) return null;
+-    const text = await resp.text();
+-    if (fileContents.size >= FILE_CACHE_MAX) {
+-      const oldest = fileContents.keys().next().value;
+-      if (oldest) fileContents.delete(oldest);
+-    }
+-    fileContents.set(path, text);
+-    return text;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-export const loadSessionContent = loadFileContent;
+-export const loadExerciseContent = loadFileContent;
+
+### packages/cli/site/vite.config.ts
+@@ -75,6 +75,11 @@ export default defineConfig(() => {
+         },
+       },
+     ],
++    resolve: {
++      alias: {
++        '@': resolve(__dirname, 'src'),
++      },
++    },
+     build: {
+       outDir: 'dist',
+       assetsDir: 'assets',
+
+===== P275 | repo rustyrazorblade/easy-db-lab | PR #642: feat(spark): add bulk-writer-s3-iam module with IAM credentials and m… | capacidade: cassandra
+--- SPEC VIVA
+# Cassandra
+
+Manages Apache Cassandra deployment, version selection, configuration, and cluster operations.
+
+## Requirements
+
+### REQ-CA-001: Multi-Version Support
+
+The system MUST support multiple Cassandra versions (3.0 through trunk) on the same AMI.
+
+**Scenarios:**
+
+- **GIVEN** a running cluster, **WHEN** the user selects a Cassandra version, **THEN** that version is activated with appropriate Java and Python runtime versions.
+- **GIVEN** a selected version, **WHEN** the user starts the cluster, **THEN** all nodes run the selected Cassandra version and join the ring.
+
+### REQ-CA-002: Configuration Management
+
+The system MUST allow configuration of Cassandra via YAML patch files.
+
+**Scenarios:**
+
+- **GIVEN** a local YAML patch file with configuration overrides, **WHEN** the user pushes configuration, **THEN** the patch is applied to cassandra.yaml on all targeted nodes.
+- **GIVEN** updated configuration, **WHEN** the user requests a restart alongside the config push, **THEN** nodes are restarted with the new configuration.
+
+### REQ-CA-003: Cluster Lifecycle
+
+The system MUST support starting, stopping, and restarting Cassandra across cluster nodes. When starting, the system SHALL also deploy the Cassandra sidecar as a K3s DaemonSet after all Cassandra nodes are up.
+
+**Scenarios:**
+
+- **GIVEN** a configured Cassandra version, **WHEN** the user starts the cluster, **THEN** nodes start sequentially with a configurable delay between them.
+- **GIVEN** a running Cassandra cluster, **WHEN** the user stops it, **THEN** all nodes are stopped gracefully.
+- **WHEN** the user runs `cassandra start`, **THEN** after all Cassandra nodes are up, the sidecar DaemonSet is applied to K3s.
+
+### REQ-CA-004: Mixed-Version Clusters
+
+The system MUST support running different Cassandra versions on different nodes for upgrade testing.
+
+**Scenarios:**
+
+- **GIVEN** a running cluster, **WHEN** the user selects different versions for different hosts, **THEN** each host runs its assigned version independently.
+
+### REQ-CA-005: CQL Access
+
+The system MUST provide CQL query execution against the cluster via the Java driver, routed through the network access layer (SOCKS proxy or Tailscale).
+
+**Scenarios:**
+
+- **GIVEN** a running Cassandra cluster, **WHEN** the user executes a CQL query, **THEN** the query is routed through the available network path and results are displayed.
+- **GIVEN** the REPL or server is running, **WHEN** multiple CQL queries are executed, **THEN** the CQL session is reused across queries.
+
+### REQ-CA-006: Nodetool Access
+
+The system MUST provide nodetool execution on cluster nodes.
+
+**Scenarios:**
+
+- **GIVEN** a running cluster, **WHEN** the user invokes nodetool, **THEN** the specified nodetool command is executed on the targeted node.
+
+## Success Criteria
+
+- Users can switch Cassandra versions in under 1 minute without reprovisioning infrastructure.
+
+--- ARQUIVOS DO PR (54)
+added     +23    -0     .env.example
+modified  +1     -0     .gitignore
+modified  +1     -1     CLAUDE.md
+modified  +7     -2     bin/build-cassandra-analytics
+modified  +8     -0     bin/easy-db-lab
+modified  +108   -35    bin/end-to-end-test
+added     +115   -0     bin/test-spark-bulk-writer-s3-iam
+added     +46    -0     bin/upload-iam-bulk-writer.sh
+modified  +31    -0     docs/development/overview.md
+modified  +2     -2     docs/development/spark.md
+modified  +9     -28    docs/user-guide/spark.md
+modified  +8     -2     gradle/libs.versions.toml
+added     +2     -0     openspec/changes/add-bulk-writer-s3-iam/.openspec.yaml
+added     +45    -0     openspec/changes/add-bulk-writer-s3-iam/design.md
+added     +28    -0     openspec/changes/add-bulk-writer-s3-iam/proposal.md
+added     +52    -0     openspec/changes/add-bulk-writer-s3-iam/specs/bulk-writer-s3-iam/spec.md
+added     +15    -0     openspec/changes/add-bulk-writer-s3-iam/specs/spark-modules/spec.md
+added     +22    -0     openspec/changes/add-bulk-writer-s3-iam/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-13-env-file-config/.openspec.yaml
+added     +68    -0     openspec/changes/archive/2026-05-13-env-file-config/design.md
+added     +28    -0     openspec/changes/archive/2026-05-13-env-file-config/proposal.md
+added     +31    -0     openspec/changes/archive/2026-05-13-env-file-config/specs/end-to-end-testing/spec.md
+added     +34    -0     openspec/changes/archive/2026-05-13-env-file-config/specs/env-file-config/spec.md
+added     +21    -0     openspec/changes/archive/2026-05-13-env-file-config/tasks.md
+modified  +15    -1     openspec/specs/end-to-end-testing/spec.md
+added     +34    -0     openspec/specs/env-file-config/spec.md
+modified  +1     -1     settings.gradle
+added     +37    -0     spark/bulk-writer-s3-iam/build.gradle.kts
+added     +374   -0     spark/bulk-writer-s3-iam/src/main/java/com/rustyrazorblade/easydblab/spark/EasyDbLabIamStorageExtension.java
+added     +217   -0     spark/bulk-writer-s3-iam/src/main/java/com/rustyrazorblade/easydblab/spark/IamBulkWriter.java
+added     +135   -0     spark/bulk-writer-s3-iam/src/test/java/com/rustyrazorblade/easydblab/spark/EasyDbLabIamStorageExtensionIntegrationTest.java
+added     +167   -0     spark/bulk-writer-s3-iam/src/test/java/com/rustyrazorblade/easydblab/spark/EasyDbLabIamStorageExtensionTest.java
+added     +104   -0     spark/bulk-writer-s3-iam/src/test/java/com/rustyrazorblade/easydblab/spark/IamBulkWriterTest.java
+removed   +0     -379   spark/bulk-writer-s3/README.md
+removed   +0     -34    spark/bulk-writer-s3/build.gradle.kts
+removed   +0     -304   spark/bulk-writer-s3/src/main/java/com/rustyrazorblade/easydblab/spark/EasyDbLabStorageExtension.java
+removed   +0     -101   spark/bulk-writer-s3/src/main/java/com/rustyrazorblade/easydblab/spark/S3BulkWriter.java
+removed   +0     -331   spark/bulk-writer-s3/src/test/java/com/rustyrazorblade/easydblab/spark/EasyDbLabStorageExtensionIntegrationTest.java
+modified  +10    -5     spark/common/build.gradle.kts
+modified  +155   -30    spark/common/src/main/java/com/rustyrazorblade/easydblab/spark/CqlSetup.java
+modified  +44    -24    spark/common/src/main/java/com/rustyrazorblade/easydblab/spark/SparkJobConfig.java
+added     +74    -0     spark/common/src/test/java/com/rustyrazorblade/easydblab/spark/CqlSetupIntegrationTest.java
+added     +114   -0     spark/common/src/test/java/com/rustyrazorblade/easydblab/spark/CqlSetupTopologyTest.java
+modified  +0     -13    spark/common/src/test/java/com/rustyrazorblade/easydblab/spark/SparkJobConfigTest.java
+modified  +28    -13    src/main/kotlin/com/rustyrazorblade/easydblab/commands/Hosts.kt
+modified  +21    -3     src/main/kotlin/com/rustyrazorblade/easydblab/configuration/sidecar/SidecarManifestBuilder.kt   <== código ligado à spec
+modified  +1     -1     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSIamExtensions.kt
+modified  +11    -0     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSModule.kt
+modified  +16    -1     src/main/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSPolicy.kt
+modified  +10    -10    src/main/kotlin/com/rustyrazorblade/easydblab/services/EMRProvisioningService.kt
+modified  +77    -1     src/main/kotlin/com/rustyrazorblade/easydblab/services/SidecarService.kt
+modified  +18    -0     src/main/resources/com/rustyrazorblade/easydblab/iam-policy-ec2.json
+modified  +4     -1     src/test/kotlin/com/rustyrazorblade/easydblab/providers/aws/AWSpolicyTest.kt
+modified  +24    -3     src/test/kotlin/com/rustyrazorblade/easydblab/services/SidecarServiceTest.kt
+--- DIFF DO CÓDIGO LIGADO
+### src/main/kotlin/com/rustyrazorblade/easydblab/configuration/sidecar/SidecarManifestBuilder.kt
+@@ -8,6 +8,7 @@ import io.fabric8.kubernetes.api.model.ConfigMapVolumeSourceBuilder
+ import io.fabric8.kubernetes.api.model.EmptyDirVolumeSourceBuilder
+ import io.fabric8.kubernetes.api.model.HasMetadata
+ import io.fabric8.kubernetes.api.model.HostPathVolumeSourceBuilder
++import io.fabric8.kubernetes.api.model.LocalObjectReferenceBuilder
+ import io.fabric8.kubernetes.api.model.SecurityContextBuilder
+ import io.fabric8.kubernetes.api.model.VolumeMountBuilder
+ import io.fabric8.kubernetes.api.model.apps.DaemonSetBuilder
+@@ -38,8 +39,10 @@ class SidecarManifestBuilder(
+         private const val PYROSCOPE_HOST_PATH = "/usr/local/pyroscope"
+         private const val PYROSCOPE_MOUNT_PATH = "/usr/local/pyroscope"
+         private const val CASSANDRA_DATA_PATH = "/mnt/db1/cassandra"
+-
+         private const val SIDECAR_CONFIG_PATH = "/conf/sidecar.yaml"
++        private const val SIDECAR_PORT = 9043
++        private const val READINESS_INITIAL_DELAY = 15
++        private const val READINESS_PERIOD = 10
+     }
+ 
+     /**
+@@ -54,10 +57,11 @@ class SidecarManifestBuilder(
+         image: String = DEFAULT_IMAGE,
+         controlNodeIp: String,
+         clusterName: String,
++        imagePullSecretName: String = "",
+     ): List<HasMetadata> =
+         listOf(
+             buildConfigMap(),
+-            buildDaemonSet(image, controlNodeIp, clusterName),
++            buildDaemonSet(image, controlNodeIp, clusterName, imagePullSecretName),
+         )
+ 
+     /**
+@@ -92,6 +96,7 @@ class SidecarManifestBuilder(
+         image: String,
+         controlNodeIp: String,
+         clusterName: String,
++        imagePullSecretName: String = "",
+     ) = DaemonSetBuilder()
+         .withNewMetadata()
+         .withName(APP_LABEL)
+@@ -110,6 +115,11 @@ class SidecarManifestBuilder(
+         .addToNodeSelector("type", "db")
+         .withHostNetwork(true)
+         .withDnsPolicy("ClusterFirstWithHostNet")
++        .apply {
++            if (imagePullSecretName.isNotEmpty()) {
++                addToImagePullSecrets(LocalObjectReferenceBuilder().withName(imagePullSecretName).build())
++            }
++        }
+         // Init container: substitute __HOST_IP__ with the node's actual IP
+         .addNewInitContainer()
+         .withName("config-init")
+@@ -180,7 +190,15 @@ class SidecarManifestBuilder(
+                 .withMountPath(PYROSCOPE_MOUNT_PATH)
+                 .withReadOnly(true)
+                 .build(),
+-        ).endContainer()
++        ).withNewReadinessProbe()
++        .withNewHttpGet()
++        .withPath("/api/v1/cassandra/schema")
++        .withNewPort(SIDECAR_PORT)
++        .endHttpGet()
++        .withInitialDelaySeconds(READINESS_INITIAL_DELAY)
++        .withPeriodSeconds(READINESS_PERIOD)
++        .endReadinessProbe()
++        .endContainer()
+         // Volumes
+         .addNewVolume()
+         .withName("config-template")
+
+===== P276 | repo IgniteUI/igniteui-theming | PR #537: feat: add generic platform detection knowledge | capacidade: color-reference
+--- SPEC VIVA
+## Purpose
+
+Define the `get_color` tool output for CSS variable references and opacity handling.
+
+## Requirements
+
+### Requirement: Color reference returns CSS variable
+
+The `get_color` tool returns a CSS variable reference for the requested palette color.
+
+#### Scenario: Basic color reference
+
+- **WHEN** `color` and `variant` are provided
+- **THEN** the response includes a `var(--ig-<color>-<shade>)` reference
+
+#### Scenario: Contrast color
+
+- **WHEN** `contrast: true` is provided
+- **THEN** the response includes the `-contrast` variant of the variable
+
+#### Scenario: Opacity
+
+- **WHEN** `opacity` is provided
+- **THEN** the response uses CSS relative color syntax to apply opacity
+
+--- ARQUIVOS DO PR (49)
+modified  +0     -3     .gitignore
+modified  +2     -2     README.md
+added     +2     -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/.openspec.yaml
+added     +113   -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/design.md
+added     +31    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/proposal.md
+added     +27    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/elevations/spec.md
+added     +112   -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/sass-compilation-tests/spec.md
+added     +54    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/theme-generation/spec.md
+added     +29    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/specs/typography/spec.md
+added     +38    -0     openspec/changes/archive/2026-02-20-fix-mcp-sass-imports/tasks.md
+added     +2     -0     openspec/changes/generic-platform-detection/.openspec.yaml
+added     +151   -0     openspec/changes/generic-platform-detection/design.md
+added     +41    -0     openspec/changes/generic-platform-detection/proposal.md
+added     +26    -0     openspec/changes/generic-platform-detection/specs/component-theming/spec.md
+added     +164   -0     openspec/changes/generic-platform-detection/specs/generic-platform/spec.md
+added     +50    -0     openspec/changes/generic-platform-detection/specs/layout-overrides/spec.md
+added     +54    -0     openspec/changes/generic-platform-detection/specs/platform-detection/spec.md
+added     +36    -0     openspec/changes/generic-platform-detection/specs/theme-generation/spec.md
+added     +70    -0     openspec/changes/generic-platform-detection/tasks.md
+modified  +13    -1     openspec/specs/elevations/spec.md
+added     +116   -0     openspec/specs/sass-compilation-tests/spec.md
+modified  +27    -1     openspec/specs/theme-generation/spec.md
+modified  +14    -1     openspec/specs/typography/spec.md
+modified  +6     -6     src/mcp/README.md
+modified  +169   -4     src/mcp/__tests__/generators/sass.test.ts   <== código ligado à spec
+modified  +127   -19    src/mcp/__tests__/knowledge/platform-detection.test.ts   <== código ligado à spec
+modified  +2     -2     src/mcp/__tests__/knowledge/sass-api.test.ts
+modified  +44    -0     src/mcp/__tests__/tools/handlers/handlers.test.ts   <== código ligado à spec
+modified  +2     -10    src/mcp/generators/css.ts
+modified  +32    -2     src/mcp/generators/sass.ts
+modified  +2     -2     src/mcp/index.ts
+added     +228   -0     src/mcp/knowledge/docs/setup/platform.md
+modified  +0     -2     src/mcp/knowledge/index.ts
+added     +9     -0     src/mcp/knowledge/platform-setup.ts
+modified  +32    -22    src/mcp/knowledge/platforms/index.ts
+modified  +3     -3     src/mcp/knowledge/platforms/react.ts
+modified  +3     -3     src/mcp/knowledge/sass-api.ts
+modified  +46    -1     src/mcp/resources/presets.ts
+modified  +25    -7     src/mcp/tools/descriptions.ts
+modified  +24    -3     src/mcp/tools/handlers/component-theme.ts
+modified  +2     -1     src/mcp/tools/handlers/custom-palette.ts
+modified  +2     -1     src/mcp/tools/handlers/elevations.ts
+modified  +1     -1     src/mcp/tools/handlers/layout.ts
+modified  +2     -1     src/mcp/tools/handlers/palette.ts
+modified  +368   -98    src/mcp/tools/handlers/platform.ts
+modified  +3     -0     src/mcp/tools/handlers/theme.ts
+modified  +2     -1     src/mcp/tools/handlers/typography.ts
+modified  +52    -0     src/mcp/utils/sass.ts
+modified  +2     -0     src/mcp/utils/types.ts
+--- DIFF DO CÓDIGO LIGADO
+### src/mcp/__tests__/generators/sass.test.ts
+@@ -5,10 +5,7 @@
+  * 1. Generated code contains expected Sass constructs
+  * 2. Generated code structure is correct for each platform
+  * 3. Variables and descriptions are set correctly
+- *
+- * Note: Full Sass compilation tests are limited because generated code
+- * uses variables (like $material-type-scale) that are defined within
+- * the theming library's context. We focus on structural validation.
++ * 4. Generated code compiles as valid Sass (compilation tests)
+  */
+ 
+ import * as path from "node:path";
+@@ -32,13 +29,22 @@ const PACKAGE_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
+ /**
+  * Rewrites generated Sass code to use local paths for testing.
+  * Replaces package imports with local sass/ directory imports.
++ *
++ * Handles:
++ * - Base module: @use 'igniteui-theming' as *; → @use 'sass' as *;
++ * - Angular module: @use "igniteui-angular/theming" as *; → @use 'sass' as *;
++ * - Sub-module presets: @use 'igniteui-theming/sass/...' as *; → @use 'sass/...' as *;
+  */
+ function rewriteImportsForTesting(code: string): string {
+ 	return code
+ 		.replace(
+ 			/@use ['"]igniteui-angular\/theming['"] as \*;/g,
+ 			"@use 'sass' as *;",
+ 		)
++		.replace(
++			/@use ['"]igniteui-theming\/sass\/(.+?)['"] as \*;/g,
++			"@use 'sass/$1' as *;",
++		)
+ 		.replace(/@use ['"]igniteui-theming['"] as \*;/g, "@use 'sass' as *;");
+ }
+ 
+@@ -190,6 +196,69 @@ describe("generateTypography", () => {
+ 		// Font stack should be wrapped in quotes
+ 		expect(result.code).toContain("\"'Titillium Web', sans-serif\"");
+ 	});
++
++	it("includes typography preset import for non-Angular platforms", () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/typography/presets' as *;",
++		);
++	});
++
++	it("omits typography preset import for Angular platform", () => {
++		const result = generateTypography({
++			platform: "angular",
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++
++		expect(result.code).not.toContain("typography/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateTypography({
++			platform: "webcomponents",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for react", async () => {
++		const result = generateTypography({
++			platform: "react",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for blazor", async () => {
++		const result = generateTypography({
++			platform: "blazor",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles with no platform", async () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("compiles for all design systems", async () => {
++		for (const ds of ["material", "fluent", "bootstrap", "indigo"] as const) {
++			const result = generateTypography({
++				fontFamily: "Roboto",
++				designSystem: ds,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++		}
++	});
+ });
+ 
+ describe("generateElevations", () => {
+@@ -215,6 +284,57 @@ describe("generateElevations", () => {
+ 		expect(result.variables).toContain("$indigo-elevations");
+ 		expect(result.code).toContain("$indigo-elevations");
+ 	});
++
++	it("includes elevations preset import for non-Angular platforms", () => {
++		const result = generateElevations({});
++
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/elevations/presets' as *;",
++		);
++	});
++
++	it("omits elevations preset import for Angular platform", () => {
++		const result = generateElevations({
++			platform: "angular",
++		});
++
++		expect(result.code).not.toContain("elevations/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateElevations({
++			platform: "webcomponents",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for react", async () => {
++		const result = generateElevations({
++			platform: "react",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles for blazor", async () => {
++		const result = generateElevations({
++			platform: "blazor",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("generates valid Sass that compiles with no platform", async () => {
++		const result = generateElevations({});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++
++	it("compiles with indigo design system", async () => {
++		const result = generateElevations({
++			designSystem: "indigo",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++		expect(result.code).toContain("$indigo-elevations");
++	});
+ });
+ 
+ describe("generateTheme", () => {
+@@ -271,6 +391,51 @@ describe("generateTheme", () => {
+ 
+ 			expect(result.code).toContain("$surface: #222222");
+ 		});
++
++		it("generates valid Sass that compiles with defaults", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++		});
++
++		it("generates valid Sass that compiles without typography", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++				includeTypography: false,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++			expect(result.code).not.toContain("typography/presets");
++		});
++
++		it("generates valid Sass that compiles without elevations", async () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				secondaryColor: "#f7bd32",
++				surfaceColor: "white",
++				includeElevations: false,
++			});
++			expect(await isValidSass(result.code)).toBe(true);
++			expect(result.code).not.toContain("elevations/presets");
++		});
++
++		it("includes preset imports for typography and elevations", () => {
++			const result = generateTheme({
++				primaryColor: "#2ab759",
++				designSystem: "material",
++			});
++
++			expect(result.code).toContain(
++				"@use 'igniteui-theming/sass/typography/presets' as *;",
++			);
++			expect(result.code).toContain(
++				"@use 'igniteui-theming/sass/elevations/presets' as *;",
++			);
++		});
+ 	});
+ 
+ 	describe("Angular platform", () => {
+
+### src/mcp/__tests__/knowledge/platform-detection.test.ts
+@@ -82,29 +82,49 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("detects Angular from angular.json config file", () => {
++		it("detects Angular from angular.json config file with Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("angular.json");
+ 			});
+ 
+-			const result = detectPlatformFromDependencies({}, {}, "/project");
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-angular": "^18.0.0" },
++				{},
++				"/project",
++			);
+ 
+ 			expect(result.platform).toBe("angular");
+-			expect(result.confidence).toBe("high"); // 80 rounds to high
++			expect(result.confidence).toBe("high");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "angular.json",
++				confidence: 80,
++			});
++		});
++
++		it("returns generic when angular.json exists but no Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("angular.json");
++			});
++
++			const result = detectPlatformFromDependencies({}, {}, "/project");
++
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "config_file",
+ 				file: "angular.json",
+ 				confidence: 80,
+ 			});
+ 		});
+ 
+-		it("uses @angular/core as fallback with low confidence", () => {
++		it("returns generic with @angular/core only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies(
+ 				{ "@angular/core": "^18.0.0" },
+ 				{},
+ 			);
+ 
+-			expect(result.platform).toBe("angular");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -136,10 +156,10 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("uses lit as fallback with low confidence", () => {
++		it("returns generic with lit only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies({ lit: "^3.0.0" }, {});
+ 
+-			expect(result.platform).toBe("webcomponents");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -171,7 +191,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			expect(result.confidence).toBe("high");
+ 		});
+ 
+-		it("detects React from vite.config.ts with @vitejs/plugin-react", () => {
++		it("returns generic from vite.config.ts with React plugin but no Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("vite.config.ts");
+ 			});
+@@ -183,6 +203,31 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "vite.config.ts",
++				confidence: 80,
++			});
++		});
++
++		it("detects React from vite.config.ts with React plugin and Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("vite.config.ts");
++			});
++			mockReadFileSync.mockReturnValue(`
++        import { defineConfig } from 'vite';
++        import react from '@vitejs/plugin-react';
++        export default defineConfig({ plugins: [react()] });
++      `);
++
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-react": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("react");
+ 			expect(result.confidence).toBe("high");
+ 			expect(result.signals).toContainEqual({
+@@ -192,13 +237,33 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("detects React from next.config.js", () => {
++		it("returns generic from next.config.js without Ignite UI package", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("next.config.js");
+ 			});
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "next.config.js",
++				confidence: 80,
++			});
++		});
++
++		it("detects React from next.config.js with Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("next.config.js");
++			});
++
++			const result = detectPlatformFromDependencies(
++				{ "igniteui-react": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("react");
+ 			expect(result.confidence).toBe("high");
+ 			expect(result.signals).toContainEqual({
+@@ -208,13 +273,13 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("uses react package as fallback with low confidence", () => {
++		it("returns generic with react package only (no Ignite UI package)", () => {
+ 			const result = detectPlatformFromDependencies(
+ 				{ react: "^18.0.0", "react-dom": "^18.0.0" },
+ 				{},
+ 			);
+ 
+-			expect(result.platform).toBe("react");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "framework_package",
+@@ -249,7 +314,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			});
+ 		});
+ 
+-		it("detects Blazor SDK without IgniteUI with low confidence", () => {
++		it("returns generic for Blazor SDK without IgniteUI", () => {
+ 			mockExistsSync.mockReturnValue(false);
+ 			mockReaddirSync.mockReturnValue(["MyApp.csproj"] as unknown as ReturnType<
+ 				typeof readdirSync
+@@ -264,7 +329,7 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
+-			expect(result.platform).toBe("blazor");
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("low");
+ 			expect(result.signals).toContainEqual({
+ 				type: "config_file",
+@@ -294,7 +359,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			).toEqual(["angular", "react"]);
+ 		});
+ 
+-		it("returns ambiguous when angular.json and next.config.js both exist", () => {
++		it("returns generic (not ambiguous) when angular.json and next.config.js both exist without Ignite UI", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				const pathStr = String(path);
+ 				return (
+@@ -304,6 +369,28 @@ describe("detectPlatformFromDependencies", () => {
+ 
+ 			const result = detectPlatformFromDependencies({}, {}, "/project");
+ 
++			// Without Ignite UI product packages, config-only signals resolve to generic
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++		});
++
++		it("returns ambiguous when angular.json and next.config.js both exist with Ignite UI packages", () => {
++			mockExistsSync.mockImplementation((path) => {
++				const pathStr = String(path);
++				return (
++					pathStr.includes("angular.json") || pathStr.includes("next.config.js")
++				);
++			});
++
++			const result = detectPlatformFromDependencies(
++				{
++					"igniteui-angular": "^18.0.0",
++					"igniteui-react": "^18.0.0",
++				},
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBeNull();
+ 			expect(result.ambiguous).toBe(true);
+ 			expect(result.alternatives).toHaveLength(2);
+@@ -355,19 +442,19 @@ describe("detectPlatformFromDependencies", () => {
+ 	});
+ 
+ 	describe("No platform detected", () => {
+-		it("returns null platform with none confidence when no matches", () => {
++		it("returns generic platform with none confidence when no matches", () => {
+ 			const result = detectPlatformFromDependencies({ lodash: "^4.17.0" }, {});
+ 
+-			expect(result.platform).toBeNull();
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("none");
+ 			expect(result.signals).toEqual([]);
+ 			expect(result.reason).toContain("No Ignite UI packages");
+ 		});
+ 
+-		it("returns null platform when dependencies are empty", () => {
++		it("returns generic platform when dependencies are empty", () => {
+ 			const result = detectPlatformFromDependencies({}, {});
+ 
+-			expect(result.platform).toBeNull();
++			expect(result.platform).toBe("generic");
+ 			expect(result.confidence).toBe("none");
+ 		});
+ 	});
+@@ -388,7 +475,7 @@ describe("detectPlatformFromDependencies", () => {
+ 			// Should not include framework fallback since we have high confidence
+ 		});
+ 
+-		it("prefers config file over framework fallback", () => {
++		it("returns generic with config file + framework package but no Ignite UI product", () => {
+ 			mockExistsSync.mockImplementation((path) => {
+ 				return String(path).includes("angular.json");
+ 			});
+@@ -399,6 +486,27 @@ describe("detectPlatformFromDependencies", () => {
+ 				"/project",
+ 			);
+ 
++			// Without Ignite UI product, returns generic despite strong config+framework signals
++			expect(result.platform).toBe("generic");
++			expect(result.confidence).toBe("low");
++			expect(result.signals).toContainEqual({
++				type: "config_file",
++				file: "angular.json",
++				confidence: 80,
++			});
++		});
++
++		it("prefers config file over framework fallback with Ignite UI package", () => {
++			mockExistsSync.mockImplementation((path) => {
++				return String(path).includes("angular.json");
++			});
++
++			const result = detectPlatformFromDependencies(
++				{ "@angular/core": "^18.0.0", "igniteui-angular": "^18.0.0" },
++				{},
++				"/project",
++			);
++
+ 			expect(result.platform).toBe("angular");
+ 			expect(result.confidence).toBe("high");
+ 			// Config file (80) should override framework fallback (40)
+
+### src/mcp/__tests__/tools/handlers/handlers.test.ts
+@@ -265,6 +265,34 @@ describe("layout handlers", () => {
+ 		expect(text).toContain("--ig-radius-factor: 0.8;");
+ 		expect(text).toContain("igx-avatar");
+ 	});
++
++	it("set_size with generic platform and component merges selectors like undefined", async () => {
++		const resultGeneric = await handleSetSize({
++			size: "small",
++			component: "avatar",
++			platform: "generic",
++		});
++
++		const resultUndefined = await handleSetSize({
++			size: "small",
++			component: "avatar",
++		});
++
++		// Both should produce the same merged-selectors output
++		expect(resultGeneric.content[0].text).toBe(resultUndefined.content[0].text);
++	});
++
++	it("set_size with generic platform and scope works correctly", async () => {
++		const result = await handleSetSize({
++			size: "large",
++			scope: ".my-section",
++			platform: "generic",
++		});
++
++		const text = result.content[0].text;
++		expect(text).toContain("--ig-size: 3;");
++		expect(text).toContain(".my-section");
++	});
+ });
+ 
+ describe("handleCreateElevations", () => {
+@@ -395,6 +423,22 @@ describe("handleCreateComponentTheme", () => {
+ 		expect(text).toContain("required");
+ 	});
+ 
++	it("returns error when platform is generic", async () => {
++		const result = await handleCreateComponentTheme({
++			platform: "generic",
++			component: "avatar",
++			tokens: {
++				background: "#ff5722",
++			},
++		});
++
++		expect(result.isError).toBe(true);
++		const text = result.content[0].text;
++		expect(text).toContain("Error");
++		expect(text).toContain("generic");
++		expect(text).toContain("not supported");
++	});
++
+ 	it("returns MCP response format for valid component", async () => {
+ 		const result = await handleCreateComponentTheme({
+ 			platform: "webcomponents",
+
+===== P277 | repo VimCommando/kibana-object-manager | PR #16: Add Kibana version checks and force override | capacidade: concurrency
+--- SPEC VIVA
+# concurrency Specification
+
+## Purpose
+This specification defines the concurrency control mechanisms for the Kibana API interaction and asset processing, ensuring high performance while protecting the Kibana server from overload.
+## Requirements
+### Requirement: Global API Concurrency Limit
+`KibanaClient` SHALL implement a global limit on the number of simultaneous "in-flight" HTTP requests across all instances (including space-scoped clones).
+
+#### Scenario: Enforce concurrency limit
+- **GIVEN** `KibanaClient` initialized with `MAX_REQUESTS = 2`
+- **WHEN** making 3 simultaneous API requests
+- **THEN** the first 2 requests SHALL be sent immediately
+- **THEN** the 3rd request SHALL wait until one of the first 2 completes
+
+#### Scenario: Configurable limit
+- **WHEN** `KibanaClient` is initialized
+- **THEN** the limit SHALL be configurable via the constructor
+- **AND** SHALL default to 8 if not specified via environment variables
+
+### Requirement: Concurrent Asset Processing
+The application SHALL perform asset-level operations concurrently to minimize total execution time.
+
+#### Scenario: Concurrent space processing
+- **GIVEN** multiple spaces are being processed during `pull` or `push`
+- **THEN** spaces SHALL be processed concurrently up to the global limit
+
+#### Scenario: Concurrent item extraction
+- **GIVEN** an extractor is fetching multiple items by ID (e.g. workflows)
+- **THEN** the items SHALL be fetched concurrently up to the global limit
+
+
+--- ARQUIVOS DO PR (17)
+modified  +2     -1     Cargo.lock
+modified  +2     -1     Cargo.toml
+added     +2     -0     openspec/changes/kibana-versions/.openspec.yaml
+added     +102   -0     openspec/changes/kibana-versions/design.md
+added     +34    -0     openspec/changes/kibana-versions/proposal.md
+added     +33    -0     openspec/changes/kibana-versions/specs/agents/spec.md
+added     +80    -0     openspec/changes/kibana-versions/specs/cli/spec.md
+added     +39    -0     openspec/changes/kibana-versions/specs/kibana-client/spec.md
+added     +32    -0     openspec/changes/kibana-versions/specs/tools/spec.md
+added     +22    -0     openspec/changes/kibana-versions/specs/workflows/spec.md
+added     +32    -0     openspec/changes/kibana-versions/tasks.md
+modified  +441   -24    src/cli.rs   <== código ligado à spec
+modified  +172   -1     src/client/kibana.rs
+modified  +3     -1     src/client/mod.rs
+modified  +52    -3     src/kibana/spaces/manifest.rs
+modified  +4     -1     src/lib.rs
+modified  +57    -13    src/main.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/cli.rs
+@@ -1,7 +1,9 @@
+ //! CLI helper functions
+ 
+ use crate::{
+-    client::{Auth, KibanaClient},
++    client::{
++        ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
++    },
+     etl::{Extractor, Loader, Transformer},
+     kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
+     kibana::dependencies::{
+@@ -17,10 +19,11 @@ use crate::{
+         VegaSpecEscaper, VegaSpecUnescaper,
+     },
+ };
+-use eyre::{Context, Result};
++use eyre::{Context, Report, Result};
+ use owo_colors::OwoColorize;
+ use serde_json::Value;
+ use std::collections::HashSet;
++use std::fmt;
+ use std::path::Path;
+ use std::sync::Arc;
+ use tokio::task::JoinSet;
+@@ -61,6 +64,135 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
+         .context("Failed to create Kibana client")
+ }
+ 
++/// Warning report used to signal a version-gating warning exit (status code 2).
++#[derive(Debug)]
++pub struct VersionWarning {
++    message: String,
++}
++
++impl VersionWarning {
++    fn new(message: impl Into<String>) -> Self {
++        Self {
++            message: message.into(),
++        }
++    }
++}
++
++impl fmt::Display for VersionWarning {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "{}", self.message)
++    }
++}
++
++impl std::error::Error for VersionWarning {}
++
++fn version_warning(message: impl Into<String>) -> Report {
++    Report::new(VersionWarning::new(message))
++}
++
++/// Return warning text when an error represents a version warning.
++pub fn version_warning_message(report: &Report) -> Option<&str> {
++    report
++        .downcast_ref::<VersionWarning>()
++        .map(|warning| warning.message.as_str())
++}
++
++#[derive(Debug, Clone)]
++struct VersionPreflight {
++    detected: KibanaVersionInfo,
++    recorded: Option<KibanaVersion>,
++}
++
++fn parse_capability(api: &str) -> Option<ApiCapability> {
++    match api {
++        "saved_objects" | "saved_object" | "objects" | "object" => Some(ApiCapability::SavedObjects),
++        "workflows" | "workflow" => Some(ApiCapability::Workflows),
++        "agents" | "agent" => Some(ApiCapability::Agents),
++        "tools" | "tool" => Some(ApiCapability::Tools),
++        "spaces" | "space" => Some(ApiCapability::Spaces),
++        _ => None,
++    }
++}
++
++fn capability_requested(capability: ApiCapability, filter: Option<&[String]>) -> bool {
++    match filter {
++        None => true,
++        Some(values) => values
++            .iter()
++            .filter_map(|v| parse_capability(&v.to_lowercase()))
++            .any(|candidate| candidate == capability),
++    }
++}
++
++fn is_older_major_minor(target: &KibanaVersion, recorded: &KibanaVersion) -> bool {
++    target.major < recorded.major
++        || (target.major == recorded.major && target.minor < recorded.minor)
++}
++
++fn load_recorded_kibana_version(project_dir: &Path) -> Result<Option<KibanaVersion>> {
++    let spaces_manifest_path = project_dir.join("spaces.yml");
++    if !spaces_manifest_path.exists() {
++        return Ok(None);
++    }
++
++    let manifest = SpacesManifest::read(&spaces_manifest_path)?;
++    match manifest.kibana_version() {
++        Some(version) => match parse_kibana_version(version) {
++            Ok(parsed) => Ok(Some(parsed)),
++            Err(e) => {
++                log::warn!(
++                    "Ignoring invalid spaces.yml kibana.version '{}': {}",
++                    version,
++                    e
++                );
++                Ok(None)
++            }
++        },
++        None => Ok(None),
++    }
++}
++
++fn persist_kibana_version(project_dir: &Path, version: &str) -> Result<()> {
++    let spaces_manifest_path = project_dir.join("spaces.yml");
++    let mut manifest = if spaces_manifest_path.exists() {
++        SpacesManifest::read(&spaces_manifest_path)?
++    } else {
++        let mut created = SpacesManifest::new();
++        created.add_space("default".to_string(), "Default".to_string());
++        created
++    };
++
++    manifest.set_kibana_version(version.to_string());
++    manifest.write(&spaces_manifest_path)?;
++    Ok(())
++}
++
++async fn run_version_preflight(
++    project_dir: &Path,
++    client: &KibanaClient,
++    action: &str,
++    force: bool,
++) -> Result<VersionPreflight> {
++    let detected = client.server_version_info().await?;
++    let recorded = load_recorded_kibana_version(project_dir)?;
++
++    if let Some(recorded_version) = recorded.as_ref()
++        && is_older_major_minor(&detected.parsed, recorded_version) {
++            let message = format!(
++                "{} requires --force because target Kibana {} is older than recorded repository version {}",
++                action, detected.parsed, recorded_version
++            );
++
++            if force {
++                log::warn!("{}", message);
++            } else {
++                return Err(version_warning(message));
++            }
++        }
++
++    Ok(VersionPreflight { detected, recorded })
++}
++
+ /// Check if an API should be processed based on the filter
+ fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
+     match filter {
+@@ -97,15 +229,46 @@ pub async fn pull_saved_objects(
+     project_dir: impl AsRef<Path>,
+     space_filter: Option<&[String]>,
+     api_filter: Option<&[String]>,
++    force: bool,
+ ) -> Result<usize> {
+     let project_dir = Arc::<Path>::from(project_dir.as_ref());
+     let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
+ 
+     log::info!("Connecting to Kibana...");
+     let client = load_kibana_client(&*project_dir)?;
++    let preflight = run_version_preflight(&project_dir, &client, "pull", force).await?;
++    let detected_version = preflight.detected.parsed;
++
++    let mut unsupported = Vec::new();
++    for capability in [
++        ApiCapability::Agents,
++        ApiCapability::Tools,
++        ApiCapability::Workflows,
++    ] {
++        if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
++            && !KibanaClient::supports_capability(&detected_version, capability)
++        {
++            unsupported.push(KibanaClient::unsupported_capability_reason(
++                &detected_version,
++                capability,
++            ));
++        }
++    }
++
++    let warning_exit = !force && !unsupported.is_empty();
++    for warning in &unsupported {
++        log::warn!("{}", warning);
++    }
++    if force && !unsupported.is_empty() {
++        log::warn!("--force enabled: attempting API calls despite unsupported version checks");
++    }
+ 
+     // Pull space definitions FIRST (before any other operations)
+-    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
++    let can_pull_spaces = !warning_exit
++        || KibanaClient::supports_capability(&detected_version, ApiCapability::Spaces)
++        || force;
++    if can_pull_spaces && should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice()))
++    {
+         let spaces_manifest_path = project_dir.join("spaces.yml");
+         if spaces_manifest_path.exists() {
+             log::info!("Pulling space definitions...");
+@@ -133,6 +296,7 @@ pub async fn pull_saved_objects(
+         let client = client.clone();
+         let project_dir = project_dir.clone();
+         let api_filter = api_filter.clone();
++        let detected_version = detected_version.clone();
+ 
+         set.spawn(async move {
+             log::info!("Processing space: {}", space_id.cyan());
+@@ -141,6 +305,12 @@ pub async fn pull_saved_objects(
+             // Get space client for this space
+             let space_client = client.space(&space_id)?;
+             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
++            let can_pull_workflows = force
++                || KibanaClient::supports_capability(&detected_version, ApiCapability::Workflows);
++            let can_pull_agents = force
++                || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
++            let can_pull_tools = force
++                || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
+ 
+             // Pull saved objects for this space
+             if should_process_api("saved_objects", api_filter_slice)
+@@ -149,19 +319,22 @@ pub async fn pull_saved_objects(
+                 }
+ 
+             // Pull workflows for this space
+-            if should_process_api("workflows", api_filter_slice)
++            if can_pull_workflows
++                && should_process_api("workflows", api_filter_slice)
+                 && let Ok(count) = pull_space_workflows(&project_dir, &space_client).await {
+                     log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
+                 }
+ 
+             // Pull agents for this space
+-            if should_process_api("agents", api_filter_slice)
++            if can_pull_agents
++                && should_process_api("agents", api_filter_slice)
+                 && let Ok(count) = pull_space_agents(&project_dir, &space_client).await {
+                     log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
+                 }
+ 
+             // Pull tools for this space
+-            if should_process_api("tools", api_filter_slice)
++            if can_pull_tools
++                && should_process_api("tools", api_filter_slice)
+                 && let Ok(count) = pull_space_tools(&project_dir, &space_client).await {
+                     log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
+                 }
+@@ -182,6 +355,19 @@ pub async fn pull_saved_objects(
+         "✓ Pull complete: {} total saved object(s) across all spaces",
+         total_count
+     );
++
++    // Record the source cluster version after successful pull execution.
++    persist_kibana_version(&project_dir, &preflight.detected.raw)?;
++    if let Some(recorded) = preflight.recorded {
++        log::debug!("Repository kibana.version before pull: {}", recorded);
++    }
++
++    if warning_exit {
++        return Err(version_warning(
++            "One or more requested APIs are unsupported for the target Kibana version".to_string(),
++        ));
++    }
++
+     Ok(total_count)
+ }
+ 
+@@ -200,12 +386,38 @@ pub async fn push_saved_objects(
+     managed: bool,
+     space_filter: Option<&[String]>,
+     api_filter: Option<&[String]>,
++    force: bool,
+ ) -> Result<usize> {
+     let project_dir = Arc::<Path>::from(project_dir.as_ref());
+     let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
+ 
+     log::info!("Connecting to Kibana...");
+     let client = load_kibana_client(&*project_dir)?;
++    let preflight = run_version_preflight(&project_dir, &client, "push", force).await?;
++    let detected_version = preflight.detected.parsed;
++
++    let mut unsupported = Vec::new();
++    for capability in [
++        ApiCapability::Agents,
++        ApiCapability::Tools,
++        ApiCapability::Workflows,
++    ] {
++        if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
++            && !KibanaClient::supports_capability(&detected_version, capability)
++        {
++            unsupported.push(KibanaClient::unsupported_capability_reason(
++                &detected_version,
+
+===== P278 | repo denisfl/inbox | PR #47: feat(ui): enhance task and event management with description previews… | capacidade: weekly-timeline
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Weekly view displays a vertical time grid
+
+The calendar weekly view (`calendar?view=week`) SHALL render a vertical time grid with hour rows spanning 07:00–23:00. Each day SHALL occupy a column. A time axis with hour labels SHALL be displayed on the left side of the grid.
+
+#### Scenario: Time axis is visible
+- **WHEN** user navigates to `calendar?view=week`
+- **THEN** a vertical axis on the left displays hour labels from 7:00 to 23:00 at 1-hour intervals
+
+#### Scenario: Seven day columns are rendered
+- **WHEN** user navigates to `calendar?view=week`
+- **THEN** seven day columns are displayed for Monday through Sunday of the selected week
+
+### Requirement: Timed events are positioned by their start time
+
+Timed events (not all-day) SHALL be placed in the grid at the row corresponding to their `starts_at` hour and minute. Event height SHALL reflect duration proportionally (each 30-minute slot = 1 grid row).
+
+#### Scenario: Event at 10:00 appears at the 10:00 row
+- **WHEN** a timed event with `starts_at` at 10:00 exists on a weekday
+- **THEN** the event block starts at the 10:00 row in that day's column
+
+#### Scenario: Event duration determines block height
+- **WHEN** a timed event spans 90 minutes (e.g., 10:00–11:30)
+- **THEN** the event block spans 3 grid rows (3 x 30-min slots)
+
+#### Scenario: Event without ends_at gets minimum height
+- **WHEN** a timed event has no `ends_at`
+- **THEN** the event block spans 1 grid row (30-min default)
+
+#### Scenario: Event before 07:00 is clamped
+- **WHEN** a timed event starts before 07:00
+- **THEN** the event block is placed at the top of the grid (row 1)
+
+### Requirement: All-day events are displayed above the time grid
+
+All-day events SHALL be rendered in a dedicated strip above the time grid, separate from timed events. Documents and tasks without a specific time SHALL also appear in this strip.
+
+#### Scenario: All-day event appears in the top strip
+- **WHEN** an all-day event exists on a weekday
+- **THEN** it is displayed in the all-day strip above the time grid for that day's column
+
+#### Scenario: Task without due_time appears in the all-day strip
+- **WHEN** a task with `due_date` but no `due_time` exists on a weekday
+- **THEN** it appears in the all-day strip for that day
+
+#### Scenario: All-day strip limits visible items
+- **WHEN** more than 3 all-day items exist on a single day
+- **THEN** only 3 are shown with a "+N more" indicator
+
+### Requirement: Week view navigation preserves existing behavior
+
+Week navigation (previous/next arrows, date range title) SHALL continue to work as before. The view title SHALL display the date range of the current week.
+
+#### Scenario: Navigate to previous week
+- **WHEN** user clicks the previous-week arrow
+- **THEN** the view shifts to the prior 7-day period with the time grid
+
+### Requirement: Week view is responsive on mobile
+
+On viewports narrower than 700px, the weekly time grid SHALL collapse to a single-column vertical layout (similar to agenda view) since a 7-column grid is not usable on small screens.
+
+#### Scenario: Mobile collapses to single column
+- **WHEN** viewport width is below 700px
+- **THEN** the week view displays as a vertical list instead of a 7-column time grid
+
+### Requirement: Past timed events show reduced opacity on Agenda view
+
+On the Agenda view (`calendar?view=agenda`), timed events whose end time (or start time if no end time) is in the past SHALL be rendered with reduced opacity (0.55). All-day events SHALL NOT be affected.
+
+#### Scenario: Past timed event is dimmed on Agenda
+- **WHEN** a timed event with `ends_at` before the current time is displayed on the Agenda view
+- **THEN** it is rendered with `opacity: 0.55`
+
+#### Scenario: Ongoing event is not dimmed
+- **WHEN** a timed event with `starts_at` in the past but `ends_at` in the future is displayed
+- **THEN** it is rendered at full opacity
+
+#### Scenario: All-day event is never dimmed
+- **WHEN** an all-day event on today's date is displayed on the Agenda view
+- **THEN** it is rendered at full opacity regardless of current time
+
+#### Scenario: Hover reveals past event at full opacity
+- **WHEN** user hovers over a dimmed past event
+- **THEN** the event temporarily displays at full opacity
+
+### Requirement: Past timed events show reduced opacity on Dashboard
+
+In the Dashboard Events block, timed events whose end time (or start time if no end time) is in the past SHALL be rendered with reduced opacity (0.55). All-day events SHALL NOT be affected.
+
+#### Scenario: Past timed event is dimmed on Dashboard
+- **WHEN** a timed event under "Today" group has `ends_at` before the current time
+- **THEN** it is rendered with `opacity: 0.55`
+
+#### Scenario: Future event is not dimmed on Dashboard
+- **WHEN** a timed event under "Today" group has `starts_at` in the future
+- **THEN** it is rendered at full opacity
+
+#### Scenario: Hover reveals past Dashboard event
+- **WHEN** user hovers over a dimmed past event on Dashboard
+- **THEN** the event temporarily displays at full opacity
+
+### Requirement: CalendarEvent exposes a past? predicate
+
+`CalendarEvent` SHALL provide a `past?` instance method that returns `true` when the event is timed (not all-day) and its `ends_at` (or `starts_at` if `ends_at` is nil) is before `Time.current`.
+
+#### Scenario: Ended event is past
+- **WHEN** `ends_at` is 30 minutes ago and `all_day?` is false
+- **THEN** `past?` returns `true`
+
+#### Scenario: All-day event is never past
+- **WHEN** `all_day?` is true
+- **THEN** `past?` returns `false` regardless of `starts_at`
+
+#### Scenario: Ongoing event is not past
+- **WHEN** `starts_at` is 1 hour ago and `ends_at` is 30 minutes from now
+- **THEN** `past?` returns `false`
+
+--- ARQUIVOS DO PR (14)
+modified  +99    -1     app/assets/stylesheets/tasks.css
+modified  +24    -2     app/controllers/calendar_events_controller.rb
+modified  +5     -1     app/controllers/tasks_controller.rb
+modified  +2     -1     app/helpers/application_helper.rb   <== código ligado à spec
+modified  +18    -6     app/views/calendar_events/_form.html.erb
+modified  +11    -17    app/views/tasks/_task.html.erb
+added     +77    -0     app/views/tasks/show.html.erb
+modified  +1     -1     config/routes.rb
+added     +2     -0     openspec/changes/ui-improvements-tasks-events-navigation/.openspec.yaml
+added     +46    -0     openspec/changes/ui-improvements-tasks-events-navigation/design.md
+added     +29    -0     openspec/changes/ui-improvements-tasks-events-navigation/proposal.md
+added     +66    -0     openspec/changes/ui-improvements-tasks-events-navigation/specs/task-show-page/spec.md
+added     +30    -0     openspec/changes/ui-improvements-tasks-events-navigation/tasks.md
+modified  +1     -0     spec/helpers/application_helper_spec.rb   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### app/helpers/application_helper.rb
+@@ -1,8 +1,9 @@
+ module ApplicationHelper
+   # Render a back-link with arrow_left icon.
++  # Uses browser history when available, falls back to the href path.
+   #   back_link(tasks_path, "Tasks")
+   def back_link(path, label)
+-    link_to path, class: "back-link" do
++    link_to path, class: "back-link", onclick: "history.back(); return false;" do
+       heroicon(:arrow_left, style: "width: 16px; height: 16px;") +
+         content_tag(:span, label)
+     end
+
+### spec/helpers/application_helper_spec.rb
+@@ -8,6 +8,7 @@
+       html = helper.back_link("/tasks", "Tasks")
+       expect(html).to include("Tasks")
+       expect(html).to include('class="back-link"')
++      expect(html).to include("history.back()")
+     end
+   end
+ 
+
+===== P279 | repo licht1stein/brepl | PR #14: Bundle all dependencies into self-contained uberscript | capacidade: delimiter-validation
+--- SPEC VIVA
+# delimiter-validation Specification
+
+## Purpose
+TBD - created by archiving change add-hook-install. Update Purpose after archive.
+## Requirements
+### Requirement: Pre-Edit Auto-Fix
+
+The hook MUST automatically fix unbalanced or mismatched delimiters in Clojure code before writing to disk, enabling Claude to work with Clojure without manual bracket management.
+
+**Inputs**:
+
+- Clojure source code (may contain delimiter errors)
+- File path for context
+
+**Process**:
+
+1. Detect if file is Clojure source (by extension)
+2. Attempt automatic delimiter correction
+3. Validate corrected code is syntactically valid
+4. Return corrected code or error message
+
+**Outputs**:
+
+- **Success**: Corrected Clojure code with balanced delimiters
+- **Failure**: Block edit with actionable error message
+
+**Constraints**:
+
+- Must handle all Clojure delimiter types: `()`, `[]`, `{}`, `#{}`
+- Must preserve code semantics (correction only adds/removes delimiters)
+- Must complete in < 500ms for typical files (< 1000 lines)
+- Must not require external binary dependencies
+
+#### Scenario: Incomplete expression is auto-corrected
+
+Given Claude edits a Clojure function with missing closing delimiters
+And the function has correct opening delimiters
+When the pre-edit hook processes the file
+Then the hook should add the missing closing delimiters
+And the hook should return the corrected code
+And Claude's edit should proceed with corrected code
+
+#### Scenario: Nested structure delimiters are balanced
+
+Given Claude edits code with nested forms
+And the nested forms have mismatched delimiter counts
+When the pre-edit hook processes the file
+Then the hook should balance all delimiter levels
+And the hook should maintain proper nesting order
+And the hook should return syntactically valid code
+
+#### Scenario: Unfixable syntax errors block the edit
+
+Given Claude edits code with mismatched delimiter types
+And the delimiters cannot be automatically corrected
+When the pre-edit hook attempts correction
+Then the hook should detect the unfixable error
+And the hook should block the edit
+And the hook should provide an error message explaining the issue
+
+### Requirement: Post-Edit Quick Validation
+
+The hook SHALL verify code is syntactically valid after edits are written, as a safety check.
+
+**Inputs**: File path of edited Clojure file
+
+**Process**:
+
+1. Read file contents
+2. Validate syntax (parsing without execution)
+3. Proceed to evaluation if valid, block if invalid
+
+**Outputs**:
+
+- **Valid**: Continue to evaluation
+- **Invalid**: Block with error details
+
+**Constraints**:
+
+- Must complete in < 100ms for typical files
+- Should rarely catch errors (pre-edit auto-fix handles most cases)
+
+#### Scenario: Valid code passes post-edit check
+
+Given a Clojure file was edited by Claude
+And pre-edit auto-fix corrected any delimiter errors
+When the post-edit validation runs
+Then the validation should pass
+And the file should proceed to evaluation
+
+#### Scenario: Invalid code is detected post-edit
+
+Given a Clojure file was edited
+And an error was introduced that pre-edit missed
+When the post-edit validation runs
+Then the validation should detect the error
+And the hook should block evaluation
+And the hook should report the specific error
+
+### Requirement: File Type Filtering
+
+The hook SHALL apply validation only to Clojure and Babashka source files, allowing other file types to edit without validation overhead.
+
+**Inputs**: File path and file contents
+
+**Process**:
+
+1. Check file extension for Clojure/Babashka extensions
+2. If no recognized extension, check file contents for Babashka shebang
+3. If Clojure/Babashka file: apply validation
+4. If other file type: skip validation, return success
+
+**Outputs**: Boolean decision (validate or skip)
+
+**Constraints**:
+
+- Must recognize extensions: `.clj`, `.cljs`, `.cljc`, `.cljx`, `.bb`
+- Must recognize shebangs: `#!/usr/bin/env bb`, `#!/usr/bin/bb`, or any shebang containing `bb`
+- Must complete in < 5ms (extension check + optional first line read)
+
+#### Scenario: Non-Clojure files skip validation
+
+Given Claude edits a markdown file
+When the hook processes the edit
+Then the hook should check the file extension
+And the hook should skip all validation
+And the hook should return immediate success
+
+#### Scenario: All Clojure extensions are validated
+
+Given Claude edits a file with Clojure extension
+When the hook processes the edit
+Then the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+Valid Clojure extensions: `.clj`, `.cljs`, `.cljc`, `.cljx`
+
+#### Scenario: Babashka files with .bb extension are validated
+
+Given Claude edits a file with `.bb` extension
+When the hook processes the edit
+Then the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+#### Scenario: Files with Babashka shebang are validated
+
+Given Claude edits a file without a recognized extension
+And the file starts with a Babashka shebang
+When the hook processes the edit
+Then the hook should detect the Babashka shebang
+And the hook should apply full delimiter validation
+And the hook should auto-correct any errors
+And the hook should validate the result
+
+Valid Babashka shebangs include: `#!/usr/bin/env bb`, `#!/usr/bin/bb`, or any shebang line containing `bb`
+
+### Requirement: Clear Error Messages
+
+The hook MUST provide actionable guidance to Claude when delimiter errors cannot be automatically fixed.
+
+**Inputs**: Error details from validation failure
+
+**Outputs**: Human-readable error message with:
+
+- What went wrong
+- Where the error occurred (if known)
+- Suggested action to resolve
+
+**Constraints**:
+
+- Message must be understandable by AI agent
+- Message must suggest specific remediation
+- Message must not include internal implementation details
+
+#### Scenario: Error message guides resolution
+
+Given delimiter correction failed
+And the hook needs to block the edit
+When the hook generates the error message
+Then the message should explain what error was detected
+And the message should suggest how to fix the issue
+And the message should be clear enough for Claude to understand
+
+
+--- ARQUIVOS DO PR (20)
+added     +14    -0     .githooks/pre-commit
+modified  +38    -1     CLAUDE.md
+modified  +30    -2     README.md
+modified  +22    -6     bb.edn
+modified  +772   -14    brepl
+added     +120   -0     openspec/changes/archive/2026-01-05-create-uberscript-build/design.md
+added     +20    -0     openspec/changes/archive/2026-01-05-create-uberscript-build/proposal.md
+added     +93    -0     openspec/changes/archive/2026-01-05-create-uberscript-build/specs/packaging/spec.md
+added     +42    -0     openspec/changes/archive/2026-01-05-create-uberscript-build/tasks.md
+added     +95    -0     openspec/specs/packaging/spec.md
+modified  +5     -5     package.nix
+modified  +1     -0     shell.nix
+added     +898   -0     src/brepl.clj
+renamed   +0     -0     src/brepl/lib/backup.clj
+renamed   +0     -0     src/brepl/lib/hook_utils.clj
+renamed   +0     -0     src/brepl/lib/installer.clj
+renamed   +0     -0     src/brepl/lib/stop_hooks.clj
+renamed   +0     -4     src/brepl/lib/validator.clj
+modified  +2     -5     test/hook_validate_test.clj   <== código ligado à spec
+modified  +2     -5     test/installer_test.clj   <== código ligado à spec
+--- DIFF DO CÓDIGO LIGADO
+### test/hook_validate_test.clj
+@@ -1,10 +1,7 @@
+ (ns hook-validate-test
+   (:require [clojure.test :refer [deftest is testing]]
+-            [clojure.string :as str]))
+-
+-;; Load validator lib
+-(load-file "lib/validator.clj")
+-(require '[brepl.lib.validator :as sut])
++            [clojure.string :as str]
++            [brepl.lib.validator :as sut]))
+ 
+ ;; Tests
+ 
+
+### test/installer_test.clj
+@@ -6,11 +6,8 @@
+   (:require [clojure.test :refer [deftest is testing]]
+             [babashka.fs :as fs]
+             [clojure.java.io :as io]
+-            [cheshire.core :as json]))
+-
+-;; Load installer lib
+-(load-file "lib/installer.clj")
+-(require '[brepl.lib.installer :as sut])
++            [cheshire.core :as json]
++            [brepl.lib.installer :as sut]))
+ 
+ ;; =============================================================================
+ ;; Test Helpers
+

@@ -1,0 +1,3040 @@
+===== P130 | repo RandyChen1985/yunshu-ai-agent-platform | PR #1: Pull Request: AI 执行层迁移至 AgentScope 并重构 ChatBI/General/Knowledge 链路 | capacidade: embedchat-upload-attachments
+--- SPEC VIVA
+# embedchat-upload-attachments Specification
+
+## Purpose
+TBD - created by archiving change embedchat-upload-attachments. Update Purpose after archive.
+## Requirements
+### Requirement: 本地文件上传接口与安全校验
+系统 **SHALL** 提供 `POST /api/v1/chat/upload` 接口以供用户上传会话附件，并对上传的大小及安全性进行严格防护。
+
+#### Scenario: 上传合法的常规文件
+- **WHEN** 用户通过 `POST /api/v1/chat/upload` 发送一个 2MB 的图片 `chart.png`
+- **THEN** 系统将文件安全保存至本地目录，去除原始文件名中的特殊字符，重命名为唯一的文件名，并返回 200 响应，包含 `url`, `filename`, `size`, `ext` 的结构化元数据
+
+#### Scenario: 拦截危险脚本和可执行后缀
+- **WHEN** 用户尝试上传 `malicious.exe` 或 `exploit.sh`
+- **THEN** 系统检测到黑名单危险后缀，立即阻断，并抛出 403 Forbidden 错误
+
+#### Scenario: 拦截超出大小限制的文件
+- **WHEN** 用户尝试上传一个大于 20MB 的文件
+- **THEN** 系统阻断上传，抛出 400 (或 413) 状态码及清晰的错误提醒
+
+### Requirement: 静态资产公开托管
+系统 **SHALL** 将物理存储目录挂载在 Web 服务路由下，以便前端能够随时通过 URL 进行图片预览与文件下载。
+
+#### Scenario: 静态文件托管访问
+- **WHEN** 前端向静态文件路径 `/static/uploads/1716800000_chart.png` 发起 GET 请求
+- **THEN** 系统以二进制流形式正常输出文件，且不加重内部接口鉴权负担，方便嵌入式页面即时预览
+
+### Requirement: 前端 Plus 菜单与多通道挂载交互
+前端 **SHALL** 在输入框的输入条左侧新增极客 `+` 按钮，提供下拉菜单功能和多通道上传挂载能力。
+
+#### Scenario: 点击加号菜单展开分流
+- **WHEN** 用户点击输入条左侧的 `+` 按钮
+- **THEN** 界面弹起具有毛玻璃特效的下拉菜单，呈现“上传本地文件 (Active)”、“选择知识库 (Disabled/筹备中)”、“技能工作流 (Disabled/筹备中)”
+
+#### Scenario: 挂载已上传的附件进行预览
+- **WHEN** 用户选择本地文件上传并成功后
+- **THEN** 输入框上方渲染附件挂载预览栏，对于图片显示精致的缩略图，非图片显示规范的文件卡片，并在悬浮时呈现 `X` 删除图标以供一键移除
+
+#### Scenario: 粘贴和拖拽附件智能挂载
+- **WHEN** 用户直接往输入框拖拽本地文件释放，或者将系统剪贴板中的截图粘贴进输入区
+- **THEN** 前端智能捕获对应事件，自动上传至后端，并顺畅地将生成的文件实体挂载在附件预览区
+
+### Requirement: 发送载荷扩容与会话内存回显
+系统 **SHALL** 支持在发送消息时携带附件，并在 Redis 会话历史中保存和回显这些信息，使会话具备持久化的附件上下文记忆。
+
+#### Scenario: 携带附件发送消息
+- **WHEN** 用户在挂载 2 个附件后输入“分析刚才的数据”并点击发送
+- **THEN** 前端将 userInput 文本和包含文件 url/size/filename 等的 files 数组打包送入 `/completions`，后端持久化该轮的 files，且不影响 SSE 消息流的正常生成
+
+#### Scenario: 会话历史回显附件
+- **WHEN** 刷新页面或重新打开对话，前端 GET 请求 `/conversation/{conversation_id}` 获取历史记录
+- **THEN** 服务端返回的消息明细中完整包含已持久化的 files 附件数组，前端依据此将图片或文件卡片在对话流历史气泡中精准渲染出来
+
+### Requirement: 本地与容器持久化目录映射
+系统 **SHALL** 统一规划在宿主机及容器内的存储目录架构，并在 `docker-compose.ai-agent.yml` 中挂载它们以避免重启丢失数据。
+
+#### Scenario: 容器持久卷映射成功建立
+- **WHEN** 容器使用 `docker-compose.ai-agent.yml` 启动时
+- **THEN** 宿主机的 `./data/uploads` 自动映射为容器内的 `/app/data/uploads`，宿主机的 `./data/skills` 自动映射为 `/app/data/skills`，所有文件在物理介质上进行持久化保存
+
+### Requirement: 大模型多模态图片直连交互 (Vision Mode)
+核心智能体执行引擎 **SHALL** 能自动识别消息链中的图片附件，并将其转化为符合大模型规范的多模态格式（含文本与图片 url），供支持 Vision 能力的模型读取和交互。
+
+#### Scenario: 发送包含图片的多模态消息
+- **WHEN** 用户挂载了一张图片并发送“解释一下这幅图画”
+- **THEN** 执行器将带有图像的 HumanMessage 改装为 `[{"type": "text", "text": "解释一下这幅图画"}, {"type": "image_url", "image_url": {"url": "..."}}]`，使 Vision 大模型能直接识别图像并返回正确的解读结论
+
+
+--- ARQUIVOS DO PR (162)
+modified  +1     -0     .gitignore
+modified  +4     -4     README.md
+modified  +4     -4     README_EN.md
+modified  +15    -2     app/api/portal/endpoints/models.py
+modified  +68    -2     app/api/v1/endpoints/chat.py   <== código ligado à spec
+modified  +166   -83    app/core/llm/client.py
+modified  +29    -15    app/services/ai/agent_prompts.py
+modified  +339   -24    app/services/ai/agent_service.py   <== código ligado à spec
+modified  +10    -5     app/services/ai/audit.py
+modified  +28    -1     app/services/ai/config.py
+modified  +15    -4     app/services/ai/context_manager.py
+modified  +26    -14    app/services/ai/conversation_summarizer.py
+modified  +12    -4     app/services/ai/data_query_turn_classifier.py
+modified  +68    -20    app/services/ai/dispatcher.py
+added     +51    -0     app/services/ai/executors/assistant_executor.py
+modified  +62    -3     app/services/ai/executors/base.py
+removed   +0     -607   app/services/ai/executors/chat_executor.py
+modified  +3     -4     app/services/ai/executors/common.py
+modified  +18    -2062  app/services/ai/executors/data_executor.py   <== código ligado à spec
+added     +58    -0     app/services/ai/executors/knowledge_executor.py
+modified  +4     -3     app/services/ai/executors/openclaw_executor.py
+modified  +69    -16    app/services/ai/executors/prompts.py
+modified  +9     -8     app/services/ai/executors/rag_executor.py
+modified  +39    -13    app/services/ai/intent_service.py
+modified  +7     -4     app/services/ai/memory_service.py   <== código ligado à spec
+modified  +30    -13    app/services/ai/prompt_ops/prompt_service.py
+modified  +44    -10    app/services/ai/router_service.py
+added     +1     -0     app/services/ai/runners/__init__.py
+added     +920   -0     app/services/ai/runners/assistant_agent_runner.py
+added     +1988  -0     app/services/ai/runners/data_agent_runner.py
+added     +245   -0     app/services/ai/runners/knowledge_agent_runner.py
+added     +2     -0     app/services/ai/runtime/__init__.py
+added     +2     -0     app/services/ai/runtime/agentscope/__init__.py
+added     +84    -0     app/services/ai/runtime/agentscope/agent_runtime.py
+added     +273   -0     app/services/ai/runtime/agentscope/chat.py
+added     +38    -0     app/services/ai/runtime/agentscope/compat.py
+added     +179   -0     app/services/ai/runtime/agentscope/confirmations.py
+added     +4     -0     app/services/ai/runtime/agentscope/data_runtime.py
+added     +65    -0     app/services/ai/runtime/agentscope/data_tools.py
+added     +83    -0     app/services/ai/runtime/agentscope/errors.py
+added     +440   -0     app/services/ai/runtime/agentscope/event_stream.py
+added     +44    -0     app/services/ai/runtime/agentscope/events.py
+added     +45    -0     app/services/ai/runtime/agentscope/imports.py
+added     +65    -0     app/services/ai/runtime/agentscope/messages.py
+added     +37    -0     app/services/ai/runtime/agentscope/models.py
+added     +172   -0     app/services/ai/runtime/agentscope/pending_store.py
+added     +132   -0     app/services/ai/runtime/agentscope/session_lock.py
+added     +150   -0     app/services/ai/runtime/agentscope/state_store.py
+added     +116   -0     app/services/ai/runtime/agentscope/stream_reconcile.py
+added     +21    -0     app/services/ai/runtime/agentscope/text_sanitize.py
+added     +462   -0     app/services/ai/runtime/agentscope/tools.py
+added     +225   -0     app/services/ai/runtime/agentscope/workspace.py
+modified  +5     -3     app/services/ai/tools/advanced_auxiliary_tools.py
+modified  +1     -1     app/services/ai/tools/dashboard_tools.py
+modified  +1     -1     app/services/ai/tools/data_api.py
+modified  +2     -2     app/services/ai/tools/generic_api.py
+modified  +2     -2     app/services/ai/tools/jira_tools.py
+modified  +6     -2     app/services/ai/tools/knowledge_tool.py
+modified  +3     -3     app/services/ai/tools/mcp_factory.py
+modified  +1     -2     app/services/ai/tools/memory_ltm_tools.py
+modified  +1     -2     app/services/ai/tools/memory_search_tool.py
+modified  +1     -1     app/services/ai/tools/notification_tools.py
+modified  +255   -4     app/services/ai/tools/registry.py
+modified  +1     -1     app/services/ai/tools/system_executive_tools.py
+modified  +1     -1     app/services/ai/tools/system_tools.py
+modified  +1     -1     app/services/ai/tools/task_manager_tools.py
+added     +107   -0     app/services/ai/tools/tool_compat.py
+modified  +17    -25    app/services/ai/turn_classifier.py
+modified  +2     -2     app/services/chatbi_example_service.py
+modified  +64    -32    app/services/metadata_generator.py
+modified  +12    -0     app/services/metadata_rag_service.py
+modified  +3     -1     architech/README.md
+added     +98    -0     architech/design/AGENTSCOPE_RUNTIME.md
+modified  +1     -1     architech/design/AGENT_APP_DESIGN.md
+modified  +3     -3     architech/design/AGENT_ROUTING_DESIGN.md
+modified  +30    -29    architech/design/AI_AGENT_SYSTEM_DESIGN.md
+modified  +8     -2     architech/design/CHAT_BI_DESIGN.md
+modified  +1     -1     architech/design/GLOBAL_SYSTEM_OVERVIEW.md
+modified  +53    -41    architech/design/agent_execution_flow_review.md
+modified  +49    -21    architech/design/chat/CHAT_FLOW.md
+modified  +4     -3     architech/design/chat/PROMPT_LAYERS.md
+modified  +5     -2     architech/design/chat/README.md
+modified  +68    -82    architech/design/tool-call.md
+modified  +18    -13    architech/tools-schemal/README.md
+modified  +1     -1     db-prod/V5_consolidated_agent_system.sql
+added     +13    -0     db-prod/V72-rename_general_chat_slug_to_main.sql
+modified  +1     -1     docker/Dockerfile
+modified  +2     -2     docs/md/embed_demo.html
+modified  +1     -1     docs/md/embed_integration_guide.md
+modified  +35    -4     frontend/src/components/ConfirmModal.vue
+modified  +2     -37    frontend/src/components/MessageRenderer.vue
+modified  +153   -103   frontend/src/components/embed/ChatInput.vue   <== código ligado à spec
+added     +413   -0     frontend/src/utils/agentscopeSseHandlers.ts
+added     +51    -0     frontend/src/utils/quickButtons.ts
+added     +7     -0     frontend/src/utils/streamContentSanitize.ts
+added     +58    -0     frontend/src/utils/toolLogDisplay.ts
+modified  +389   -20    frontend/src/views/AgentDebug.vue
+modified  +166   -153   frontend/src/views/AgentManagement.vue
+modified  +413   -33    frontend/src/views/EmbedChat.vue   <== código ligado à spec
+modified  +1     -1     frontend/src/views/WidgetDebugger.vue
+modified  +1     -1     openspec/changes/archive/2026-01-22-enable-tool-runtime-config/design.md
+modified  +1     -1     openspec/changes/archive/2026-01-22-enable-tool-runtime-config/implementation_plan.md
+modified  +1     -1     openspec/changes/archive/2026-01-22-enable-tool-runtime-config/proposal.md
+modified  +1     -1     openspec/changes/archive/2026-02-05-implement-multi-agent-parallel-execution/design.md
+modified  +1     -1     openspec/changes/archive/2026-03-18-integrate-mcp-sse-client/design.md
+modified  +2     -2     openspec/changes/archive/2026-03-18-integrate-mcp-sse-client/proposal.md
+added     +2     -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/.openspec.yaml
+added     +108   -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/design.md
+added     +43    -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/proposal.md
+added     +80    -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/specs/agentscope-core-integration/spec.md
+added     +90    -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/specs/chatbi-multi-agent-team/spec.md
+added     +96    -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/tasks.md
+added     +289   -0     openspec/changes/archive/2026-06-09-refactor-to-agentscope/todo.md
+added     +84    -0     openspec/specs/agentscope-core-integration/spec.md
+added     +94    -0     openspec/specs/chatbi-multi-agent-team/spec.md
+modified  +1     -5     requirements.txt
+modified  +7     -5     tests/CHECKLIST.md
+modified  +1355  -110   tests/ai/executors/test_chat_executor.py
+modified  +1     -1     tests/ai/executors/test_common_multimodal.py
+modified  +32    -539   tests/ai/executors/test_data_executor.py
+added     +2951  -0     tests/ai/runners/test_data_agent_runner.py
+added     +286   -0     tests/ai/runners/test_general_agent_multiturn.py
+added     +131   -0     tests/ai/runtime/test_agentscope_chat_client.py
+added     +73    -0     tests/ai/runtime/test_agentscope_data_tools.py
+added     +30    -0     tests/ai/runtime/test_agentscope_environment_baseline.py
+added     +203   -0     tests/ai/runtime/test_agentscope_llm_factory.py
+added     +171   -0     tests/ai/runtime/test_agentscope_native_agent.py
+added     +139   -0     tests/ai/runtime/test_agentscope_runtime_foundation.py
+added     +133   -0     tests/ai/runtime/test_agentscope_state_pending.py
+added     +380   -0     tests/ai/runtime/test_agentscope_tooling.py
+added     +86    -0     tests/ai/runtime/test_agentscope_workspace.py
+added     +87    -0     tests/ai/runtime/test_agentscope_workspace_toolkit.py
+added     +214   -0     tests/ai/runtime/test_event_stream_observability.py
+added     +50    -0     tests/ai/runtime/test_external_execution_resume.py
+added     +95    -0     tests/ai/runtime/test_session_lock.py
+added     +69    -0     tests/ai/runtime/test_stream_reconcile.py
+added     +15    -0     tests/ai/runtime/test_text_sanitize.py
+added     +329   -0     tests/ai/runtime/test_tool_registry_runtime_specs.py
+removed   +0     -1905  tests/ai/test_data_executor_robustness.py
+modified  +42    -2     tests/ai/test_dispatcher_data_executor_boundary.py
+modified  +85    -62    tests/ai/test_dual_model_flow.py
+added     +65    -0     tests/ai/test_intent_service_agentscope.py
+modified  +19    -13    tests/ai/test_multi_agent_router.py
+modified  +82    -42    tests/ai/test_p1_optimizations.py
+modified  +13    -9     tests/ai/test_router_context.py
+modified  +6     -3     tests/ai/test_tool_description_validation.py
+modified  +110   -31    tests/ai/test_turn_classifier.py
+modified  +1     -1     tests/ai/tools/test_data_api.py
+modified  +19    -1     tests/ai/tools/test_knowledge_tool.py
+modified  +1     -0     tests/ai/tools/test_registry.py
+modified  +62    -0     tests/api/v1/test_chat_completions.py
+modified  +19    -9     tests/services/ai/prompt_ops/test_prompt_service.py
+modified  +74    -0     tests/services/ai/test_agent_service_skill_hint.py
+modified  +30    -0     tests/services/ai/test_audit_token_aggregate.py
+added     +51    -0     tests/services/ai/test_base_executor_token_usage.py
+modified  +159   -16    tests/services/ai/test_router_service.py
+modified  +7     -8     tests/test_chatbi_ltm_rewrite.py
+modified  +16    -9     tests/test_conversation_summarizer.py
+removed   +0     -119   tests/test_dry_run.py
+modified  +2     -2     tests/test_mcp_management.py
+modified  +8     -14    tests/test_xml_parsing.py
+removed   +0     -104   tests/verify_parallel_and_heartbeat.py
+--- DIFF DO CÓDIGO LIGADO
+### app/api/v1/endpoints/chat.py
+@@ -52,6 +52,7 @@ class ChatCompletionRequest(BaseModel):
+     conversation_id: Optional[str] = None  # 服务端对话记忆 ID
+     enable_multi_agent: bool = True        # 是否启用多智能体协同
+     debug_options: Optional[Dict[str, Any]] = None
++    permission_options: Optional[Dict[str, Any]] = None
+ 
+ class ChatCompletionResponse(BaseModel):
+     content: str
+@@ -62,6 +63,24 @@ class ChatCompletionResponse(BaseModel):
+     trace_id: Optional[str] = None
+ 
+ 
++class ToolPermissionConfirmRequest(BaseModel):
++    confirmed: bool = Field(..., description="是否允许执行该工具调用")
++
++
++class ExternalExecutionResultItem(BaseModel):
++    id: str = Field(..., description="tool_call id")
++    name: str = Field(..., description="tool name")
++    output: str = Field(..., description="tool execution output text")
++    state: str = Field(default="success", description="tool result state")
++
++
++class ExternalExecutionResumeRequest(BaseModel):
++    results: list[ExternalExecutionResultItem] = Field(
++        ...,
++        description="外部执行工具返回结果列表",
++    )
++
++
+ from app.schemas.response import StandardResponse
+ 
+ class GreetingResponse(BaseModel):
+@@ -206,7 +225,8 @@ async def sse_generator() -> AsyncGenerator[str, None]:
+                 user_info=user_info,
+                 api_key=api_key_str,
+                 enable_multi_agent=completion_request.enable_multi_agent,
+-                debug_options=completion_request.debug_options
++                debug_options=completion_request.debug_options,
++                permission_options=completion_request.permission_options,
+             ):
+                 # Format each chunk as an SSE data event
+                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+@@ -232,10 +252,56 @@ async def sse_generator() -> AsyncGenerator[str, None]:
+             conversation_id=completion_request.conversation_id,
+             user_info=user_info,
+             api_key=api_key_str,
+-            enable_multi_agent=completion_request.enable_multi_agent
++            enable_multi_agent=completion_request.enable_multi_agent,
++            permission_options=completion_request.permission_options,
+         )
+         return StandardResponse(data=result)
+ 
++
++@router.post(
++    "/permissions/{permission_request_id}/confirm",
++    summary="确认或拒绝待执行工具调用",
++    description="确认 AgentScope ASK 工具调用后继续原 Agent 运行，流式返回后续 SSE。",
++)
++async def confirm_tool_permission(
++    permission_request_id: str,
++    confirm_request: ToolPermissionConfirmRequest,
++    user_info: Dict[str, Any] = Depends(require_api_key),
++):
++    async def sse_generator() -> AsyncGenerator[str, None]:
++        async for chunk in agent_service.resume_agentscope_permission_stream(
++            permission_request_id=permission_request_id,
++            confirmed=confirm_request.confirmed,
++            user_info=user_info,
++        ):
++            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
++        yield "data: [DONE]\n\n"
++
++    return StreamingResponse(sse_generator(), media_type="text/event-stream")
++
++
++@router.post(
++    "/external-executions/{external_execution_request_id}/resume",
++    summary="提交外部执行工具结果并恢复 Agent",
++    description="客户端执行 external tool 后，通过此接口回传结果并继续原 Agent 运行。",
++)
++async def resume_external_execution(
++    external_execution_request_id: str,
++    resume_request: ExternalExecutionResumeRequest,
++    user_info: Dict[str, Any] = Depends(require_api_key),
++):
++    async def sse_generator() -> AsyncGenerator[str, None]:
++        async for chunk in agent_service.resume_agentscope_external_execution_stream(
++            external_execution_request_id=external_execution_request_id,
++            results=[item.model_dump() for item in resume_request.results],
++            user_info=user_info,
++        ):
++            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
++        yield "data: [DONE]\n\n"
++
++    return StreamingResponse(sse_generator(), media_type="text/event-stream")
++
++
+ @router.get("/history", 
+     response_model=StandardResponse[AgentExecutionHistoryListResponse],
+     summary="查询历史记录",
+
+### app/services/ai/agent_service.py
+@@ -15,11 +15,23 @@
+ from app.services.ai.memory_service import memory_service
+ from app.services.ai.agent_prompts import AgentServicePrompts
+ from app.services.ai.executors.common import extract_tokens_from_message
+-from langchain_core.messages import SystemMessage, HumanMessage
++from app.services.ai.runtime.agentscope.compat import HumanMessage, SystemMessage
+ from app.core.orm import AsyncSessionLocal
+ 
+ logger = logging.getLogger(__name__)
+ 
++AWAITING_RESUME_STATUSES = frozenset({"awaiting_permission", "awaiting_external_execution"})
++
++
++def _accumulate_stream_content(full: str, chunk: Dict[str, Any]) -> str:
++    """合并 SSE chunk 到会话正文；retraction 表示用新正文整体替换。"""
++    if chunk.get("type") == "retraction":
++        return str(chunk.get("content") or "")
++    if "content" in chunk:
++        return full + str(chunk["content"])
++    return full
++
++
+ class AgentService:
+     """
+     Unified Orchestrator for AI Agent interactions.
+@@ -54,7 +66,8 @@ async def chat_completion_stream(
+         user_info: Optional[Dict[str, Any]] = None,
+         api_key: Optional[str] = None,
+         enable_multi_agent: bool = True,
+-        debug_options: Optional[Dict[str, Any]] = None
++        debug_options: Optional[Dict[str, Any]] = None,
++        permission_options: Optional[Dict[str, Any]] = None,
+     ) -> AsyncGenerator[Dict[str, Any], None]:
+         """
+         Main entry point for streaming chat.
+@@ -341,7 +354,6 @@ async def chat_completion_stream(
+ 
+             # --- 按轮次类型裁剪上下文注入（与会话级 Turn 分类共用，不重复调意图 LLM）---
+             from app.services.ai.turn_classifier import (
+-                TurnClassification,
+                 TurnType,
+                 resolve_turn_for_session,
+                 should_inject_ltm,
+@@ -351,19 +363,17 @@ async def chat_completion_stream(
+                 turn_type_label,
+                 default_thought_expanded,
+             )
+-            from app.services.ai.intent_service import IntentType
+ 
+             can_do_data = "data_query" in (agent_config.capabilities or [])
+             if can_do_data:
+-                turn_classification = TurnClassification(
+-                    turn_type=TurnType.DATA_QUERY_REQUEST,
+-                    reasoning="ChatBI 正在分析本轮请求类别，后续由数据查询执行器完成精确处理",
+-                    skip_intent_llm=True,
+-                    intent=IntentType.DATA_QUERY,
++                turn_classification, turn_intent_info, turn_intent_elapsed_ms = await resolve_turn_for_session(
++                    user_query,
++                    messages,
++                    can_do_data=True,
++                    user_info=user_info,
++                    conversation_id=conversation_id,
+                 )
+-                turn_intent_info = None
+-                turn_intent_elapsed_ms = 0.0
+-                session_turn = None
++                session_turn = (turn_classification, turn_intent_info, turn_intent_elapsed_ms)
+             else:
+                 turn_classification, turn_intent_info, turn_intent_elapsed_ms = await resolve_turn_for_session(
+                     user_query,
+@@ -374,7 +384,10 @@ async def chat_completion_stream(
+                 )
+                 session_turn = (turn_classification, turn_intent_info, turn_intent_elapsed_ms)
+             early_turn_type = turn_classification.turn_type
+-            turn_display_label = "ChatBI 请求类别分析" if can_do_data else turn_type_label(turn_classification.turn_type)
++            if can_do_data and turn_classification.turn_type == TurnType.DATA_QUERY_REQUEST:
++                turn_display_label = "ChatBI 请求类别分析"
++            else:
++                turn_display_label = turn_type_label(turn_classification.turn_type)
+ 
+             # --- Long-Term Memory (LTM) Injection ---
+             if should_inject_ltm(early_turn_type) and user_info:
+@@ -579,14 +592,14 @@ async def chat_completion_stream(
+                     trace_id,
+                     trace_buffer,
+                     debug_options,
++                    permission_options,
+                     user_info,
+                     api_key,
+                     conversation_id,
+                     session_turn,
+                     route_hints,
+                 ):
+-                    if "content" in chunk:
+-                        full_response_content += chunk["content"]
++                    full_response_content = _accumulate_stream_content(full_response_content, chunk)
+                     yield chunk
+             else:
+                 # --- Standard Single Agent Mode ---
+@@ -598,6 +611,7 @@ async def chat_completion_stream(
+                     trace_id,
+                     trace_buffer,
+                     debug_options,
++                    permission_options,
+                     user_info,
+                     conversation_id,
+                     shared_turn=session_turn,
+@@ -616,8 +630,13 @@ async def chat_completion_stream(
+ 
+                 # Execution
+                 async for chunk in executor.execute(messages):
+-                    if "content" in chunk:
+-                        full_response_content += chunk["content"]
++                    full_response_content = _accumulate_stream_content(full_response_content, chunk)
++                    if chunk.get("type") == "permission_required":
++                        execution_status = "awaiting_permission"
++                    elif chunk.get("type") == "external_execution_required":
++                        execution_status = "awaiting_external_execution"
++                    elif chunk.get("type") == "error" or chunk.get("status") == "error":
++                        execution_status = "error"
+                     yield chunk
+ 
+             # 聚合本轮消耗的 Token 并 yield meta 给前端，同时传给 add_message
+@@ -668,11 +687,12 @@ async def chat_completion_stream(
+             duration = (end_time - start_time) * 1000
+             
+             # 6. Async Audit Logging & History
+-            asyncio.create_task(AuditManager.log_transaction(
+-                 trace_id, agent_config, user_query, full_response_content,
+-                 user_info, execution_status, duration, trace_buffer,
+-                 conversation_id=conversation_id
+-            ))
++            if execution_status not in AWAITING_RESUME_STATUSES:
++                asyncio.create_task(AuditManager.log_transaction(
++                     trace_id, agent_config, user_query, full_response_content,
++                     user_info, execution_status, duration, trace_buffer,
++                     conversation_id=conversation_id
++                ))
+ 
+             if (
+                 conversation_id
+@@ -699,7 +719,8 @@ async def chat_completion(
+         conversation_id: Optional[str] = None,
+         user_info: Optional[Dict[str, Any]] = None,
+         api_key: Optional[str] = None,
+-        enable_multi_agent: bool = True
++        enable_multi_agent: bool = True,
++        permission_options: Optional[Dict[str, Any]] = None,
+     ) -> Dict[str, Any]:
+         """
+         Non-streaming wrapper for chat completion.
+@@ -717,7 +738,8 @@ async def chat_completion(
+             conversation_id=conversation_id,
+             user_info=user_info,
+             api_key=api_key,
+-            enable_multi_agent=enable_multi_agent
++            enable_multi_agent=enable_multi_agent,
++            permission_options=permission_options,
+         ):
+             if "trace_id" in chunk and chunk.get("status") == "init":
+                 trace_id = chunk["trace_id"]
+@@ -733,6 +755,297 @@ async def chat_completion(
+             "agent_name": agent_name_resp
+         }
+ 
++    async def resume_agentscope_permission_stream(
++        self,
++        *,
++        permission_request_id: str,
++        confirmed: bool,
++        user_info: Optional[Dict[str, Any]] = None,
++    ) -> AsyncGenerator[Dict[str, Any], None]:
++        from app.services.ai.runtime.agentscope.confirmations import (
++            pending_agentscope_confirmations,
++        )
++
++        current_user_id = None
++        if user_info:
++            current_user_id = user_info.get("user_id") or user_info.get("id")
++
++        pending = await pending_agentscope_confirmations.pop_async(
++            permission_request_id,
++            user_id=current_user_id,
++        )
++        if not pending:
++            yield {
++                "type": "error",
++                "status": "error",
++                "content": "工具确认请求不存在或已过期，请重新发起本轮对话。",
++            }
++            return
++
++        if pending.user_id and current_user_id and str(current_user_id) != str(pending.user_id):
++            yield {
++                "type": "error",
++                "status": "error",
++                "content": "当前用户无权确认该工具调用。",
++            }
++            return
++
++        if pending.snapshot.kind == "external":
++            yield {
++                "type": "error",
++                "status": "error",
++                "content": "该请求为外部执行挂起，请使用 external execution 恢复接口。",
++            }
++            return
++
++        runner = self._build_agentscope_runner_from_pending(pending, user_info=user_info)
++
++        yield {
++            "type": "permission_result",
++            "status": "success" if confirmed else "rejected",
++            "permission_request_id": permission_request_id,
++            "tool_call_id": getattr(pending.tool_call, "id", None),
++        }
++
++        full_response_content = ""
++        execution_status = "success" if confirmed else "rejected"
++        start_time = asyncio.get_running_loop().time()
++        async for chunk in runner.resume_agentscope_native_confirmation(
++            pending,
++            confirmed=confirmed,
++        ):
++            full_response_content = _accumulate_stream_content(full_response_content, chunk)
++            yield chunk
++
++        p_tokens, c_tokens, t_tokens = 0, 0, 0
++        trace_buffer = runner.trace_buffer
++        try:
++            from app.services.ai.audit import aggregate_tokens_from_trace_buffer
++            p_tokens, c_tokens, t_tokens = aggregate_tokens_from_trace_buffer(trace_buffer) if trace_buffer else (0, 0, 0)
++        except Exception as agg_err:
++            logger.warning(f"Failed to aggregate tokens after permission resume: {agg_err}")
++
++        if p_tokens or c_tokens:
++            yield {
++                "type": "meta",
++                "prompt_tokens": p_tokens,
++                "completion_tokens": c_tokens,
++                "total_tokens": t_tokens,
++            }
++
++        agent_config = runner.config
++        conversation_id = runner.conversation_id or pending.snapshot.conversation_id
++        user_query = (pending.state or {}).get("user_query") or ""
++
++        if conversation_id and full_response_content:
++            u_id = user_info.get("user_id") if user_info else pending.user_id
++            handled_by = getattr(agent_config, "agent_name", None) if agent_config else None
++            asyncio.create_task(memory_service.add_message(
++                u_id,
++                conversation_id,
++                "assistant",
++                full_response_content,
++                trace_id=pending.trace_id,
++                agent_name=handled_by,
++                prompt_tokens=p_tokens,
++                completion_tokens=c_tokens,
++            ))
++
++        duration = (asyncio.get_running_loop().time() - start_time) * 1000
++        asyncio.create_task(AuditManager.log_transaction(
++            pending.trace_id,
++            agent_config,
++            user_query,
++            full_response_content,
++            user_info,
++            execution_status,
++            duration,
++            trace_buffer,
++            conversation_id=conversation_id,
++        ))
++
++        if (
++            conversation_id
++            and execution_status == "success"
++            and full_response_content
++            and user_info
++            and user_info.get("user_id")
++        ):
++            from app.services.ai.session_summary_service import SessionSummaryService
++            asyncio.create_task(
++                SessionSummaryService.merge_session_summary(
++                    str(user_info.get("user_id")), conversation_id, full_response_content
++                )
++            )
++
++    def _build_agentscope_runner_from_pending(
++        self,
++        pending: Any,
++        *,
++        user_info: Optional[Dict[str, Any]] = None,
++    ) -> Any:
++        runner = pending.runner
++        if runner is not None:
++            return runner
++
++        ctx = pending.snapshot.runner_context or {}
++        if ctx.get("runner_type") == "data":
+
+### app/services/ai/executors/data_executor.py
+(sem diff: binário ou grande demais)
+
+### app/services/ai/memory_service.py
+@@ -109,10 +109,8 @@ async def add_message(self, user_id: str, conversation_id: str, role: str, conte
+             message["files"] = files
+         if agent_name:
+             message["agent_name"] = agent_name
+-        if prompt_tokens:
+-            message["prompt_tokens"] = prompt_tokens
+-        if completion_tokens:
+-            message["completion_tokens"] = completion_tokens
++        message["prompt_tokens"] = int(prompt_tokens or 0)
++        message["completion_tokens"] = int(completion_tokens or 0)
+ 
+         
+         # Push to list
+@@ -179,6 +177,11 @@ async def clear_history(self, user_id: str, conversation_id: str):
+     async def delete_session_memory(self, user_id: str, conversation_id: str, include_summary: bool = True):
+         """Delete LIST history and optionally summary index doc."""
+         await self.clear_history(user_id, conversation_id)
++        from app.services.ai.runtime.agentscope.state_store import agent_state_store
++        from app.services.ai.runtime.agentscope.workspace import delete_workspace_for_session
++
++        await agent_state_store.delete(user_id, conversation_id)
++        await delete_workspace_for_session(user_id, conversation_id)
+         if include_summary:
+             from app.services.ai.memory_index_service import MemoryIndexService
+             await MemoryIndexService.delete_summary(str(user_id), conversation_id)
+
+### frontend/src/components/embed/ChatInput.vue
+@@ -4,6 +4,13 @@ import MentionList from "@/components/agent/MentionList.vue";
+ import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
+ import { isImageAttachment } from "@/utils/attachmentImages";
+ 
++type ApprovalMode = "ask" | "allow" | "deny";
++type ModelOption = {
++  id?: string;
++  name?: string;
++  model_id: string;
++};
++
+ const props = defineProps<{
+   modelValue: string;
+   isProcessing: boolean;
+@@ -12,10 +19,15 @@ const props = defineProps<{
+   allowedAgents: any[];
+   currentUser: any;
+   windowWidth: number;
++  approvalMode?: ApprovalMode;
++  selectedModel?: string;
++  availableModels?: ModelOption[];
+ }>();
+ 
+ const emit = defineEmits<{
+   (e: 'update:modelValue', val: string): void;
++  (e: 'update:approvalMode', val: ApprovalMode): void;
++  (e: 'update:selectedModel', val: string): void;
+   (e: 'send'): void;
+   (e: 'stop'): void;
+   (e: 'toggle-shortcuts'): void;
+@@ -113,8 +125,8 @@ const handleInput = (e: Event) => {
+     inputRef.value.style.height = "auto";
+     inputRef.value.style.height = Math.min(inputRef.value.scrollHeight, 120) + "px";
+   }
+-  // Don't show command menu during composition
+-  if (val.startsWith("/") && props.windowWidth < 640 && !isComposing.value) {
++  // Don't show command menu during IME composition
++  if (val.startsWith("/") && !isComposing.value) {
+     showCommandMenu.value = true;
+     activeCommandIndex.value = 0;
+   } else {
+@@ -192,6 +204,12 @@ const canSend = computed(
+   () => !!props.modelValue.trim() || uploadedFiles.value.length > 0,
+ );
+ 
++const modelLabel = computed(() => {
++  if (!props.selectedModel) return "模型";
++  const model = props.availableModels?.find((item) => item.model_id === props.selectedModel);
++  return model?.name || props.selectedModel;
++});
++
+ const plusMenuContainerRef = ref<HTMLElement | null>(null);
+ 
+ const handleGlobalClick = (event: MouseEvent) => {
+@@ -480,115 +498,147 @@ defineExpose({
+         </div>
+ 
+         <!-- Input Box -->
+-        <div @dragover.prevent @drop="handleDropFile" class="relative flex items-end bg-gray-50 dark:bg-gray-800 rounded-xl px-2 py-2 border border-gray-200 dark:border-gray-700 transition-all duration-500" :class="{ 'ring-2 ring-primary/20 border-primary/30 bg-white dark:bg-gray-900 shadow-lg shadow-primary/5': isProcessing }">
++        <div @dragover.prevent @drop="handleDropFile" class="relative flex flex-col bg-gray-50 dark:bg-gray-800 rounded-2xl px-3 py-2.5 border border-gray-200 dark:border-gray-700 transition-all duration-500" :class="{ 'ring-2 ring-primary/20 border-primary/30 bg-white dark:bg-gray-900 shadow-lg shadow-primary/5': isProcessing }">
+             <div v-if="isProcessing" class="absolute inset-0 rounded-xl opacity-40 pointer-events-none overflow-hidden">
+                 <div class="absolute inset-0 bg-gradient-to-r from-transparent via-primary/20 to-transparent w-[200%] animate-scan"></div>
+             </div>
+-            
+-            <!-- Plus Button & Menu (Premium Glassmorphism Style) -->
+-            <div ref="plusMenuContainerRef" class="relative flex-shrink-0 z-30 mr-1 self-center">
+-                <button @click="togglePlusMenu" :disabled="isProcessing" class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400" :class="{ 'text-primary bg-gray-100 dark:bg-gray-700 rotate-45': showPlusMenu && !isProcessing }">
+-                    <svg class="w-5 h-5 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
+-                    </svg>
+-                </button>
+-                
+-                <input type="file" multiple ref="fileInputRef" @change="handleFileChange" class="hidden" />
+-
+-                <!-- Menu Dropdown -->
+-                <transition 
+-                  enter-active-class="transition ease-out duration-100" 
+-                  enter-from-class="transform opacity-0 scale-95" 
+-                  enter-to-class="transform opacity-100 scale-100" 
+-                  leave-active-class="transition ease-in duration-75" 
+-                  leave-from-class="transform opacity-100 scale-100" 
+-                  leave-to-class="transform opacity-0 scale-95"
++
++            <div
++              v-if="showCommandMenu && filteredCommands.length > 0 && !isProcessing"
++              class="absolute bottom-full left-0 right-0 z-[100] mb-2 flex max-h-72 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl animate-fade-in-up dark:border-gray-700 dark:bg-gray-800 sm:max-w-sm"
++            >
++              <div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-700">
++                <div class="flex items-center space-x-2">
++                  <span class="text-[10px] font-black uppercase tracking-widest text-gray-400">快捷指令库</span>
++                  <span class="rounded-md bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary">{{ filteredCommands.length }} 匹配</span>
++                </div>
++              </div>
++              <div class="overflow-y-auto p-1 custom-scrollbar">
++                <div
++                  v-for="(cmd, index) in filteredCommands"
++                  :key="cmd.id"
++                  @click="selectCommand(cmd)"
++                  class="flex cursor-pointer items-center space-x-3 rounded-lg px-3 py-2 transition-all"
++                  :class="index === activeCommandIndex ? 'bg-primary/10 ring-1 ring-primary/20 dark:bg-primary/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'"
+                 >
+-                    <div v-if="showPlusMenu" class="absolute bottom-full left-0 mb-2 w-52 bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-xl shadow-xl border border-gray-200/50 dark:border-gray-700/50 py-1.5 z-50 animate-fade-in-up">
+-                        <!-- Upload File (Active) -->
+-                        <button @click="triggerFileInput" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
+-                            <span class="text-lg">📁</span>
+-                            <span class="font-medium text-left">上传本地文件</span>
+-                        </button>
+-
+-                        <!-- Browse Server Files (Active) -->
+-                        <button @click="showPlusMenu = false; emit('select-local-fs');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
+-                            <span class="text-lg">💻</span>
+-                            <span class="font-medium text-left">浏览服务器文件</span>
+-                        </button>
+-                        
+-                        <!-- Knowledge Base -->
+-                        <button @click="showPlusMenu = false; emit('select-knowledge-base');" class="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
+-                            <div class="flex items-center space-x-3">
+-                                <span class="text-lg">📚</span>
+-                                <span class="font-medium text-left">选择知识库</span>
+-                            </div>
+-                        </button>
+-                        
+-                        <!-- Skills (Active) -->
+-                        <button @click="showPlusMenu = false; emit('select-skill');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
+-                            <span class="text-lg">⚙️</span>
+-                            <span class="font-medium text-left">调用技能工作流</span>
+-                        </button>
+-
+-                        <!-- Memory Records -->
+-                        <button @click="showPlusMenu = false; emit('select-memory');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
+-                            <span class="text-lg">🧠</span>
+-                            <span class="font-medium text-left">选择记忆记录</span>
+-                        </button>
++                  <div class="min-w-0 flex-1">
++                    <div class="flex items-center space-x-2">
++                      <span class="truncate text-sm font-bold text-gray-900 dark:text-gray-100" :class="index === activeCommandIndex ? 'text-primary' : ''">
++                        {{ cmd.label }}
++                      </span>
++                      <span v-if="String(cmd.id).startsWith('sys_')" class="rounded border border-gray-200 bg-gray-100 px-1 py-0.5 text-[8px] font-black uppercase tracking-tighter text-gray-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-400">SYS</span>
+                     </div>
+-                </transition>
++                    <div class="truncate font-mono text-[10px] text-gray-400 opacity-70">
++                      {{ cmd.command }}
++                    </div>
++                  </div>
++                </div>
++              </div>
+             </div>
+-            
+-            <textarea ref="inputRef" :value="modelValue" :disabled="isProcessing" @input="handleInput" @keydown="handleKeydown" @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" @paste="handlePaste" rows="1" class="flex-1 bg-transparent border-none outline-none focus:ring-0 text-base sm:text-sm placeholder:text-sm py-2 px-2 resize-none max-h-32 text-gray-900 dark:text-gray-100 placeholder-gray-400 peer z-10 relative disabled:cursor-not-allowed disabled:opacity-60" :placeholder="isProcessing ? 'AI 正在生成回复...' : (windowWidth < 640 ? '输入消息，或 \'/\' 使用快捷指令...' : '输入消息...')"></textarea>
+-            <button @click="isProcessing ? emit('stop') : emit('send')" :disabled="!isProcessing && !canSend" class="flex-shrink-0 mb-1 ml-2 p-1.5 rounded-lg text-white hover:opacity-90 disabled:opacity-50 transition-all z-10 relative" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }">
+-                <svg v-if="isProcessing" class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" /></svg>
+-                <svg v-else class="w-4 h-4 transform rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+-            </button>
+-        </div>
+-        <div class="mt-1 text-center"><span class="text-[10px] text-gray-300 dark:text-gray-600">Powered by Yunshu AI</span></div>
+-      </div>
+ 
+-      <div
+-        v-if="showCommandMenu && filteredCommands.length > 0 && !isProcessing"
+-        class="fixed z-[100] bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col animate-fade-in-up"
+-        :class="[
+-          'w-[calc(100vw-2rem)] sm:w-64'
+-        ]"
+-        :style="{ 
+-          bottom: '80px',
+-          left: windowWidth < 640 ? '1rem' : 'auto',
+-          right: windowWidth < 640 ? 'auto' : '1rem',
+-          maxHeight: windowWidth < 640 ? '40vh' : '18rem' 
+-        }"
+-      >
+-        <div class="px-3 py-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-100 dark:border-gray-600 flex justify-between items-center">
+-          <div class="flex items-center space-x-2">
+-            <span class="text-[10px] font-black text-gray-400 dark:text-gray-400 uppercase tracking-widest">快捷指令库</span>
+-            <span class="px-1.5 py-0.5 bg-primary/10 text-primary text-[9px] font-bold rounded-md">{{ filteredCommands.length }} 匹配</span>
+-          </div>
+-        </div>
+-        
+-        <div class="overflow-y-auto custom-scrollbar p-1">
+-          <div
+-            v-for="(cmd, index) in filteredCommands"
+-            :key="cmd.id"
+-            @click="selectCommand(cmd)"
+-            class="flex items-center space-x-3 px-3 py-2 rounded-lg cursor-pointer transition-all"
+-            :class="index === activeCommandIndex ? 'bg-primary/10 dark:bg-primary/20 ring-1 ring-primary/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700'"
+-          >
+-            <div class="flex-1 min-w-0">
+-              <div class="flex items-center space-x-2">
+-                <span class="text-sm font-bold text-gray-900 dark:text-gray-100 truncate" :class="index === activeCommandIndex ? 'text-primary' : ''">
+-                  {{ cmd.label }}
+-                </span>
+-                <span v-if="String(cmd.id).startsWith('sys_')" class="px-1 py-0.5 rounded text-[8px] bg-gray-100 text-gray-500 border border-gray-200 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-400 font-black uppercase tracking-tighter">SYS</span>
+-              </div>
+-              <div class="text-[10px] text-gray-400 truncate font-mono opacity-70">
+-                {{ cmd.command }}
+-              </div>
++            <textarea ref="inputRef" :value="modelValue" :disabled="isProcessing" @input="handleInput" @keydown="handleKeydown" @compositionstart="handleCompositionStart" @compositionend="handleCompositionEnd" @paste="handlePaste" rows="1" class="w-full min-h-[46px] bg-transparent border-none outline-none focus:ring-0 text-base sm:text-sm placeholder:text-sm px-0 py-1 resize-none max-h-32 text-gray-900 dark:text-gray-100 placeholder-gray-400 peer z-10 relative disabled:cursor-not-allowed disabled:opacity-60" :placeholder="isProcessing ? 'AI 正在生成回复...' : '输入消息，或 \'/\' 使用快捷指令...'"></textarea>
++
++            <div class="relative z-20 mt-1 flex min-h-9 items-center gap-2">
++                <!-- Plus Button & Menu (Premium Glassmorphism Style) -->
++                <div ref="plusMenuContainerRef" class="relative flex-shrink-0 z-30">
++                    <button @click="togglePlusMenu" :disabled="isProcessing" class="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-200 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400" :class="{ 'text-primary bg-gray-100 dark:bg-gray-700 rotate-45': showPlusMenu && !isProcessing }" title="添加附件或上下文">
++                        <svg class="w-5 h-5 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
++                        </svg>
++                    </button>
++
++                    <input type="file" multiple ref="fileInputRef" @change="handleFileChange" class="hidden" />
++
++                    <!-- Menu Dropdown -->
++                    <transition
++                      enter-active-class="transition ease-out duration-100"
++                      enter-from-class="transform opacity-0 scale-95"
++                      enter-to-class="transform opacity-100 scale-100"
++                      leave-active-class="transition ease-in duration-75"
++                      leave-from-class="transform opacity-100 scale-100"
++                      leave-to-class="transform opacity-0 scale-95"
++                    >
++                        <div v-if="showPlusMenu" class="absolute bottom-full left-0 mb-2 w-52 bg-white/95 dark:bg-gray-800/95 backdrop-blur-md rounded-xl shadow-xl border border-gray-200/50 dark:border-gray-700/50 py-1.5 z-50 animate-fade-in-up">
++                            <!-- Upload File (Active) -->
++                            <button @click="triggerFileInput" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
++                                <span class="text-lg">📁</span>
++                                <span class="font-medium text-left">上传本地文件</span>
++                            </button>
++
++                            <!-- Browse Server Files (Active) -->
++                            <button @click="showPlusMenu = false; emit('select-local-fs');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
++                                <span class="text-lg">💻</span>
++                                <span class="font-medium text-left">浏览服务器文件</span>
++                            </button>
++
++                            <!-- Knowledge Base -->
++                            <button @click="showPlusMenu = false; emit('select-knowledge-base');" class="w-full flex items-center justify-between px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
++                                <div class="flex items-center space-x-3">
++                                    <span class="text-lg">📚</span>
++                                    <span class="font-medium text-left">选择知识库</span>
++                                </div>
++                            </button>
++
++                            <!-- Skills (Active) -->
++                            <button @click="showPlusMenu = false; emit('select-skill');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
++                                <span class="text-lg">⚙️</span>
++                                <span class="font-medium text-left">调用技能工作流</span>
++                            </button>
++
++                            <!-- Memory Records -->
++                            <button @click="showPlusMenu = false; emit('select-memory');" class="w-full flex items-center space-x-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary transition-all duration-150">
++                                <span class="text-lg">🧠</span>
++                                <span class="font-medium text-left">选择记忆记录</span>
++                            </button>
++                        </div>
++                    </transition>
++                </div>
++
++                <label class="relative flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-semibold text-gray-500 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700/70">
++                    <span class="pointer-events-none">请求批准</span>
++                    <select
++                      :value="approvalMode || 'ask'"
++                      :disabled="isProcessing"
++                      class="approval-mode-select absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
++                      aria-label="批准方式"
++                      @change="emit('update:approvalMode', (($event.target as HTMLSelectElement).value as ApprovalMode))"
++                    >
++                        <option value="ask">ASK</option>
++                        <option value="allow">ALLOW</option>
++                        <option value="deny">DENY</option>
++                    </select>
++                    <span class="pointer-events-none text-gray-700 dark:text-gray-200">{{ (approvalMode || 'ask').toUpperCase() }}</span>
++                    <svg class="pointer-events-none h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6" />
++                    </svg>
++                </label>
++
++                <div class="flex-1"></div>
++
++                <label class="relative flex max-w-[9rem] items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700/70 sm:max-w-[14rem]" :title="selectedModel ? `覆盖模型: ${selectedModel}` : '使用智能体默认模型'">
++                    <span class="pointer-events-none max-w-[7rem] truncate sm:max-w-[12rem]">{{ modelLabel }}</span>
++                    <select
++                      :value="selectedModel || ''"
++                      :disabled="isProcessing"
++                      class="model-select absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
++                      aria-label="模型选择"
++                      @change="emit('update:selectedModel', ($event.target as HTMLSelectElement).value)"
++                    >
++                        <option value="">使用默认模型</option>
++                        <option v-for="model in (availableModels || [])" :key="model.id || model.model_id" :value="model.model_id">
++                            {{ model.name || model.model_id }}
++                        </option>
++                    </select>
++                    <svg class="pointer-events-none h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6" />
++                    </svg>
++                </label>
++
++                <button @click="isProcessing ? emit('stop') : emit('send')" :disabled="!isProcessing && !canSend" class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-white hover:opacity-90 disabled:opacity-50 transition-all shadow-sm z-10 relative" :style="{ backgroundColor: 'var(--primary-color, #1677ff)' }" :title="isProcessing ? '停止生成' : '发送'">
++                    <svg v-if="isProcessing" class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" /></svg>
++                    <svg v-else class="w-4 h-4 -rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" d="M5 12h14M13 6l6 6-6 6" /></svg>
++                </button>
+             </div>
+-          </div>
+
+### frontend/src/views/EmbedChat.vue
+@@ -666,8 +666,30 @@
+                              </div>
+                           </div>                          <!-- Details -->
+                           <div v-if="log.details && log.isExpanded" class="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+-                            <!-- SQL Detection & Pretty Print -->
+-                            <div v-if="log.details && (log.details.includes('SELECT ') || log.details.includes('[Executed SQL]:') || log.details.includes('SQL:'))" class="space-y-1.5 mb-1">
++                            <template v-if="splitSqlToolLogDetails(log.details)">
++                              <div class="space-y-1.5 mb-1">
++                                <div class="p-2 bg-gray-900 rounded border border-gray-800 font-mono text-[10px] text-emerald-400 leading-relaxed overflow-x-auto relative group/sql">
++                                  <div class="flex justify-between items-center mb-1 text-[9px] text-gray-500 font-sans uppercase tracking-tight">
++                                    <span>SQL Query</span>
++                                    <button @click.stop="copyMessage(splitSqlToolLogDetails(log.details)!.sqlPart)" class="text-gray-600 hover:text-emerald-400 transition-colors uppercase">Copy</button>
++                                  </div>
++                                  <pre class="whitespace-pre-wrap break-all">{{ splitSqlToolLogDetails(log.details)!.sqlPart }}</pre>
++                                </div>
++                                <div class="p-2 rounded border font-mono text-[10px] leading-relaxed overflow-x-auto"
++                                     :class="splitSqlToolLogDetails(log.details)!.bodyKind === 'error'
++                                       ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900/40 text-red-700 dark:text-red-300'
++                                       : 'bg-gray-50 dark:bg-gray-900/60 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'">
++                                  <div class="mb-1 text-[9px] font-sans uppercase tracking-tight"
++                                       :class="splitSqlToolLogDetails(log.details)!.bodyKind === 'error' ? 'text-red-500' : 'text-gray-500'">
++                                    {{ sqlToolLogBodyLabel(splitSqlToolLogDetails(log.details)!.bodyKind) }}
++                                  </div>
++                                  <pre class="whitespace-pre-wrap break-all">{{ splitSqlToolLogDetails(log.details)!.bodyPart }}</pre>
++                                </div>
++                                <pre v-if="splitSqlToolLogDetails(log.details)!.trailingPart" class="font-mono text-[10px] text-amber-600 dark:text-amber-400 whitespace-pre-wrap break-all">{{ splitSqlToolLogDetails(log.details)!.trailingPart }}</pre>
++                              </div>
++                            </template>
++                            <!-- SQL Detection & Pretty Print (legacy / error-only logs) -->
++                            <div v-else-if="log.details && isSqlLikeToolLogDetails(log.details)" class="space-y-1.5 mb-1">
+                                 <div class="p-2 bg-gray-900 rounded border border-gray-800 font-mono text-[10px] text-emerald-400 leading-relaxed overflow-x-auto relative group/sql">
+                                     <div class="flex justify-between items-center mb-1 text-[9px] text-gray-500 font-sans uppercase tracking-tight">
+                                       <span>SQL Query</span>
+@@ -684,6 +706,117 @@
+                   </div>
+                 </transition>
+               </div>
++              <!-- Tool Permission Confirmation -->
++              <div
++                v-if="msg.pendingPermission"
++                class="mt-3 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50/80 dark:bg-amber-900/20 p-3 text-xs"
++              >
++                <div class="flex items-start gap-2">
++                  <div class="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
++                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
++                    </svg>
++                  </div>
++                  <div class="min-w-0 flex-1">
++                    <div class="flex items-center justify-between gap-3">
++                      <div class="font-bold text-amber-900 dark:text-amber-100 truncate">
++                        {{ msg.pendingPermission.title || '工具调用确认' }}
++                      </div>
++                      <span
++                        class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
++                        :class="{
++                          'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300': msg.pendingPermission.status === 'pending',
++                          'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300': msg.pendingPermission.status === 'approved',
++                          'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300': msg.pendingPermission.status === 'rejected',
++                          'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300': msg.pendingPermission.status === 'error' || msg.pendingPermission.status === 'expired'
++                        }"
++                      >
++                        {{ formatPermissionStatus(msg.pendingPermission.status) }}
++                      </span>
++                    </div>
++                    <div class="mt-1 text-amber-800/80 dark:text-amber-200/80 break-words">
++                      {{ msg.pendingPermission.details }}
++                    </div>
++                    <div
++                      v-if="msg.pendingPermission.tool_call?.name"
++                      class="mt-2 rounded-md bg-white/70 dark:bg-gray-950/30 border border-amber-100 dark:border-amber-900/40 p-2 font-mono text-[10px] text-gray-600 dark:text-gray-300 overflow-x-auto"
++                    >
++                      <span>{{ msg.pendingPermission.tool_call.name }}</span>
++                      <span v-if="msg.pendingPermission.tool_call.args"> {{ JSON.stringify(msg.pendingPermission.tool_call.args) }}</span>
++                    </div>
++                    <div v-if="msg.pendingPermission.status === 'pending'" class="mt-3 flex items-center gap-2">
++                      <button
++                        @click="confirmPendingPermission(msg, true)"
++                        :disabled="msg.pendingPermission.isSubmitting"
++                        class="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
++                      >
++                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="m5 13 4 4L19 7" />
++                        </svg>
++                        允许
++                      </button>
++                      <button
++                        @click="confirmPendingPermission(msg, false)"
++                        :disabled="msg.pendingPermission.isSubmitting"
++                        class="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-bold text-gray-700 border border-gray-200 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700"
++                      >
++                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 18 18 6M6 6l12 12" />
++                        </svg>
++                        拒绝
++                      </button>
++                    </div>
++                  </div>
++                </div>
++              </div>
++              <!-- External Tool Execution -->
++              <div
++                v-if="msg.pendingExternalExecution"
++                class="mt-3 rounded-lg border border-sky-200 dark:border-sky-900/50 bg-sky-50/80 dark:bg-sky-900/20 p-3 text-xs"
++              >
++                <div class="flex items-start gap-2">
++                  <div class="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
++                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
++                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M14 4h6m0 0v6m0-6L10 14" />
++                    </svg>
++                  </div>
++                  <div class="min-w-0 flex-1">
++                    <div class="flex items-center justify-between gap-3">
++                      <div class="font-bold text-sky-900 dark:text-sky-100 truncate">
++                        {{ msg.pendingExternalExecution.title || '外部工具执行' }}
++                      </div>
++                      <span class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
++                        {{ formatExternalExecutionStatus(msg.pendingExternalExecution.status) }}
++                      </span>
++                    </div>
++                    <div class="mt-1 text-sky-800/80 dark:text-sky-200/80 break-words">
++                      {{ msg.pendingExternalExecution.details }}
++                    </div>
++                    <div
++                      v-if="msg.pendingExternalExecution.tool_call?.name"
++                      class="mt-2 rounded-md bg-white/70 dark:bg-gray-950/30 border border-sky-100 dark:border-sky-900/40 p-2 font-mono text-[10px] text-gray-600 dark:text-gray-300 overflow-x-auto"
++                    >
++                      <span>{{ msg.pendingExternalExecution.tool_call.name }}</span>
++                      <span v-if="msg.pendingExternalExecution.tool_call.args"> {{ JSON.stringify(msg.pendingExternalExecution.tool_call.args) }}</span>
++                    </div>
++                    <div v-if="msg.pendingExternalExecution.status === 'pending'" class="mt-3 space-y-2">
++                      <textarea
++                        v-model="msg.pendingExternalExecution.outputDraft"
++                        rows="4"
++                        placeholder="在此粘贴客户端执行该工具后的输出结果..."
++                        class="w-full rounded-md border border-sky-200 dark:border-sky-800 bg-white/90 dark:bg-gray-950/40 px-3 py-2 text-xs text-gray-700 dark:text-gray-200"
++                      />
++                      <button
++                        @click="submitPendingExternalExecution(msg)"
++                        :disabled="msg.pendingExternalExecution.isSubmitting"
++                        class="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
++                      >
++                        提交结果并继续
++                      </button>
++                    </div>
++                  </div>
++                </div>
++              </div>
+               <!-- Main Content -->
+               <div v-if="msg.content" class="relative group/content mt-2">
+                 <!-- Floating Copy Button (Moved here to avoid overlap) -->
+@@ -1042,6 +1175,11 @@
+         :allowed-agents="allowedAgents"
+         :current-user="currentUser"
+         :window-width="windowWidth"
++        :approval-mode="config.approvalMode"
++        :selected-model="config.overrideModel"
++        :available-models="availableModels"
++        @update:approval-mode="(mode) => { config.approvalMode = mode; saveRoutingSettings(); }"
++        @update:selected-model="(model) => { config.overrideModel = model; saveRoutingSettings(); }"
+         @send="sendMessage"
+         @stop="stopGeneration"
+         @toggle-shortcuts="toggleShortcuts"
+@@ -1941,6 +2079,8 @@ import RagFlowResourceSelector from "@/components/RagFlowResourceSelector.vue";
+ import FileBrowserModal from "@/components/embed/FileBrowserModal.vue";
+ import AttachmentImageThumb from "@/components/embed/AttachmentImageThumb.vue";
+ import { isImageAttachment } from "@/utils/attachmentImages";
++import { sanitizeStreamContent } from "@/utils/streamContentSanitize";
++import { createSseLineParser } from "@/utils/chartRenderer";
+ import { modelApi, type AIModel } from "@/api/model";
+ import {
+   filterLogsForTurn,
+@@ -1949,6 +2089,16 @@ import {
+   countHiddenLogs,
+   type TurnType,
+ } from "@/utils/turnLogDisplay";
++import { splitSqlToolLogDetails, isSqlLikeToolLogDetails, sqlToolLogBodyLabel } from "@/utils/toolLogDisplay";
++import {
++  dispatchAgentscopeStreamEvent,
++  formatExternalExecutionStatus,
++  formatPermissionStatus,
++  handlePermissionRequired as applyPermissionRequiredEvent,
++  resumeExternalExecutionStream,
++  type PendingExternalExecution,
++  type PendingToolPermission,
++} from "@/utils/agentscopeSseHandlers";
+ // --- Types ---
+ interface LogEntry {
+   id: number | string;
+@@ -1957,7 +2107,7 @@ interface LogEntry {
+   status: "pending" | "success" | "error";
+   isExpanded: boolean;
+   isRouter?: boolean;
+-  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'intent' | 'permission' | 'default';
++  category?: 'router' | 'sql' | 'knowledge' | 'tool' | 'intent' | 'permission' | 'external' | 'model' | 'agent' | 'context' | 'default';
+   execution_time_ms?: number | null;
+   elapsed_time_ms?: number | null;
+   started_at?: number | null;
+@@ -1999,6 +2149,9 @@ interface Message {
+   feedback?: "up" | "down" | null;
+   timestamp?: string;
+   isTimeLabel?: boolean;
++  pendingPermission?: PendingToolPermission;
++  pendingExternalExecution?: PendingExternalExecution;
++  toolResultData?: Record<string, Array<{ block_id?: string; media_type?: string; data?: unknown; url?: string | null }>>;
+ }
+ // Helper: Check Role
+ const checkRole = (msg: Message, role: string): boolean => {
+@@ -2382,6 +2535,7 @@ const config = reactive({
+   theme: "light",
+   welcomeMessage: "",
+   overrideModel: "", // To override default model
++  approvalMode: "ask" as "ask" | "allow" | "deny",
+   overrideAgentId: "", // To override agent via @mention
+   userAvatar: "", // Custom user avatar URL
+   routingMode: "auto", // 'auto' | 'expert'
+@@ -2399,6 +2553,7 @@ const saveRoutingSettings = () => {
+     localStorage.setItem("yovole_enable_multi_agent", config.enableMultiAgent ? "1" : "0");
+     localStorage.setItem("yovole_show_shortcuts", config.showShortcuts ? "1" : "0");
+     localStorage.setItem("yovole_override_model", config.overrideModel || "");
++    localStorage.setItem("yovole_approval_mode", config.approvalMode || "ask");
+     localStorage.setItem("yovole_embed_theme", config.theme || "light");
+ };
+ const triggerMultiAgentHint = (enabled: boolean) => {
+@@ -2544,7 +2699,7 @@ const resetStallTimer = () => {
+ const showCommandMenu = ref(false);
+ const slashCommands = ref<any[]>([
+   { id: "sys_history", command: "/history", label: "🕒 历史", sort_order: -20 },
+-  { id: "sys_clear", command: "/clear", label: "💬 新会话", sort_order: -18 },
++  { id: "sys_clear", command: "/new", label: "💬 新会话", sort_order: -18 },
+   { id: "sys_settings", command: "/settings", label: "⚙️ 设置", sort_order: -15 },
+ ]);
+ // History Sidebar State
+@@ -3378,7 +3533,7 @@ const fetchSlashCommands = async () => {
+       // 定义系统命令
+       const systemCommands = [
+         { id: "sys_history", command: "/history", label: "🕒 历史", sort_order: -20 },
+-        { id: "sys_clear", command: "/clear", label: "💬 新会话", sort_order: -18 },
++        { id: "sys_clear", command: "/new", label: "💬 新会话", sort_order: -18 },
+         { id: "sys_settings", command: "/settings", label: "⚙️ 设置", sort_order: -15 }
+       ];
+       // 合并系统命令和用户命令，并按 sort_order 排序
+@@ -3390,7 +3545,7 @@ const fetchSlashCommands = async () => {
+       // 如果API没有返回数据，至少确保系统命令存在
+       const systemCommands = [
+         { id: "sys_history", command: "/history", label: "🕒 历史", sort_order: -20 },
+-        { id: "sys_clear", command: "/clear", label: "💬 新会话", sort_order: -18 },
++        { id: "sys_clear", command: "/new", label: "💬 新会话", sort_order: -18 },
+         { id: "sys_settings", command: "/settings", label: "⚙️ 设置", sort_order: -15 }
+       ];
+       slashCommands.value = systemCommands;
+@@ -3401,7 +3556,7 @@ const fetchSlashCommands = async () => {
+     const systemCommands = [
+       { id: "sys_history", command: "/history", label: "🕒 历史", sort_order: -20 },
+       { id: "sys_settings", command: "/settings", label: "⚙️ 设置", sort_order: -15 },
+-      { id: "sys_clear", command: "/clear", label: "💬 新会话", sort_order: -10 }
++      { id: "sys_clear", command: "/new", label: "💬 新会话", sort_order: -10 }
+     ];
+     slashCommands.value = systemCommands;
+   }
+@@ -3678,7 +3833,8 @@ const handleSystemCommand = (cmd: string): boolean => {
+     case "/settings":
+       showSettings.value = true;
+       return true;
+-    case "/clear":
++    case "/new":
++    case "/clear": // legacy alias
+       showConfirmModal.value = true;
+       return true;
+   }
+@@ -3872,6 +4028,229 @@ const handleQuickQuestion = (content: string) => {
+   userInput.value = content;
+   sendMessage();
+ };
++
++const addEmbedLogFromStream = (msg: Message, data: any) => {
++  if (!msg.logs) msg.logs = [];
++  const logId = data.id || Date.now() + Math.random();
++  const existingIdx = msg.logs.findIndex((l) => l.id === logId);
++  const title = data.title || "";
++  let category: LogEntry["category"] = data.category || "default";
++  if (category === "default") {
++    if (title.includes("路由")) category = "router";
++    else if (title.includes("SQL") || title.includes("sql") || title.includes("数据")) category = "sql";
++    else if (title.includes("知识") || title.includes("检索") || title.includes("引用") || title.includes("来源") || title.includes("分析")) category = "knowledge";
++    else if (title.includes("工具") || title.includes("调用")) category = "tool";
++    else if (title.includes("意图") || title.includes("轮次分类")) category = "intent";
++    else if (title.includes("权限") || title.includes("permission") || title.includes("确认")) category = "permission";
++  }
++  if (existingIdx > -1) {
++    const currentLog = msg.logs[existingIdx];
++    if (!currentLog) return;
++    msg.logs[existingIdx] = {
++      ...currentLog,
++      title: data.title || currentLog.title,
++      details: data.details ?? currentLog.details,
++      status: (data.status as any) || currentLog.status || "success",
++      category: category !== "default" ? category : currentLog.category,
++      execution_time_ms: data.execution_time_ms ?? currentLog.execution_time_ms,
++      elapsed_time_ms: data.elapsed_time_ms ?? currentLog.elapsed_time_ms,
+
+===== P131 | repo theoden8/webspace_app | PR #410: Scrape latest Firefox version for generated user-agents | capacidade: webspaces
+--- SPEC VIVA
+# Webspaces Feature Specification
+
+## Purpose
+
+The Webspaces feature allows users to organize their saved sites into separate workspaces, enabling better organization and context switching between different browsing contexts (e.g., Work, Personal, Research).
+
+## Status
+
+- **Implementation Date**: 2026-01-12
+- **Status**: Completed
+
+---
+
+## Requirements
+
+### Requirement: WEBSPACE-001 - Create Multiple Webspaces
+
+Users SHALL be able to create multiple webspaces to organize sites into logical groups.
+
+#### Scenario: Create a new webspace
+
+**Given** the user is on the webspaces list screen
+**When** the user taps "Create Webspace"
+**And** enters a name (e.g., "Work")
+**And** selects sites to include
+**And** taps the checkmark icon
+**Then** a new webspace is created with the specified name and sites
+
+---
+
+### Requirement: WEBSPACE-002 - Select Active Webspace
+
+Users SHALL be able to select and switch between webspaces to view filtered sites.
+
+#### Scenario: Select a webspace
+
+**Given** the user is viewing the webspaces list
+**When** the user taps on a webspace card
+**Then** that webspace becomes selected
+**And** the drawer shows only sites belonging to that webspace
+
+---
+
+### Requirement: WEBSPACE-003 - Visual Selection Indicator
+
+The system SHALL provide clear visual indication of which webspace is currently active.
+
+#### Scenario: Display selected webspace indicator
+
+**Given** a webspace is selected
+**When** the user views the webspaces list
+**Then** the selected webspace displays:
+- Green highlighted background
+- Check icon next to the name
+- Bold text
+- Higher card elevation
+
+---
+
+### Requirement: WEBSPACE-004 - Filtered Drawer Navigation
+
+The drawer SHALL only show sites belonging to the currently selected webspace.
+
+#### Scenario: Filter drawer by webspace
+
+**Given** the user has selected the "Work" webspace
+**And** "Work" contains sites A and B
+**And** "Personal" contains site C
+**When** the user opens the drawer
+**Then** only sites A and B are displayed
+**And** site C is not visible
+
+---
+
+### Requirement: WEBSPACE-005 - Persistent State
+
+Webspaces and selection state SHALL persist across app restarts.
+
+#### Scenario: Restore webspace selection on restart
+
+**Given** the user has selected "Work" webspace
+**When** the app is closed and reopened
+**Then** "Work" webspace remains selected
+**And** the drawer shows Work sites
+
+---
+
+### Requirement: WEBSPACE-006 - Edit Webspace
+
+Users SHALL be able to edit existing webspaces.
+
+#### Scenario: Modify webspace contents
+
+**Given** a webspace "Work" exists with sites A and B
+**When** the user taps the edit icon on the webspace card
+**And** adds site C and removes site A
+**And** saves changes
+**Then** "Work" now contains sites B and C
+
+---
+
+### Requirement: WEBSPACE-007 - Delete Webspace
+
+Users SHALL be able to delete webspaces.
+
+#### Scenario: Delete a webspace
+
+**Given** webspaces "Work" and "Personal" exist
+**And** "Work" is currently selected
+**When** the user taps delete on "Work"
+**And** confirms the deletion
+**Then** "Work" is removed
+**And** selection is cleared
+**And** user returns to webspaces list
+
+---
+
+### Requirement: WEBSPACE-008 - Back to Webspaces Navigation
+
+Users SHALL be able to return to the webspaces list from the drawer.
+
+#### Scenario: Navigate back to webspaces list
+
+**Given** the user is viewing sites in a selected webspace
+**When** the user opens the drawer
+**And** taps "Back to Webspaces"
+**Then** the webspaces list is displayed
+
+---
+
+### Requirement: WEBSPACE-009 - "All" Webspace
+
+The system SHALL provide a special "All" webspace that shows all sites.
+
+#### Scenario: View all sites via All webspace
+
+**Given** the user has multiple webspaces with various sites
+**When** the user selects the "All" webspace
+**Then** all sites are displayed in the drawer
+**And** the "All" webspace cannot be deleted or moved
+
+---
+
+### Requirement: WEBSPACE-010 - Automatic Index Updates on Site Deletion
+
+When a site is deleted, all webspace indices SHALL be automatically updated.
+
+#### Scenario: Delete site updates webspace indices
+
+**Given** site at index 2 is in webspaces "Work" (indices [0,2]) and "Personal" (indices [2,3])
+**When** site at index 2 is deleted
+**Then** "Work" indices become [0]
+**And** "Personal" indices become [2] (shifted from [3])
+
+---
+
+## Data Model
+
+### Webspace
+
+```dart
+class Webspace {
+  String id;              // UUID - unique identifier
+  String name;            // Display name (user-defined)
+  List<int> siteIndices;  // Indices of WebViewModels in this webspace
+}
+```
+
+## Persistence
+
+Stored in SharedPreferences:
+- `webspaces`: JSON array of all webspaces
+- `selectedWebspaceId`: ID of currently selected webspace
+
+---
+
+## Logic Engines
+
+Selection and index-update logic is extracted into pure-Dart engines so
+the rules can be exercised without a widget tree (same code runs in
+production):
+
+- [`WebspaceSelectionEngine`](../../../lib/services/webspace_selection_engine.dart):
+  - `filteredSiteIndices({selectedWebspaceId, webspaces, siteCount})` —
+    implements WEBSPACE-004 (filtered drawer) including the `All`
+    special-case and out-of-bounds filtering.
+  - `indicesToUnloadOnWebspaceSwitch({loadedIndices, previousWebspaceIndices,
+    newWebspaceIndices})` — returns the loaded sites that leave the
+    visible set on a webspace switch. The offline short-circuit
+    (preserve-all-loaded when disconnected) is a policy decision owned
+    by the caller, not the engine. The container-mode short-circuit
+    (sites stay resident across switches when isolated by their own
+    native container) lives in [`SiteUnloadEngine`](../../../lib/services/site_unload_engine.dart),
+    which delegates here in legacy mode.
+  - `cleanupWebspaceIndices({webspaces, siteCount})` — strips
+    out-of-bounds entries in place.
+- [`SiteUnloadEngine`](../../../lib/services/site_unload_engine.dart):
+  - `indicesToUnloadOnWebspaceSwitch({useContainers, ...})` — returns
+    `{}` under container mode (sites are isolated and stay loaded);
+    delegates to `WebspaceSelectionEngine` in legacy mode.
+  - `indicesToUnloadForProxyMismatch({targetIndex, models, loadedIndices,
+    proxyIsGlobal})` — on Android (process-global proxy), returns the
+    loaded sites whose effective proxy differs from the activating
+    site's. Their next request would silently route through the new
+    proxy (last-write-wins on `inapp.ProxyController`), so they are
+    force-unloaded on activation. Per-site DEFAULT resolves through the
+    app-global outbound proxy via `resolveEffectiveProxy`, so two
+    DEFAULT sites are equivalent regardless of the global value. Returns
+    `{}` on platforms with true per-site proxy (iOS 17+ / macOS 14+).
+  - `indicesToEvictForLruCap({targetIndex, loadedIndices, maxLoadedSites,
+    protectedIndices, preferKeepIndices})` — bounds the number of
+    concurrently loaded webviews at
+    [`kMaxLoadedSites`](../../../lib/services/site_unload_engine.dart)
+    (currently 20); treats `loadedIndices` as access-ordered (caller
+    bumps to end on activation). Two-tier eviction: out-of-keep
+    candidates first (oldest first), then in-keep candidates (oldest
+    first), with `protectedIndices` (typically the active site)
+    excluded entirely. The caller passes the active webspace's site
+    indices as `preferKeepIndices`, so context-relevant sites are
+    evicted last.
+  - `indexToEvictForMemoryPressure({loadedIndices, protectedIndices,
+    preferKeepIndices})` — picks one site to evict in response to an
+    OS memory pressure signal (`didHaveMemoryPressure`). Same two-tier
+    policy as `indicesToEvictForLruCap`. One victim per event lets the
+    OS clamp the loaded count to whatever the device can carry,
+    instead of guessing a target up front; if pressure persists the
+    callback fires again and the next victim is picked.
+- [`SiteLifecycleEngine.computeDeletionPatch`](../../../lib/services/site_lifecycle_engine.dart)
+  — returns the rewritten `siteIndices` for every affected webspace
+  when a site is removed from `_webViewModels`, implementing
+  WEBSPACE-010. The rewrite drops the deleted index and shifts every
+  `i > deletedIndex` down by one.
+
+Tests live in [test/webspace_selection_engine_test.dart](../../../test/webspace_selection_engine_test.dart),
+[test/site_unload_engine_test.dart](../../../test/site_unload_engine_test.dart),
+and [test/site_lifecycle_engine_test.dart](../../../test/site_lifecycle_engine_test.dart).
+
+---
+
+## Files
+
+### Created
+- `lib/webspace_model.dart` - Webspace data model
+- `lib/screens/webspaces_list.dart` - Main webspaces screen
+- `lib/screens/webspace_detail.dart` - Edit webspace screen
+- `lib/services/webspace_selection_engine.dart` - Filter + unload-on-switch logic
+- `lib/services/site_lifecycle_engine.dart` - Deletion-patch index rewrite
+- `test/webspace_model_test.dart` - Unit tests
+- `test/webspace_selection_engine_test.dart` - Selection/unload/cleanup tests
+- `test/site_lifecycle_engine_test.dart` - Deletion patch tests
+
+### Modified
+- `lib/main.dart` - Webspace state management and UI integration
+- `pubspec.yaml` - Added `uuid: ^4.5.1` dependency
+
+--- ARQUIVOS DO PR (78)
+modified  +8     -0     .github/workflows/build-and-test.yml
+modified  +8     -0     lib/l10n/app_af.arb
+modified  +8     -0     lib/l10n/app_am.arb
+modified  +8     -0     lib/l10n/app_ar.arb
+modified  +8     -0     lib/l10n/app_bg.arb
+modified  +8     -0     lib/l10n/app_bn.arb
+modified  +8     -0     lib/l10n/app_bs.arb
+modified  +8     -0     lib/l10n/app_ca.arb
+modified  +8     -0     lib/l10n/app_cs.arb
+modified  +8     -0     lib/l10n/app_cy.arb
+modified  +8     -0     lib/l10n/app_da.arb
+modified  +8     -0     lib/l10n/app_de.arb
+modified  +8     -0     lib/l10n/app_el.arb
+modified  +52    -0     lib/l10n/app_en.arb
+modified  +8     -0     lib/l10n/app_es.arb
+modified  +8     -0     lib/l10n/app_et.arb
+modified  +8     -0     lib/l10n/app_eu.arb
+modified  +8     -0     lib/l10n/app_fa.arb
+modified  +8     -0     lib/l10n/app_fi.arb
+modified  +8     -0     lib/l10n/app_fil.arb
+modified  +8     -0     lib/l10n/app_fr.arb
+modified  +8     -0     lib/l10n/app_ga.arb
+modified  +8     -0     lib/l10n/app_gl.arb
+modified  +8     -0     lib/l10n/app_gu.arb
+modified  +8     -0     lib/l10n/app_he.arb
+modified  +8     -0     lib/l10n/app_hi.arb
+modified  +8     -0     lib/l10n/app_hr.arb
+modified  +8     -0     lib/l10n/app_hu.arb
+modified  +8     -0     lib/l10n/app_hy.arb
+modified  +8     -0     lib/l10n/app_id.arb
+modified  +8     -0     lib/l10n/app_is.arb
+modified  +8     -0     lib/l10n/app_it.arb
+modified  +8     -0     lib/l10n/app_ja.arb
+modified  +8     -0     lib/l10n/app_ka.arb
+modified  +8     -0     lib/l10n/app_km.arb
+modified  +8     -0     lib/l10n/app_kn.arb
+modified  +8     -0     lib/l10n/app_ko.arb
+modified  +8     -0     lib/l10n/app_la.arb
+modified  +8     -0     lib/l10n/app_lt.arb
+modified  +8     -0     lib/l10n/app_lv.arb
+modified  +8     -0     lib/l10n/app_mk.arb
+modified  +8     -0     lib/l10n/app_ml.arb
+modified  +8     -0     lib/l10n/app_mn.arb
+modified  +8     -0     lib/l10n/app_mr.arb
+modified  +8     -0     lib/l10n/app_ms.arb
+modified  +8     -0     lib/l10n/app_mt.arb
+modified  +8     -0     lib/l10n/app_nb.arb
+modified  +8     -0     lib/l10n/app_ne.arb
+modified  +8     -0     lib/l10n/app_nl.arb
+modified  +8     -0     lib/l10n/app_pa.arb
+modified  +8     -0     lib/l10n/app_pl.arb
+modified  +8     -0     lib/l10n/app_pt.arb
+modified  +8     -0     lib/l10n/app_pt_BR.arb
+modified  +8     -0     lib/l10n/app_ro.arb
+modified  +8     -0     lib/l10n/app_si.arb
+modified  +8     -0     lib/l10n/app_sk.arb
+modified  +8     -0     lib/l10n/app_sl.arb
+modified  +8     -0     lib/l10n/app_sq.arb
+modified  +8     -0     lib/l10n/app_sr.arb
+modified  +8     -0     lib/l10n/app_sv.arb
+modified  +8     -0     lib/l10n/app_sw.arb
+modified  +8     -0     lib/l10n/app_ta.arb
+modified  +8     -0     lib/l10n/app_te.arb
+modified  +8     -0     lib/l10n/app_th.arb
+modified  +8     -0     lib/l10n/app_tr.arb
+modified  +8     -0     lib/l10n/app_uk.arb
+modified  +8     -0     lib/l10n/app_ur.arb
+modified  +8     -0     lib/l10n/app_zh.arb
+modified  +8     -0     lib/l10n/app_zh_Hant.arb
+modified  +2     -0     lib/main.dart
+modified  +71    -0     lib/screens/app_settings.dart
+modified  +7     -19    lib/screens/settings.dart   <== código ligado à spec
+added     +213   -0     lib/services/firefox_user_agent_service.dart
+modified  +63    -11    lib/services/user_agent_classifier.dart
+modified  +71    -1     openspec/specs/desktop-mode/spec.md
+added     +197   -0     test/firefox_user_agent_service_test.dart
+modified  +1     -0     test/js/l10n_coverage.test.js
+modified  +4     -3     test/user_agent_classifier_test.dart
+--- DIFF DO CÓDIGO LIGADO
+### lib/screens/settings.dart
+@@ -1,5 +1,4 @@
+ import 'dart:io';
+-import 'dart:math';
+ 
+ import 'package:flutter/material.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+@@ -11,6 +10,7 @@ import 'package:webspace/settings/proxy.dart';
+ import 'package:webspace/services/webview.dart';
+ import 'package:webspace/services/content_blocker_service.dart';
+ import 'package:webspace/services/dns_block_service.dart';
++import 'package:webspace/services/firefox_user_agent_service.dart';
+ import 'package:webspace/services/localcdn_service.dart';
+ import 'package:webspace/services/log_service.dart';
+ import 'package:webspace/services/notification_service.dart';
+@@ -57,24 +57,12 @@ const List<MapEntry<String?, String>> _languages = [
+   MapEntry('hi', 'हिन्दी'),
+ ];
+ 
+-String generateRandomUserAgent() {
+-  // You can modify these values to add more variety to the generated user-agent strings
+-  List<String> platforms = [
+-    'Windows NT 10.0; Win64; x64',
+-    'Macintosh; Intel Mac OS X 10_15_7',
+-    'Linux x86_64',
+-    'iPhone; CPU iPhone OS 15_7_3 like Mac OS X',
+-    'Android 16; Mobile', // Add an Android platform
+-  ];
+-
+-  String geckoVersion = '151.0';
+-  String geckoTrail = '20100101';
+-  String appName = 'Firefox';
+-  String appVersion = '151.0';
+-
+-  String platform = platforms[Random().nextInt(platforms.length)];
+-  return 'Mozilla/5.0 ($platform; rv:$geckoVersion) Gecko/$geckoTrail $appName/$appVersion';
+-}
++/// Render a Firefox UA for a randomly chosen platform at the current Firefox
++/// version. The version is scraped from Firefox source at runtime by
++/// [FirefoxUserAgentService] (falling back to the bundled default offline),
++/// so the randomize button stays current without an app release.
++String generateRandomUserAgent() =>
++    FirefoxUserAgentService.instance.randomUserAgent();
+ 
+ class SettingsScreen extends StatefulWidget {
+   final WebViewModel webViewModel;
+
+===== P132 | repo datenoio/iterabledata | PR #11: Add LLM readiness roadmap: catalog, agent tools, and AI operations | capacidade: cbor-format
+--- SPEC VIVA
+# cbor-format Specification
+
+## Purpose
+Support reading and writing Concise Binary Object Representation (CBOR, RFC 8949) data as records, including single items and arrays/sequences.
+
+## Requirements
+
+### Requirement: CBOR File Reading
+The system SHALL support reading Concise Binary Object Representation (CBOR, RFC 8949) data and yielding decoded items as Python objects (e.g. dicts or lists), supporting single top-level items and CBOR sequences where applicable.
+
+#### Scenario: Read CBOR file with automatic detection
+- **WHEN** using `open_iterable` on a `.cbor` (or configured CBOR) file
+- **THEN** it automatically selects `CBORIterable` for processing
+
+#### Scenario: Read CBOR array or sequence as records
+- **WHEN** reading a CBOR file whose top-level value is an array or a CBOR sequence of items
+- **THEN** it yields one record per array element or sequence item (e.g. dicts for map items)
+
+#### Scenario: Read single CBOR map as one record
+- **WHEN** reading a CBOR file whose top-level value is a single map
+- **THEN** it yields one record representing that map (e.g. a single dict)
+
+#### Scenario: Handle missing CBOR dependency
+- **WHEN** the CBOR library (e.g. `cbor2`) is not installed
+- **THEN** it raises an `ImportError` with a clear message instructing installation of `iterabledata[cbor]`
+
+--- ARQUIVOS DO PR (380)
+modified  +1     -0     .cursor/skills/README.md
+added     +80    -0     .cursor/skills/ai-integration/SKILL.md
+added     +51    -0     .github/ISSUE_TEMPLATE/bug_report.yml
+added     +31    -0     .github/ISSUE_TEMPLATE/feature_request.yml
+added     +13    -0     .github/pull_request_template.md
+added     +22    -0     .github/workflows/ai-integration.yml
+modified  +43    -3     .github/workflows/ci.yml
+modified  +1     -0     .github/workflows/release.yml
+modified  +6     -6     .pre-commit-config.yaml
+modified  +22    -1     AGENTS.md
+modified  +42    -0     CHANGELOG.md
+added     +49    -0     CONTRIBUTING.md
+modified  +20    -5     IMPROVEMENT_PLAN.md
+modified  +54    -2     README.md
+added     +2958  -0     dev/formats.json
+added     +116   -0     dev/scripts/coverage_by_package.py
+added     +27    -0     dev/scripts/export_formats_json.py
+modified  +86    -120   dev/scripts/find_missing_fixtures.py
+added     +62    -0     dev/scripts/generate_format_doc_stubs.py
+added     +70    -0     dev/scripts/generate_llms_txt.py
+added     +74    -0     docs/FORMAT_PAGE_TEMPLATE.md
+modified  +1     -0     docs/GITHUB_PAGES_SETUP.md
+modified  +176   -1     docs/docs/api/ai.md
+modified  +1     -1     docs/docs/api/async.md
+modified  +1     -1     docs/docs/api/capabilities.md
+added     +73    -0     docs/docs/api/catalog.md
+modified  +4     -4     docs/docs/api/convert.md
+modified  +1     -1     docs/docs/api/open-iterable.md
+modified  +22    -1     docs/docs/api/ops-inspect.md
+modified  +6     -0     docs/docs/api/ops-stats.md
+modified  +1     -1     docs/docs/api/plugins.md
+added     +73    -0     docs/docs/api/tools.md
+renamed   +21    -22    docs/docs/formats/arc.md
+added     +40    -0     docs/docs/formats/arff.md
+added     +40    -0     docs/docs/formats/bam.md
+added     +40    -0     docs/docs/formats/cdf.md
+added     +205   -0     docs/docs/formats/ckpt.md
+added     +205   -0     docs/docs/formats/copy.md
+added     +205   -0     docs/docs/formats/der.md
+added     +205   -0     docs/docs/formats/dta.md
+added     +40    -0     docs/docs/formats/dxf.md
+added     +34    -0     docs/docs/formats/fa.md
+added     +205   -0     docs/docs/formats/fbs.md
+added     +205   -0     docs/docs/formats/flexbuf.md
+added     +34    -0     docs/docs/formats/fq.md
+added     +40    -0     docs/docs/formats/gexf.md
+added     +205   -0     docs/docs/formats/gpkg.md
+added     +34    -0     docs/docs/formats/gpx.md
+added     +40    -0     docs/docs/formats/graphml.md
+added     +40    -0     docs/docs/formats/gv.md
+added     +205   -0     docs/docs/formats/htm.md
+added     +205   -0     docs/docs/formats/ics.md
+modified  +193   -166   docs/docs/formats/index.md
+modified  +1     -1     docs/docs/formats/json.md
+added     +40    -0     docs/docs/formats/kmz.md
+added     +34    -0     docs/docs/formats/libsvm.md
+added     +205   -0     docs/docs/formats/log.md
+modified  +164   -164   docs/docs/formats/ltsv.md
+added     +205   -0     docs/docs/formats/mht.md
+added     +40    -0     docs/docs/formats/mvt.md
+added     +40    -0     docs/docs/formats/n3.md
+added     +40    -0     docs/docs/formats/nc.md
+added     +34    -0     docs/docs/formats/npy.md
+added     +205   -0     docs/docs/formats/nq.md
+added     +205   -0     docs/docs/formats/nt.md
+added     +40    -0     docs/docs/formats/pcap.md
+added     +205   -0     docs/docs/formats/rda.md
+added     +205   -0     docs/docs/formats/rdf.md
+added     +205   -0     docs/docs/formats/rio.md
+added     +40    -0     docs/docs/formats/rss.md
+added     +40    -0     docs/docs/formats/sam.md
+added     +205   -0     docs/docs/formats/sav.md
+added     +205   -0     docs/docs/formats/seq.md
+added     +205   -0     docs/docs/formats/shp.md
+added     +205   -0     docs/docs/formats/sql.md
+added     +40    -0     docs/docs/formats/topojson.md
+added     +40    -0     docs/docs/formats/trig.md
+added     +40    -0     docs/docs/formats/trix.md
+added     +205   -0     docs/docs/formats/ubj.md
+added     +205   -0     docs/docs/formats/vtx.md
+added     +40    -0     docs/docs/formats/xlsb.md
+modified  +1     -1     docs/docs/formats/zipxml.md
+modified  +2     -2     docs/docs/getting-started/migration-guide.md
+modified  +6     -6     docs/docs/getting-started/performance.md
+added     +76    -0     docs/docs/integrations/BUILDING_AGENTS.md
+added     +58    -0     docs/docs/integrations/MCP.md
+modified  +30    -0     docs/integrations/AI_FRAMEWORKS.md
+modified  +36    -38    docs/integrations/CLAUDE.md
+modified  +29    -48    docs/integrations/GEMINI.md
+modified  +25    -40    docs/integrations/OPENAI.md
+modified  +2     -0     docs/sidebars.js
+modified  +13    -1     examples/ai/README.md
+added     +23    -0     examples/ai/anthropic_tools.py
+added     +183   -0     examples/ai/generate_blocks.py
+added     +21    -0     examples/ai/langchain_agent.py
+added     +27    -0     examples/ai/openai_function_calling.py
+added     +13    -0     examples/ai/plan_conversion.py
+modified  +1     -1     iterable/__init__.py
+modified  +3     -2     iterable/ai/__init__.py
+added     +773   -0     iterable/ai/blocks.py
+added     +62    -0     iterable/ai/cache.py
+added     +173   -0     iterable/ai/context.py
+modified  +501   -6     iterable/ai/doc.py
+added     +155   -0     iterable/ai/fileinfo.py
+added     +211   -0     iterable/ai/filter.py
+added     +188   -0     iterable/ai/models.py
+added     +129   -0     iterable/ai/plan.py
+added     +152   -0     iterable/ai/progress.py
+added     +14    -0     iterable/ai/prompts/__init__.py
+added     +9     -0     iterable/ai/prompts/documentation.txt
+added     +16    -0     iterable/ai/prompts/plan_conversion.txt
+added     +17    -0     iterable/ai/prompts/suggest_transform.txt
+added     +13    -0     iterable/ai/prompts/translate_filter.txt
+modified  +508   -14    iterable/ai/providers.py
+added     +139   -0     iterable/ai/sampling.py
+added     +72    -0     iterable/ai/suggest.py
+modified  +5     -5     iterable/async_base.py
+modified  +15    -149   iterable/base.py
+added     +62    -0     iterable/catalog/__init__.py
+added     +75    -0     iterable/codec_base.py
+removed   +0     -30    iterable/codecs/7zcodec.py_
+added     +17    -0     iterable/codecs/_stream.py
+modified  +4     -10    iterable/codecs/bz2codec.py
+modified  +4     -12    iterable/codecs/gzipcodec.py
+modified  +10    -7     iterable/codecs/zstdcodec.py
+added     +72    -0     iterable/dataframe_adapters.py
+modified  +1     -1     iterable/datatypes/annotatedcsv.py
+modified  +1     -1     iterable/datatypes/apachelog.py
+modified  +1     -1     iterable/datatypes/arff.py
+modified  +1     -1     iterable/datatypes/arrow.py
+modified  +1     -1     iterable/datatypes/asn1.py
+modified  +117   -5     iterable/datatypes/avro.py
+modified  +1     -1     iterable/datatypes/beam.py
+modified  +1     -1     iterable/datatypes/bencode.py
+modified  +1     -1     iterable/datatypes/bsonf.py
+modified  +3     -3     iterable/datatypes/capnp.py
+modified  +1     -1     iterable/datatypes/cbor.py   <== código ligado à spec
+modified  +1     -1     iterable/datatypes/cdx.py
+modified  +1     -1     iterable/datatypes/cef.py
+modified  +1     -1     iterable/datatypes/csv.py
+modified  +2     -2     iterable/datatypes/csvw.py
+modified  +1     -1     iterable/datatypes/dbf.py
+modified  +1     -1     iterable/datatypes/delta.py
+modified  +28    -3     iterable/datatypes/duckdb.py
+modified  +1     -1     iterable/datatypes/dxf.py
+modified  +1     -1     iterable/datatypes/edn.py
+modified  +1     -1     iterable/datatypes/eml.py
+modified  +1     -1     iterable/datatypes/feed.py
+modified  +10    -3     iterable/datatypes/flatbuffers.py
+modified  +1     -1     iterable/datatypes/flexbuffers.py
+modified  +1     -1     iterable/datatypes/flink.py
+modified  +1     -1     iterable/datatypes/fwf.py
+modified  +1     -1     iterable/datatypes/gelf.py
+modified  +1     -1     iterable/datatypes/geojson.py
+modified  +2     -2     iterable/datatypes/geopackage.py
+modified  +2     -2     iterable/datatypes/gml.py
+modified  +1     -1     iterable/datatypes/hdf5.py
+modified  +1     -1     iterable/datatypes/hocon.py
+modified  +1     -1     iterable/datatypes/html.py
+modified  +9     -2     iterable/datatypes/hudi.py
+modified  +1     -1     iterable/datatypes/ical.py
+modified  +3     -3     iterable/datatypes/iceberg.py
+modified  +1     -1     iterable/datatypes/ilp.py
+modified  +1     -1     iterable/datatypes/ini.py
+modified  +1     -1     iterable/datatypes/ion.py
+modified  +2     -2     iterable/datatypes/json.py
+modified  +1     -1     iterable/datatypes/jsonl.py
+modified  +1     -1     iterable/datatypes/jsonld.py
+modified  +1     -1     iterable/datatypes/kafka.py
+modified  +1     -1     iterable/datatypes/kml.py
+modified  +25    -3     iterable/datatypes/lance.py
+modified  +1     -1     iterable/datatypes/ldif.py
+modified  +1     -1     iterable/datatypes/libsvm.py
+modified  +1     -1     iterable/datatypes/ltsv.py
+modified  +1     -1     iterable/datatypes/mbox.py
+modified  +1     -1     iterable/datatypes/mhtml.py
+modified  +1     -1     iterable/datatypes/msgpack.py
+modified  +1     -1     iterable/datatypes/mvt.py
+modified  +2     -2     iterable/datatypes/mysqldump.py
+modified  +1     -1     iterable/datatypes/netcdf.py
+modified  +1     -1     iterable/datatypes/nquads.py
+modified  +2     -2     iterable/datatypes/ntriples.py
+modified  +2     -2     iterable/datatypes/numpy.py
+modified  +1     -1     iterable/datatypes/ods.py
+modified  +42    -11    iterable/datatypes/orc.py
+modified  +1     -1     iterable/datatypes/parquet.py
+modified  +37    -26    iterable/datatypes/pcap.py
+modified  +1     -1     iterable/datatypes/pgcopy.py
+modified  +6     -9     iterable/datatypes/picklef.py
+modified  +1     -1     iterable/datatypes/protobuf.py
+modified  +2     -2     iterable/datatypes/psv.py
+modified  +1     -1     iterable/datatypes/pulsar.py
+modified  +1     -1     iterable/datatypes/px.py
+modified  +1     -1     iterable/datatypes/rdata.py
+modified  +2     -2     iterable/datatypes/rdfxml.py
+modified  +1     -1     iterable/datatypes/rds.py
+modified  +1     -1     iterable/datatypes/recordio.py
+modified  +1     -1     iterable/datatypes/sas.py
+modified  +1     -1     iterable/datatypes/sequencefile.py
+modified  +1     -1     iterable/datatypes/shapefile.py
+modified  +1     -1     iterable/datatypes/smile.py
+modified  +1     -1     iterable/datatypes/spss.py
+modified  +28    -3     iterable/datatypes/sqlite.py
+modified  +1     -1     iterable/datatypes/stata.py
+modified  +1     -1     iterable/datatypes/tfrecord.py
+modified  +1     -1     iterable/datatypes/thrift.py
+modified  +1     -1     iterable/datatypes/toml.py
+modified  +1     -1     iterable/datatypes/topojson.py
+modified  +3     -3     iterable/datatypes/turtle.py
+modified  +1     -1     iterable/datatypes/txt.py
+modified  +1     -1     iterable/datatypes/ubjson.py
+modified  +1     -1     iterable/datatypes/vcf.py
+modified  +1     -1     iterable/datatypes/vortex.py
+modified  +1     -1     iterable/datatypes/warc.py
+modified  +1     -1     iterable/datatypes/xls.py
+modified  +1     -1     iterable/datatypes/xlsx.py
+modified  +4     -4     iterable/datatypes/xml.py
+modified  +1     -1     iterable/datatypes/yaml.py
+modified  +70    -27    iterable/datatypes/zipped.py
+modified  +10    -5     iterable/datatypes/zipxml.py
+modified  +1     -1     iterable/engines/duckdb.py
+modified  +1     -278   iterable/exceptions.py
+added     +279   -0     iterable/guidance.py
+modified  +16    -6     iterable/helpers/capabilities.py
+added     +95    -0     iterable/helpers/content_detection.py
+modified  +450   -1362  iterable/helpers/detect.py   <== código ligado à spec
+added     +782   -0     iterable/helpers/format_registry.py
+added     +377   -0     iterable/helpers/open_iterable.py
+modified  +62    -72    iterable/helpers/utils.py
+added     +56    -0     iterable/ingest/_sql_base.py
+modified  +13    -33    iterable/ingest/mysql.py
+modified  +11    -30    iterable/ingest/postgresql.py
+modified  +11    -29    iterable/ingest/sqlite.py
+added     +5     -0     iterable/mcp/__init__.py
+added     +104   -0     iterable/mcp/server.py
+modified  +55    -12    iterable/ops/inspect.py
+modified  +47    -14    iterable/ops/stats.py
+modified  +51    -0     iterable/ops/transform.py
+added     +36    -0     iterable/tools/__init__.py
+added     +217   -0     iterable/tools/_core.py
+added     +20    -0     iterable/tools/_result.py
+added     +38    -0     iterable/tools/langchain.py
+added     +259   -0     iterable/tools/schemas.py
+added     +62    -0     llms.txt
+added     +44    -0     openspec/changes/LLM_READINESS_ROADMAP.md
+added     +45    -0     openspec/changes/add-ai-block-documentation/design.md
+added     +41    -0     openspec/changes/add-ai-block-documentation/proposal.md
+added     +134   -0     openspec/changes/add-ai-block-documentation/specs/ai/spec.md
+added     +34    -0     openspec/changes/add-ai-block-documentation/specs/ops-stats/spec.md
+added     +31    -0     openspec/changes/add-ai-block-documentation/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/design.md
+added     +32    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/proposal.md
+added     +75    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/agent-tools/spec.md
+added     +18    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/ai/spec.md
+added     +64    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/tasks.md
+added     +85    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/design.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/proposal.md
+added     +52    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/specs/format-registry/spec.md
+added     +19    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/tasks.md
+added     +36    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/design.md
+added     +33    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/proposal.md
+added     +23    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/format-registry/spec.md
+added     +55    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/llm-catalog/spec.md
+added     +50    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/design.md
+added     +30    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/proposal.md
+added     +94    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ai/spec.md
+added     +14    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ops-filter/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/tasks.md
+added     +41    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/design.md
+added     +40    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/proposal.md
+added     +55    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ai/spec.md
+added     +52    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/llm-discoverability/spec.md
+added     +31    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ops-inspect/spec.md
+added     +51    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/tasks.md
+added     +91    -0     openspec/specs/agent-tools/spec.md
+modified  +99    -1     openspec/specs/ai/spec.md
+added     +64    -0     openspec/specs/format-registry/spec.md
+added     +61    -0     openspec/specs/llm-catalog/spec.md
+modified  +13    -0     openspec/specs/ops-filter/spec.md
+modified  +12    -3     openspec/specs/ops-inspect/spec.md
+modified  +33    -0     pyproject.toml
+removed   +0     -5     testdata/test_write_annotated.csv
+added     +94    -0     tests/conformance_fixtures.py
+modified  +12    -5     tests/conftest.py
+renamed   +0     -0     tests/fixtures/2cols6rows.vortex
+added     +0     -0     tests/fixtures/2cols6rows_flat_converted.csv.gz
+added     +0     -0     tests/fixtures/2cols6rows_infer.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_infer.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.arrow
+added     +0     -0     tests/fixtures/2cols6rows_test.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.br
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.bz2
+added     +0     -0     tests/fixtures/2cols6rows_test.csv.gz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.lz4
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.snappy
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.xz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.zst
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csvw
+renamed   +0     -0     tests/fixtures/2cols6rows_test.fwf
+renamed   +0     -0     tests/fixtures/2cols6rows_test.geojson
+renamed   +0     -0     tests/fixtures/2cols6rows_test.gml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonl
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonld
+renamed   +0     -0     tests/fixtures/2cols6rows_test.kml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.msgpack
+added     +0     -0     tests/fixtures/2cols6rows_test.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.parquet
+renamed   +0     -0     tests/fixtures/2cols6rows_test.pickle
+renamed   +0     -0     tests/fixtures/2cols6rows_test.yaml
+added     +36    -0     tests/fixtures/README.md
+added     +4     -0     tests/fixtures/ai_responses/README.md
+renamed   +0     -0     tests/fixtures/books_converted.csv.gz
+added     +0     -0     tests/fixtures/coerce.avro
+renamed   +0     -0     tests/fixtures/invalid.avro
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.csv.gz
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.jsonl
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.parquet
+renamed   +0     -0     tests/fixtures/sample.gpx
+renamed   +0     -0     tests/fixtures/sample.kmz
+added     +0     -0     tests/fixtures/special_names.orc
+renamed   +0     -0     tests/fixtures/test_7z.7z
+renamed   +0     -0     tests/fixtures/test_7z_read.7z
+renamed   +0     -0     tests/fixtures/test_7z_reset.7z
+renamed   +0     -0     tests/fixtures/test_annotated.csv
+renamed   +0     -0     tests/fixtures/test_annotated_bulk.csv
+renamed   +0     -0     tests/fixtures/test_annotated_defaults.csv
+renamed   +0     -0     tests/fixtures/test_annotated_types.csv
+renamed   +0     -0     tests/fixtures/test_asn1_read.der
+renamed   +0     -0     tests/fixtures/test_asn1_reset.der
+renamed   +0     -0     tests/fixtures/test_debug.warc
+renamed   +0     -0     tests/fixtures/test_ilp.ilp
+renamed   +0     -0     tests/fixtures/test_ilp_bulk.ilp
+added     +0     -0     tests/fixtures/test_simple.jsonl
+renamed   +0     -0     tests/fixtures/test_simple.warc
+renamed   +0     -0     tests/fixtures/test_vortex.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_bulk.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_context.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_count.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_iterate.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_next.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_readone.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_reset.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_totals.vortex
+renamed   +0     -0     tests/fixtures/test_write_annotated.csv
+renamed   +0     -0     tests/fixtures/test_zipxml.zip
+added     +298   -0     tests/fixtures/tool_schemas/openai_functions.json
+added     +408   -0     tests/test_ai_blocks.py
+added     +71    -0     tests/test_ai_conformance.py
+added     +47    -0     tests/test_ai_context.py
+added     +42    -0     tests/test_ai_filter.py
+added     +44    -0     tests/test_ai_integration.py
+added     +30    -0     tests/test_ai_plan.py
+added     +52    -0     tests/test_ai_providers.py
+added     +29    -0     tests/test_ai_suggest.py
+modified  +45    -0     tests/test_async_support.py
+modified  +46    -0     tests/test_avro.py
+added     +68    -0     tests/test_catalog.py
+modified  +1     -3     tests/test_db_engines.py
+modified  +19    -0     tests/test_duckdb.py
+modified  +73    -47    tests/test_format_conformance.py
+added     +125   -0     tests/test_format_registry.py
+modified  +16    -0     tests/test_ingest.py
+added     +49    -0     tests/test_ingest_identifiers.py
+added     +33    -0     tests/test_llms_txt.py
+added     +37    -0     tests/test_mcp_server.py
+modified  +51    -0     tests/test_ops_inspect.py
+modified  +30    -2     tests/test_orc.py
+modified  +2     -2     tests/test_parquet.py
+modified  +21    -4     tests/test_pcap.py
+modified  +27    -0     tests/test_sqlite.py
+added     +181   -0     tests/test_tools.py
+added     +156   -0     tests/test_uncovered_formats.py
+modified  +52    -105   tests/test_zipxml.py
+added     +1     -0     tests/testdata
+removed   +0     -0     tests/testdata/2cols6rows_flat_converted.csv.gz
+removed   +0     -0     tests/testdata/2cols6rows_test.csv.gz
+removed   +0     -5     tests/testdata/test_annotated_types.csv
+removed   +0     -1     tests/testdata/test_pipeline_atomic_fail.jsonl
+--- DIFF DO CÓDIGO LIGADO
+### iterable/datatypes/cbor.py
+@@ -27,7 +27,7 @@ class CBORIterable(BaseFileIterable):
+ 
+     def __init__(
+         self,
+-        filename: str = None,
++        filename: str | None = None,
+         stream: typing.IO[Any] | None = None,
+         codec: BaseCodec | None = None,
+         mode: str = "r",
+
+### iterable/helpers/detect.py
+@@ -1,1362 +1,450 @@
+-from __future__ import annotations
+-
+-import importlib
+-from typing import Any, Literal, TypedDict
+-
+-import chardet
+-
+-from ..base import BaseCodec, BaseIterable
+-
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-
+-
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-
+-
+-# Plugin discovery flag
+-_plugins_discovered = False
+-
+-
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+-        try:
+-            from ..plugins import discover_plugins
+-
+-            discover_plugins()
+-        except Exception as e:
+-            # Don't let a broken plugin block built-in formats, but surface the
+-            # failure at warning level so misconfigured entry points are visible.
+-            format_detection_logger.warning("Plugin discovery failed: %s", e)
+-        _plugins_discovered = True
+-
+-
+-def _get_format_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged format registry (built-in + plugins).
+-
+-    Built-in formats take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in formats (take precedence)
+-    merged = DATATYPE_REGISTRY.copy()
+-
+-    # Add plugin formats (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for format_id, value in registry._formats.items():
+-            if format_id not in merged:
+-                merged[format_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin formats: %s", e)
+-
+-    return merged
+-
+-
+-def _get_codec_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged codec registry (built-in + plugins).
+-
+-    Built-in codecs take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in codecs (take precedence)
+-    merged = CODEC_REGISTRY.copy()
+-
+-    # Add plugin codecs (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for codec_id, value in registry._codecs.items():
+-            if codec_id not in merged:
+-                merged[codec_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin codecs: %s", e)
+-
+-    return merged
+-
+-
+-# Lazy registries: extension -> (module_path, class_name)
+-DATATYPE_REGISTRY: dict[str, tuple[str, str]] = {
+-    "avro": ("iterable.datatypes.avro", "AVROIterable"),
+-    "bson": ("iterable.datatypes.bsonf", "BSONIterable"),
+-    "csv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "tsv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "dbf": ("iterable.datatypes.dbf", "DBFIterable"),
+-    "json": ("iterable.datatypes.json", "JSONIterable"),
+-    "jsonl": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "ndjson": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "jsonld": ("iterable.datatypes.jsonld", "JSONLDIterable"),
+-    "parquet": ("iterable.datatypes.parquet", "ParquetIterable"),
+-    "pickle": ("iterable.datatypes.picklef", "PickleIterable"),
+-    "orc": ("iterable.datatypes.orc", "ORCIterable"),
+-    "xls": ("iterable.datatypes.xls", "XLSIterable"),
+-    "xlsx": ("iterable.datatypes.xlsx", "XLSXIterable"),
+-    "xml": ("iterable.datatypes.xml", "XMLIterable"),
+-    "arrow": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "feather": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "msgpack": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "mp": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "fwf": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "fixed": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "yaml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "yml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "sas7bdat": ("iterable.datatypes.sas", "SASIterable"),
+-    "sas": ("iterable.datatypes.sas", "SASIterable"),
+-    "dta": ("iterable.datatypes.stata", "StataIterable"),
+-    "stata": ("iterable.datatypes.stata", "StataIterable"),
+-    "sav": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "spss": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "protobuf": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "pb": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "ion": ("iterable.datatypes.ion", "IonIterable"),
+-    "hdf5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "h5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "geojson": ("iterable.datatypes.geojson", "GeoJSONIterable"),
+-    "toml": ("iterable.datatypes.toml", "TOMLIterable"),
+-    "delta": ("iterable.datatypes.delta", "DeltaIterable"),
+-    "cbor": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cbors": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cdf": ("iterable.datatypes.cdf", "CDFIterable"),
+-    "ods": ("iterable.datatypes.ods", "ODSIterable"),
+-    "sqlite": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "db": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "duckdb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "ddb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "psv": ("iterable.datatypes.psv", "PSVIterable"),
+-    "ssv": ("iterable.datatypes.psv", "SSVIterable"),
+-    "ubjson": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "ubj": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "capnp": ("iterable.datatypes.capnp", "CapnpIterable"),
+-    "iceberg": ("iterable.datatypes.iceberg", "IcebergIterable"),
+-    "turtle": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "ttl": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "flatbuffers": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "fbs": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "thrift": ("iterable.datatypes.thrift", "ThriftIterable"),
+-    "txt": ("iterable.datatypes.txt", "TxtIterable"),
+-    "text": ("iterable.datatypes.txt", "TxtIterable"),
+-    "hudi": ("iterable.datatypes.hudi", "HudiIterable"),
+-    "apachelog": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "access.log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "tfrecord": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "tfrecords": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "sequencefile": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "seq": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "gelf": ("iterable.datatypes.gelf", "GELIterable"),
+-    "cef": ("iterable.datatypes.cef", "CEFIterable"),
+-    "ntriples": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nt": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nquads": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "nq": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "kafka": ("iterable.datatypes.kafka", "KafkaIterable"),
+-    "pulsar": ("iterable.datatypes.pulsar", "PulsarIterable"),
+-    "flink": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "ckpt": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "beam": ("iterable.datatypes.beam", "BeamIterable"),
+-    "recordio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rdfxml": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "rdf": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "ilp": ("iterable.datatypes.ilp", "ILPIterable"),
+-    "annotatedcsv": ("iterable.datatypes.annotatedcsv", "AnnotatedCSVIterable"),
+-    "cdx": ("iterable.datatypes.cdx", "CDXIterable"),
+-    "warc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "arc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "ldif": ("iterable.datatypes.ldif", "LDIFIterable"),
+-    "mbox": ("iterable.datatypes.mbox", "MBOXIterable"),
+-    "ini": ("iterable.datatypes.ini", "INIIterable"),
+-    "properties": ("iterable.datatypes.ini", "INIIterable"),
+-    "conf": ("iterable.datatypes.ini", "INIIterable"),
+-    "edn": ("iterable.datatypes.edn", "EDNIterable"),
+-    "smile": ("iterable.datatypes.smile", "SMILEIterable"),
+-    "bencode": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "torrent": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "vcf": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "vcard": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "ical": ("iterable.datatypes.ical", "ICALIterable"),
+-    "ics": ("iterable.datatypes.ical", "ICALIterable"),
+-    "eml": ("iterable.datatypes.eml", "EMLIterable"),
+-    "mysqldump": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "sql": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "pgcopy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "copy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "hocon": ("iterable.datatypes.hocon", "HOCONIterable"),
+-    "flexbuffers": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "flexbuf": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "asn1": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "der": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "mhtml": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "mht": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "ltsv": ("iterable.datatypes.ltsv", "LTSVIterable"),
+-    "px": ("iterable.datatypes.px", "PXIterable"),
+-    "kml": ("iterable.datatypes.kml", "KMLIterable"),
+-    "kmz": ("iterable.datatypes.kmz", "KMZIterable"),
+-    "gpx": ("iterable.datatypes.gpx", "GPXIterable"),
+-    "gml": ("iterable.datatypes.gml", "GMLIterable"),
+-    "shapefile": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "shp": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "geopackage": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "gpkg": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "csvw": ("iterable.datatypes.csvw", "CSVWIterable"),
+-    "rdata": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rda": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rds": ("iterable.datatypes.rds", "RDSIterable"),
+-    "lance": ("iterable.datatypes.lance", "LanceIterable"),
+-    "pcap": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "pcapng": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "nc": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "netcdf": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "mvt": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "pbf": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "topojson": ("iterable.datatypes.topojson", "TopoJSONIterable"),
+-    "feed": ("iterable.datatypes.feed", "FeedIterable"),
+-    "atom": ("iterable.datatypes.feed", "FeedIterable"),
+-    "rss": ("iterable.datatypes.feed", "FeedIterable"),
+-    "dxf": ("iterable.datatypes.dxf", "DXFIterable"),
+-    "libsvm": ("iterable.datatypes.libsvm", "LIBSVMIterable"),
+-    "npy": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "npz": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "html": ("iterable.datatypes.html", "HTMLIterable"),
+-    "htm": ("iterable.datatypes.html", "HTMLIterable"),
+-    "arff": ("iterable.datatypes.arff", "ARFFIterable"),
+-    "trig": ("iterable.datatypes.trig", "TriGIterable"),
+-    "n3": ("iterable.datatypes.n3", "N3Iterable"),
+-    "trix": ("iterable.datatypes.trix", "TriXIterable"),
+-    "xlsb": ("iterable.datatypes.xlsb", "XLSBIterable"),
+-    "fasta": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fna": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "faa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fastq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "fq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "graphml": ("iterable.datatypes.graphml", "GraphMLIterable"),
+-    "gexf": ("iterable.datatypes.gexf", "GEXFIterable"),
+-    "dot": ("iterable.datatypes.dot", "DOTIterable"),
+-    "gv": ("iterable.datatypes.dot", "DOTIterable"),
+-    "bam": ("iterable.datatypes.bam", "BAMIterable"),
+-    "sam": ("iterable.datatypes.sam", "SAMIterable"),
+-    "vortex": ("iterable.datatypes.vortex", "VortexIterable"),
+-    "vtx": ("iterable.datatypes.vortex", "VortexIterable"),
+-    # Usable via explicit format override: iterableargs={"format": "zipxml", "tagname": ...}
+-    "zipxml": ("iterable.datatypes.zipxml", "ZIPXMLSource"),
+-}
+-
+-CODEC_REGISTRY: dict[str, tuple[str, str]] = {
+-    "bz2": ("iterable.codecs.bz2codec", "BZIP2Codec"),
+-    "gz": ("iterable.codecs.gzipcodec", "GZIPCodec"),
+-    "lz4": ("iterable.codecs.lz4codec", "LZ4Codec"),
+-    "xz": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "lzma": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "zip": ("iterable.codecs.zipcodec", "ZIPCodec"),
+-    "br": ("iterable.codecs.brotlicodec", "BrotliCodec"),
+-    "zstd": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "zst": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "snappy": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "sz": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "lzo": ("iterable.codecs.lzocodec", "LZOCodec"),
+-    "lzop": ("iterable.codecs.lzocodec", "LZOCodec"),
+-}
+-
+-# Formats that are read-only (do not support write operations)
+-# This set includes formats that explicitly raise WriteNotSupportedError
+-# or use the base class default (which also raises WriteNotSupportedError)
+-READ_ONLY_FORMATS: set[str] = {
+-    # Formats that explicitly raise WriteNotSupportedError
+-    "arff",
+-    "delta",
+-    "feed",
+
+===== P133 | repo tatargabor/set-core | PR #6: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization) | capacidade: runtime-directory-convention
+--- SPEC VIVA
+# Runtime Directory Convention Specification
+
+## Purpose
+
+TBD — restored after delta-sync structural cleanup. Update Purpose with a one-line statement of what this capability owns.
+
+### In scope
+- `~/.local/share/set-core/<project>/` as location for all shared runtime data (worktree-independent)
+- `<worktree>/.set/` as minimal location for per-agent ephemeral data only
+- Subdirectory layout: orchestration/, sentinel/, logs/, cache/, screenshots/
+- Central path resolution via Python `SetRuntime` class and bash `set-paths` helper
+- `.gitignore` simplification (remove scattered patterns, keep only `/.set/` for per-worktree)
+- Migration of all existing runtime files to new locations
+- Sentinel migration from project-local `.wt/sentinel/` to shared location
+- Backward-compatible bootstrap (set-project init auto-migration)
+- Worktree retention after merge (configurable, default: keep)
+
+### Out of scope
+- Changing the behavior of any runtime file (only paths change)
+- Removing the `.claude/` directory (it keeps config: settings, commands, skills, rules, hooks, agents)
+- Changing `set/orchestration/orchestration.yaml` location (config stays in `wt/`)
+- Changing `set/orchestration/specs/` location (specs are artifacts, not runtime)
+- Moving memory or metrics (already in `~/.local/share/set-core/`)
+- Moving daemon PID/socket from `/tmp/` (OS convention)
+
+## Requirements
+
+### Requirement: Shared runtime directory
+The system SHALL use `~/.local/share/set-core/<project>/` (respecting `XDG_DATA_HOME`) as the location for all shared runtime data. Project name SHALL be resolved from git repo name, consistent with the memory system.
+
+#### Scenario: Directory created on first use
+- **WHEN** any set-core component needs to write shared runtime data and the directory does not exist
+- **THEN** it SHALL create the required subdirectory under `~/.local/share/set-core/<project>/`
+
+#### Scenario: Worktree-independence
+- **WHEN** multiple worktrees exist for the same project
+- **THEN** they SHALL all resolve to the same shared runtime directory
+
+### Requirement: Per-worktree agent ephemeral
+The system SHALL use `<worktree>/.set/` for per-agent ephemeral data only: loop-state.json, activity.json, PID files, current iteration logs.
+
+#### Scenario: Agent writes to worktree-local path
+- **WHEN** an agent writes loop state or activity during execution
+- **THEN** it SHALL write to `<worktree>/.set/loop-state.json` and `<worktree>/.set/activity.json`
+
+### Requirement: Orchestration runtime migration
+The system SHALL store orchestration runtime files under the shared `orchestration/` subdirectory.
+
+#### Scenario: State file at new path
+- **WHEN** the orchestration engine reads or writes the state file
+- **THEN** it SHALL use `~/.local/share/set-core/<project>/orchestration/state.json`
+
+#### Scenario: Events file at new path
+- **WHEN** the orchestration engine appends events
+- **THEN** it SHALL use `~/.local/share/set-core/<project>/orchestration/events.jsonl`
+
+#### Scenario: Plans, runs, digest at new path
+- **WHEN** the planner writes plan files, run logs, or digest cache
+- **THEN** it SHALL use subdirectories under `~/.local/share/set-core/<project>/orchestration/`
+
+#### Scenario: Screenshots at new path
+- **WHEN** smoke or e2e screenshots are captured
+- **THEN** they SHALL be stored under `~/.local/share/set-core/<project>/screenshots/`
+
+### Requirement: Sentinel migration
+The system SHALL move sentinel runtime files from project-local `.wt/sentinel/` to the shared `sentinel/` subdirectory.
+
+#### Scenario: Sentinel events at shared path
+- **WHEN** sentinel writes events, findings, status, or inbox
+- **THEN** it SHALL use `~/.local/share/set-core/<project>/sentinel/`
+
+#### Scenario: Sentinel PID at shared path
+- **WHEN** sentinel writes its PID file
+- **THEN** it SHALL use `~/.local/share/set-core/<project>/sentinel/sentinel.pid` (migrated from project root `sentinel.pid`)
+
+### Requirement: Agent runtime migration
+The system SHALL store agent loop runtime files under `<worktree>/.set/` instead of `<worktree>/.claude/`.
+
+#### Scenario: Loop state at new path
+- **WHEN** the ralph loop reads or writes loop state
+- **THEN** it SHALL use `<worktree>/.set/loop-state.json`
+
+#### Scenario: Activity file at new path
+- **WHEN** agent activity is recorded
+- **THEN** it SHALL use `<worktree>/.set/activity.json`
+
+#### Scenario: PID files at new path
+- **WHEN** ralph PID files are written
+- **THEN** they SHALL use `<worktree>/.set/ralph-terminal.pid`
+
+### Requirement: Log migration
+The system SHALL store logs under the shared `logs/` subdirectory and per-worktree `.wt/logs/`.
+
+#### Scenario: Orchestration log at shared path
+- **WHEN** orchestration events are logged
+- **THEN** the log SHALL be written to `~/.local/share/set-core/<project>/logs/orchestration.log`
+
+#### Scenario: Current iteration logs at worktree path
+- **WHEN** ralph loop writes iteration logs during execution
+- **THEN** they SHALL be written to `<worktree>/.set/logs/ralph-iter-*.log`
+
+#### Scenario: Archived iteration logs at shared path
+- **WHEN** a change is merged and logs are archived
+- **THEN** iteration logs SHALL be copied to `~/.local/share/set-core/<project>/logs/changes/{change-name}/`
+
+### Requirement: Cache migration
+The system SHALL store caches under the shared `cache/` subdirectory.
+
+#### Scenario: Codemap cache at new path
+- **WHEN** codemaps are cached
+- **THEN** they SHALL be stored under `~/.local/share/set-core/<project>/cache/codemaps/`
+
+#### Scenario: Design cache at new path
+- **WHEN** design metadata is cached
+- **THEN** it SHALL be stored under `~/.local/share/set-core/<project>/cache/designs/`
+
+#### Scenario: Credentials at new path
+- **WHEN** service credentials (jira, confluence) are stored
+- **THEN** they SHALL be under `~/.local/share/set-core/<project>/cache/credentials/`
+
+### Requirement: Design snapshot migration
+The system SHALL store the design snapshot under the shared runtime directory.
+
+#### Scenario: Design snapshot at new path
+- **WHEN** the design bridge fetches a design snapshot
+- **THEN** it SHALL write to `~/.local/share/set-core/<project>/design-snapshot.md`
+
+### Requirement: Path resolution via config constant
+All runtime file access SHALL go through a centralized path resolution mechanism.
+
+#### Scenario: Python code uses SetRuntime
+- **WHEN** Python code needs a shared runtime file path
+- **THEN** it SHALL use `SetRuntime(project_path).state_file`, `.events_file`, etc.
+
+#### Scenario: Python code uses SetRuntime.agent_dir
+- **WHEN** Python code needs a per-worktree agent path
+- **THEN** it SHALL use `SetRuntime.agent_dir(worktree_path)` to resolve `<worktree>/.set/`
+
+#### Scenario: Bash code uses set-paths helper
+- **WHEN** bash code needs a runtime file path
+- **THEN** it SHALL source `set-paths` and use exported variables
+
+### Requirement: Gitignore simplification
+The `.gitignore` SHALL be simplified by removing scattered runtime patterns.
+
+#### Scenario: Old scattered patterns removable
+- **WHEN** migration is complete
+- **THEN** the following `.gitignore` patterns SHALL be removable: `loop-state.json`, `activity.json`, `*.pid`, `.claude/logs/`, `.claude/orchestration.log`, `orchestration-events.jsonl`, `.set-core/`
+- **AND** only `/.set/` SHALL remain for per-worktree ephemeral files
+
+### Requirement: Worktree retention
+The system SHALL support configurable worktree lifecycle after merge.
+
+#### Scenario: Retention keep (default)
+- **WHEN** a change is merged and `worktree_retention` is `keep`
+- **THEN** the worktree directory and branch SHALL be preserved
+- **AND** logs SHALL still be archived to the shared location
+
+#### Scenario: Retention delete-on-merge
+- **WHEN** a change is merged and `worktree_retention` is `delete-on-merge`
+- **THEN** the worktree directory and branch SHALL be deleted after log archival (legacy behavior)
+
+#### Scenario: Manual cleanup
+- **WHEN** `set-cleanup --older-than Nd` is run
+- **THEN** worktrees for changes merged more than N days ago SHALL be removed
+## MODIFIED Requirements
+
+### Requirement: Runtime root includes runtime/ subdirectory
+The `SetRuntime` class SHALL resolve the per-project runtime root as `~/.local/share/set-core/runtime/<project-name>/` instead of `~/.local/share/set-core/<project-name>/`.
+
+#### Scenario: New project runtime path
+- **WHEN** `SetRuntime("craftbrew-run7")` is instantiated
+- **THEN** `root` is `~/.local/share/set-core/runtime/craftbrew-run7/`
+
+#### Scenario: Bash equivalent
+- **WHEN** `set-paths` is sourced for project `craftbrew-run7`
+- **THEN** `WT_RUNTIME_DIR` is `~/.local/share/set-core/runtime/craftbrew-run7/`
+
+### Requirement: Auto-migration of legacy runtime directories
+When `SetRuntime` initializes and the old-style directory exists (`~/.local/share/set-core/<project>/`) but the new-style does not (`~/.local/share/set-core/runtime/<project>/`), the system SHALL move the old directory to the new location automatically.
+
+#### Scenario: First access after upgrade
+- **WHEN** `~/.local/share/set-core/craftbrew-run7/` exists
+- **AND** `~/.local/share/set-core/runtime/craftbrew-run7/` does not exist
+- **THEN** the directory is moved to `~/.local/share/set-core/runtime/craftbrew-run7/`
+
+#### Scenario: Already migrated
+- **WHEN** `~/.local/share/set-core/runtime/craftbrew-run7/` already exists
+- **THEN** no migration occurs
+
+### Requirement: Watcher discovers paths via SetRuntime
+The watcher SHALL use `SetRuntime` to discover state and log file paths instead of hardcoding `set/orchestration/` or project-root relative paths. Legacy fallback paths SHALL remain for backward compatibility.
+
+#### Scenario: State file discovery
+- **WHEN** the watcher looks for a project's state file
+- **THEN** it checks `SetRuntime(project_path).state_file` first
+- **AND** falls back to project-local legacy paths if not found
+
+--- ARQUIVOS DO PR (21)
+added     +260   -0     docs/research/decompose-replan-optimization-2026-05-08.md
+modified  +15    -1     lib/set_orch/config.py
+modified  +77    -11    lib/set_orch/engine.py   <== código ligado à spec
+modified  +422   -88    lib/set_orch/planner.py   <== código ligado à spec
+modified  +9     -2     lib/set_orch/subprocess_utils.py
+added     +2     -0     openspec/changes/decompose-replan-optimization/.openspec.yaml
+added     +312   -0     openspec/changes/decompose-replan-optimization/design.md
+added     +126   -0     openspec/changes/decompose-replan-optimization/proposal.md
+added     +81    -0     openspec/changes/decompose-replan-optimization/specs/amb-jit-resolution/spec.md
+added     +88    -0     openspec/changes/decompose-replan-optimization/specs/digest-diff-update/spec.md
+added     +41    -0     openspec/changes/decompose-replan-optimization/specs/orch-digest-python/spec.md
+added     +113   -0     openspec/changes/decompose-replan-optimization/specs/orch-plan-python/spec.md
+added     +61    -0     openspec/changes/decompose-replan-optimization/specs/orch-replan-python/spec.md
+added     +76    -0     openspec/changes/decompose-replan-optimization/specs/planner-prompt-caching/spec.md
+added     +108   -0     openspec/changes/decompose-replan-optimization/specs/planner-strategy-routing/spec.md
+added     +91    -0     openspec/changes/decompose-replan-optimization/specs/replan-domain-plan-reuse/spec.md
+added     +100   -0     openspec/changes/decompose-replan-optimization/specs/replan-scoped-patch/spec.md
+added     +300   -0     openspec/changes/decompose-replan-optimization/tasks.md
+added     +270   -0     tests/integration/test_serial_decompose_e2e.py
+added     +294   -0     tests/unit/test_planner_replan_reuse.py
+added     +209   -0     tests/unit/test_planner_strategy_routing.py
+--- DIFF DO CÓDIGO LIGADO
+### lib/set_orch/engine.py
+@@ -147,6 +147,18 @@ class Directives:
+     # Replan divergent-plan reconciliation mode.
+     divergent_plan_dir_cleanup: str = "enabled"
+ 
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++
+     # ─── verify-gate-resilience-fixes: hoisted retry/circuit limits ───
+     # All fields below default to DIRECTIVE_DEFAULTS values (config.py canonical).
+     # Phase 4 will replace hardcoded constants in merger.py / verifier.py /
+@@ -249,6 +261,12 @@ def parse_directives(raw: dict) -> Directives:
+         raw, "divergent_plan_dir_cleanup", d.divergent_plan_dir_cleanup,
+     )
+ 
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++
+     # verify-gate-resilience-fixes: hoisted retry/circuit limits.
+     d.max_merge_retries = _int(raw, "max_merge_retries", d.max_merge_retries)
+     d.max_integration_retries = _int(raw, "max_integration_retries", d.max_integration_retries)
+@@ -3684,33 +3702,65 @@ def _auto_replan_cycle(
+             _load_domain_data, _phase1_planning_brief,
+             _decompose_single_domain, _phase2_parallel_decompose,
+             _phase3_merge_plans, _save_domain_plans,
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+         )
+ 
+         logger.info("Replan: using domain-parallel pipeline (trigger=%s)", replan_trigger)
+ 
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
+ 
+         digest_dir = os.path.join(os.getcwd(), "set", "orchestration", "digest")
+         logger.debug("Replan: digest_dir=%s, exists=%s", digest_dir, os.path.isdir(digest_dir))
+         domain_data = _load_domain_data(digest_dir)
+         from .model_config import resolve_model as _resolve_model
+         model = d.default_model or _resolve_model("agent")
+ 
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
++
+         if replan_trigger == "spec_change":
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
++            # Spec changed — most hashes will differ; let the hash check
++            # decide per-domain rather than blanket re-decompose.
++            logger.info("Replan: spec changed — hash-based reuse engaged")
+             saved_brief = _phase1_planning_brief(domain_data, model=model)
+-            saved_domain_plans = _phase2_parallel_decompose(domain_data, saved_brief, model=model, digest_dir=digest_dir)
++            # Brief change invalidates all hashes by construction.
++            reuse_set = set()
++            failed_domains = [d_["name"] for d_ in domain_data.get("domains", [])]
++            for dname in failed_domains:
++                domain = next((dom for dom in domain_data["domains"] if dom["name"] == dname), None)
++                if domain:
++                    _dreq_ids = [r.get("id", "") for r in domain.get("requirements", [])]
++                    saved_domain_plans[dname] = _decompose_single_domain(
++                        domain, json.dumps(saved_brief), domain_data["conventions"], model=model,
++                        test_plan_context=_build_test_plan_context(digest_dir, _dreq_ids),
++                    )
+         elif replan_trigger == "e2e_failure":
+             # Phase 3 only — re-merge with failure context
+             logger.info("Replan: Phase 3 only (E2E failure)")
+         elif replan_trigger in ("domain_failure", "coverage_gap"):
+-            # Re-run failed/gap domains only
+-            failed_domains = _get_domains_needing_replan(state_file, domain_data, replan_trigger)
++            # Re-run failed/gap domains only — minus those whose hash shows
++            # they're actually unchanged.
++            flagged = _get_domains_needing_replan(state_file, domain_data, replan_trigger)
++            failed_domains = [d_ for d_ in flagged if d_ not in reuse_set]
++            skipped = [d_ for d_ in flagged if d_ in reuse_set]
++            if skipped:
++                logger.info(
++                    "Replan: hash-based reuse skipped %d trigger-flagged domain(s): %s",
++                    len(skipped), skipped,
++                )
+             logger.info("Replan: re-decomposing domains: %s", failed_domains)
+             for dname in failed_domains:
+                 domain = next((dom for dom in domain_data["domains"] if dom["name"] == dname), None)
+@@ -3739,7 +3789,23 @@ def _auto_replan_cycle(
+                         test_plan_context=_build_test_plan_context(digest_dir, _dreq_ids2),
+                     )
+ 
+-        _save_domain_plans(saved_brief, saved_domain_plans)
++        # Persist with hashes so the next replan can detect unchanged domains.
++        _save_domain_plans(saved_brief, saved_domain_plans, domain_data=domain_data)
++
++        # Emit REPLAN_REUSE telemetry (capability replan-domain-plan-reuse).
++        # `reuse_set` was computed above; total = current digest's domain count.
++        try:
++            total_domains = len(domain_data.get("domains", []))
++            reused_count = len(reuse_set)
++            redecomposed_count = max(0, total_domains - reused_count)
++            event_bus.emit("REPLAN_REUSE", change="", data={
++                "reused": reused_count,
++                "redecomposed": redecomposed_count,
++                "total": total_domains,
++                "trigger": replan_trigger,
++            })
++        except Exception:
++            logger.debug("Failed to emit REPLAN_REUSE event", exc_info=True)
+ 
+         plan_json = _phase3_merge_plans(
+             saved_domain_plans, saved_brief, domain_data,
+
+### lib/set_orch/planner.py
+@@ -168,6 +168,184 @@ def summarize_spec(
+ _FORCE_STRATEGY_VALID = {"flat", "domain-parallel", "auto"}
+ 
+ 
++# ─── Planner Strategy Routing ────────────────────────────────────────
++# Capability: planner-strategy-routing (decompose-replan-optimization).
++# Default `auto` resolves to `serial` for typical specs and only routes to
++# `parallel` when the estimated flat-prompt input tokens exceed the
++# threshold. The legacy DOMAIN_PARALLEL_MIN_REQS = 30 heuristic is removed.
++
++# Default threshold: 120k leaves ~80k of the Opus 200k window for output
++# and tool-use turns. Tunable via the `planner_single_call_max_input_tokens`
++# directive.
++SINGLE_CALL_MAX_INPUT_TOKENS_DEFAULT: int = 120_000
++
++# Fixed overhead added to the file-size estimate. Covers _PLANNING_RULES
++# (~5 KB), output schema (~1 KB), test infra context (~0.5 KB), design
++# context placeholder (~2 KB), existing-specs/active-changes (~1 KB).
++_FLAT_PROMPT_FIXED_OVERHEAD_CHARS: int = 9_500
++
++# Chars-per-token estimate (rough; ~3.5 for English+JSON mix).
++_CHARS_PER_TOKEN: float = 3.5
++
++
++def estimate_flat_prompt_tokens(
++    digest_dir: str,
++    replan_ctx: dict | None = None,
++) -> int:
++    """Estimate the input-token size of the flat (single-call) decompose prompt.
++
++    Pure-Python computation. Reads digest files from disk and returns an
++    integer estimate. Never invokes Claude.
++
++    Args:
++        digest_dir: Path to `set/orchestration/digest`. Missing files are
++            treated as zero bytes (graceful fallback).
++        replan_ctx: Optional replan context dict (`completed`, `e2e_failures`,
++            `audit_gaps`). Its serialized JSON size is added to the estimate.
++
++    Returns:
++        Estimated input tokens (chars / _CHARS_PER_TOKEN).
++    """
++    total_chars = _FLAT_PROMPT_FIXED_OVERHEAD_CHARS
++
++    # Sum byte sizes of standard digest files; missing → 0.
++    if digest_dir and os.path.isdir(digest_dir):
++        for filename in (
++            "conventions.json",
++            "requirements.json",
++            "dependencies.json",
++            "ambiguities.json",
++            "index.json",
++        ):
++            path = os.path.join(digest_dir, filename)
++            try:
++                total_chars += os.path.getsize(path)
++            except OSError:
++                pass  # missing — treat as 0
++
++        # Sum all domains/*.md files.
++        domains_dir = os.path.join(digest_dir, "domains")
++        if os.path.isdir(domains_dir):
++            try:
++                for entry in os.listdir(domains_dir):
++                    if entry.endswith(".md"):
++                        try:
++                            total_chars += os.path.getsize(
++                                os.path.join(domains_dir, entry),
++                            )
++                        except OSError:
++                            pass
++            except OSError:
++                pass
++
++    # Replan context — serialize and count.
++    if replan_ctx:
++        try:
++            total_chars += len(json.dumps(replan_ctx))
++        except (TypeError, ValueError):
++            pass
++
++    return int(total_chars / _CHARS_PER_TOKEN)
++
++
++def _resolve_planner_strategy(
++    digest_dir: str,
++    replan_ctx: dict | None = None,
++    project_dir: str | None = None,
++) -> tuple[str, dict]:
++    """Resolve the planner strategy via directive + threshold check.
++
++    Precedence (high → low):
++      1. env var SET_ORCH_PLANNER_STRATEGY
++      2. orchestration.yaml::planner.strategy
++      3. state.extras.directives.planner_strategy
++      4. default `auto`
++
++    When the resolved strategy is `auto`, run `estimate_flat_prompt_tokens`
++    and pick `serial` if estimate ≤ threshold, else `parallel`.
++
++    Returns:
++        (strategy: "serial"|"parallel", debug_info: dict). debug_info has
++        keys `source`, `estimated_tokens`, `threshold`, `raw_directive`.
++    """
++    cwd = Path(project_dir) if project_dir else Path(os.getcwd())
++    debug: dict[str, Any] = {
++        "source": "default",
++        "raw_directive": "auto",
++        "estimated_tokens": 0,
++        "threshold": SINGLE_CALL_MAX_INPUT_TOKENS_DEFAULT,
++    }
++
++    raw = os.environ.get("SET_ORCH_PLANNER_STRATEGY")
++    if raw:
++        debug["source"] = "env"
++        debug["raw_directive"] = raw
++
++    if raw is None:
++        # orchestration.yaml::planner.strategy
++        for path in (cwd / ".claude" / "orchestration.yaml", cwd / "orchestration.yaml"):
++            if not path.is_file():
++                continue
++            try:
++                import yaml as _yaml
++                with open(path) as _fh:
++                    data = _yaml.safe_load(_fh) or {}
++            except Exception:
++                continue
++            planner_section = data.get("planner") if isinstance(data, dict) else None
++            if isinstance(planner_section, dict) and "strategy" in planner_section:
++                raw = planner_section.get("strategy")
++                debug["source"] = f"orchestration.yaml::{path.name}"
++                debug["raw_directive"] = str(raw)
++                # Threshold override may also be in the same file.
++                threshold_override = planner_section.get("single_call_max_input_tokens")
++                if isinstance(threshold_override, int) and threshold_override > 0:
++                    debug["threshold"] = threshold_override
++                break
++
++    if raw is None:
++        # state.extras.directives.planner_strategy
++        try:
++            from .paths import LineagePaths as _LP
++            state_path = _LP(str(cwd)).state_file
++            if os.path.isfile(state_path):
++                with open(state_path) as _sf:
++                    _sd = json.load(_sf)
++                directives = _sd.get("extras", {}).get("directives", {})
++                if "planner_strategy" in directives:
++                    raw = directives["planner_strategy"]
++                    debug["source"] = "state.directives"
++                    debug["raw_directive"] = str(raw)
++                threshold_override = directives.get("planner_single_call_max_input_tokens")
++                if isinstance(threshold_override, int) and threshold_override > 0:
++                    debug["threshold"] = threshold_override
++        except Exception:
++            pass
++
++    if raw is None or raw not in ("serial", "parallel", "auto"):
++        if raw not in (None, "auto"):
++            logger.warning(
++                "Unknown planner.strategy=%r — falling back to 'auto'", raw,
++            )
++        raw = "auto"
++        if debug["source"] == "default":
++            debug["raw_directive"] = "auto"
++
++    if raw in ("serial", "parallel"):
++        return raw, debug
++
++    # auto — estimate and pick.
++    estimated = estimate_flat_prompt_tokens(digest_dir, replan_ctx)
++    debug["estimated_tokens"] = estimated
++    threshold = debug["threshold"]
++    chosen = "serial" if estimated <= threshold else "parallel"
++    logger.info(
++        "planner.strategy=auto resolved=%s estimated_tokens=%d threshold=%d",
++        chosen, estimated, threshold,
++    )
++    return chosen, debug
++
++
+ def _read_force_strategy(project_dir: str | None = None) -> str:
+     """Return the configured planner.force_strategy, or 'auto' if unset/invalid."""
+     cwd = Path(project_dir) if project_dir else Path(os.getcwd())
+@@ -1819,6 +1997,7 @@ def enrich_plan_metadata(
+     plan_version: int = 1,
+     replan_cycle: int | None = None,
+     state_path: str | None = None,
++    strategy: str | None = None,
+ ) -> dict:
+     """Add metadata fields to a raw plan JSON.
+ 
+@@ -1837,7 +2016,14 @@ def enrich_plan_metadata(
+         Enriched plan dict with metadata.
+     """
+     plan_phase = "iteration" if replan_cycle is not None else "initial"
+-    plan_method = os.environ.get("_PLAN_METHOD", "api")
++    # decompose-replan-optimization: record the resolved strategy in
++    # plan_method so post-run cost analysis can attribute spend per
++    # strategy. `strategy` argument wins; env var is honored for back-
++    # compat with older callers; default `api` preserves today's value.
++    if strategy is not None:
++        plan_method = strategy
++    else:
++        plan_method = os.environ.get("_PLAN_METHOD", "api")
+ 
+     # Compute input hash
+     input_hash = ""
+@@ -2138,7 +2324,9 @@ def _phase1_planning_brief(
+     # No --max-turns: the prompt asks for JSON output, model self-terminates on
+     # end_turn. Hardcoded caps preemptively killed legitimate big-spec runs.
+     # Timeout remains as a silent-hang circuit-breaker.
+-    result = run_claude_logged(prompt, purpose="decompose_brief", timeout=1800, model=model)
++    result = run_claude_logged(
++        prompt, purpose="decompose_brief", timeout=1800, model=model, strategy="parallel",
++    )
+     if result.exit_code != 0:
+         raise RuntimeError(f"Phase 1 (planning brief) failed (exit {result.exit_code})")
+ 
+@@ -2234,7 +2422,9 @@ def _decompose_single_domain(
+     # No --max-turns: domains with I/O exploration (admin reading prisma schema,
+     # auth checking existing setup) need >5 turns; cap was the recurring blocker
+     # for craftbrew-scale specs. Timeout 1800s is the silent-hang safety net.
+-    result = run_claude_logged(prompt, purpose="decompose_domain", timeout=1800, model=model)
++    result = run_claude_logged(
++        prompt, purpose="decompose_domain", timeout=1800, model=model, strategy="parallel",
++    )
+     if result.exit_code != 0:
+         raise RuntimeError(f"Phase 2 domain '{domain['name']}' failed (exit {result.exit_code})")
+ 
+@@ -2340,7 +2530,9 @@ def _phase3_merge_plans(
+ 
+     logger.info("Phase 3: merging %d domain plans", len(domain_plans))
+     # No --max-turns: see decompose_brief / decompose_domain rationale.
+-    result = run_claude_logged(prompt, purpose="decompose_merge", timeout=1800, model=model)
++    result = run_claude_logged(
++        prompt, purpose="decompose_merge", timeout=1800, model=model, strategy="parallel",
++    )
+     if result.exit_code != 0:
+         raise RuntimeError(f"Phase 3 (merge) failed (exit {result.exit_code})")
+ 
+@@ -2353,11 +2545,122 @@ def _phase3_merge_plans(
+     return merged_plan
+ 
+ 
++def load_saved_domain_plans(
++    state_file: str,
++) -> tuple[dict, dict[str, dict], dict[str, str]] | None:
++    """Load the saved Phase 1 brief + Phase 2 domain plans + per-domain hashes.
++
++    Returns `(brief, domain_plans, domain_input_hashes)` on success, or
++    `None` when the file is missing or unparseable. Capability:
++    replan-domain-plan-reuse.
++
++    A WARNING is logged on parse failure so operators can correlate with
++    a missing reuse opportunity.
++    """
++    from .paths import LineagePaths
++    try:
++        domains_file = LineagePaths.from_state_file(state_file).plan_domains_file
++    except Exception as exc:
++        logger.debug("load_saved_domain_plans: lineage resolution failed (%s)", exc)
++        return None
++    if not os.path.isfile(domains_file):
++        return None
++    try:
++        with open(domains_file) as f:
++            data = json.load(f)
++    except (OSError, json.JSONDecodeError) as exc:
++        logger.warning(
++            "Replan: could not load saved domain plans at %s (%s) — "
++            "proceeding with full Phase 2",
++            domains_file, exc,
++        )
++        return None
++    brief = data.get("brief", {}) or {}
++    domain_plans = data.get("domain_plans", {}) or {}
++    hashes = data.get("domain_input_hashes", {}) or {}
++    logger.info(
++        "Replan: loaded saved domain plans (%d domains, %d hashes)",
++        len(domain_plans), len(hashes),
++    )
++    return brief, domain_plans, hashes
++
++
++def resolve_domain_reuse_decisions(
++    saved_hashes: dict[str, str],
++    current_domain_data: dict,
++    current_brief: dict,
++) -> tuple[set[str], set[str]]:
++    """Decide which domains can be reused vs need re-decomposition.
++
++    Recomputes each current domain's input hash and compares to the
++    saved hash. Returns `(reuse_names, redecompose_names)`. Capability:
++    replan-domain-plan-reuse.
++
++    A domain is reused only when (a) a saved hash exists for that name,
++    AND (b) the recomputed hash byte-equals the saved one. New domains
++    in the current digest that have no saved hash are placed in
+

@@ -1,0 +1,511 @@
+===== P273 | arabold/docs-mcp-server PR #431 | capacidade do par: configuration
+PR: Fix embedding dimension resolution for custom models
+arquivos ligados: src/store/DocumentStore.test.ts
+--- linhas alteradas (152; mostrando até 40)
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+-import { loadConfig } from "../utils/config";
++import { loadConfig, markVectorDimensionSource } from "../utils/config";
+-import { EmbeddingModelChangedError } from "./errors";
++import { DimensionError, EmbeddingModelChangedError } from "./errors";
++const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
++const mockEmbeddingCalls = vi.hoisted(() => ({ query: 0, documents: 0 }));
++        mockEmbeddingCalls.query += 1;
+-        const embedding = new Array(1536).fill(0);
++        const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-            const index = (baseIndex + i) % 1536;
++            const index = (baseIndex + i) % mockEmbeddingDimension.value;
++        mockEmbeddingCalls.documents += 1;
+-          const embedding = new Array(1536).fill(0);
++          const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-              const index = (baseIndex + i) % 1536;
++              const index = (baseIndex + i) % mockEmbeddingDimension.value;
++    mockEmbeddingDimension.value = 1536;
++      mockEmbeddingDimension.value = 1536;
++  let tempDir: string;
++    mockEmbeddingDimension.value = 1536;
++    mockEmbeddingCalls.query = 0;
++    mockEmbeddingCalls.documents = 0;
++    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-store-"));
++    rmSync(tempDir, { recursive: true, force: true });
++    dbPath = ":memory:",
++      markVectorDimensionSource(cfg, true);
+-    const s = new DocumentStore(":memory:", cfg);
++    const s = new DocumentStore(dbPath, cfg);
++    it("should not throw after restarting with an auto-detected unknown model dimension", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model");
++      // Metadata was persisted with the resolved dimension, not the default config value.
++      expect(store.getEmbeddingMetadata().dimension).toBe("1024");
++      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
++    });
++    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
++      mockEmbeddingDimension.value = 1024;
+--- candidata: embedding-generation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Chunk Metadata Header
+  | The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > ### Requirement: Chunk Metadata Header
+  > The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > This enriches the embedding vector with document context to improve semantic search relevance. The header is prepended only for the embedding input; it is not stored as part of the chunk content in th
+  > **Code reference:** `src/store/DocumentStore.ts:1170-1173`
+  > - **THEN** the embedding input SHALL be prefixed with `<title>React Docs</title>\n<url>https://react.dev/learn</url>\n<path>Learn / Installation / Setup</path>\n`
+  > - **AND** the chunk content in the database SHALL remain unchanged (without the header)
+  > #### Scenario: Chunk with empty section path
+  > - **WHEN** a chunk has an empty section path `[]`
+--- candidata: embedding-model-change-safety [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Embedding Metadata Persistence
+  | The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > ### Requirement: Embedding Metadata Persistence
+  > The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > - `embedding_model`: The full model specification string (e.g., `openai:text-embedding-3-small`)
+  > - `embedding_dimension`: The configured vector dimension as a string (e.g., `"1536"`)
+  > The `metadata` table SHALL be created by a database migration with the schema `CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`.
+  > The metadata SHALL be written after successful embedding initialization during `DocumentStore.initialize()`. If embeddings are disabled (FTS-only mode), no embedding metadata SHALL be stored.
+  > #### Scenario: Metadata stored after successful embedding init
+  > - **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
+--- candidata: embedding-resolution [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Model Specification Parsing
+  | The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > **Supported providers:** `openai`, `vertex`, `gemini`, `aws`, `microsoft`, `sagemaker` (parse-only; model creation not yet implemented).
+  > **Code reference:** `src/store/embeddings/EmbeddingConfig.ts:290-317`
+  > #### Scenario: Model string without provider prefix
+  > - **WHEN** the model specification is `text-embedding-3-small` (no colon)
+  > - **THEN** the system SHALL use `openai` as the provider and `text-embedding-3-small` as the model name
+  > #### Scenario: Model string with provider prefix
+  > - **WHEN** the model specification is `gemini:embedding-001`
+--- candidata: subresource-blocklist [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Blocklist categories and scope
+  | The scraper SHALL maintain a built-in, hand-curated blocklist of third-party sub-resource origins covering exactly these categories: **Analytics**, **Session Replay**, **Chat Widgets**, **Captcha**, a
+  > #### Scenario: Analytics SDK request is blocked
+  > - **THEN** the request is aborted with Playwright reason `blockedbyclient`
+  > #### Scenario: Captcha runtime is blocked
+  > - **THEN** the request is aborted with reason `blockedbyclient`
+  > #### Scenario: Chat widget bundle is blocked
+  > - **THEN** the request is aborted with reason `blockedbyclient`
+  > #### Scenario: Session replay agent is blocked
+  > - **THEN** the request is aborted with reason `blockedbyclient`
+
+===== P274 | ChenChenyaqi/learn-anything PR #98 | capacidade do par: site-build
+PR: refactor: decompose site components, composables, and utils
+arquivos ligados: packages/cli/site/src/composables/useI18n.ts;packages/cli/site/src/composables/useTopicData.ts;packages/cli/site/vite.config.ts
+--- linhas alteradas (380; mostrando até 40)
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++export type { I18nKey } from './locales/en';
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+--- candidata: site-theme [tasks+termos]
+  | ## ADDED Requirements
+  | > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  | ### Requirement: Dashboard page shows all topics as cards
+  > > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  > ### Requirement: Dashboard page shows all topics as cards
+  > The system SHALL render a Dashboard page at the site root (`/`) that scans `/topics/` for all topic directories via `import.meta.glob`, reads each topic's `state.json`, and displays each topic as a ca
+  > #### Scenario: Dashboard with multiple topics
+  > - **WHEN** `/topics/` contains subdirectories `javascript/` and `python/`, each with a valid `state.json`
+  > - **THEN** the Dashboard displays two cards, one for "JavaScript" with its progress and one for "Python" with its progress
+  > #### Scenario: Dashboard with no topics
+  > - **WHEN** `/topics/` exists but contains no topic subdirectories with valid `state.json` files
+--- candidata: quiz-results-summary [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Results display after quiz completion
+  | After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > ### Requirement: Results display after quiz completion
+  > After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > #### Scenario: Quiz completed
+  > - **WHEN** the user submits the final question
+  > - **AND** the results show a large score indicator (e.g., "7 / 8")
+  > - **AND** the results show a percentage (e.g., "87.5%")
+  > The results summary SHALL show each question's grading outcome with the user's answer, correct answer, and explanation.
+  > #### Scenario: Exact-match question graded correctly
+--- candidata: quiz-card-practice [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz modal container
+  | The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > - **WHEN** a quiz file is launched from the sidebar
+  > - **AND** the first question is displayed as a card
+  > - **THEN** the modal closes
+  > - **AND** any current quiz session state is discarded
+  > #### Scenario: Multiple choice question
+  > - **WHEN** the current question has type `multiple_choice`
+  > - **THEN** all options from `question.options[]` are rendered as radio buttons
+--- candidata: quiz-sidebar-tab [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz tab in topic sidebar
+  | The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > ### Requirement: Quiz tab in topic sidebar
+  > The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > #### Scenario: User is on a topic page
+  > - **WHEN** the sidebar context is `topic`
+  > - **THEN** three tabs are displayed: Topics, Exercises, Quizzes
+  > - **AND** the Quizzes tab label is "Quizzes" (English locale) or "测验" (Chinese locale)
+  > #### Scenario: User is on the dashboard
+  > - **WHEN** the sidebar context is `dashboard`
+--- candidata: site-cli [tasks]
+  | ## ADDED Requirements
+  | > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  | > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  > > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > ### Requirement: serve command generates files, installs dependencies, and starts Vite dev server
+  > The system SHALL provide a `learn-anything serve [path]` command that: (1) calls `SiteGenerator.generate()` to write template files to `.learn/`, (2) runs `npm install --prefix .learn` to install vue,
+  > #### Scenario: serve generates files before starting
+  > - **WHEN** user runs `learn-anything serve` in a project directory
+  > - **THEN** the system writes all site template files to `.learn/` before attempting npm install
+  > - **WHEN** user runs `learn-anything serve` and `.learn/package.json` exists
+
+===== P275 | rustyrazorblade/easy-db-lab PR #642 | capacidade do par: cassandra
+PR: feat(spark): add bulk-writer-s3-iam module with IAM credentials and m…
+arquivos ligados: src/main/kotlin/com/rustyrazorblade/easydblab/configuration/sidecar/SidecarManifestBuilder.kt
+--- linhas alteradas (23; mostrando até 40)
++import io.fabric8.kubernetes.api.model.LocalObjectReferenceBuilder
++        private const val SIDECAR_PORT = 9043
++        private const val READINESS_INITIAL_DELAY = 15
++        private const val READINESS_PERIOD = 10
++        imagePullSecretName: String = "",
+-            buildDaemonSet(image, controlNodeIp, clusterName),
++            buildDaemonSet(image, controlNodeIp, clusterName, imagePullSecretName),
++        imagePullSecretName: String = "",
++        .apply {
++            if (imagePullSecretName.isNotEmpty()) {
++                addToImagePullSecrets(LocalObjectReferenceBuilder().withName(imagePullSecretName).build())
++            }
++        }
+-        ).endContainer()
++        ).withNewReadinessProbe()
++        .withNewHttpGet()
++        .withPath("/api/v1/cassandra/schema")
++        .withNewPort(SIDECAR_PORT)
++        .endHttpGet()
++        .withInitialDelaySeconds(READINESS_INITIAL_DELAY)
++        .withPeriodSeconds(READINESS_PERIOD)
++        .endReadinessProbe()
++        .endContainer()
+--- candidata: spark-modules [PR+termos]
+  | # Spark Modules
+  | Spark job module organization, shared configuration, and independent deployable JARs for performance comparison.
+  | ## Requirements
+  > - **THEN** the module MUST parse and use those properties for database connectivity and schema setup
+  > - **WHEN** the project is built with `./gradlew :spark:common:build` or `./gradlew :spark:bulk-writer-sidecar:shadowJar`
+  > - **WHEN** a user submits a Spark job with `--jar spark/bulk-writer-sidecar/build/libs/bulk-writer-sidecar-all.jar --main-class ...DirectBulkWriter` using the same `--conf` flags
+  > - **AND** then submits with `--jar spark/connector-writer/build/libs/connector-writer-all.jar --main-class ...StandardConnectorWriter` using the same `--conf` flags
+  > - **THEN** both jobs MUST write to the same keyspace/table schema using the same data generator, enabling direct performance comparison
+  > - **THEN** the module MUST parse and use those properties for database connectivity and schema setup
+  > - **WHEN** the project is built with `./gradlew :spark:common:build` or `./gradlew :spark:bulk-writer-sidecar:shadowJar`
+  > - **WHEN** a user submits a Spark job with `--jar spark/bulk-writer-sidecar/build/libs/bulk-writer-sidecar-all.jar --main-class ...DirectBulkWriter` using the same `--conf` flags
+--- candidata: containerized-sidecar [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Sidecar runs as a K3s DaemonSet on database nodes
+  | The system SHALL deploy the Cassandra sidecar as a K3s DaemonSet targeting all nodes with label `type=db`, using `hostNetwork: true` so the sidecar can connect to the local Cassandra instance.
+  > #### Scenario: Sidecar deployed on cassandra start
+  > - **WHEN** the user runs `cassandra start`
+  > - **THEN** a DaemonSet named `cassandra-sidecar` is applied to K3s and one sidecar pod runs on each database node
+  > #### Scenario: Sidecar pod runs as cassandra user
+  > - **THEN** each pod runs with `runAsUser: 999` and `runAsGroup: 999` (the cassandra user)
+  > ### Requirement: Sidecar image is configurable at start time
+  > The system SHALL accept a `--sidecar-image` option on `cassandra start` specifying the container image (registry, repository, and tag) to use for the sidecar DaemonSet. The default SHALL be `ghcr.io/a
+  > #### Scenario: Default image used when no flag provided
+--- candidata: bulk-writer-s3-iam [PR]
+  | # Bulk Writer S3 IAM
+  | Spark bulk writer that uses S3 transport with IAM instance profile credentials. No static keys are extracted or passed to the sidecar — both the Spark executor and the Cassandra sidecar authenticate v
+  | ## ADDED Requirements
+  > - **WHEN** `IamBulkWriter` builds the write options map
+  > - **WHEN** `IamBulkWriter` builds the write options map
+--- candidata: end-to-end-testing [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: End-to-end test runner
+  | The system SHALL provide a bash test runner (`bin/end-to-end-test`) that provisions real AWS infrastructure, deploys services, runs validation steps, and tears down the environment. All steps run rega
+--- candidata: env-file-config [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Scripts source a gitignored .env file at project root
+  | Both `bin/easy-db-lab` and `bin/end-to-end-test` SHALL source `$PROJECT_ROOT/.env` at startup if the file exists. Variables already set in the shell environment SHALL NOT be overwritten. The file SHAL
+
+===== P276 | IgniteUI/igniteui-theming PR #537 | capacidade do par: color-reference
+PR: feat: add generic platform detection knowledge
+arquivos ligados: src/mcp/__tests__/generators/sass.test.ts;src/mcp/__tests__/knowledge/platform-detection.test.ts;src/mcp/__tests__/tools/handlers/handlers.test.ts
+--- linhas alteradas (318; mostrando até 40)
+- *
+- * Note: Full Sass compilation tests are limited because generated code
+- * uses variables (like $material-type-scale) that are defined within
+- * the theming library's context. We focus on structural validation.
++ * 4. Generated code compiles as valid Sass (compilation tests)
++ *
++ * Handles:
++ * - Base module: @use 'igniteui-theming' as *; → @use 'sass' as *;
++ * - Angular module: @use "igniteui-angular/theming" as *; → @use 'sass' as *;
++ * - Sub-module presets: @use 'igniteui-theming/sass/...' as *; → @use 'sass/...' as *;
++		.replace(
++			/@use ['"]igniteui-theming\/sass\/(.+?)['"] as \*;/g,
++			"@use 'sass/$1' as *;",
++		)
++	it("includes typography preset import for non-Angular platforms", () => {
++		const result = generateTypography({
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++		expect(result.code).toContain(
++			"@use 'igniteui-theming/sass/typography/presets' as *;",
++		);
++	});
++	it("omits typography preset import for Angular platform", () => {
++		const result = generateTypography({
++			platform: "angular",
++			fontFamily: "Roboto",
++			designSystem: "material",
++		});
++		expect(result.code).not.toContain("typography/presets");
++		expect(result.code).toContain("igniteui-angular/theming");
++	});
++	it("generates valid Sass that compiles for webcomponents", async () => {
++		const result = generateTypography({
++			platform: "webcomponents",
++			fontFamily: "Roboto",
++		});
++		expect(await isValidSass(result.code)).toBe(true);
++	});
++	it("generates valid Sass that compiles for react", async () => {
+--- candidata: sass-compilation-tests [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Generated typography Sass compiles without errors
+  | The `create_typography` tool's output SHALL compile as valid Sass for all non-Angular platforms.
+  > ### Requirement: Generated typography Sass compiles without errors
+  > The `create_typography` tool's output SHALL compile as valid Sass for all non-Angular platforms.
+  > #### Scenario: Typography compiles for webcomponents platform
+  > - **GIVEN** `platform: webcomponents` and `fontFamily: 'Roboto'`
+  > - **WHEN** `generateTypography` produces Sass code
+  > - **THEN** the code MUST compile without Sass errors
+  > #### Scenario: Typography compiles for react platform
+  > - **GIVEN** `platform: react` and `fontFamily: 'Roboto'`
+--- candidata: component-theming [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Component token schemas are exposed
+  | The `get_component_design_tokens` tool SHALL explicitly indicate when a component is compound and provide an actionable checklist for generating related themes.
+  > The `get_component_design_tokens` tool SHALL explicitly indicate when a component is compound and provide an actionable checklist for generating related themes.
+  > #### Scenario: Compound component response includes required checklist
+  > - **WHEN** `get_component_design_tokens` is called for a compound component
+  > - **THEN** the response includes a "Compound checklist (required)" section listing each related theme and its scoped selector
+  > - **AND** the checklist instructs the model to call `get_component_design_tokens` and `create_component_theme` for each related theme using the provided selector
+  > - **WHEN** a compound component has related themes without scoped selectors (e.g., selector is `TODO`)
+  > ### Requirement: Component theming requires platform
+  > The `create_component_theme` tool description SHALL specify compound-component completeness rules to reduce incomplete outputs.
+--- candidata: generic-platform [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Generic is a first-class platform value
+  | The `Platform` type SHALL include `"generic"` as a valid member alongside `"angular"`, `"webcomponents"`, `"react"`, and `"blazor"`. All `Record<Platform, ...>` mappings SHALL include a `generic` entr
+  > ### Requirement: Generic is a first-class platform value
+  > The `Platform` type SHALL include `"generic"` as a valid member alongside `"angular"`, `"webcomponents"`, `"react"`, and `"blazor"`. All `Record<Platform, ...>` mappings SHALL include a `generic` entr
+  > #### Scenario: PLATFORMS array includes generic
+  > - **WHEN** the `PLATFORMS` constant is defined
+  > - **THEN** it SHALL contain `"generic"` as a member
+  > - **AND** the derived `Platform` type includes `"generic"` in its union
+  > #### Scenario: Ignite package patterns for generic
+  > - **WHEN** `IGNITE_PACKAGE_PATTERNS` is defined as `Record<Platform, string[]>`
+--- candidata: platform-detection [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Platform detection provides confidence and signals
+  | The system detects a target platform using package dependencies, config files, and framework fallbacks, returning confidence and contributing signals.
+  > ### Requirement: Platform detection provides confidence and signals
+  > The system detects a target platform using package dependencies, config files, and framework fallbacks, returning confidence and contributing signals.
+  > #### Scenario: Ignite UI package detected
+  > - **WHEN** `igniteui-angular`, `igniteui-webcomponents`, `igniteui-react`, or commercial equivalents are found in dependencies
+  > - **THEN** the platform is set to the matching target
+  > - **AND** confidence is `high` with an `ignite_package` signal
+  > - **WHEN** `angular.json`, `vite.config.*` with React plugin, `next.config.js`, or `.csproj` with IgniteUI.Blazor is detected
+  > - **THEN** the platform is set to the matching target
+--- candidata: theme-generation [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Theme generation is platform-aware
+  | The `create_theme` tool generates Sass output that follows platform-specific conventions.
+  > ### Requirement: Theme generation is platform-aware
+  > The `create_theme` tool generates Sass output that follows platform-specific conventions.
+  > #### Scenario: Angular output
+  > - **WHEN** `platform: angular` is provided
+  > - **THEN** the output includes `@include core()`
+  > - **AND** the output includes `@include theme(` with schema and palette
+  > #### Scenario: Web Components output
+  > - **WHEN** `platform: webcomponents` is provided
+
+===== P277 | VimCommando/kibana-object-manager PR #16 | capacidade do par: concurrency
+PR: Add Kibana version checks and force override
+arquivos ligados: src/cli.rs
+--- linhas alteradas (429; mostrando até 40)
+-    client::{Auth, KibanaClient},
++    client::{
++        ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
++    },
+-use eyre::{Context, Result};
++use eyre::{Context, Report, Result};
++use std::fmt;
++/// Warning report used to signal a version-gating warning exit (status code 2).
++#[derive(Debug)]
++pub struct VersionWarning {
++    message: String,
++}
++impl VersionWarning {
++    fn new(message: impl Into<String>) -> Self {
++        Self {
++            message: message.into(),
++        }
++    }
++}
++impl fmt::Display for VersionWarning {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "{}", self.message)
++    }
++}
++impl std::error::Error for VersionWarning {}
++fn version_warning(message: impl Into<String>) -> Report {
++    Report::new(VersionWarning::new(message))
++}
++/// Return warning text when an error represents a version warning.
++pub fn version_warning_message(report: &Report) -> Option<&str> {
++    report
++        .downcast_ref::<VersionWarning>()
++        .map(|warning| warning.message.as_str())
++}
++#[derive(Debug, Clone)]
++struct VersionPreflight {
++    detected: KibanaVersionInfo,
++    recorded: Option<KibanaVersion>,
++}
++fn parse_capability(api: &str) -> Option<ApiCapability> {
+--- candidata: cli [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: API Filtering
+  | The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > The CLI SHALL support filtering operations by API type using the `--api` flag on `pull`, `push`, and `togo` commands.
+  > #### Scenario: Default behavior (no filter)
+  > - **THEN** the system pulls all supported object types (Spaces, Saved Objects, Workflows, Agents, Tools)
+  > - **WHEN** the user runs `kibob pull --api tools`
+  > - **THEN** the system ONLY pulls Tools
+  > - **AND** skips Spaces, Saved Objects, Workflows, and Agents
+  > - **WHEN** the user runs `kibob push --api agents,workflows`
+  > - **THEN** the system pushes Agents and Workflows
+--- candidata: agents [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Agent API Compliance
+  | The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates.
+  > The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates.
+  > - **WHEN** creating a new agent
+  > - **THEN** the system sends a `POST` request to `/api/agent_builder/agents`
+  > - **WHEN** updating an existing agent
+  > - **THEN** the system sends a `PUT` request to `/api/agent_builder/agents/{id}`
+  > The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates, and SHALL only execute these operations when Kibana version is 9.2.0 or newer.
+  > - **WHEN** creating a new agent on Kibana 9.2.0 or newer
+  > - **THEN** the system sends a `POST` request to `/api/agent_builder/agents`
+--- candidata: kibana-client [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Space-Aware Client Architecture
+  | The Kibana client SHALL be split into two structs:
+  > The Kibana client SHALL be split into two structs:
+  > - `KibanaClient`: Root client that holds shared HTTP client, base URL, and space registry
+  > - `SpaceClient`: Space-bound view that automatically prefixes API paths with space
+  > #### Scenario: Create space-bound client
+  > - **WHEN** calling `kibana.space("marketing")`
+  > - **THEN** return `Ok(SpaceClient)` if "marketing" exists in loaded spaces
+  > - **THEN** return `Err` if "marketing" is not in the spaces manifest
+  > #### Scenario: Default space handling
+--- candidata: tools [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Tools Push Support
+  | The system SHALL support pushing tool definitions to Kibana via the `/api/agent_builder/tools` API, correctly handling JSON5 files with multiline strings.
+  > ### Requirement: Tools Push Support
+  > The system SHALL support pushing tool definitions to Kibana via the `/api/agent_builder/tools` API, correctly handling JSON5 files with multiline strings.
+  > #### Scenario: Push successfully reads and uploads tools
+  > - **WHEN** the user runs `kibob push` with tools in the project directory
+  > - **AND** successfully creates or updates the tools in Kibana
+  > ### Requirement: Tools Push Support
+  > The system SHALL support pushing tool definitions to Kibana via the `/api/agent_builder/tools` API, correctly handling JSON5 files with multiline strings, and SHALL only execute tools operations when 
+  > #### Scenario: Push successfully reads and uploads tools
+--- candidata: include-dependencies [tasks]
+  | # Capability: Include Dependencies
+  | ## ADDED Requirements
+  | ### Requirement: Automatic Dependency Inclusion
+  > When adding an object to a manifest via the `add` command, `kibob` MUST automatically identify and add all referenced dependencies to their respective manifests, unless the `--exclude-dependencies` fl
+  > #### Scenario: Adding an Agent with Tools
+  > - **Given** an agent that references two tools: `tool-a` and `tool-b`.
+  > - **When** the user runs `kibob add agent my-agent`.
+  > - **Then** `my-agent` is added to `agents.yml`.
+  > - **And** `tool-a` and `tool-b` are added to `tools.yml`.
+  > - **And** the JSON files for the agent and both tools are written to the filesystem.
+  > - **Given** a tool that references workflow `wf-1`.
+
+===== P278 | denisfl/inbox PR #47 | capacidade do par: weekly-timeline
+PR: feat(ui): enhance task and event management with description previews…
+arquivos ligados: app/helpers/application_helper.rb;spec/helpers/application_helper_spec.rb
+--- linhas alteradas (4; mostrando até 40)
++  # Uses browser history when available, falls back to the href path.
+-    link_to path, class: "back-link" do
++    link_to path, class: "back-link", onclick: "history.back(); return false;" do
++      expect(html).to include("history.back()")
+--- candidata: task-show-page [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Task description preview in list
+  | The task list SHALL display up to 2 lines of the task's description text directly below the title, replacing the "task-has-desc" icon indicator.
+  > - **THEN** the browser navigates to the task show page (`/tasks/:id`)
+  > ### Requirement: Back button uses browser history
+  > The back link across all pages SHALL navigate to the previous page in browser history, with a fallback to a hardcoded path when no history exists.
+  > #### Scenario: Back from page with history
+  > - **THEN** the browser returns to the dashboard (previous history entry)
+  > - **WHEN** user opens a task edit page directly (no browser history) and clicks back
+  > - **THEN** the browser navigates to the fallback path (e.g., tasks list)
+--- candidata: lexxy-rich-text-editor [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Lexxy gem and Action Text are installed
+  | The application SHALL have `lexxy` gem and `@37signals/lexxy` npm package installed. Action Text infrastructure (migration, tables) SHALL be configured. Lexxy SHALL override the default Action Text fo
+  > - **THEN** `Lexxy` module is available and Action Text uses Lexxy as the editor
+  > The migration SHALL NOT drop original `description` TEXT columns from `tasks` and `calendar_events` tables, nor the `blocks` table. These columns SHALL be deprecated and available for rollback.
+--- candidata: interactive-checkboxes [tasks]
+  | ## ADDED Requirements
+  | ### interactive-checkboxes
+  | Task list checkboxes rendered from Markdown `- [ ]` / `- [x]` syntax are interactive and persist state.
+--- candidata: markdown-editing [tasks]
+  | ## ADDED Requirements
+  | ### markdown-editing
+  | Editing experience for text blocks using a Markdown textarea with preview toggle.
+--- candidata: markdown-rendering [tasks]
+  | ## ADDED Requirements
+  | ### markdown-rendering
+  | Server-side Markdown rendering for text blocks using Redcarpet.

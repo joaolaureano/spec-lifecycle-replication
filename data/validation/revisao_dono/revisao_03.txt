@@ -1,0 +1,398 @@
+===== P013 | tmck-code/yet-another-statusline PR #78 | capacidade do par: workflow-two-column-agents
+PR: Polishing
+arquivos ligados: claude/yas/layout.py;claude/yas/renderer.py;test/test_layout_seam.py;test/test_subagent_rows.py
+--- linhas alteradas (1036; mostrando até 40)
++    _ANSI_RE,
++    GLYPH_HOURGLASS,
++    GLYPH_RENAMED,
+-from yas.info import SessionView
++from yas.info import SessionView, _fmt_elapsed_clock
+-from yas.render.text import _visible_width
++from yas.render.text import _visible_width, _token_offsets
++# Characters that can start a dirty-status block in the plain-text path string.
++# The block is always preceded by a single space so we search for ' ' + one of
++# these. Untracked (•), modified (*), deleted (-), and renamed (GLYPH_RENAMED).
++_DIRTY_CHARS = frozenset('•*-' + GLYPH_RENAMED)
++# The branch-separator glyph used in path_git / path_git_compact.
++_BRANCH_SEP = '∈'   # U+2208 ELEMENT OF (plain Unicode, not PUA)
++def _ansi_byte_offset(ansi: str, plain_idx: int) -> int:
++    """Return the byte (str index) in *ansi* that corresponds to plain-text
++    position *plain_idx* (0-indexed visible character count, ANSI escapes
++    excluded). Returns ``len(ansi)`` when *plain_idx* >= visible width."""
++    pos = 0   # current byte position in `ansi`
++    vis = 0   # visible characters counted so far
++    while pos < len(ansi) and vis < plain_idx:
++        m = _ANSI_RE.match(ansi, pos)
++        if m:
++            pos = m.end()
++            continue
++        pos += 1
++        vis += 1
++    return pos
++    labels: list[tuple[str, int]] = field(default_factory=list)
+-            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0).split('\n'):
++            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0,
++                                       stats_col=100 if width >= 125 else None).split('\n'):
+-            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0).split('\n'):
++            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0,
++                                       stats_col=100 if width >= 125 else None).split('\n'):
+-    helper_text, right_text, right_w = r.model_right_section(
++    helper_5h, helper_7d, right_text, right_w = r.model_right_section(
++        view.cfg.justify,
+-    vsep_w   = 5
+-    helper_w = _visible_width(helper_text)
++    vsep_w     = 5
+--- candidata: section-labels [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Opt-in wide-only label activation
+  | The statusline SHALL paint superscript section labels onto the wide layout's border and separator rows only when `cfg.labels` is `true`. When `cfg.labels` is `false` the layout SHALL render identicall
+  > ### Requirement: Opt-in wide-only label activation
+  > The statusline SHALL paint superscript section labels onto the wide layout's border and separator rows only when `cfg.labels` is `true`. When `cfg.labels` is `false` the layout SHALL render identicall
+  > #### Scenario: Labels off renders unchanged
+  > - **WHEN** `cfg.labels` is false in the wide layout
+  > - **THEN** the border and separator rows render identically to the pre-feature output (no superscript glyphs present)
+  > #### Scenario: Labels on paints the wide frame
+  > - **WHEN** `cfg.labels` is true and the terminal width selects the wide layout
+  > - **THEN** superscript labels appear on the top border and the separator rows above their sections
+--- candidata: justify-top-row [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Even slack distribution across wide top-row sections
+  | When `cfg.justify` is `true`, the wide layout's top content row SHALL distribute horizontal slack evenly across its active sections rather than concentrating all slack in the path section. The active 
+  > ### Requirement: Even slack distribution across wide top-row sections
+  > When `cfg.justify` is `true`, the wide layout's top content row SHALL distribute horizontal slack evenly across its active sections rather than concentrating all slack in the path section. The active 
+  > #### Scenario: Slack distributed across four active sections
+  > - **WHEN** `cfg.justify` is true, elapsed and cache are active (N=5), and `total_slack` is 20
+  > - **THEN** each section receives 4 extra columns (`20 // 5 = 4`, remainder 0)
+  > #### Scenario: Remainder spread left-to-right
+  > - **WHEN** `cfg.justify` is true, N=5, and `total_slack` is 22
+  > - **THEN** sections 0–1 receive 5 extra columns each and sections 2–4 receive 4 columns each
+--- candidata: statusline-config [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Layered configuration precedence
+  | The statusline SHALL resolve every configurable knob through a single, fixed precedence chain: CLI flag (where one exists) → canonical `YAS_*` environment variable → legacy-alias environment variable 
+  > The statusline SHALL resolve every configurable knob through a single, fixed precedence chain: CLI flag (where one exists) → canonical `YAS_*` environment variable → legacy-alias environment variable 
+  > - **WHEN** `[layout].max_width = 200` is set in `yas.toml` and `YAS_MAX_WIDTH=160` is set in the environment
+  > - **THEN** the resolved `max_width` is `160`
+  > - **WHEN** `[tokens].soft_limit = 1000000` is set in `yas.toml` and no `YAS_SOFT_LIMIT` env var is set
+  > - **THEN** the resolved `soft_limit` is `1000000`
+  > - **THEN** every knob resolves to its built-in default (`max_width=140`, `full_width=false`, `soft_limit=150000`, `token_window=60`, `theme=dark`, `bg_shift=warm`)
+  > - **WHEN** `--theme` is passed on the command line and `YAS_THEME` and `[appearance].theme` are also set
+  > The statusline SHALL accept canonical `YAS_*` environment variables for all six knobs (`YAS_MAX_WIDTH`, `YAS_FULL_WIDTH`, `YAS_SOFT_LIMIT`, `YAS_TOKEN_WINDOW`, `YAS_THEME`, `YAS_BG_SHIFT`). It SHALL c
+--- candidata: cache-countdown [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Prompt-cache anchor extraction from the transcript
+  | `TranscriptUsage` SHALL capture, during its existing single forward scan of the transcript jsonl, the wall-clock `timestamp` of the most recent line whose `message.usage` shows prompt-cache activity —
+  > ### Requirement: Prompt-cache anchor extraction from the transcript
+  > `TranscriptUsage` SHALL capture, during its existing single forward scan of the transcript jsonl, the wall-clock `timestamp` of the most recent line whose `message.usage` shows prompt-cache activity —
+  > #### Scenario: Anchor is the latest cache-bearing line
+  > - **WHEN** a transcript contains several assistant lines with cache activity at increasing timestamps followed by a non-cache line
+  > - **THEN** `cache_anchor_epoch` equals the epoch of the LAST cache-bearing line, not the last line overall
+  > #### Scenario: No cache activity yields a zero anchor
+  > - **WHEN** a transcript contains no line with `cache_read_input_tokens > 0` or `cache_creation_input_tokens > 0`
+  > - **THEN** `cache_anchor_epoch` is `0.0`
+--- candidata: statusline-info [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Lazy pure-read SessionView gather
+  | The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+  > ### Requirement: Lazy pure-read SessionView gather
+  > The statusline SHALL gather all *derived* session state through a single `SessionView` module (`claude/statusline/info.py`), constructed once per render from a parsed `SessionInfo` plus a `Config`. `S
+  > #### Scenario: A narrow render reads only what it draws
+  > - **WHEN** a `SessionView` is constructed and a narrow-width build reads only `view.subagents`
+  > - **THEN** the git subprocess, the transcript scan, and the openspec walk are not triggered (only the subagent source is read)
+  > #### Scenario: A field is read at most once per view
+  > - **WHEN** `view.session_inout` and `view.transcript_usage` are both accessed on one `SessionView`
+  > - **THEN** the transcript is scanned exactly once (the cached value feeds both)
+
+===== P014 | tencentcloudstack/terraform-provider-tencentcloud PR #4186 | capacidade do par: teo-edge-kv
+PR: feat(teo): add tencentcloud_teo_function_replica resource
+arquivos ligados: tencentcloud/provider.go
+--- linhas alteradas (1; mostrando até 40)
++			"tencentcloud_teo_function_replica":                                                     teo.ResourceTencentCloudTeoFunctionReplica(),
+--- candidata: teo-function-replica [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Create TEO function replica
+  | The system SHALL allow users to create an edge function replica by specifying zone_id, function_id, replica_name, content, and optionally remark. Upon successful creation, the resource ID SHALL be set
+  > The system SHALL register the `tencentcloud_teo_function_replica` resource in provider.go and document it in provider.md.
+  > - **THEN** the resource `tencentcloud_teo_function_replica` SHALL be available for use in Terraform configurations
+  > The system SHALL register the `tencentcloud_teo_function_replica` resource in provider.go and document it in provider.md.
+  > - **THEN** the resource `tencentcloud_teo_function_replica` SHALL be available for use in Terraform configurations
+--- candidata: bh-bind-device-account-kubeconfig-resource [tasks]
+  | # bh-bind-device-account-kubeconfig-resource Specification
+  | ## ADDED Requirements
+  | ### Requirement: Resource MUST be registered as `tencentcloud_bh_bind_device_account_kubeconfig`
+--- candidata: bh-bind-device-resource [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Resource schema definition
+  | The `tencentcloud_bh_bind_device_resource` resource SHALL define the following schema fields:
+--- candidata: cdb-start-cpu-expand-attachment [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Resource schema defines CPU elastic expansion attachment parameters
+  | The resource `tencentcloud_cdb_start_cpu_expand` SHALL define a schema with the following top-level fields:
+--- candidata: cfw-cluster-fw-bypass-config [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: 读取集群防火墙 Bypass 配置
+  | 资源 SHALL 通过 `DescribeClusterNatCcnFwSwitchList` 接口读取集群防火墙的当前 Bypass 状态，并将 `enable` 字段写入 Terraform state。
+
+===== P015 | datenoio/iterabledata PR #11 | capacidade do par: vortex-format
+PR: Add LLM readiness roadmap: catalog, agent tools, and AI operations
+arquivos ligados: iterable/datatypes/vortex.py;iterable/helpers/detect.py
+--- linhas alteradas (1563; mostrando até 40)
+-        filename: str = None,
++        filename: str | None = None,
+-from __future__ import annotations
+-import importlib
+-from typing import Any, Literal, TypedDict
+-import chardet
+-from ..base import BaseCodec, BaseIterable
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-# Plugin discovery flag
+-_plugins_discovered = False
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+--- candidata: ai [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Block-Based Documentation Generation
+  | The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > The system SHALL provide `ai.doc.generate_blocks()` that generates dataset documentation as
+  > independent blocks and returns a structured result containing per-block markdown and data
+  > #### Scenario: Generate selected blocks
+  > - **WHEN** `ai.doc.generate_blocks()` is called with `blocks=["general", "schema"]`
+  > - **THEN** the result contains a `blocks` mapping with entries for `general` and `schema`
+  > - **AND** each block entry contains a `markdown` string and a `data` dictionary
+  > - **AND** the result contains a `source` descriptor and a `full_document_markdown` string
+  > #### Scenario: Default block set
+--- candidata: convert [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: File Format Conversion
+  | The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > ### Requirement: File Format Conversion
+  > The system SHALL convert data between different file formats with automatic format detection, schema extraction, and efficient batch processing.
+  > The system SHALL support atomic writes for safer production file operations. When atomic writes are enabled, the system SHALL write to a temporary file and atomically rename it to the final destinatio
+  > #### Scenario: Atomic write on successful conversion
+  > - **WHEN** `convert()` is called with `atomic=True` and conversion completes successfully
+  > - **AND** the temporary file is atomically renamed to the final destination using `os.replace()`
+  > - **AND** the temporary file is removed after successful rename
+  > - **AND** the final output file is only visible when fully written
+--- candidata: format-registry [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Declarative Format Descriptors
+  | The system SHALL define each built-in format with a single declarative descriptor that records
+  > ### Requirement: Declarative Format Descriptors
+  > The system SHALL define each built-in format with a single declarative descriptor that records
+  > its canonical id, aliases, implementing module and class, whether its content is text or binary,
+  > whether it is flat/tabular, whether it supports writing, its optional-dependency extra (if any),
+  > and any leading-byte signatures used for content-based detection. The set of descriptors SHALL be
+  > the single source of truth for built-in format metadata.
+  > #### Scenario: Each format has exactly one descriptor
+  > - **WHEN** the format descriptor table is loaded
+--- candidata: database-engines [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Database Engine Support
+  | The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > ### Requirement: Database Engine Support
+  > The system SHALL support reading data from SQL and NoSQL databases as iterable data sources, treating database query results exactly like files: an iterator of `dict` rows, with the same error handlin
+  > #### Scenario: PostgreSQL query as iterable source
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="SELECT id, name, created_at FROM users WHERE active = TRUE")`
+  > - **THEN** the system connects to PostgreSQL, executes the query, and returns an iterable that yields dict rows with keys `id`, `name`, `created_at`
+  > #### Scenario: PostgreSQL table name auto-query
+  > - **WHEN** a user calls `open_iterable("postgresql://user:pass@host:5432/dbname", engine="postgres", query="users")` with a table name instead of SQL query
+  > - **THEN** the system automatically builds and executes `SELECT * FROM users`, returning an iterable of all rows from the table
+--- candidata: cloud-storage [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Cloud Storage URI Support
+  | The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > ### Requirement: Cloud Storage URI Support
+  > The system SHALL support reading from and writing to cloud object storage services (Amazon S3, Google Cloud Storage, Azure Blob Storage) via URI schemes, transparently integrating with existing format
+  > - **WHEN** a user calls `open_iterable('s3://bucket/path/file.csv')`
+  > - **THEN** the system detects the S3 URI scheme, opens the file via fsspec, and returns an iterable that works identically to local files
+  > #### Scenario: Read compressed file from GCS
+  > - **WHEN** a user calls `open_iterable('gs://bucket/data.jsonl.gz')`
+  > - **THEN** the system detects the GCS URI, opens the file via fsspec, detects the gzip compression codec, and returns an iterable that transparently decompresses and parses the JSONL format
+  > #### Scenario: Write to Azure Blob Storage
+
+===== P016 | nold-ai/specfact-cli PR #610 | capacidade do par: review-scorer
+PR: Release dev to main
+arquivos ligados: src/specfact_cli/__init__.py
+--- linhas alteradas (2; mostrando até 40)
+-__version__ = "0.47.7"
++__version__ = "0.47.11"
+--- candidata: acceptance-test-runner [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Dual-Path Scenario Execution
+  | The system SHALL execute CLI behavior scenarios via both in-process (CliRunner) and subprocess (built-wheel installed binary) paths.
+--- candidata: adapter-development-guide [tasks]
+  | # adapter-development-guide Specification
+  | Adapter developers have a guide that describes the full BridgeAdapter interface, ToolCapabilities, and how to implement or extend adapters.
+  | ## ADDED Requirements
+--- candidata: adr-template [tasks]
+  | # adr-template Specification
+  | Architecture Decision Records (ADRs) are available so that major architectural decisions are recorded and discoverable.
+  | ## ADDED Requirements
+--- candidata: api-error-diagnostics [tasks]
+  | # api-error-diagnostics Specification
+  | ## Purpose
+  | Define how SpecFact CLI captures, logs, and surfaces API errors (especially ADO PATCH failures) so that with `--debug` users see response body and patch paths, and without debug users see clear, actio
+--- candidata: backlog-adapter [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: BacklogAdapter Interface
+  | The system SHALL provide a standard `BacklogAdapter` interface that all backlog sources (GitHub, ADO, JIRA, GitLab, etc.) must implement.
+
+===== P017 | quiqr/quiqr-desktop PR #661 | capacidade do par: user-feedback
+PR: main
+arquivos ligados: packages/frontend/src/api.ts
+--- linhas alteradas (14; mostrando até 40)
++/**
++ * Trigger a browser download for a file within the workspace's site directory.
++ * Uses a hidden anchor element to initiate the download from the file-download endpoint.
++ */
++export function fileDownload(siteKey: string, workspaceKey: string, filePath: string) {
++  const url = `/api/sites/${encodeURIComponent(siteKey)}/workspaces/${encodeURIComponent(workspaceKey)}/file-download?path=${encodeURIComponent(filePath)}`;
++  const a = document.createElement('a');
++  a.href = url;
++  a.download = '';
++  document.body.appendChild(a);
++  a.click();
++  document.body.removeChild(a);
++}
++  fileDownload: typeof fileDownload;
+--- candidata: communication-layer [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: WebSocket Push Notification Layer
+  | The web adapter SHALL use WebSocket connections for backend-to-frontend push notifications only, not for request-response patterns.
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints, maintaining the existing communication pattern.
+  > - **THEN** it uses `mainProcessBridge.request()` to POST to HTTP endpoint
+  > - **AND** works identically in both Electron and web browser
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints using relative URLs, with an `Authorization: Bearer <token>` header when auth is enabled.
+  > SSE endpoints SHALL accept JWT tokens via query parameter since `EventSource` cannot send custom headers.
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints using relative URLs, maintaining the existing communication pattern while working on any deployment origin.
+  > ### Requirement: File download endpoint with path restriction
+  > The backend SHALL expose a file download endpoint that streams a file from the workspace's site directory, with path traversal protection.
+--- candidata: frontend-components [tasks+PR+termos]
+  | # Capability: Frontend Components
+  | ## ADDED Requirements
+  | ### Requirement: Functional Component Pattern
+  > #### Scenario: No class component remains in components directory
+  > - **GIVEN** a directory or module in the codebase
+  > - **THEN** the directory MUST be removed from the codebase
+  > - **AND** any references in documentation SHOULD note the replacement
+  > - **AND** the `frontend/src/components/HoForm/` directory MUST NOT exist
+  > - **AND** clicking the button SHALL open the `FieldAIAssistDialog`
+  > #### Scenario: FieldAIAssistButton hidden without templates
+  > - **WHEN** user clicks "Generate" or "Process" button
+--- candidata: application-settings-ui [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Semantic separation of Application Settings and User Preferences
+  | The system SHALL establish a clear UI separation between Application Settings (system-wide configuration for the Quiqr application) and Preferences (per-user settings).
+  > - **THEN** Application Settings appear in a separate menu group that can be conditionally hidden or restricted in future implementations
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+  > The system SHALL render a Storage settings page at route `/prefs/storage` within the Preferences layout.
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+  > #### Scenario: User clicks Git menu item
+  > - **WHEN** user clicks "Git" in the Application Settings menu group
+--- candidata: ui-components [tasks]
+  | # UI Components Specification
+  | ## ADDED Requirements
+  | ### Requirement: LogViewer Component
+  > - **WHEN** user clicks copy button on a log row
+  > The system SHALL provide a dedicated view for global application logs accessible from the workspace toolbar.
+  > - **WHEN** user is in a workspace
+  > - **THEN** an "Application Logs" button is visible in the workspace toolbar (renamed from "Log")
+  > - **WHEN** user clicks "Application Logs" button
+  > The system SHALL provide a dedicated view for site-specific workspace logs accessible from the workspace toolbar.
+  > - **WHEN** user is in a workspace with applicationRole "siteDeveloper"
+  > - **THEN** a "Site Log" button is visible next to the "Tools" button in the workspace toolbar
+--- candidata: logging [tasks]
+  | # Logging Specification
+  | ## ADDED Requirements
+  | ### Requirement: Structured JSONL Log Files
+  > The system SHALL write structured logs in newline-delimited JSON (JSONL) format with separate files for global application logs and site-specific workspace logs.
+  > - **THEN** a site log file is created at `$HOME/Quiqr/sites/{siteKey}/{workspaceKey}-YYYY-MM-DD.jsonl` (where YYYY-MM-DD is the current date)
+  > - **THEN** categories include: electron-init, standalone-init, llm-connection, config, backend-server, resource-download, and others as needed
+  > - **THEN** categories include: sync, content, buildaction, model, import, workspace, and others as needed
+  > - **THEN** it uses logger.debugSite(), logger.infoSite(), logger.warningSite(), logger.errorSite() methods with siteKey, workspaceKey, category, message, and optional metadata
+  > The system SHALL provide backend API endpoints for retrieving and filtering logs.
+  > - **WHEN** frontend requests site logs via getSiteLogs({ siteKey, workspaceKey, date?, level?, category?, search?, limit?, offset? })
+  > - **THEN** the backend returns matching log entries for that workspace with pagination
+
+===== P018 | codeready-toolchain/claw-operator PR #108 | capacidade do par: standard-library-testing
+PR: feat: implement device pairing approval via pod exec in ClawDevicePairingRequestReconciler
+arquivos ligados: internal/controller/suite_test.go
+--- linhas alteradas (15; mostrando até 40)
++	apimeta "k8s.io/apimachinery/pkg/api/meta"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++		{newRouteUnstructured(), client.ObjectKey{Name: getDevicePairingRouteName(instanceName), Namespace: namespace}},
+-			if apierrors.IsNotFound(err) {
++			if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
++func newRouteUnstructured() *unstructured.Unstructured {
++	u := &unstructured.Unstructured{}
++	u.SetGroupVersionKind(schema.GroupVersionKind{
++		Group:   "route.openshift.io",
++		Version: "v1",
++		Kind:    RouteKind,
++	})
++	return u
++}
+--- candidata: device-pairing-exec [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Controller SHALL execute device approval command in matched pod
+  | When exactly one pod matches the selector, the controller SHALL set `Ready=False, Reason=Processing` on the CR, then execute `openclaw devices approve <requestID> --json` in the `gateway` container of
+--- candidata: unified-kustomize-controller [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Controller watches OpenClaw resources
+  | The OpenClawReconciler controller SHALL watch OpenClaw custom resources in all namespaces and trigger reconciliation when changes occur.
+  > The OpenClawReconciler controller SHALL watch OpenClaw custom resources in all namespaces and trigger reconciliation when changes occur.
+  > - **THEN** the controller reconciliation loop is triggered with the resource name and namespace
+  > ### Requirement: Controller sets namespace on all resources
+  > The controller SHALL set the namespace on all built resources to match the OpenClaw instance's namespace.
+  > #### Scenario: Namespace matches OpenClaw instance
+  > - **THEN** the controller iterates each resource and sets namespace to instance.Namespace
+  > - **THEN** all resources are created in the same namespace as the OpenClaw CR
+  > - **THEN** the controller uses client.Patch() with Apply patch type
+--- candidata: external-access [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Operator creates Service for OpenClaw gateway
+  | The operator SHALL create a ClusterIP Service named `openclaw` exposing the OpenClaw gateway on port 18789.
+  > - **THEN** it has annotation `haproxy.router.openshift.io/timeout: 3600s`
+--- candidata: api-key-field [termos]
+  | ## ADDED Requirements
+  | ### Requirement: APIKey field is mandatory in OpenClawSpec
+  | The OpenClawSpec MUST include a mandatory `APIKey` field of type `string` that contains the LLM provider API key.
+  > ### Requirement: CRD schema includes APIKey validation
+  > The generated CRD YAML MUST include OpenAPI validation schema that marks APIKey as a required string field with minimum length validation.
+  > - **THEN** the CRD schema MUST show APIKey as a required field with type string
+  > ### Requirement: CRD schema includes APIKey validation
+  > The generated CRD YAML MUST include OpenAPI validation schema that marks APIKey as a required string field with minimum length validation.
+  > - **THEN** the CRD schema MUST show APIKey as a required field with type string
+  > ### Requirement: CRD schema includes APIKey validation
+  > ### Requirement: CRD schema includes GeminiAPIKey validation

@@ -1,0 +1,3169 @@
+===== P010 | repo qixing-jk/all-api-hub | PR #485: feat(context-menus): per-entry visibility toggles + live refresh | capacidade: logging
+--- SPEC VIVA
+# logging Specification
+
+## Purpose
+TBD - created by archiving change unified-logging. Update Purpose after archive.
+## Requirements
+### Requirement: Leveled, scoped logging API
+The system SHALL provide a unified logging API for application diagnostics. The API MUST support log levels `debug`, `info`, `warn`, and `error`, and MUST allow logs to be scoped with a stable identifier (e.g., module/feature name).
+
+#### Scenario: Scoped info log
+- **WHEN** a module emits an `info` log using the unified logger with scope `Options.Settings`
+- **THEN** the emitted log includes the scope `Options.Settings` and is classified as level `info`
+
+### Requirement: Level-to-console method mapping
+When console logging is enabled, the system MUST map log levels to the corresponding console methods:
+- `debug` → `console.debug`
+- `info` → `console.info` (or `console.log` if `console.info` is unavailable)
+- `warn` → `console.warn`
+- `error` → `console.error`
+
+#### Scenario: Error logs use console.error
+- **WHEN** the unified logger emits an `error` log while console logging is enabled
+- **THEN** the system calls `console.error` to emit the log
+
+### Requirement: User can enable or disable console logging
+The system SHALL provide a user-facing option to enable or disable console logging. This preference MUST be persisted and MUST apply across all extension contexts (background/service worker, content scripts, popup/options/side panel). When console logging is disabled, the system MUST NOT emit any console output at any log level, including `error`.
+
+#### Scenario: Console logging disabled suppresses output
+- **WHEN** a user disables console logging in settings
+- **THEN** subsequent unified logger calls do not emit any output to the browser console
+
+#### Scenario: Error logs do not bypass disabled console logging
+- **WHEN** a user disables console logging in settings and an `error` log is emitted
+- **THEN** the system does not emit the error to the browser console
+
+### Requirement: User-configurable minimum console log level
+The system SHALL allow users to configure a minimum console log level. When console logging is enabled, logs below the configured level MUST NOT be emitted.
+
+#### Scenario: Debug logs are suppressed when minimum level is info
+- **WHEN** the minimum console log level is set to `info`
+- **THEN** `debug` logs are not emitted but `info`, `warn`, and `error` logs are emitted
+
+### Requirement: Sensitive data is redacted from logs
+The system MUST prevent sensitive information from being written to the console. At minimum, values that represent API keys/tokens, authorization headers, cookies, or backup payloads MUST be redacted before emission.
+
+#### Scenario: Token fields are redacted
+- **WHEN** the unified logger is called with details that include a field named `adminToken` containing a token value
+- **THEN** the emitted log does not contain the raw token value and instead contains a redacted placeholder
+
+### Requirement: Logging must be resilient and non-throwing
+The unified logger MUST NOT throw exceptions to its callers. If log details contain circular references or unsupported values, the logger MUST still return without throwing and MUST emit a best-effort representation when console logging is enabled.
+
+#### Scenario: Circular details do not crash the caller
+- **WHEN** the unified logger is called with details that contain a circular reference
+- **THEN** the call completes without throwing an exception
+
+### Requirement: Standardized extension context prefix
+The system MUST include a standardized extension context prefix in emitted log output to support debugging across contexts. The prefix MUST identify the running context (at minimum: Background/Service Worker, Content Script, Popup, Options, Side Panel) and MUST be included alongside the module/feature scope.
+
+#### Scenario: Content script log includes context prefix
+- **WHEN** a content script emits a log using the unified logger
+- **THEN** the emitted log output includes the standardized Content Script context prefix in addition to the module scope
+
+
+--- ARQUIVOS DO PR (26)
+modified  +4     -0     constants/runtimeActions.ts
+modified  +26    -0     contexts/UserPreferencesContext.tsx   <== código ligado à spec
+modified  +99    -49    entrypoints/background/contextMenus.ts
+modified  +12    -0     entrypoints/background/runtimeMessages.ts
+modified  +23    -0     entrypoints/options/pages/BasicSettings/components/RedemptionAssistSettings.tsx
+modified  +22    -0     entrypoints/options/pages/BasicSettings/components/WebAiApiCheckSettings.tsx
+modified  +4     -0     locales/en/redemptionAssist.json
+modified  +4     -0     locales/en/webAiApiCheck.json
+modified  +4     -0     locales/zh_CN/redemptionAssist.json
+modified  +4     -0     locales/zh_CN/webAiApiCheck.json
+added     +2     -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/.openspec.yaml
+added     +117   -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/design.md
+added     +27    -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/proposal.md
+added     +78    -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/specs/context-menu-entry-visibility/spec.md
+added     +22    -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/specs/web-ai-api-check/spec.md
+added     +40    -0     openspec/changes/archive/2026-02-16-per-site-context-menu-toggle/tasks.md
+added     +80    -0     openspec/specs/context-menu-entry-visibility/spec.md
+modified  +3     -1     openspec/specs/web-ai-api-check/spec.md
+modified  +12    -0     services/userPreferences.ts   <== código ligado à spec
+modified  +3     -0     services/webAiApiCheck/background.ts
+added     +123   -0     tests/entrypoints/background/contextMenus.test.ts
+modified  +31    -0     tests/entrypoints/background/runtimeMessages.test.ts
+added     +115   -0     tests/entrypoints/options/ContextMenuVisibilityToggles.test.tsx
+modified  +3     -0     tests/services/redemptionAssist.test.ts
+modified  +5     -0     tests/services/userPreferences.test.ts
+modified  +6     -0     tests/services/webAiApiCheck/background.test.ts
+--- DIFF DO CÓDIGO LIGADO
+### contexts/UserPreferencesContext.tsx
+@@ -809,6 +809,9 @@ export const UserPreferencesProvider = ({
+             DEFAULT_PREFERENCES.redemptionAssist ??
+             ({
+               enabled: true,
++              contextMenu: {
++                enabled: true,
++              },
+               relaxedCodeValidation: true,
+               urlWhitelist: {
+                 enabled: true,
+@@ -830,6 +833,16 @@ export const UserPreferencesProvider = ({
+           action: RuntimeActionIds.RedemptionAssistUpdateSettings,
+           settings: updates,
+         })
++
++        const shouldRefreshContextMenus =
++          typeof updates.contextMenu?.enabled === "boolean" ||
++          typeof updates.enabled === "boolean"
++
++        if (shouldRefreshContextMenus) {
++          void sendRuntimeMessage({
++            action: RuntimeActionIds.PreferencesRefreshContextMenus,
++          })
++        }
+       }
+ 
+       return success
+@@ -852,6 +865,9 @@ export const UserPreferencesProvider = ({
+             DEFAULT_PREFERENCES.webAiApiCheck ??
+             ({
+               enabled: true,
++              contextMenu: {
++                enabled: true,
++              },
+               autoDetect: {
+                 enabled: false,
+                 urlWhitelist: {
+@@ -867,6 +883,16 @@ export const UserPreferencesProvider = ({
+             lastUpdated: Date.now(),
+           }
+         })
++
++        const shouldRefreshContextMenus =
++          typeof updates.contextMenu?.enabled === "boolean" ||
++          typeof updates.enabled === "boolean"
++
++        if (shouldRefreshContextMenus) {
++          void sendRuntimeMessage({
++            action: RuntimeActionIds.PreferencesRefreshContextMenus,
++          })
++        }
+       }
+ 
+       return success
+
+### services/userPreferences.ts
+@@ -105,8 +105,13 @@ export interface RedemptionAssistUrlWhitelistPreferences {
+   includeCheckInAndRedeemUrls: boolean
+ }
+ 
++export interface ContextMenuVisibilityPreferences {
++  enabled: boolean
++}
++
+ export interface RedemptionAssistPreferences {
+   enabled: boolean
++  contextMenu: ContextMenuVisibilityPreferences
+   /**
+    * When enabled, treat any 32-character non-whitespace token as a possible
+    * redemption code (do not require strict hex charset).
+@@ -143,6 +148,7 @@ export interface WebAiApiCheckPreferences {
+    * Manual triggers can still be shown when enabled regardless of auto-detect.
+    */
+   enabled: boolean
++  contextMenu: ContextMenuVisibilityPreferences
+   autoDetect: WebAiApiCheckAutoDetectPreferences
+ }
+ 
+@@ -449,6 +455,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
+   modelRedirect: DEFAULT_MODEL_REDIRECT_PREFERENCES,
+   redemptionAssist: {
+     enabled: true,
++    contextMenu: {
++      enabled: true,
++    },
+     relaxedCodeValidation: true,
+     urlWhitelist: {
+       enabled: true,
+@@ -459,6 +468,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
+   },
+   webAiApiCheck: {
+     enabled: true,
++    contextMenu: {
++      enabled: true,
++    },
+     autoDetect: {
+       enabled: false,
+       urlWhitelist: {
+
+===== P011 | repo elastic/esdiag | PR #269: feat: add host secrets keystore and role-constrained auth | capacidade: streaming-deserialization
+--- SPEC VIVA
+### Requirement: Memory-efficient processing of large diagnostic payloads
+The processing pipeline SHALL avoid loading large top-level JSON structures (arrays or objects) entirely into memory. Instead, it MUST process individual elements or key-value pairs in a streaming manner.
+
+#### Scenario: Processing large node stats
+- **WHEN** the system encounters a `node_stats` payload with many nodes
+- **THEN** it processes each node's statistics sequentially or in small batches
+- **AND** it does not allocate memory for all nodes simultaneously
+
+### Requirement: Buffer reuse for repeated diagnostic elements
+The system SHALL reuse allocated memory buffers when deserializing multiple elements of the same type in a sequence.
+
+#### Scenario: Reusing buffers for index stats
+- **WHEN** the system deserializes statistics for multiple indices in a loop
+- **THEN** it reuses the same memory allocation for the temporary data structures of each index
+- **AND** total allocations are significantly reduced compared to fresh allocations per index
+
+### Requirement: Streaming of deep nested structures
+The system SHALL support streaming deserialization of deeply nested structures, such as index mappings, where individual parent elements may contain thousands of child elements.
+
+#### Scenario: Processing large mapping payload
+- **WHEN** the system encounters a large mapping payload with many indices and thousands of fields per index
+- **THEN** it streams the top-level indices
+- **AND** it optionally streams the nested properties/fields to further reduce peak memory usage
+
+### Requirement: Performance benchmarks for large diagnostic archives
+The system SHALL meet specific performance targets for peak memory usage and execution time when processing large diagnostic archives.
+
+#### Scenario: Benchmark peak memory usage
+- **WHEN** processing the large diagnostic archive `tests/archives/diagnostic-b33109-2025-Sep-29--22_30_33.zip`
+- **THEN** the peak memory usage (RSS) SHALL NOT exceed 500MB
+- **AND** the peak memory usage SHOULD be significantly lower than the baseline established before this change
+
+#### Scenario: Benchmark execution time
+- **WHEN** processing the large diagnostic archive `tests/archives/diagnostic-b33109-2025-Sep-29--22_30_33.zip`
+- **THEN** the total execution time SHALL NOT increase by more than 10% compared to the baseline
+- **AND** ideally, execution time SHOULD remain stable or decrease due to reduced allocation overhead
+
+--- ARQUIVOS DO PR (25)
+modified  +201   -1     Cargo.lock
+modified  +6     -0     Cargo.toml
+modified  +283   -3     NOTICE.txt
+added     +76    -0     docs/hosts-keystore.md
+added     +2     -0     openspec/changes/host-secrets/.openspec.yaml
+added     +82    -0     openspec/changes/host-secrets/design.md
+added     +32    -0     openspec/changes/host-secrets/proposal.md
+added     +11    -0     openspec/changes/host-secrets/specs/collection-execution/spec.md
+added     +30    -0     openspec/changes/host-secrets/specs/host-role-targeting/spec.md
+added     +38    -0     openspec/changes/host-secrets/specs/host-secret-store/spec.md
+added     +30    -0     openspec/changes/host-secrets/tasks.md
+modified  +10    -0     openspec/specs/collection-execution/spec.md
+added     +34    -0     openspec/specs/host-role-targeting/spec.md
+added     +42    -0     openspec/specs/host-secret-store/spec.md
+modified  +48    -3     readme.md
+modified  +16    -2     skills/esdiag/SKILL.md
+modified  +7     -22    src/client/elasticsearch.rs
+modified  +1     -1     src/client/kibana.rs
+added     +302   -0     src/data/keystore.rs
+modified  +796   -26    src/data/known_host.rs
+modified  +7     -1     src/data/mod.rs   <== código ligado à spec
+modified  +1     -0     src/env.rs
+modified  +228   -145   src/main.rs
+modified  +4     -5     src/receiver/elastic_cloud_admin.rs
+modified  +605   -90    tests/collection_tests.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/data/mod.rs
+@@ -4,6 +4,8 @@
+ 
+ /// Authentication methods
+ mod auth;
++/// Encrypted secret storage
++mod keystore;
+ /// Manage saving and loading hosts from a YAML file
+ mod known_host;
+ /// Elastic stack products
+@@ -14,7 +16,11 @@ pub mod settings;
+ mod uri;
+ 
+ pub use auth::{Auth, AuthType};
+-pub use known_host::{ElasticCloud, KnownHost, KnownHostBuilder};
++pub use keystore::{
++    BasicSecret, SecretAuth, SecretEntry, add_secret, get_password_for_secret_commands,
++    get_password_from_env, get_secret, remove_secret, resolve_secret_auth, upsert_secret_auth,
++};
++pub use known_host::{ElasticCloud, HostRole, KnownHost, KnownHostBuilder};
+ pub use product::Product;
+ pub use settings::Settings;
+ pub use uri::Uri;
+
+===== P012 | repo kalbasit/ncps | PR #1406: feat(server): add Bearer token auth for GET/HEAD routes | capacidade: closure-pinning
+--- SPEC VIVA
+# closure-pinning Specification
+
+## Purpose
+TBD - created by archiving change pin-closure. Update Purpose after archive.
+## Requirements
+### Requirement: User can pin a closure
+The system SHALL allow users to pin a closure by its narinfo hash. Pinned closures and all their transitive references SHALL be protected from LRU eviction.
+
+#### Scenario: Pin a closure that exists in the database
+- **WHEN** user sends `POST /pin/{hash}.narinfo` where the hash exists in the `narinfos` table
+- **THEN** the system stores the hash in `pinned_closures` table
+- **AND** returns `200 OK`
+
+#### Scenario: Pin a closure that does not exist
+- **WHEN** user sends `POST /pin/{hash}.narinfo` where the hash does not exist in the database
+- **THEN** the system returns `404 Not Found`
+
+#### Scenario: Pin an already-pinned closure
+- **WHEN** user sends `POST /pin/{hash}.narinfo` where the hash is already pinned
+- **THEN** the system returns `200 OK` (idempotent)
+
+### Requirement: User can unpin a closure
+The system SHALL allow users to unpin a previously pinned closure. After unpinning, the narinfo and its references become eligible for LRU eviction.
+
+#### Scenario: Unpin a pinned closure
+- **WHEN** user sends `DELETE /pin/{hash}.narinfo` where the hash is pinned
+- **THEN** the system removes the hash from `pinned_closures` table
+- **AND** returns `200 OK`
+
+#### Scenario: Unpin a closure that is not pinned
+- **WHEN** user sends `DELETE /pin/{hash}.narinfo` where the hash is not pinned
+- **THEN** the system returns `200 OK` (idempotent)
+
+### Requirement: User can list pinned closures
+The system SHALL allow users to list all pinned closures.
+
+#### Scenario: List pinned closures
+- **WHEN** user sends `GET /pins`
+- **THEN** the system returns a list of pinned closure hashes
+- **AND** returns `200 OK`
+
+#### Scenario: List pinned closures when none exist
+- **WHEN** user sends `GET /pins` and no closures are pinned
+- **THEN** the system returns an empty list
+
+### Requirement: Pinned closures are protected from LRU eviction
+The LRU eviction process SHALL exclude narinfos that are protected by pinned closures from deletion candidates.
+
+#### Scenario: LRU eviction skips pinned closure root
+- **WHEN** LRU eviction runs and a pinned narinfo hash is among the least recently used
+- **THEN** the system SHALL NOT delete that narinfo
+- **AND** SHALL continue to find eligible narinfos until cleanup size is met
+
+#### Scenario: LRU eviction skips transitive references of pinned closures
+- **WHEN** LRU eviction runs and a narinfo is a transitive reference of a pinned closure
+- **THEN** the system SHALL NOT delete that narinfo
+- **AND** SHALL compute the full closure by traversing `narinfo_references` table, resolving each reference to its narinfo via JOIN with the `narinfos` table (note: `narinfo_references.reference` is the full store path base name like `2imigbs1vnh9bdyf42z9mvq23pdshgw4-nghttp2-1.67.1-dev`, not just the hash)
+
+#### Scenario: LRU eviction with deep closure graph
+- **WHEN** LRU eviction runs and a pinned closure has many transitive references (depth > 1000)
+- **THEN** the system SHALL log a warning
+- **AND** SHALL protect all reachable narinfos up to the depth limit
+
+### Requirement: Pin operation fetches missing narinfos from upstream
+When pinning a closure, the system SHALL attempt to fetch missing narinfos from upstream caches to ensure the full closure is available.
+
+#### Scenario: Pin closure with missing references in database
+- **WHEN** user pins a closure and some references are not in the local database
+- **THEN** the system SHALL attempt to fetch those narinfos from upstream caches
+- **AND** SHALL pin all successfully fetched narinfos as part of the closure
+
+### Requirement: Closure pinning is documented in the user guide
+The user-facing documentation SHALL include a dedicated page describing the
+closure pinning feature so operators can discover and use it. The page MUST
+cover the pin, unpin, and list endpoints, their success and error status codes,
+the idempotency of pin and unpin, and that pinning protects a narinfo and all
+its transitive references from LRU eviction.
+
+#### Scenario: A discoverable feature page exists
+- **WHEN** the documentation is published
+- **THEN** a page titled "Pinning" exists under the User Guide → Features section
+- **AND** it is registered in `docs/!!!meta.json` with a stable `shareAlias` slug so it appears in the navigation tree
+
+#### Scenario: Endpoints are documented to match the implementation
+- **WHEN** a reader follows the Pinning page
+- **THEN** it documents `POST /pin/{hash}.narinfo` returning `200 OK` on success and `404 Not Found` for an unknown narinfo hash
+- **AND** documents `DELETE /pin/{hash}.narinfo` returning `200 OK` (idempotent)
+- **AND** documents `GET /pins` returning a JSON array of pinned narinfo hashes with `Content-Type: application/json`
+
+#### Scenario: Eviction-protection semantics are explained
+- **WHEN** a reader follows the Pinning page
+- **THEN** it states that a pinned closure and all of its transitive references are excluded from LRU eviction
+- **AND** it provides at least one worked `curl` example for pinning, unpinning, and listing
+
+#### Scenario: The feature is cross-linked from cache-size guidance
+- **WHEN** a reader is on the Cache Management or Getting Started → Concepts page where LRU eviction is described
+- **THEN** a link points to the Pinning page as the supported way to protect store paths from eviction
+
+
+--- ARQUIVOS DO PR (21)
+modified  +14    -0     CHANGELOG.md
+modified  +7     -0     charts/ncps/templates/deployment.yaml
+modified  +4     -0     charts/ncps/templates/secret.yaml
+modified  +7     -0     charts/ncps/templates/statefulset.yaml
+modified  +12    -0     charts/ncps/tests/configmap_test.yaml
+modified  +102   -0     charts/ncps/tests/deployment_test.yaml
+modified  +28    -0     charts/ncps/tests/secret_test.yaml
+modified  +6     -0     charts/ncps/values.schema.json
+modified  +10    -0     charts/ncps/values.yaml
+modified  +6     -0     config.example.yaml
+modified  +1     -0     docs/docs/User Guide/Configuration/Reference.md
+modified  +30    -0     docs/docs/User Guide/Usage/Cache Management.md
+added     +2     -0     openspec/changes/archive/2026-06-20-proxy-get-token-auth/.openspec.yaml
+added     +84    -0     openspec/changes/archive/2026-06-20-proxy-get-token-auth/design.md
+added     +63    -0     openspec/changes/archive/2026-06-20-proxy-get-token-auth/proposal.md
+added     +114   -0     openspec/changes/archive/2026-06-20-proxy-get-token-auth/specs/read-path-auth/spec.md
+added     +27    -0     openspec/changes/archive/2026-06-20-proxy-get-token-auth/tasks.md
+added     +127   -0     openspec/specs/read-path-auth/spec.md
+modified  +8     -0     pkg/ncps/serve.go
+modified  +62    -0     pkg/server/server.go   <== código ligado à spec
+modified  +132   -0     pkg/server/server_test.go
+--- DIFF DO CÓDIGO LIGADO
+### pkg/server/server.go
+@@ -3,6 +3,8 @@ package server
+ import (
+ 	"compress/gzip"
+ 	"context"
++	"crypto/sha256"
++	"crypto/subtle"
+ 	"encoding/json"
+ 	"errors"
+ 	"io"
+@@ -76,6 +78,7 @@ type Server struct {
+ 	router *chi.Mux
+ 
+ 	deletePermitted bool
++	getToken        string
+ 	putPermitted    bool
+ }
+ 
+@@ -94,6 +97,12 @@ func New(cache *cache.Cache) *Server {
+ // SetDeletePermitted configures the server to either allow or deny access to DELETE.
+ func (s *Server) SetDeletePermitted(dp bool) { s.deletePermitted = dp }
+ 
++// SetGetToken configures a Bearer token required to access GET and HEAD routes.
++// When non-empty, requests without a matching Authorization: Bearer <token> header
++// are rejected with 401 Unauthorized. The /healthz and /metrics routes are always
++// exempt.
++func (s *Server) SetGetToken(token string) { s.getToken = token }
++
+ // SetPutPermitted configures the server to either allow or deny access to PUT.
+ func (s *Server) SetPutPermitted(pp bool) { s.putPermitted = pp }
+ 
+@@ -108,6 +117,7 @@ func (s *Server) createRouter() {
+ 	s.router.Use(recoverer)
+ 
+ 	s.router.Use(s.skipTelemetryForInfraRoutes)
++	s.router.Use(s.requireGetToken)
+ 
+ 	// 1. Register standard routes at the root
+ 	s.registerRoutes(s.router)
+@@ -194,6 +204,58 @@ func (s *Server) registerRoutes(r chi.Router) {
+ 	r.Get(routeBuildTrace, s.getBuildTrace(true))
+ }
+ 
++// requireGetToken is a middleware that enforces Bearer token authentication for
++// GET and HEAD requests when s.getToken is non-empty. Infrastructure endpoints
++// (/healthz and /metrics) are always exempt regardless of configuration.
++func (s *Server) requireGetToken(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if s.getToken == "" {
++			next.ServeHTTP(w, r)
++
++			return
++		}
++
++		// Only apply to GET and HEAD; other methods have their own guards.
++		if r.Method != http.MethodGet && r.Method != http.MethodHead {
++			next.ServeHTTP(w, r)
++
++			return
++		}
++
++		// Infrastructure routes are always exempt.
++		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
++			next.ServeHTTP(w, r)
++
++			return
++		}
++
++		authHeader := r.Header.Get("Authorization")
++
++		const bearerPrefix = "Bearer "
++
++		// Hash both tokens to a fixed length before the constant-time compare.
++		// subtle.ConstantTimeCompare returns early when the slice lengths differ,
++		// so comparing the raw variable-length tokens directly would leak the
++		// secret's length via a timing side-channel. SHA-256 digests are always
++		// 32 bytes, so the comparison time is independent of both token contents
++		// and length.
++		presented := strings.TrimPrefix(authHeader, bearerPrefix)
++		presentedHash := sha256.Sum256([]byte(presented))
++		expectedHash := sha256.Sum256([]byte(s.getToken))
++
++		if !strings.HasPrefix(authHeader, bearerPrefix) ||
++			subtle.ConstantTimeCompare(presentedHash[:], expectedHash[:]) != 1 {
++			// RFC 7235 §4.1: a 401 response must carry a challenge.
++			w.Header().Set("WWW-Authenticate", "Bearer")
++			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
++
++			return
++		}
++
++		next.ServeHTTP(w, r)
++	})
++}
++
+ func recoverer(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		defer func() {
+
+===== P013 | repo tmck-code/yet-another-statusline | PR #78: Polishing | capacidade: workflow-two-column-agents
+--- SPEC VIVA
+# workflow-two-column-agents Specification
+
+## Purpose
+
+Define the two-column agent layout for workflow runs at wide terminal widths: when `per_agent` rendering is active and the terminal is at least 120 columns wide (the TWO_COL_WF_WIDTH threshold), workflow agents are paired side-by-side within a single content row to halve vertical space usage. Each agent in two-column mode uses the one-line form. Below the threshold, agents render one per row as before.
+
+## Requirements
+
+### Requirement: Two-column agent layout at wide terminal widths
+
+When `per_agent` is True and the terminal width is ≥ 120, workflow agents SHALL be rendered in pairs side-by-side within a single content row, separated by a `  │  ` vertical divider. Each half SHALL receive `(inner - 5) // 2` columns where `inner = width - 4`. Agents SHALL be paired sequentially by `first_timestamp` order. When the agent count is odd, the final agent SHALL be rendered in the left column only, with a blank right half, so it stays inside the L/R section and the column divider remains unbroken. Done and running agents MAY be mixed within a pair. When terminal width is < 120, agents SHALL render one per row as before.
+
+#### Scenario: Agents paired at width ≥ 120
+
+- **WHEN** `per_agent` is True, width ≥ 120, and there are 4 agents
+- **THEN** the layout emits 2 content rows, each containing 2 agents separated by `  │  `
+
+#### Scenario: Odd agent rendered in the left column
+
+- **WHEN** `per_agent` is True, width ≥ 120, and there are 3 agents
+- **THEN** the layout emits 2 content rows: one with agents 1+2 paired, one with agent 3 in the left column and a blank right half, both carrying the divider
+
+#### Scenario: Below threshold renders one per row
+
+- **WHEN** `per_agent` is True and width < 120
+- **THEN** each agent occupies its own content row (existing behaviour)
+
+### Requirement: Column divider spans the whole run block and joins the box
+
+In two-column mode the column divider `│` SHALL be embedded in every row of a run block — the header, every paired/odd agent row, the summary, and any `+N more workflows` overflow row — at the shared column `workflow_divider_col(width)`, so the bar runs unbroken from the header down to the summary. The block SHALL carry no internal separator rows. `build_wide` SHALL thread the matching `┬` onto the separator above the first header and carry the matching `┴` down to the border (or separator) below the last summary, so the bar joins the box at both ends rather than floating.
+
+#### Scenario: Divider runs through header and summary
+
+- **WHEN** `per_agent` is True, width ≥ 120, and a run is rendered
+- **THEN** the header row and the summary row each contain the divider `│` at `workflow_divider_col(width)`, and no `separator_dim` rows appear between the header and summary
+
+#### Scenario: Divider joins the box at top and bottom
+
+- **WHEN** `build_wide` renders a two-column workflow block
+- **THEN** the separator above the header carries a `┬` and the border/separator below the summary carries a `┴`, both at the divider column
+
+#### Scenario: Done and running agents may be paired together
+
+- **WHEN** width ≥ 120 and agents 1 (done) and 2 (running) are adjacent in timestamp order
+- **THEN** they appear side-by-side in the same row; agent 1 renders with dim done styling
+
+### Requirement: Two-column mode uses one-line agent form
+
+In two-column layout, each agent SHALL be rendered using the one-line (non-twoline) form regardless of terminal width. The `twoline=True` path SHALL only apply in single-column layout.
+
+#### Scenario: One-line form used in two-column mode
+
+- **WHEN** width ≥ 120 and agents are rendered in two-column mode
+- **THEN** each agent is rendered with `twoline=False` (single-line form)
+
+--- ARQUIVOS DO PR (66)
+modified  +1     -1     .claude-plugin/plugin.json
+modified  +1     -5     .github/hooks/pre-commit
+added     +10    -0     .github/hooks/pre-push
+modified  +3     -0     .gitignore
+modified  +23    -7     CONTEXT.md
+modified  +1     -0     README.md
+modified  +14    -0     claude/yas/config.py
+modified  +19    -0     claude/yas/constants.py
+modified  +14    -2     claude/yas/info/__init__.py
+added     +52    -0     claude/yas/info/clear.py
+modified  +351   -30    claude/yas/layout.py   <== código ligado à spec
+modified  +110   -20    claude/yas/render/borders.py
+modified  +58    -2     claude/yas/render/text.py
+modified  +278   -102   claude/yas/renderer.py   <== código ligado à spec
+modified  +2     -8     claude/yas/session.py
+added     +2     -0     openspec/changes/archive/2026-06-16-restyle-top-row/.openspec.yaml
+added     +42    -0     openspec/changes/archive/2026-06-16-restyle-top-row/design.md
+added     +27    -0     openspec/changes/archive/2026-06-16-restyle-top-row/proposal.md
+added     +25    -0     openspec/changes/archive/2026-06-16-restyle-top-row/specs/cache-countdown/spec.md
+added     +86    -0     openspec/changes/archive/2026-06-16-restyle-top-row/specs/top-row-format/spec.md
+added     +41    -0     openspec/changes/archive/2026-06-16-restyle-top-row/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-17-add-clear-timer/.openspec.yaml
+added     +38    -0     openspec/changes/archive/2026-06-17-add-clear-timer/design.md
+added     +31    -0     openspec/changes/archive/2026-06-17-add-clear-timer/proposal.md
+added     +25    -0     openspec/changes/archive/2026-06-17-add-clear-timer/specs/statusline-info/spec.md
+added     +60    -0     openspec/changes/archive/2026-06-17-add-clear-timer/specs/top-row-format/spec.md
+added     +36    -0     openspec/changes/archive/2026-06-17-add-clear-timer/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/.openspec.yaml
+added     +65    -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/design.md
+added     +27    -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/proposal.md
+added     +72    -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/specs/justify-top-row/spec.md
+added     +30    -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/specs/statusline-config/spec.md
+added     +38    -0     openspec/changes/archive/2026-06-17-justify-wide-top-row/tasks.md
+added     +2     -0     openspec/changes/archive/2026-06-18-add-layout-labels/.openspec.yaml
+added     +56    -0     openspec/changes/archive/2026-06-18-add-layout-labels/design.md
+added     +31    -0     openspec/changes/archive/2026-06-18-add-layout-labels/proposal.md
+added     +135   -0     openspec/changes/archive/2026-06-18-add-layout-labels/specs/section-labels/spec.md
+added     +25    -0     openspec/changes/archive/2026-06-18-add-layout-labels/specs/statusline-config/spec.md
+added     +44    -0     openspec/changes/archive/2026-06-18-add-layout-labels/tasks.md
+modified  +13    -3     openspec/specs/cache-countdown/spec.md
+added     +78    -0     openspec/specs/justify-top-row/spec.md
+added     +141   -0     openspec/specs/section-labels/spec.md
+modified  +53    -0     openspec/specs/statusline-config/spec.md
+modified  +24    -0     openspec/specs/statusline-info/spec.md
+added     +128   -0     openspec/specs/top-row-format/spec.md
+modified  +1     -1     ops/install.sh
+modified  +2     -1     pyproject.toml
+modified  +1     -1     test/fixtures/claude_dark_medium.ansi
+modified  +1     -1     test/fixtures/claude_dark_narrow.ansi
+modified  +5     -5     test/fixtures/claude_dark_wide.ansi
+modified  +132   -1     test/test_borders.py
+modified  +64    -0     test/test_config.py
+modified  +23    -1     test/test_context_line.py
+modified  +138   -19    test/test_helper.py
+modified  +231   -2     test/test_info.py
+added     +214   -0     test/test_justify.py
+added     +31    -0     test/test_labels.py
+added     +282   -0     test/test_labels_layout.py
+modified  +298   -12    test/test_layout_seam.py   <== código ligado à spec
+modified  +159   -21    test/test_model_section.py
+modified  +3     -3     test/test_session_elapsed.py
+modified  +36    -0     test/test_session_info_pure.py
+modified  +62    -0     test/test_subagent_rows.py   <== código ligado à spec
+modified  +79    -4     test/test_tokens_cost.py
+modified  +25    -1     uv.lock
+modified  +4     -0     yas.example.toml
+--- DIFF DO CÓDIGO LIGADO
+### claude/yas/layout.py
+@@ -7,11 +7,14 @@
+ 
+ from yas.config import Config
+ from yas.constants import (
++    _ANSI_RE,
+     BOX_V,
+     CLR_WARN,
+     DEFAULT_SOFT_LIMIT,
+     ELLIPSIS,
+     GLYPH_CONFIG_WARN,
++    GLYPH_HOURGLASS,
++    GLYPH_RENAMED,
+     GLYPH_WF_DIVIDER,
+     RESET,
+     SUBAGENT_DISPLAY_CAP,
+@@ -20,13 +23,37 @@
+     WORKFLOW_AGENT_CAP,
+     WORKFLOW_RUN_CAP,
+ )
+-from yas.info import SessionView
++from yas.info import SessionView, _fmt_elapsed_clock
+ from yas.info.subagents import read_last_prompt_ts
+ from yas.render.pill import Pill
+ from yas.renderer import Renderer
+-from yas.render.text import _visible_width
++from yas.render.text import _visible_width, _token_offsets
+ from yas.tokens import TickRecord
+ 
++# Characters that can start a dirty-status block in the plain-text path string.
++# The block is always preceded by a single space so we search for ' ' + one of
++# these. Untracked (•), modified (*), deleted (-), and renamed (GLYPH_RENAMED).
++_DIRTY_CHARS = frozenset('•*-' + GLYPH_RENAMED)
++
++# The branch-separator glyph used in path_git / path_git_compact.
++_BRANCH_SEP = '∈'   # U+2208 ELEMENT OF (plain Unicode, not PUA)
++
++
++def _ansi_byte_offset(ansi: str, plain_idx: int) -> int:
++    """Return the byte (str index) in *ansi* that corresponds to plain-text
++    position *plain_idx* (0-indexed visible character count, ANSI escapes
++    excluded). Returns ``len(ansi)`` when *plain_idx* >= visible width."""
++    pos = 0   # current byte position in `ansi`
++    vis = 0   # visible characters counted so far
++    while pos < len(ansi) and vis < plain_idx:
++        m = _ANSI_RE.match(ansi, pos)
++        if m:
++            pos = m.end()
++            continue
++        pos += 1
++        vis += 1
++    return pos
++
+ 
+ @dataclass
+ class RowSpec:
+@@ -40,6 +67,7 @@ class RowSpec:
+     pill: Pill | None = None
+     pill_edge: str = 'bottom'
+     right_pill: str = ''
++    labels: list[tuple[str, int]] = field(default_factory=list)
+ 
+ 
+ @dataclass
+@@ -246,7 +274,8 @@ def build_narrow(
+         rows.append(RowSpec('separator_dim'))
+     if visible_subs:
+         for sub in visible_subs:
+-            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0).split('\n'):
++            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0,
++                                       stats_col=100 if width >= 125 else None).split('\n'):
+                 rows.append(RowSpec('content', content=line))
+         rows.append(RowSpec('separator_dim'))
+     wf_rows = build_workflow_rows(view, width, r, per_agent=False)
+@@ -320,7 +349,8 @@ def build_medium(
+         rows.append(RowSpec('separator_dim'))
+     if visible_subs:
+         for sub in visible_subs:
+-            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0).split('\n'):
++            for line in r.subagent_row(sub, width - 4, twoline=width > 100, session_inout=0,
++                                       stats_col=100 if width >= 125 else None).split('\n'):
+                 rows.append(RowSpec('content', content=line))
+         rows.append(RowSpec('separator_dim'))
+     wf_rows = build_workflow_rows(view, width, r, per_agent=False)
+@@ -365,7 +395,7 @@ def build_wide(
+     skill_display = ','.join(s.split(':', 1)[-1] for s in skills.names)
+     session_inout = view.session_inout
+ 
+-    helper_text, right_text, right_w = r.model_right_section(
++    helper_5h, helper_7d, right_text, right_w = r.model_right_section(
+         session.model_name, session.model_thinking, session.rate_limits,
+         session.effort.level if session.thinking.enabled else '',
+         fast_mode=session.fast_mode,
+@@ -375,6 +405,7 @@ def build_wide(
+         token_log.day_in, token_log.day_cache_read, token_log.day_out,
+         sess_cost, day_cost, tok_rate,
+         session.session_id, width, fill, view.cfg.show_day_stats,
++        view.cfg.justify,
+     )
+     # The three-segment tokens │ cost │ rate row is fixed-content-width: at the
+     # bottom of the wide band (box ~80-84) it cannot hold both columns plus the
+@@ -398,8 +429,11 @@ def build_wide(
+     spec = LayoutSpec(width=width, fill=fill, session_id=session.session_id)
+     rows: list[RowSpec] = []
+ 
+-    vsep_w   = 5
+-    helper_w = _visible_width(helper_text)
++    vsep_w     = 5
++    helper_5h_w = _visible_width(helper_5h)
++    has_7d      = bool(helper_7d)
++    helper_7d_w = _visible_width(helper_7d) if has_7d else 0
++    helper_w    = helper_5h_w + (4 + helper_7d_w if has_7d else 0)
+ 
+     # Cache countdown section: glyph + time, vsep-delimited, sheds before path truncates.
+     cache_cd = view.cache_countdown
+@@ -413,19 +447,125 @@ def build_wide(
+             cache_section_w = _cache_section_w
+             cache_content   = _cache_txt
+ 
+-    # Elapsed section: session clock (H:MM:SS), vsep-delimited, sheds before path truncates.
+-    # elapsed_section_w = elapsed_content_w + 3 (1-lead vsep: ' │ ' = 3 visible).
+-    elapsed_content, _elapsed_cw = r.elapsed_section(elapsed)
++    # Elapsed section: session clock + optional since-/clear timer.
++    # Degradation: both timers → clear-only → shed entirely (path protection outermost).
++    clear_epoch = view.clear_epoch
++    clear_str   = ''
++    if clear_epoch is not None:
++        clear_ms  = max(0.0, view.now - clear_epoch) * 1000
++        clear_str = _fmt_elapsed_clock(int(clear_ms))
++
++    elapsed_content, _elapsed_cw = r.elapsed_section(elapsed, clear_str)
+     elapsed_section_w = 0
+-    if elapsed:
+-        _elapsed_sw = _elapsed_cw + 3
+-        if (width - 4) - vsep_w - _elapsed_sw - helper_w - cache_section_w - right_w >= 5:
+-            elapsed_section_w = _elapsed_sw
++    if elapsed or clear_str:
++        _sw = _elapsed_cw + 3
++        if (width - 4) - vsep_w - _sw - helper_w - cache_section_w - right_w >= 5:
++            elapsed_section_w = _sw
++        elif clear_str:
++            # Try clear-only (drop session timer)
++            _co, _cw = r.elapsed_section('', clear_str)
++            _sw_c = _cw + 3
++            if (width - 4) - vsep_w - _sw_c - helper_w - cache_section_w - right_w >= 5:
++                elapsed_content, _elapsed_cw = _co, _cw
++                elapsed_section_w = _sw_c
+ 
+     target_w = (width - 4) - vsep_w - elapsed_section_w - helper_w - cache_section_w - right_w
+     line_path = r.fit_path(session.short_pwd, git, target_w, compact_only=False)
+     path_w   = _visible_width(line_path)
+ 
++    # Justify: distribute horizontal slack evenly across active top-row sections
++    # (path, [elapsed], 5h, [7d], [cache], last-slot). Gate on cfg.justify and
++    # total_slack > 0; fall through silently when total_slack == 0 (D3).
++    total_slack = target_w - path_w
++    path_extra = elapsed_extra = h5_left = h5_right = h7_left = h7_right = cache_extra = last_extra = 0
++    if view.cfg.justify and total_slack > 0:
++        _has_elapsed = elapsed_section_w > 0
++        _has_cache   = cache_section_w > 0
++        _N           = 3 + (1 if _has_elapsed else 0) + (1 if has_7d else 0) + (1 if _has_cache else 0)
++        _extra_per   = total_slack // _N
++        _remainder   = total_slack % _N
++        _extras      = [_extra_per + (1 if i < _remainder else 0) for i in range(_N)]
++        _idx         = 0
++        path_extra   = _extras[_idx]
++        _idx += 1
++        if _has_elapsed:
++            elapsed_extra = _extras[_idx]
++            _idx += 1
++        # Spend each helper section's slack first as inter-stat breathing room
++        # (separators widen from 1 toward a 3-char cap, symmetric within the
++        # section), then centre whatever remains as outer padding. The section's
++        # total width is unchanged — inner growth is matched by outer shrink — so
++        # the divider columns below are unaffected. The 5h section has two
++        # separators (countdown↔pct, pct↔trend); 7d has one (pct↔trend).
++        h5_extra = _extras[_idx]
++        _idx += 1
++        gap_5h   = 1 + min(2, h5_extra // 2)   # ≤3; both 5h separators at this width
++        h5_inner = 2 * (gap_5h - 1)
++        h5_outer = h5_extra - h5_inner
++        h5_left  = h5_outer // 2
++        h5_right = h5_outer - h5_left
++        gap_7d   = 1
++        if has_7d:
++            h7_extra = _extras[_idx]
++            _idx += 1
++            gap_7d   = 1 + min(2, h7_extra)    # ≤3; the single 7d separator
++            h7_inner = gap_7d - 1
++            h7_outer = h7_extra - h7_inner
++            # RHS has 2 more built-in spaces than LHS (sep_rate trailing=1 vs
++            # explicit-space+cache_vsep-lead=3), so bias the split left by 1.
++            h7_left  = (h7_outer + 2) // 2
++            h7_right = h7_outer - h7_left
++        if gap_5h != 1 or gap_7d != 1:
++            helper_5h, helper_7d = r._rate_helpers(session.rate_limits, gap_5h, gap_7d)
++        if _has_cache:
++            cache_extra = _extras[_idx]
++            _idx += 1
++        last_extra = _extras[_idx]
++        if path_extra:
++            # Distribute path_extra around the git block when one is present:
++            # half before the ∈ separator, half after the branch/commit and
++            # before the dirty-status indicator (or at the end when absent).
++            # Fall back to simple append when there is no git block.
++            _plain = _ANSI_RE.sub('', line_path)
++            _sep_i = _plain.find(_BRANCH_SEP)
++            if _sep_i != -1:
++                # Locate the dirty block: ' ' + a dirty char after the sep.
++                _dirty_i = -1
++                for _ci in range(_sep_i + 1, len(_plain) - 1):
++                    if _plain[_ci] == ' ' and _plain[_ci + 1] in _DIRTY_CHARS:
++                        _dirty_i = _ci
++                        break
++                # Split: half before ∈, half before dirty (or at end).
++                _p_left  = path_extra // 2
++                _p_right = path_extra - _p_left
++                # Byte offsets in the ANSI string for the two insertion points.
++                _b_sep   = _ansi_byte_offset(line_path, _sep_i)
++                if _dirty_i != -1:
++                    # Offset of dirty section shifts by _p_left spaces we inserted.
++                    _b_dirt = _ansi_byte_offset(line_path, _dirty_i)
++                    line_path = (
++                        line_path[:_b_sep]
++                        + ' ' * _p_left
++                        + line_path[_b_sep:_b_dirt]
++                        + ' ' * _p_right
++                        + line_path[_b_dirt:]
++                    )
++                else:
++                    line_path = (
++                        line_path[:_b_sep]
++                        + ' ' * _p_left
++                        + line_path[_b_sep:]
++                        + ' ' * _p_right
++                    )
++            else:
++                line_path = f'{line_path}{" " * path_extra}'
++            path_w += path_extra
++        if elapsed_extra:
++            _e_left           = elapsed_extra // 2
++            _e_right          = elapsed_extra - _e_left
++            elapsed_content   = f'{" " * _e_left}{elapsed_content}{" " * _e_right}'
++            elapsed_section_w += elapsed_extra
++
+     pill: Pill | None = None
+     if pill_pct:
+         pill = Pill(start=width - right_w + 1, end=width, anchor=pill_anchor, shift=pill_shift, pct=pill_pct)
+@@ -441,6 +581,29 @@ def build_wide(
+         elapsed_vsep    = ''
+ 
+     helper_anchor = elapsed_div_col if elapsed_div_col is not None else path_div_col
++
++    # Build the helper section from the 5h and (optional) 7d sub-sections.
++    # When 7d is active, join them with a proper vsep │ that receives ┬/┴ elbows.
++    # helper content starts at absolute col helper_anchor + 2 (one col for trailing
++    # space of the preceding vsep block; then content at +2 after that │ col).
++    padded_5h = f'{" " * h5_left}{helper_5h}{" " * h5_right}' if (h5_left or h5_right) else helper_5h
++    sep_rate_col: int | None = None
++    sep_rate_vsep = ''
++    if has_7d:
++        sep_rate_col  = helper_anchor + 2 + _visible_width(padded_5h) + 2
++        sep_rate_vsep = r.vsep_block(sep_rate_col, width, fill=fill, leader=True)
++    padded_7d = f'{" " * h7_left}{helper_7d}{" " * h7_right}' if (h7_left or h7_right) else helper_7d
++    helper_text = f'{padded_5h}{sep_rate_vsep}{padded_7d}'
++    helper_w    = _visible_width(helper_text)
++
++    if cache_extra:
++        # last_extra (= pad) lands entirely on RHS; cache vsep trailing gives 2 LHS
++        # built-in spaces. Shift split so visible LHS ≈ visible RHS.
++        _c_left         = min(cache_extra, max(0, (cache_extra + last_extra - 2) // 2))
++        _c_right        = cache_extra - _c_left
++        cache_content   = f'{" " * _c_left}{cache_content}{" " * _c_right}'
++        cache_section_w += cache_extra
++
+     cache_div_col = helper_anchor + helper_w + vsep_w if cache_section_w else None
+     cache_vsep    = r.vsep_block(cache_div_col, width, fill=fill, leader=False) if cache_div_col else ''
+ 
+@@ -458,25 +621,126 @@ def build_wide(
+     path_row_cols: list[int] = [path_div_col]
+     if elapsed_section_w:
+         path_row_cols.append(elapsed_div_col)  # type: ignore[arg-type]
++    if sep_rate_col is not None:
++        path_row_cols.append(sep_rate_col)
+     if cache_section_w:
+         path_row_cols.append(cache_div_col)    # type: ignore[arg-type]
+     path_row_downs = tuple(path_row_cols)
+     path_row_ups   = path_row_downs
+ 
++    # Section labels (cfg.labels): hand-tuned superscript captions overlaid onto
++    # the top border above the path/model row. Each (text, start_col) anchor is
++    # derived from the divider/width vars already computed above; the border
++    # primitive truncates/drops them at any elbow, corner, session id, or pill so
++    # a wrong column is cosmetic-only. Empty (and byte-identical to today) when
++    # the knob is off.
++    # Each anchor is measured from the *rendered* content below it (ANSI stripped,
++    # value token offsets), so a label's first glyph sits over the value it names
++    # regardless of that value's width. Labels are appended left-to-right; the
++    # border primitive truncates/drops them at any elbow, corner, session id, or
++    # pill so a wrong column is cosmetic-only.
++    top_labels: list[tuple[str, int]] = []
+
+### claude/yas/renderer.py
+@@ -50,10 +50,10 @@
+     GLYPH_CONTINUATION,
+     GLYPH_FOLDER,
+     GLYPH_CACHE,
+-    GLYPH_HELPER,
++    GLYPH_CLEAR,
+     GLYPH_HOURGLASS,
+     GLYPH_IN,
+-    GLYPH_MODEL,
++    GLYPH_MODEL_LIGHT,
+     GLYPH_PLUGINS,
+     GLYPH_RENAMED,
+     GLYPH_REPLYING,
+@@ -71,6 +71,8 @@
+     GLYPH_WF_HEADER,
+     GLYPH_WF_SUMMARY,
+     ICON_COST,
++    ICON_LIMIT_5H,
++    ICON_LIMIT_7D,
+     ICON_TOK_RATE,
+     PILL_LEFT,
+     PILL_RIGHT,
+@@ -309,17 +311,17 @@ def spark_color(self, t: float, dim: float = 1.0) -> str:
+         return self.gradient.spark_color(t, dim)
+ 
+     # --- Border delegations (backward compat) ---
+-    def border_top(self, width: int, session_id: str = '', downs: tuple[int, ...] = (), fill: float = 1.0, pill: Pill | None = None) -> str:
+-        return self.border.border_top(width, session_id, downs, fill, pill)
++    def border_top(self, width: int, session_id: str = '', downs: tuple[int, ...] = (), fill: float = 1.0, pill: Pill | None = None, labels: tuple[tuple[str, int], ...] = ()) -> str:
++        return self.border.border_top(width, session_id, downs, fill, pill, labels)
+ 
+     def border_bottom(self, width: int, ups: tuple[int, ...] = (), fill: float = 1.0) -> str:
+         return self.border.border_bottom(width, ups, fill)
+ 
+-    def border_separator(self, width: int, ups: tuple[int, ...] = (), downs: tuple[int, ...] = (), fill: float = 1.0) -> str:
+-        return self.border.border_separator(width, ups, downs, fill)
++    def border_separator(self, width: int, ups: tuple[int, ...] = (), downs: tuple[int, ...] = (), fill: float = 1.0, labels: tuple[tuple[str, int], ...] = ()) -> str:
++        return self.border.border_separator(width, ups, downs, fill, labels)
+ 
+-    def border_separator_dim(self, width: int, downs: tuple[int, ...] = (), ups: tuple[int, ...] = (), fill: float = 1.0, pill: Pill | None = None, pill_edge: str = 'bottom') -> str:
+-        return self.border.border_separator_dim(width, downs, ups, fill, pill, pill_edge)
++    def border_separator_dim(self, width: int, downs: tuple[int, ...] = (), ups: tuple[int, ...] = (), fill: float = 1.0, pill: Pill | None = None, pill_edge: str = 'bottom', labels: tuple[tuple[str, int], ...] = ()) -> str:
++        return self.border.border_separator_dim(width, downs, ups, fill, pill, pill_edge, labels)
+ 
+     def border_line(self, content: str, width: int, fill: float = 1.0, bg_lead: str = '', bg_trail: str = '', pill_flush: bool = False, right_pill: str = '') -> str:
+         return self.border.border_line(content, width, fill, bg_lead, bg_trail, pill_flush, right_pill)
+@@ -414,12 +416,42 @@ def fill_colour(self, pct: float) -> str:
+             return self.warn
+         return self.safe
+ 
+-    def elapsed_section(self, elapsed: str) -> tuple[str, int]:
+-        text = f'{self.SESSION}{elapsed}{self.R}'
++    def elapsed_section(self, elapsed: str, clear_str: str = '') -> tuple[str, int]:
++        """Compose the elapsed-cell content and its visible width.
++
++        When *clear_str* is non-empty (session has been /clear-ed), the cell
++        shows the clear timer first — ``GLYPH_CLEAR  <accent><clear_str>`` —
++        followed by the grey right-justified session timer when *elapsed* is
++        also non-empty.  Passing ``elapsed=''`` with a non-empty *clear_str*
++        gives the clear-only degradation tier (no session timer).
++
++        When both *clear_str* and *elapsed* follow their defaults (empty), the
++        result is byte-identical to the pre-change single-timer form:
++        ``<grey><elapsed rjust 8>``.
++        """
++        if clear_str:
++            sess_part = (
++                f'  {self.SESSION}{elapsed.rjust(8)}{self.R}'
++                if elapsed else ''
++            )
++            text = f'{GLYPH_CLEAR}  {CLR_CYAN}{clear_str}{RESET}{sess_part}'
++            return text, _visible_width(text)
++        padded = elapsed.rjust(8)
++        text   = f'{self.SESSION}{padded}{self.R}'
+         return text, _visible_width(text)
+ 
+     def cache_section(self, remaining: float, elapsed_pct: int) -> tuple[str, int]:
+-        dur    = fmt_dur(remaining)
++        total_s = int(remaining)
++        if total_s >= 3600:
++            h   = total_s // 3600
++            rem = total_s % 3600
++            m   = rem // 60
++            sec = rem % 60
++            dur = f'{h}:{m:02d}:{sec:02d}'
++        else:
++            m   = total_s // 60
++            sec = total_s % 60
++            dur = f'{m:02d}:{sec:02d}'
+         colour = self.fill_colour(elapsed_pct)
+         text   = f'{GLYPH_CACHE}  {colour}{dur}{RESET}'
+         return text, _visible_width(text)
+@@ -448,7 +480,7 @@ def model_section_compact(self, model_name: str, rate_limits: RateLimits, max_wi
+         pct_clr   = self.fill_colour(float(pct))
+         step      = rainbow_step()
+         c_helper  = rainbow_at(step, 9)
+-        rate_pct  = f'{pct_clr}{pct}%{self.R}'
++        rate_pct  = f'{pct_clr}{float(pct):.1f}%{self.R}'
+ 
+         rate_with_time = None
+         try:
+@@ -467,7 +499,7 @@ def model_section_compact(self, model_name: str, rate_limits: RateLimits, max_wi
+         def _build(name: str, rate: str) -> tuple[str, int]:
+             if pct_bg:
+                 cells: list[tuple[str, tuple[int, int, int] | None, bool, bool]] = []
+-                cells.append((GLYPH_MODEL, anchor, False, False))
++                cells.append((GLYPH_MODEL_LIGHT, anchor, False, False))
+                 cells.append((' ', anchor, False, False))
+                 cells.append((' ', anchor, False, False))
+                 for ch in name:
+@@ -480,12 +512,12 @@ def _build(name: str, rate: str) -> tuple[str, int]:
+                 return (
+                     f'{painted}'
+                     f'{self.LABEL}|{self.R}'
+-                    f' {c_helper}{BOLD}{GLYPH_HELPER}{self.R} {rate}'
++                    f' {c_helper}{BOLD}{ICON_LIMIT_5H}{self.R} {rate}'
+                 ), pw
+             return (
+-                f'{model_clr}{GLYPH_MODEL}  {name}{self.R}'
++                f'{model_clr}{GLYPH_MODEL_LIGHT}  {name}{self.R}'
+                 f' {self.LABEL}|{self.R}'
+-                f' {c_helper}{BOLD}{GLYPH_HELPER}{self.R} {rate}'
++                f' {c_helper}{BOLD}{ICON_LIMIT_5H}{self.R} {rate}'
+             ), 0
+ 
+         if rate_with_time:
+@@ -501,61 +533,72 @@ def _build(name: str, rate: str) -> tuple[str, int]:
+         name_budget = max(3, max_width - base_w - 1)
+         return _build(model_name[:name_budget] + ELLIPSIS, rate_pct)
+ 
+-    def model_right_section(self, model_name: str, model_thinking: str, rate_limits: RateLimits, effort_level: str = '', fast_mode: bool = False) -> tuple[str, str, int]:
+-        step      = rainbow_step()
+-        c_think   = rainbow_at(step, 0)
+-        c_helper  = rainbow_at(step, 9)
+-        model_clr = self.model_colour(model_name)
+-        pct       = self._model_bg_pct(effort_level)
+-        glyph     = GLYPH_BURN_FAST if fast_mode else GLYPH_THINKING
++    def _rate_helpers(self, rate_limits: RateLimits, gap_5h: int = 1, gap_7d: int = 1) -> tuple[str, str]:
++        """Build the 5h and (optional) 7d limit sub-sections.
++
++        ``gap_5h`` / ``gap_7d`` set the inter-stat separator width within each
++        section (default 1). The justified top row widens them toward 3 to spend
++        section slack as breathing room rather than only outer padding.
++        """
++        c_helper  = rainbow_at(rainbow_step(), 9)
++        helper_5h = f'{c_helper}{BOLD}{ICON_LIMIT_5H}{self.R}  {self.white_brt}{BOLD}{self.helper(rate_limits.five_hour, gap_5h)}{self.R}'
++        helper_7d = ''
++        seven_day = rate_limits.seven_day
++        if seven_day.used_percentage != 0 or seven_day.resets_at != 0:
++            seven_clr     = self.fill_colour(float(seven_day.used_percentage or 0))
++            seven_pct_str = f'{float(seven_day.used_percentage or 0):.1f}'
++            seven_trend   = self.burndown_trend(
++                float(seven_day.used_percentage or 0),
++                seven_day.resets_at,
++                SEVEN_DAY_MINUTES,
++                SEVEN_DAY_WARMUP_MINUTES,
++            )
++            seven_trend_part = f'{" " * gap_7d}{seven_trend}' if seven_trend else ''
++            helper_7d = f'{c_helper}{BOLD}{ICON_LIMIT_7D}{self.R}  {seven_clr}{seven_pct_str}%{self.R}{seven_trend_part}'
++        return helper_5h, helper_7d
++
++    def model_right_section(self, model_name: str, model_thinking: str, rate_limits: RateLimits, effort_level: str = '', fast_mode: bool = False) -> tuple[str, str, str, int]:
++        model_clr  = self.model_colour(model_name)
++        pct        = self._model_bg_pct(effort_level)
++        lead_glyph = GLYPH_BURN_FAST if fast_mode else GLYPH_MODEL_LIGHT
+ 
+         if pct:
+             anchor, shift = self._model_anchor_pair(model_name)
+             cells: list[tuple[str, tuple[int, int, int] | None, bool, bool]] = []
+-            cells.append((GLYPH_MODEL,    anchor, False, False))
+-            cells.append((' ',            anchor, False, False))
+-            cells.append((' ',            anchor, False, False))
++            cells.append((' ',          anchor, False, False))   # extra left padding
++            cells.append((lead_glyph,  anchor, False, False))
++            cells.append((' ',         anchor, False, False))
++            cells.append((' ',         anchor, False, False))
+             for ch in model_name:
+                 cells.append((ch, anchor, False, False))
+-            cells.append((' ',            anchor, False, False))
+-            cells.append((glyph,          anchor, True,  False))
+-            cells.append((' ',            anchor, True,  False))
+-            cells.append((' ',            anchor, True,  False))
+-            for ch in model_thinking:
+-                cells.append((ch, anchor, False, True))
++            if model_thinking:
++                cells.append((' ', anchor, False, False))
++                cells.append(('(', anchor, False, False))
++                for ch in model_thinking:
++                    cells.append((ch, anchor, False, True))
++                cells.append((')', anchor, False, False))
+             cells.append((' ', anchor, False, False))
+             pill_l    = pill_gradient_fg(0, 0, len(cells), anchor, shift, pct) + PILL_LEFT
+             pill_r    = pill_gradient_fg(len(cells), 0, len(cells), anchor, shift, pct) + PILL_RIGHT
+             right_text = pill_l + paint_bg_span(cells, anchor, shift, pct, self.pill_fg_dark, self.pill_fg_light) + pill_r + RESET
+         elif model_thinking:
+-            right_text = f'{model_clr}{GLYPH_MODEL}  {model_name}{self.R} {c_think}{BOLD}{glyph}  {self.R}{model_clr}{ITALIC}{model_thinking}{RESET}'
++            right_text = f'{model_clr} {lead_glyph}  {model_name}{self.R} {model_clr}({model_thinking}){RESET}'
+         else:
+-            right_text = f'{model_clr}{GLYPH_MODEL}  {model_name}{self.R}'
++            right_text = f'{model_clr} {lead_glyph}  {model_name}{self.R}'
+ 
+         right_w = _visible_width(right_text)
+ 
+-        helper_text = f'{c_helper}{BOLD}{GLYPH_HELPER}{self.R}  {self.white_brt}{BOLD}{self.helper(rate_limits.five_hour)}{self.R}'
+-        seven_day = rate_limits.seven_day
+-        if seven_day.used_percentage != 0 or seven_day.resets_at != 0:
+-            seven_clr = self.fill_colour(float(seven_day.used_percentage or 0))
+-            seven_trend = self.burndown_trend(
+-                float(seven_day.used_percentage or 0),
+-                seven_day.resets_at,
+-                SEVEN_DAY_MINUTES,
+-                SEVEN_DAY_WARMUP_MINUTES,
+-            )
+-            seven_trend_part = f' {seven_trend}' if seven_trend else ''
+-            helper_text += f' {self.LABEL}| {seven_clr}{seven_day.used_percentage}%{self.R}{seven_trend_part}'
++        helper_5h, helper_7d = self._rate_helpers(rate_limits)
+ 
+-        return helper_text, right_text, right_w
++        return helper_5h, helper_7d, right_text, right_w
+ 
+     def model_right_section_compact(self, model_name: str, rate_limits: RateLimits, max_right_width: int, effort_level: str = '') -> tuple[str, str, int]:
+         model_clr = self.model_colour(model_name)
+         pct_bg    = self._model_bg_pct(effort_level)
+         anchor, shift = self._model_anchor_pair(model_name) if pct_bg else ((0, 0, 0), (0, 0, 0))
+         pct       = rate_limits.five_hour.used_percentage or 0
+         pct_clr   = self.fill_colour(float(pct))
+-        rate_text = f'{pct_clr}{pct}%{self.R}'
++        rate_text = f'{pct_clr}{float(pct):.1f}%{self.R}'
+         try:
+             if rate_limits.five_hour.resets_at:
+                 resets_at = datetime.fromtimestamp(rate_limits.five_hour.resets_at).astimezone()
+@@ -579,7 +622,7 @@ def model_right_section_compact(self, model_name: str, rate_limits: RateLimits,
+         def _make_right(name: str) -> tuple[str, int]:
+             if pct_bg:
+                 cells: list[tuple[str, tuple[int, int, int] | None, bool, bool]] = []
+-                cells.append((GLYPH_MODEL, anchor, False, False))
++                cells.append((GLYPH_MODEL_LIGHT, anchor, False, False))
+                 cells.append((' ', anchor, False, False))
+                 cells.append((' ', anchor, False, False))
+                 for ch in name:
+@@ -589,7 +632,7 @@ def _make_right(name: str) -> tuple[str, int]:
+                 pill_r  = pill_gradient_fg(len(cells), 0, len(cells), anchor, shift, pct_bg) + PILL_RIGHT
+                 painted = pill_l + paint_bg_span(cells, anchor, shift, pct_bg, self.pill_fg_dark, self.pill_fg_light) + pill_r + RESET
+                 return painted, _visible_width(painted)
+-            text = f'{model_clr}{GLYPH_MODEL}  {name}{self.R}'
++            text = f'{model_clr}{GLYPH_MODEL_LIGHT}  {name}{self.R}'
+             return text, _visible_width(text)
+ 
+         right_text, right_w = _make_right(model_name)
+@@ -652,6 +695,7 @@ def subagent_row(
+         *,
+         twoline: bool = False,
+         session_inout: int = 0,
++        stats_col: int | None = None,
+     ) -> str:
+         now     = time.time()
+         is_done = sub.end_ts > 0
+@@ -707,32 +751,73 @@ def build_cluster(show_share: bool, show_tok: bool) -> str:
+                     seg += f'{ctx_clr}{tok_field}{self.R} {self.LABEL}{MIDDLE_DOT}{self.R} '
+                 return seg + f'{model_clr}{model_str}{self.R}'
+ 
+-            # Pick the richest cluster that fits alongside the front + a 1-col gap.
+-            cluster = build_cluster(False, False)  # model-only fallback
+-            for show_share, show_tok in ((True, True), (False, True)):
+-                cand = build_cluster(show_share, show_tok)
+-                if front_w + 1 + _visible_width(cand) <= target_w:
+-                    cluster = cand
+-                    break
+-            cluster_w = _visible_width(cluster)
+-
+-            # Fill the description into the space left over (truncates first).
+-            desc_text  = sub.description or ''
+-            desc_max   = target_w - front_w - cluster_w - 1 - 3  # 1-col gap + ' · '
+-            sep_desc   = ''
+-            sep_desc_w = 0
+-            if desc_text and desc_max > 0:
+-                if _visible_width(desc_text) > desc_max:
+-                    desc_text = desc_text[:desc_max - 1] + ELLIPSIS
+-                desc_w = _visible_width(desc_text)
+-                if is_done:
+-                    sep_desc = f' {self.CTX_DIM}{MIDDLE_DOT}{self.R} {self.CTX_DIM}{desc_text}{self.R}'
+-                else:
+-                    sep_desc = f' {self.LABEL}{MIDDLE_DOT}{self.R} {self.CTX}{desc_text}{self.R}'
+-                sep_desc_w = 3 + desc_w
+-
+-            pad1  = max(1, target_w - front_w - sep_desc_w - cluster_w)
+-            line1 = f'{front_c}{sep_desc}{" " * pad1}{cluster}'
++            # Decide whether the stats cluster anchors at a fixed content
++            # column (wide layouts) or right-aligns to the content edge. The
++            # anchor only applies when even the model-only fallback fits within
++            # the slack to the right of `stats_col`; otherwise we fall through
++            # to the right-aligned path so very narrow widths stay sane.
++            model_only_w = _visible_width(build_cluster(False, False))
++            anchored     = stats_col is not None and (target_w - stats_col) >= model_only_w
++
++            if anchored:
++                assert stats_col is not None  # narrowed by `anchored`
++                avail = target_w - stats_col  # slack to the right of the anchor
++                # Pick the richest cluster that fits within the anchored slack.
++                cluster = build_cluster(False, False)  # model-only fallback
+
+### test/test_layout_seam.py
+@@ -190,7 +190,8 @@ def test_seam_renders_solid_not_heavy(monkeypatch: pytest.MonkeyPatch) -> None:
+ 
+ 
+ def test_cache_countdown_none_single_elbow(monkeypatch: pytest.MonkeyPatch) -> None:
+-    """When cache_countdown is None the top border and separator_dim each carry only one elbow."""
++    """When cache_countdown is None the top border and separator_dim carry elbows for
++    path + elapsed + sep_rate (the ┆ between 5h and 7d rate-limit segments) but NOT cache."""
+     _silence_dynamic(monkeypatch)
+     view = _view()
+     view.__dict__['cache_countdown'] = None
+@@ -199,8 +200,9 @@ def test_cache_countdown_none_single_elbow(monkeypatch: pytest.MonkeyPatch) -> N
+     separator_dim = spec.rows[2]
+     assert top_border.kind == 'top_border'
+     assert separator_dim.kind == 'separator_dim'
+-    assert len(top_border.downs) == 2,  f'expected 2 downs (path + elapsed), got {top_border.downs}'
+-    assert len(separator_dim.ups) == 2, f'expected 2 ups (path + elapsed), got {separator_dim.ups}'
++    # path + elapsed + sep_rate (┆) = 3; cache is absent so no fourth elbow.
++    assert len(top_border.downs) == 3,  f'expected 3 downs (path + elapsed + sep_rate), got {top_border.downs}'
++    assert len(separator_dim.ups) == 3, f'expected 3 ups (path + elapsed + sep_rate), got {separator_dim.ups}'
+ 
+ 
+ def test_cache_countdown_width_shed(monkeypatch: pytest.MonkeyPatch) -> None:
+@@ -218,14 +220,14 @@ def test_cache_countdown_width_shed(monkeypatch: pytest.MonkeyPatch) -> None:
+     sess      = _session()
+ 
+     # Measure renderer geometry so threshold is exact rather than hand-coded.
+-    helper_text, _, right_w = _r.model_right_section(
++    h5h, h7d, _, right_w = _r.model_right_section(
+         sess.model_name,
+         sess.model_thinking,
+         sess.rate_limits,
+         '',
+         fast_mode=sess.fast_mode,
+     )
+-    helper_w        = _visible_width(helper_text)
++    helper_w = _visible_width(h5h) + (4 + _visible_width(h7d) if h7d else 0)
+     _, cache_w      = _r.cache_section(*countdown)
+     cache_section_w = vsep_w + cache_w
+     # Minimum width where the cache section is NOT shed (path budget == 5).
+@@ -238,18 +240,18 @@ def test_cache_countdown_width_shed(monkeypatch: pytest.MonkeyPatch) -> None:
+     lines_shed = layout.render_layout(spec_shed, _r)
+     assert not any(GLYPH_CACHE in ln for ln in lines_shed), \
+         f'cache glyph present at width={min_keep - 1} (should be shed)'
+-    assert len(spec_shed.rows[0].downs) == 2, \
+-        f'expected 2 top_border downs (path + elapsed) at shed width, got {spec_shed.rows[0].downs}'
++    assert len(spec_shed.rows[0].downs) == 3, \
++        f'expected 3 top_border downs (path + elapsed + sep_rate) at shed width, got {spec_shed.rows[0].downs}'
+ 
+-    # 20 cols wider: cache present, three elbows (path + elapsed + cache).
++    # 20 cols wider: cache present, four elbows (path + elapsed + sep_rate + cache).
+     view_keep = _view()
+     view_keep.__dict__['cache_countdown'] = countdown
+     spec_keep  = layout.build_wide(view_keep, _tick(), min_keep + 20, _r)
+     lines_keep = layout.render_layout(spec_keep, _r)
+     assert any(GLYPH_CACHE in ln for ln in lines_keep), \
+         f'cache glyph absent at width={min_keep + 20} (should be kept)'
+-    assert len(spec_keep.rows[0].downs) == 3, \
+-        f'expected 3 top_border downs (path + elapsed + cache) at keep width, got {spec_keep.rows[0].downs}'
++    assert len(spec_keep.rows[0].downs) == 4, \
++        f'expected 4 top_border downs (path + elapsed + sep_rate + cache) at keep width, got {spec_keep.rows[0].downs}'
+ 
+ 
+ def test_narrow_and_medium_no_cache_countdown(monkeypatch: pytest.MonkeyPatch) -> None:
+@@ -306,7 +308,7 @@ def test_cache_countdown_content_row_contains_glyph_and_time(
+     assert path_row.kind == 'content'
+     visible = strip_ansi(path_row.content)
+     assert GLYPH_CACHE in visible
+-    assert '3m07s' in visible
++    assert '03:07' in visible
+ 
+ 
+ def test_cache_countdown_divider_threaded_into_borders(
+@@ -335,6 +337,94 @@ def test_cache_countdown_divider_threaded_into_borders(
+     assert cache_div_col in sep_row.ups
+ 
+ 
++def test_sep_rate_elbow_threaded_into_borders(monkeypatch: pytest.MonkeyPatch) -> None:
++    """The │ separator between 5h and 7d rate-limit segments in the wide path/model
++    row must have matching ┬/┴ elbows in the top border and separator_dim at the
++    same visual column.
++
++    Uses the default example session (seven_day.used_percentage=89) so the 7d vsep
++    is present in the content row. Uses render_layout to verify glyphs land at the
++    correct column position after border painting.
++    """
++    from helper import strip_ansi
++    _silence_dynamic(monkeypatch)
++    # The example session has both 5h and 7d buckets active, so the 7d vsep │ appears.
++    spec  = layout.build_wide(_view(), _tick(), 160, _r)
++    lines = [strip_ansi(ln) for ln in layout.render_layout(spec, _r)]
++
++    top_border_idx = next(i for i, row in enumerate(spec.rows) if row.kind == 'top_border')
++    content_idx    = top_border_idx + 1
++    sep_dim_idx    = next(
++        i for i, row in enumerate(spec.rows)
++        if row.kind == 'separator_dim' and i > top_border_idx
++    )
++    assert spec.rows[content_idx].kind == 'content', 'expected content row after top_border'
++
++    top_row = spec.rows[top_border_idx]
++    sep_row = spec.rows[sep_dim_idx]
++
++    # sep_rate_col (7d vsep │) is the last column in downs that sits past the
++    # session-id span (the session-id covers cols 4–39 at width 160, so we find
++    # the rightmost downs col as the one that is visible as ┬ in the top border).
++    full_line = lines[content_idx]
++    top_line  = lines[top_border_idx]
++    sep_line  = lines[sep_dim_idx]
++
++    # Locate the sep_rate_col: rightmost col in top_row.downs that actually has a ┬.
++    sep_rate_col = None
++    for col in top_row.downs:
++        if top_line[col - 1] in ('┬', '┼'):
++            sep_rate_col = col
++    assert sep_rate_col is not None, (
++        f'no ┬ found at any of top_border.downs {top_row.downs}\ntop: {top_line}'
++    )
++
++    # Verify content row has │ at sep_rate_col.
++    assert full_line[sep_rate_col - 1] == '│', (
++        f'expected │ in content at col {sep_rate_col}, got {full_line[sep_rate_col-1]!r}'
++    )
++
++    # Verify separator_dim has ┴ at sep_rate_col.
++    assert sep_line[sep_rate_col - 1] in ('┴', '┼'), (
++        f'expected ┴ in separator_dim at col {sep_rate_col}, got {sep_line[sep_rate_col-1]!r}'
++    )
++
++    # Verify downs and ups are consistent.
++    assert sep_rate_col in top_row.downs, f'sep_rate_col {sep_rate_col} not in top_border.downs {top_row.downs}'
++    assert sep_rate_col in sep_row.ups,   f'sep_rate_col {sep_rate_col} not in separator_dim.ups {sep_row.ups}'
++
++
++def test_sep_rate_no_elbow_when_seven_day_absent(monkeypatch: pytest.MonkeyPatch) -> None:
++    """When the 7-day bucket is absent (used_percentage=0, resets_at=0), the 7d vsep
++    does not appear in the content row and no stray ┬/┴ elbows are added for it."""
++    from helper import strip_ansi
++    from yas.session import RateBucket
++    import dataclasses
++    _silence_dynamic(monkeypatch)
++
++    # Build a session with no 7-day bucket active.
++    sess = _session()
++    zero_limits = dataclasses.replace(sess.rate_limits, seven_day=RateBucket(used_percentage=0, resets_at=0))
++    sess = dataclasses.replace(sess, rate_limits=zero_limits)
++
++    view = SessionView(sess, Config())
++    spec = layout.build_wide(view, _tick(), 160, _r)
++    lines = [strip_ansi(ln) for ln in layout.render_layout(spec, _r)]
++
++    top_border_idx = next(i for i, row in enumerate(spec.rows) if row.kind == 'top_border')
++    top_row = spec.rows[top_border_idx]
++
++    # When 7d is absent, sep_rate_col is None so fewer downs than with 7d active.
++    spec_with_7d = layout.build_wide(_view(), _tick(), 160, _r)
++    top_with_7d  = spec_with_7d.rows[next(i for i, r in enumerate(spec_with_7d.rows) if r.kind == 'top_border')]
++    assert len(top_row.downs) < len(top_with_7d.downs), (
++        f'expected fewer downs without 7d ({top_row.downs}) vs with 7d ({top_with_7d.downs})'
++    )
++
++    # No elbow gap: every ┬ has a │ below and every ┴ has a │ above.
++    assert _elbow_gaps(lines) == 0, 'stray ┬/┴ elbows with no matching │ when 7-day absent'
++
++
+ # ---------------------------------------------------------------------------
+ # Side-by-side composition (Group 6: tasks ⟷ subagents columns)
+ # ---------------------------------------------------------------------------
+@@ -503,7 +593,7 @@ def grid(line: str) -> dict[int, str]:
+             c += 2 if _is_wide(ch) else 1
+         return cols
+     g = [grid(ln) for ln in lines]
+-    vert = set('│┃┤├┼┊')  # ┊ = dashed two-column workflow divider
++    vert = set('│┃┤├┼┊┆')  # ┊ = dashed two-column workflow divider; ┆ = SEP_RATE rate-limit separator
+     join = set('┬┴┳┻')
+     gaps = 0
+     for i, cols in enumerate(g):
+@@ -617,3 +707,199 @@ def agent_rows(width: int) -> list[layout.RowSpec]:
+                    for row in stacked)
+     assert any('agent-0' in row.content for row in stacked)
+     assert any('agent-1' in row.content for row in stacked)
++
++
++# ---------------------------------------------------------------------------
++# Task 6.4 — cache_section sub-hour and over-hour format
++# ---------------------------------------------------------------------------
++
++def test_cache_section_sub_hour_format() -> None:
++    from helper import strip_ansi
++    text, _w = _r.cache_section(187.0, 38)
++    stripped = strip_ansi(text)
++    assert '03:07' in stripped
++
++
++def test_cache_section_over_hour_format() -> None:
++    from helper import strip_ansi
++    text, _w = _r.cache_section(3905.0, 38)
++    stripped = strip_ansi(text)
++    assert '1:05:05' in stripped
++
++
++# ---------------------------------------------------------------------------
++# Task 6.3 — Clear-timer degradation ladder and fresh-session preservation
++# ---------------------------------------------------------------------------
++
++def _inject_clear_epoch(view: SessionView, epoch: float | None) -> SessionView:
++    """Inject a clear_epoch value into a SessionView's __dict__ cache."""
++    view.__dict__['clear_epoch'] = epoch
++    return view
++
++
++def test_clear_timer_both_shown_at_ample_width(monkeypatch: pytest.MonkeyPatch) -> None:
++    """At a wide terminal both clear and session timers appear in the content row."""
++    from helper import strip_ansi
++    from yas.constants import GLYPH_CLEAR
++    _silence_dynamic(monkeypatch)
++    now = 1_750_000_000.0
++    clear_epoch = now - 18 * 60 - 33  # 18:33 ago
++    view = _view()
++    view.__dict__['now'] = now
++    view.__dict__['elapsed'] = '13:27'
++    _inject_clear_epoch(view, clear_epoch)
++
++    spec = layout.build_wide(view, _tick(), 160, _r)
++    # The path/model row (first content row)
++    content_rows = [r for r in spec.rows if r.kind == 'content']
++    top_content = content_rows[0].content
++    plain = strip_ansi(top_content)
++    assert GLYPH_CLEAR in top_content, 'GLYPH_CLEAR should appear in the elapsed cell'
++    assert '18:33' in plain, 'clear timer should appear'
++    assert '13:27' in plain, 'session timer should appear'
++
++
++def test_clear_timer_clear_first_in_cell(monkeypatch: pytest.MonkeyPatch) -> None:
++    """The clear timer is leftmost (lower index) in the content row plain text."""
++    from helper import strip_ansi
++    _silence_dynamic(monkeypatch)
++    now = 1_750_000_000.0
++    clear_epoch = now - 18 * 60 - 33
++    view = _view()
++    view.__dict__['now'] = now
++    view.__dict__['elapsed'] = '13:27'
++    _inject_clear_epoch(view, clear_epoch)
++
++    spec = layout.build_wide(view, _tick(), 160, _r)
++    content_rows = [r for r in spec.rows if r.kind == 'content']
++    plain = strip_ansi(content_rows[0].content)
++    assert plain.index('18:33') < plain.index('13:27')
++
++
++def test_clear_timer_fresh_session_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Fresh session (clear_epoch=None): top content row is byte-identical to the pre-change render."""
++    _silence_dynamic(monkeypatch)
++    view_fresh = _view()
++    view_fresh.__dict__['now'] = 1_750_000_000.0
++    view_fresh.__dict__['elapsed'] = '13:27'
++    _inject_clear_epoch(view_fresh, None)
++
++    view_baseline = _view()
++    view_baseline.__dict__['now'] = 1_750_000_000.0
++    view_baseline.__dict__['elapsed'] = '13:27'
++    # No clear_epoch injection → cached_property reads from transcript → None
++    # To get a true baseline we inject None too (same result)
++    view_baseline.__dict__['clear_epoch'] = None
++
++    spec_fresh    = layout.build_wide(view_fresh, _tick(), 160, _r)
++    spec_baseline = layout.build_wide(view_baseline, _tick(), 160, _r)
++
++    # Both specs should produce an identical first content row
++    rows_f = [r for r in spec_fresh.rows if r.kind == 'content']
++    rows_b = [r for r in spec_baseline.rows if r.kind == 'content']
++    assert rows_f[0].content == rows_b[0].content
++
++
++def test_clear_timer_degrades_to_clear_only_when_both_dont_fit(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """When width is too narrow for both timers but fits clear-only, only the clear timer renders."""
++    from helper import strip_ansi
++    from yas.constants import GLYPH_CLEAR
++    from yas.render.text import _visible_width
++    _silence_dynamic(monkeypatch)
++
++    # Measure the geometry so we find the exact shed boundary
++    sess       = _session()
++    h5h, h7d, _, right_w = _r.model_right_section(
++        sess.model_name, sess.model_thinking, sess.rate_limits, '', fast_mode=sess.fast_mode,
++    )
++    helper_w = _visible_width(h5h) + (4 + _visible_width(h7d) if h7d else 0)
++    vsep_w   = 5
++    now      = 1_750_000_000.0
++    clear_epoch = now - 18 * 60 - 33
++
++    _co, clear_only_w = _r.elapsed_section('', '18:33')
++    _cb, both_w       = _r.elapsed_section('13:27', '18:33')
++    clear_sw = clear_only_w + 3
++    both_sw  = both_w + 3
++
++    # Width where both fit (path_budget = 5 with both)
++    width_both = 5 + vsep_w + both_sw + helper_w + right_w + 4
++    # Width where only clear fits (path_budget = 5 with clear only) but not both
+
+### test/test_subagent_rows.py
+@@ -242,6 +242,68 @@ def test_shed_model_and_duration_always_kept() -> None:
+         assert '47s' in plain, f'width={w} dropped duration'
+ 
+ 
++# D2. Line-1 stats anchoring (stats_col) -------------------------------------
++
++def _cluster_dot_offset(line1: str) -> int:
++    """Content-offset of the stats cluster's leading `·`.
++
++    The line may carry a leading ` · ` *description* separator; the cluster's
++    own `·` is the last `·`-led group, so we find the rightmost one that begins
++    a `· ` token at/after a high column.
++    """
++    plain = strip_ansi(line1)
++    return plain.rfind('· ', plain.find('%') - 4 if '%' in plain else 0)
++
++
++def test_stats_col_anchors_cluster_dot_at_column() -> None:
++    # At a wide content width the cluster's leading `·` sits at exactly
++    # stats_col, with the description truncated before it.
++    sub = _make_sub(description='x' * 200, total_input=12345, output=678)
++    si  = (sub.total_input + sub.output) * 2
++    line1, _ = _two(sub, 156, session_inout=si, stats_col=100)
++    plain = strip_ansi(line1)
++    assert plain[100] == '·'              # cluster dot anchored at stats_col
++    assert _visible_width(line1) == 156   # still fills the content edge
++    assert '…' in plain                   # description truncated before stats
++
++
++def test_stats_col_none_keeps_right_alignment() -> None:
++    # Default (no stats_col) is unchanged: the cluster right-aligns to the edge
++    # so its leading `·` is well past stats_col=100 at this width.
++    sub = _make_sub(description='short', total_input=12345, output=678)
++    si  = (sub.total_input + sub.output) * 2
++    line1, _ = _two(sub, 156, session_inout=si)
++    plain = strip_ansi(line1)
++    assert plain[100] != '·'              # not anchored at 100
++    assert _cluster_dot_offset(line1) > 100  # cluster pushed to the right edge
++    assert _visible_width(line1) == 156
++
++
++def test_stats_col_narrow_falls_back_to_right_align() -> None:
++    # When even the model-only cluster cannot fit to the right of stats_col
++    # (model-only is `· <model>` = 8 cols, so content width 105 leaves only 5
++    # cols of slack), the row falls back to right-alignment exactly as if
++    # stats_col were None. This is the defensive guard for narrow rows.
++    sub = _make_sub(description='short', total_input=12345, output=678)
++    si  = (sub.total_input + sub.output) * 2
++    line1_anchor, _ = _two(sub, 105, session_inout=si, stats_col=100)
++    line1_default, _ = _two(sub, 105, session_inout=si)
++    assert strip_ansi(line1_anchor) == strip_ansi(line1_default)
++    assert strip_ansi(line1_anchor)[100] != '·'
++
++
++def test_stats_col_richest_cluster_that_fits_at_anchor() -> None:
++    # Slack to the right of the anchor governs which cluster is chosen. With
++    # generous slack the full share%+tok+model cluster anchors at stats_col.
++    sub = _make_sub(total_input=12345, output=678, model='claude-sonnet-4-6')
++    si  = (sub.total_input + sub.output) * 2
++    line1, _ = _two(sub, 156, session_inout=si, stats_col=100)
++    plain = strip_ansi(line1)
++    tok   = fmt_tok(sub.total_input)
++    assert plain[100] == '·'
++    assert '%' in plain and tok in plain and 'sonnet' in plain
++
++
+ # E. Done vs running treatment -----------------------------------------------
+ 
+ def _make_done_sub(**kw) -> RunningSubagent:
+
+===== P014 | repo tencentcloudstack/terraform-provider-tencentcloud | PR #4186: feat(teo): add tencentcloud_teo_function_replica resource | capacidade: teo-edge-kv
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Resource schema definition
+
+The resource `tencentcloud_teo_edge_kv` SHALL define the following schema:
+
+- `zone_id` (Required, ForceNew, String): 站点 ID
+- `namespace` (Required, ForceNew, String): 命名空间名称
+- `key` (Required, ForceNew, String): 键名，长度为 1-512 个字符，允许的字符为字母、数字、中划线和下划线
+- `value` (Required, String): 键值，不能为空，最大支持 1 MB
+- `expiration` (Optional, Int): 键值对的过期时间，绝对时间，Unix 时间戳，取值必须大于等于当前时间 + 60
+- `expiration_ttl` (Optional, Int): 键值对的存活时长，相对时间，单位为秒，取值范围大于等于 60
+
+The resource ID SHALL be composed of `zone_id`, `namespace`, and `key` joined by `tccommon.FILED_SP` separator.
+
+#### Scenario: Schema fields are correctly defined
+- **WHEN** user defines a `tencentcloud_teo_edge_kv` resource in HCL
+- **THEN** Terraform SHALL validate that `zone_id`, `namespace`, `key`, and `value` are provided as required fields
+
+#### Scenario: ForceNew triggers resource recreation
+- **WHEN** user changes `zone_id`, `namespace`, or `key` in the configuration
+- **THEN** Terraform SHALL destroy the existing resource and create a new one
+
+### Requirement: Create operation writes KV data
+
+The resource Create method SHALL call the `EdgeKVPut` API with the following parameter mapping:
+- `zone_id` → `request.ZoneId`
+- `namespace` → `request.Namespace`
+- `key` → `request.Key`
+- `value` → `request.Value`
+- `expiration` → `request.Expiration` (if set)
+- `expiration_ttl` → `request.ExpirationTTL` (if set)
+
+The Create method SHALL use `tccommon.ReadRetryTimeout` for retry logic. After successful creation, the resource ID SHALL be set to `zone_id#namespace#key`.
+
+#### Scenario: Successful KV data write
+- **WHEN** user applies a configuration with valid `zone_id`, `namespace`, `key`, and `value`
+- **THEN** the resource SHALL call EdgeKVPut API and set the composite ID
+
+#### Scenario: Create with expiration parameters
+- **WHEN** user specifies `expiration` or `expiration_ttl`
+- **THEN** the resource SHALL pass these values to the EdgeKVPut API
+
+#### Scenario: Create API returns error
+- **WHEN** EdgeKVPut API returns an error
+- **THEN** the resource SHALL wrap the error with `tccommon.RetryError()` and return it
+
+### Requirement: Read operation queries KV data
+
+The resource Read method SHALL call the `EdgeKVGet` API with:
+- `zone_id` → `request.ZoneId`
+- `namespace` → `request.Namespace`
+- `[key]` → `request.Keys` (single-element array)
+
+The Read method SHALL parse the composite ID to extract `zone_id`, `namespace`, and `key`. If the returned Data is empty or the key's Value is empty string, the resource SHALL be marked as deleted by calling `d.SetId("")`.
+
+#### Scenario: Successful KV data read
+- **WHEN** the KV key exists
+- **THEN** the resource SHALL set `value` from the response Data
+
+#### Scenario: KV key does not exist
+- **WHEN** EdgeKVGet returns empty Data or empty Value for the key
+- **THEN** the resource SHALL call `d.SetId("")` to mark it as deleted
+
+#### Scenario: Read parses composite ID
+- **WHEN** Read method is called
+- **THEN** it SHALL split `d.Id()` by `tccommon.FILED_SP` to extract `zone_id`, `namespace`, and `key`
+
+### Requirement: Delete operation removes KV data
+
+The resource Delete method SHALL call the `EdgeKVDelete` API with:
+- `zone_id` → `request.ZoneId`
+- `namespace` → `request.Namespace`
+- `[key]` → `request.Keys` (single-element array)
+
+The Delete method SHALL use `tccommon.ReadRetryTimeout` for retry logic.
+
+#### Scenario: Successful KV data deletion
+- **WHEN** user destroys the resource
+- **THEN** the resource SHALL call EdgeKVDelete API to remove the KV data
+
+#### Scenario: Delete API returns error
+- **WHEN** EdgeKVDelete API returns an error
+- **THEN** the resource SHALL wrap the error with `tccommon.RetryError()` and return it
+
+### Requirement: Update method enforces immutability
+
+The resource Update method SHALL check if any of `value`, `expiration`, `expiration_ttl` have changed. If any of these fields are in the change set, the Update method SHALL return an error indicating that the field cannot be modified in-place.
+
+#### Scenario: Attempt to modify immutable field
+- **WHEN** user changes `value`, `expiration`, or `expiration_ttl` without changing ForceNew fields
+- **THEN** the resource SHALL return an error stating the field is immutable
+
+### Requirement: Import support
+
+The resource SHALL support import using the composite ID format `zone_id#namespace#key`.
+
+#### Scenario: Import existing KV data
+- **WHEN** user runs `terraform import tencentcloud_teo_edge_kv.example zone_id#namespace#key`
+- **THEN** the resource SHALL read the KV data and populate the state
+
+### Requirement: Provider registration
+
+The resource SHALL be registered in `tencentcloud/provider.go` and documented in `tencentcloud/provider.md`.
+
+#### Scenario: Resource is available in provider
+- **WHEN** user references `tencentcloud_teo_edge_kv` in their configuration
+- **THEN** Terraform SHALL recognize it as a valid resource type
+
+### Requirement: Unit tests with gomonkey mock
+
+The resource SHALL have unit tests in `resource_tc_teo_edge_kv_test.go` that use gomonkey to mock the cloud API calls. Tests SHALL cover Create, Read, and Delete operations.
+
+#### Scenario: Unit test for Create
+- **WHEN** unit test for Create is executed
+- **THEN** it SHALL mock EdgeKVPut API and verify the resource is created correctly
+
+#### Scenario: Unit test for Read
+- **WHEN** unit test for Read is executed
+- **THEN** it SHALL mock EdgeKVGet API and verify state is populated correctly
+
+#### Scenario: Unit test for Delete
+- **WHEN** unit test for Delete is executed
+- **THEN** it SHALL mock EdgeKVDelete API and verify the resource is deleted correctly
+
+--- ARQUIVOS DO PR (14)
+added     +3     -0     .changelog/4186.txt
+added     +2     -0     openspec/changes/archive/2026-06-03-add-teo-function-replica-resource/.openspec.yaml
+added     +57    -0     openspec/changes/archive/2026-06-03-add-teo-function-replica-resource/design.md
+added     +26    -0     openspec/changes/archive/2026-06-03-add-teo-function-replica-resource/proposal.md
+added     +86    -0     openspec/changes/archive/2026-06-03-add-teo-function-replica-resource/specs/teo-function-replica/spec.md
+added     +21    -0     openspec/changes/archive/2026-06-03-add-teo-function-replica-resource/tasks.md
+added     +86    -0     openspec/specs/teo-function-replica/spec.md
+modified  +1     -0     tencentcloud/provider.go   <== código ligado à spec
+modified  +1     -0     tencentcloud/provider.md
+added     +302   -0     tencentcloud/services/teo/resource_tc_teo_function_replica.go
+added     +21    -0     tencentcloud/services/teo/resource_tc_teo_function_replica.md
+added     +271   -0     tencentcloud/services/teo/resource_tc_teo_function_replica_test.go
+added     +51    -0     website/docs/r/teo_function_replica.html.markdown
+modified  +3     -0     website/tencentcloud.erb
+--- DIFF DO CÓDIGO LIGADO
+### tencentcloud/provider.go
+@@ -2120,6 +2120,7 @@ func Provider() *schema.Provider {
+ 			"tencentcloud_teo_function_rule":                                                        teo.ResourceTencentCloudTeoFunctionRule(),
+ 			"tencentcloud_teo_function_rule_priority":                                               teo.ResourceTencentCloudTeoFunctionRulePriority(),
+ 			"tencentcloud_teo_function_runtime_environment":                                         teo.ResourceTencentCloudTeoFunctionRuntimeEnvironment(),
++			"tencentcloud_teo_function_replica":                                                     teo.ResourceTencentCloudTeoFunctionReplica(),
+ 			"tencentcloud_teo_security_policy_config":                                               teo.ResourceTencentCloudTeoSecurityPolicyConfig(),
+ 			"tencentcloud_teo_web_security_template":                                                teo.ResourceTencentCloudTeoWebSecurityTemplate(),
+ 			"tencentcloud_teo_dns_record":                                                           teo.ResourceTencentCloudTeoDnsRecord(),
+
+===== P015 | repo datenoio/iterabledata | PR #11: Add LLM readiness roadmap: catalog, agent tools, and AI operations | capacidade: vortex-format
+--- SPEC VIVA
+# vortex-format Specification
+
+## Purpose
+TBD - created by archiving change add-vortex-format. Update Purpose after archive.
+## Requirements
+### Requirement: Vortex File Format Support
+The system SHALL support reading and writing Vortex columnar data files, providing a unified iterator-based interface consistent with other formats in the library.
+
+#### Scenario: Read Vortex file
+- **WHEN** opening a valid `.vortex` or `.vtx` file with `open_iterable()`
+- **THEN** it yields dictionary records representing rows from the Vortex file
+
+#### Scenario: Write Vortex file
+- **WHEN** writing dictionary records to a `.vortex` or `.vtx` file
+- **THEN** it creates a valid Vortex file containing the data
+
+#### Scenario: Automatic format detection by extension
+- **WHEN** using `open_iterable()` on a file with `.vortex` or `.vtx` extension
+- **THEN** it automatically selects `VortexIterable` without explicit format specification
+
+#### Scenario: Automatic format detection by magic number
+- **WHEN** using `open_iterable()` on a file starting with `VTXF` magic bytes
+- **THEN** it automatically detects and selects `VortexIterable` even without extension
+
+#### Scenario: Read-write roundtrip
+- **WHEN** writing data to a Vortex file and then reading it back
+- **THEN** the read data matches the original written data
+
+#### Scenario: Bulk operations
+- **WHEN** using `read_bulk()` or `write_bulk()` methods
+- **THEN** it efficiently processes multiple records in batches
+
+#### Scenario: Iterator interface
+- **WHEN** iterating over a Vortex file using `for row in iterable:`
+- **THEN** it yields dictionary records one at a time
+
+#### Scenario: Reset functionality
+- **WHEN** calling `reset()` on a Vortex iterable
+- **THEN** subsequent reads start from the beginning of the file
+
+#### Scenario: Totals support
+- **WHEN** calling `totals()` on a Vortex file
+- **THEN** it returns the total number of rows in the file
+
+#### Scenario: Handle missing dependency
+- **WHEN** `vortex-data` package is not installed
+- **THEN** it raises an `ImportError` with a helpful message instructing to install `iterabledata[vortex]`
+
+#### Scenario: Flat format indicator
+- **WHEN** checking if Vortex format is flat-only
+- **THEN** `is_flatonly()` returns `True` indicating tabular structure
+
+#### Scenario: Context manager support
+- **WHEN** using `with open_iterable('file.vortex') as source:`
+- **THEN** the file is properly closed after the context exits
+
+
+--- ARQUIVOS DO PR (380)
+modified  +1     -0     .cursor/skills/README.md
+added     +80    -0     .cursor/skills/ai-integration/SKILL.md
+added     +51    -0     .github/ISSUE_TEMPLATE/bug_report.yml
+added     +31    -0     .github/ISSUE_TEMPLATE/feature_request.yml
+added     +13    -0     .github/pull_request_template.md
+added     +22    -0     .github/workflows/ai-integration.yml
+modified  +43    -3     .github/workflows/ci.yml
+modified  +1     -0     .github/workflows/release.yml
+modified  +6     -6     .pre-commit-config.yaml
+modified  +22    -1     AGENTS.md
+modified  +42    -0     CHANGELOG.md
+added     +49    -0     CONTRIBUTING.md
+modified  +20    -5     IMPROVEMENT_PLAN.md
+modified  +54    -2     README.md
+added     +2958  -0     dev/formats.json
+added     +116   -0     dev/scripts/coverage_by_package.py
+added     +27    -0     dev/scripts/export_formats_json.py
+modified  +86    -120   dev/scripts/find_missing_fixtures.py
+added     +62    -0     dev/scripts/generate_format_doc_stubs.py
+added     +70    -0     dev/scripts/generate_llms_txt.py
+added     +74    -0     docs/FORMAT_PAGE_TEMPLATE.md
+modified  +1     -0     docs/GITHUB_PAGES_SETUP.md
+modified  +176   -1     docs/docs/api/ai.md
+modified  +1     -1     docs/docs/api/async.md
+modified  +1     -1     docs/docs/api/capabilities.md
+added     +73    -0     docs/docs/api/catalog.md
+modified  +4     -4     docs/docs/api/convert.md
+modified  +1     -1     docs/docs/api/open-iterable.md
+modified  +22    -1     docs/docs/api/ops-inspect.md
+modified  +6     -0     docs/docs/api/ops-stats.md
+modified  +1     -1     docs/docs/api/plugins.md
+added     +73    -0     docs/docs/api/tools.md
+renamed   +21    -22    docs/docs/formats/arc.md
+added     +40    -0     docs/docs/formats/arff.md
+added     +40    -0     docs/docs/formats/bam.md
+added     +40    -0     docs/docs/formats/cdf.md
+added     +205   -0     docs/docs/formats/ckpt.md
+added     +205   -0     docs/docs/formats/copy.md
+added     +205   -0     docs/docs/formats/der.md
+added     +205   -0     docs/docs/formats/dta.md
+added     +40    -0     docs/docs/formats/dxf.md
+added     +34    -0     docs/docs/formats/fa.md
+added     +205   -0     docs/docs/formats/fbs.md
+added     +205   -0     docs/docs/formats/flexbuf.md
+added     +34    -0     docs/docs/formats/fq.md
+added     +40    -0     docs/docs/formats/gexf.md
+added     +205   -0     docs/docs/formats/gpkg.md
+added     +34    -0     docs/docs/formats/gpx.md
+added     +40    -0     docs/docs/formats/graphml.md
+added     +40    -0     docs/docs/formats/gv.md
+added     +205   -0     docs/docs/formats/htm.md
+added     +205   -0     docs/docs/formats/ics.md
+modified  +193   -166   docs/docs/formats/index.md
+modified  +1     -1     docs/docs/formats/json.md
+added     +40    -0     docs/docs/formats/kmz.md
+added     +34    -0     docs/docs/formats/libsvm.md
+added     +205   -0     docs/docs/formats/log.md
+modified  +164   -164   docs/docs/formats/ltsv.md
+added     +205   -0     docs/docs/formats/mht.md
+added     +40    -0     docs/docs/formats/mvt.md
+added     +40    -0     docs/docs/formats/n3.md
+added     +40    -0     docs/docs/formats/nc.md
+added     +34    -0     docs/docs/formats/npy.md
+added     +205   -0     docs/docs/formats/nq.md
+added     +205   -0     docs/docs/formats/nt.md
+added     +40    -0     docs/docs/formats/pcap.md
+added     +205   -0     docs/docs/formats/rda.md
+added     +205   -0     docs/docs/formats/rdf.md
+added     +205   -0     docs/docs/formats/rio.md
+added     +40    -0     docs/docs/formats/rss.md
+added     +40    -0     docs/docs/formats/sam.md
+added     +205   -0     docs/docs/formats/sav.md
+added     +205   -0     docs/docs/formats/seq.md
+added     +205   -0     docs/docs/formats/shp.md
+added     +205   -0     docs/docs/formats/sql.md
+added     +40    -0     docs/docs/formats/topojson.md
+added     +40    -0     docs/docs/formats/trig.md
+added     +40    -0     docs/docs/formats/trix.md
+added     +205   -0     docs/docs/formats/ubj.md
+added     +205   -0     docs/docs/formats/vtx.md
+added     +40    -0     docs/docs/formats/xlsb.md
+modified  +1     -1     docs/docs/formats/zipxml.md
+modified  +2     -2     docs/docs/getting-started/migration-guide.md
+modified  +6     -6     docs/docs/getting-started/performance.md
+added     +76    -0     docs/docs/integrations/BUILDING_AGENTS.md
+added     +58    -0     docs/docs/integrations/MCP.md
+modified  +30    -0     docs/integrations/AI_FRAMEWORKS.md
+modified  +36    -38    docs/integrations/CLAUDE.md
+modified  +29    -48    docs/integrations/GEMINI.md
+modified  +25    -40    docs/integrations/OPENAI.md
+modified  +2     -0     docs/sidebars.js
+modified  +13    -1     examples/ai/README.md
+added     +23    -0     examples/ai/anthropic_tools.py
+added     +183   -0     examples/ai/generate_blocks.py
+added     +21    -0     examples/ai/langchain_agent.py
+added     +27    -0     examples/ai/openai_function_calling.py
+added     +13    -0     examples/ai/plan_conversion.py
+modified  +1     -1     iterable/__init__.py
+modified  +3     -2     iterable/ai/__init__.py
+added     +773   -0     iterable/ai/blocks.py
+added     +62    -0     iterable/ai/cache.py
+added     +173   -0     iterable/ai/context.py
+modified  +501   -6     iterable/ai/doc.py
+added     +155   -0     iterable/ai/fileinfo.py
+added     +211   -0     iterable/ai/filter.py
+added     +188   -0     iterable/ai/models.py
+added     +129   -0     iterable/ai/plan.py
+added     +152   -0     iterable/ai/progress.py
+added     +14    -0     iterable/ai/prompts/__init__.py
+added     +9     -0     iterable/ai/prompts/documentation.txt
+added     +16    -0     iterable/ai/prompts/plan_conversion.txt
+added     +17    -0     iterable/ai/prompts/suggest_transform.txt
+added     +13    -0     iterable/ai/prompts/translate_filter.txt
+modified  +508   -14    iterable/ai/providers.py
+added     +139   -0     iterable/ai/sampling.py
+added     +72    -0     iterable/ai/suggest.py
+modified  +5     -5     iterable/async_base.py
+modified  +15    -149   iterable/base.py
+added     +62    -0     iterable/catalog/__init__.py
+added     +75    -0     iterable/codec_base.py
+removed   +0     -30    iterable/codecs/7zcodec.py_
+added     +17    -0     iterable/codecs/_stream.py
+modified  +4     -10    iterable/codecs/bz2codec.py
+modified  +4     -12    iterable/codecs/gzipcodec.py
+modified  +10    -7     iterable/codecs/zstdcodec.py
+added     +72    -0     iterable/dataframe_adapters.py
+modified  +1     -1     iterable/datatypes/annotatedcsv.py
+modified  +1     -1     iterable/datatypes/apachelog.py
+modified  +1     -1     iterable/datatypes/arff.py
+modified  +1     -1     iterable/datatypes/arrow.py
+modified  +1     -1     iterable/datatypes/asn1.py
+modified  +117   -5     iterable/datatypes/avro.py
+modified  +1     -1     iterable/datatypes/beam.py
+modified  +1     -1     iterable/datatypes/bencode.py
+modified  +1     -1     iterable/datatypes/bsonf.py
+modified  +3     -3     iterable/datatypes/capnp.py
+modified  +1     -1     iterable/datatypes/cbor.py
+modified  +1     -1     iterable/datatypes/cdx.py
+modified  +1     -1     iterable/datatypes/cef.py
+modified  +1     -1     iterable/datatypes/csv.py
+modified  +2     -2     iterable/datatypes/csvw.py
+modified  +1     -1     iterable/datatypes/dbf.py
+modified  +1     -1     iterable/datatypes/delta.py
+modified  +28    -3     iterable/datatypes/duckdb.py
+modified  +1     -1     iterable/datatypes/dxf.py
+modified  +1     -1     iterable/datatypes/edn.py
+modified  +1     -1     iterable/datatypes/eml.py
+modified  +1     -1     iterable/datatypes/feed.py
+modified  +10    -3     iterable/datatypes/flatbuffers.py
+modified  +1     -1     iterable/datatypes/flexbuffers.py
+modified  +1     -1     iterable/datatypes/flink.py
+modified  +1     -1     iterable/datatypes/fwf.py
+modified  +1     -1     iterable/datatypes/gelf.py
+modified  +1     -1     iterable/datatypes/geojson.py
+modified  +2     -2     iterable/datatypes/geopackage.py
+modified  +2     -2     iterable/datatypes/gml.py
+modified  +1     -1     iterable/datatypes/hdf5.py
+modified  +1     -1     iterable/datatypes/hocon.py
+modified  +1     -1     iterable/datatypes/html.py
+modified  +9     -2     iterable/datatypes/hudi.py
+modified  +1     -1     iterable/datatypes/ical.py
+modified  +3     -3     iterable/datatypes/iceberg.py
+modified  +1     -1     iterable/datatypes/ilp.py
+modified  +1     -1     iterable/datatypes/ini.py
+modified  +1     -1     iterable/datatypes/ion.py
+modified  +2     -2     iterable/datatypes/json.py
+modified  +1     -1     iterable/datatypes/jsonl.py
+modified  +1     -1     iterable/datatypes/jsonld.py
+modified  +1     -1     iterable/datatypes/kafka.py
+modified  +1     -1     iterable/datatypes/kml.py
+modified  +25    -3     iterable/datatypes/lance.py
+modified  +1     -1     iterable/datatypes/ldif.py
+modified  +1     -1     iterable/datatypes/libsvm.py
+modified  +1     -1     iterable/datatypes/ltsv.py
+modified  +1     -1     iterable/datatypes/mbox.py
+modified  +1     -1     iterable/datatypes/mhtml.py
+modified  +1     -1     iterable/datatypes/msgpack.py
+modified  +1     -1     iterable/datatypes/mvt.py
+modified  +2     -2     iterable/datatypes/mysqldump.py
+modified  +1     -1     iterable/datatypes/netcdf.py
+modified  +1     -1     iterable/datatypes/nquads.py
+modified  +2     -2     iterable/datatypes/ntriples.py
+modified  +2     -2     iterable/datatypes/numpy.py
+modified  +1     -1     iterable/datatypes/ods.py
+modified  +42    -11    iterable/datatypes/orc.py
+modified  +1     -1     iterable/datatypes/parquet.py
+modified  +37    -26    iterable/datatypes/pcap.py
+modified  +1     -1     iterable/datatypes/pgcopy.py
+modified  +6     -9     iterable/datatypes/picklef.py
+modified  +1     -1     iterable/datatypes/protobuf.py
+modified  +2     -2     iterable/datatypes/psv.py
+modified  +1     -1     iterable/datatypes/pulsar.py
+modified  +1     -1     iterable/datatypes/px.py
+modified  +1     -1     iterable/datatypes/rdata.py
+modified  +2     -2     iterable/datatypes/rdfxml.py
+modified  +1     -1     iterable/datatypes/rds.py
+modified  +1     -1     iterable/datatypes/recordio.py
+modified  +1     -1     iterable/datatypes/sas.py
+modified  +1     -1     iterable/datatypes/sequencefile.py
+modified  +1     -1     iterable/datatypes/shapefile.py
+modified  +1     -1     iterable/datatypes/smile.py
+modified  +1     -1     iterable/datatypes/spss.py
+modified  +28    -3     iterable/datatypes/sqlite.py
+modified  +1     -1     iterable/datatypes/stata.py
+modified  +1     -1     iterable/datatypes/tfrecord.py
+modified  +1     -1     iterable/datatypes/thrift.py
+modified  +1     -1     iterable/datatypes/toml.py
+modified  +1     -1     iterable/datatypes/topojson.py
+modified  +3     -3     iterable/datatypes/turtle.py
+modified  +1     -1     iterable/datatypes/txt.py
+modified  +1     -1     iterable/datatypes/ubjson.py
+modified  +1     -1     iterable/datatypes/vcf.py
+modified  +1     -1     iterable/datatypes/vortex.py   <== código ligado à spec
+modified  +1     -1     iterable/datatypes/warc.py
+modified  +1     -1     iterable/datatypes/xls.py
+modified  +1     -1     iterable/datatypes/xlsx.py
+modified  +4     -4     iterable/datatypes/xml.py
+modified  +1     -1     iterable/datatypes/yaml.py
+modified  +70    -27    iterable/datatypes/zipped.py
+modified  +10    -5     iterable/datatypes/zipxml.py
+modified  +1     -1     iterable/engines/duckdb.py
+modified  +1     -278   iterable/exceptions.py
+added     +279   -0     iterable/guidance.py
+modified  +16    -6     iterable/helpers/capabilities.py
+added     +95    -0     iterable/helpers/content_detection.py
+modified  +450   -1362  iterable/helpers/detect.py   <== código ligado à spec
+added     +782   -0     iterable/helpers/format_registry.py
+added     +377   -0     iterable/helpers/open_iterable.py
+modified  +62    -72    iterable/helpers/utils.py
+added     +56    -0     iterable/ingest/_sql_base.py
+modified  +13    -33    iterable/ingest/mysql.py
+modified  +11    -30    iterable/ingest/postgresql.py
+modified  +11    -29    iterable/ingest/sqlite.py
+added     +5     -0     iterable/mcp/__init__.py
+added     +104   -0     iterable/mcp/server.py
+modified  +55    -12    iterable/ops/inspect.py
+modified  +47    -14    iterable/ops/stats.py
+modified  +51    -0     iterable/ops/transform.py
+added     +36    -0     iterable/tools/__init__.py
+added     +217   -0     iterable/tools/_core.py
+added     +20    -0     iterable/tools/_result.py
+added     +38    -0     iterable/tools/langchain.py
+added     +259   -0     iterable/tools/schemas.py
+added     +62    -0     llms.txt
+added     +44    -0     openspec/changes/LLM_READINESS_ROADMAP.md
+added     +45    -0     openspec/changes/add-ai-block-documentation/design.md
+added     +41    -0     openspec/changes/add-ai-block-documentation/proposal.md
+added     +134   -0     openspec/changes/add-ai-block-documentation/specs/ai/spec.md
+added     +34    -0     openspec/changes/add-ai-block-documentation/specs/ops-stats/spec.md
+added     +31    -0     openspec/changes/add-ai-block-documentation/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/design.md
+added     +32    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/proposal.md
+added     +75    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/agent-tools/spec.md
+added     +18    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/specs/ai/spec.md
+added     +64    -0     openspec/changes/archive/2026-06-17-add-agent-tool-surfaces/tasks.md
+added     +85    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/design.md
+added     +38    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/proposal.md
+added     +52    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/specs/format-registry/spec.md
+added     +19    -0     openspec/changes/archive/2026-06-17-add-format-metadata-registry/tasks.md
+added     +36    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/design.md
+added     +33    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/proposal.md
+added     +23    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/format-registry/spec.md
+added     +55    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/specs/llm-catalog/spec.md
+added     +50    -0     openspec/changes/archive/2026-06-17-add-llm-catalog/tasks.md
+added     +38    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/design.md
+added     +30    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/proposal.md
+added     +94    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ai/spec.md
+added     +14    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/specs/ops-filter/spec.md
+added     +76    -0     openspec/changes/archive/2026-06-17-expand-ai-operations/tasks.md
+added     +41    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/design.md
+added     +40    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/proposal.md
+added     +55    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ai/spec.md
+added     +52    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/llm-discoverability/spec.md
+added     +31    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/specs/ops-inspect/spec.md
+added     +51    -0     openspec/changes/archive/2026-06-17-fix-ai-llm-foundation/tasks.md
+added     +91    -0     openspec/specs/agent-tools/spec.md
+modified  +99    -1     openspec/specs/ai/spec.md
+added     +64    -0     openspec/specs/format-registry/spec.md
+added     +61    -0     openspec/specs/llm-catalog/spec.md
+modified  +13    -0     openspec/specs/ops-filter/spec.md
+modified  +12    -3     openspec/specs/ops-inspect/spec.md
+modified  +33    -0     pyproject.toml
+removed   +0     -5     testdata/test_write_annotated.csv
+added     +94    -0     tests/conformance_fixtures.py
+modified  +12    -5     tests/conftest.py
+renamed   +0     -0     tests/fixtures/2cols6rows.vortex
+added     +0     -0     tests/fixtures/2cols6rows_flat_converted.csv.gz
+added     +0     -0     tests/fixtures/2cols6rows_infer.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_infer.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.arrow
+added     +0     -0     tests/fixtures/2cols6rows_test.avro
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.br
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.bz2
+added     +0     -0     tests/fixtures/2cols6rows_test.csv.gz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.lz4
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.snappy
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.xz
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csv.zst
+renamed   +0     -0     tests/fixtures/2cols6rows_test.csvw
+renamed   +0     -0     tests/fixtures/2cols6rows_test.fwf
+renamed   +0     -0     tests/fixtures/2cols6rows_test.geojson
+renamed   +0     -0     tests/fixtures/2cols6rows_test.gml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonl
+renamed   +0     -0     tests/fixtures/2cols6rows_test.jsonld
+renamed   +0     -0     tests/fixtures/2cols6rows_test.kml
+renamed   +0     -0     tests/fixtures/2cols6rows_test.msgpack
+added     +0     -0     tests/fixtures/2cols6rows_test.orc
+renamed   +0     -0     tests/fixtures/2cols6rows_test.parquet
+renamed   +0     -0     tests/fixtures/2cols6rows_test.pickle
+renamed   +0     -0     tests/fixtures/2cols6rows_test.yaml
+added     +36    -0     tests/fixtures/README.md
+added     +4     -0     tests/fixtures/ai_responses/README.md
+renamed   +0     -0     tests/fixtures/books_converted.csv.gz
+added     +0     -0     tests/fixtures/coerce.avro
+renamed   +0     -0     tests/fixtures/invalid.avro
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.csv.gz
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.jsonl
+renamed   +0     -0     tests/fixtures/ru_cp1251_comma_converted.parquet
+renamed   +0     -0     tests/fixtures/sample.gpx
+renamed   +0     -0     tests/fixtures/sample.kmz
+added     +0     -0     tests/fixtures/special_names.orc
+renamed   +0     -0     tests/fixtures/test_7z.7z
+renamed   +0     -0     tests/fixtures/test_7z_read.7z
+renamed   +0     -0     tests/fixtures/test_7z_reset.7z
+renamed   +0     -0     tests/fixtures/test_annotated.csv
+renamed   +0     -0     tests/fixtures/test_annotated_bulk.csv
+renamed   +0     -0     tests/fixtures/test_annotated_defaults.csv
+renamed   +0     -0     tests/fixtures/test_annotated_types.csv
+renamed   +0     -0     tests/fixtures/test_asn1_read.der
+renamed   +0     -0     tests/fixtures/test_asn1_reset.der
+renamed   +0     -0     tests/fixtures/test_debug.warc
+renamed   +0     -0     tests/fixtures/test_ilp.ilp
+renamed   +0     -0     tests/fixtures/test_ilp_bulk.ilp
+added     +0     -0     tests/fixtures/test_simple.jsonl
+renamed   +0     -0     tests/fixtures/test_simple.warc
+renamed   +0     -0     tests/fixtures/test_vortex.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_bulk.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_context.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_count.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_iterate.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_next.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_readone.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_reset.vortex
+renamed   +0     -0     tests/fixtures/test_vortex_totals.vortex
+renamed   +0     -0     tests/fixtures/test_write_annotated.csv
+renamed   +0     -0     tests/fixtures/test_zipxml.zip
+added     +298   -0     tests/fixtures/tool_schemas/openai_functions.json
+added     +408   -0     tests/test_ai_blocks.py
+added     +71    -0     tests/test_ai_conformance.py
+added     +47    -0     tests/test_ai_context.py
+added     +42    -0     tests/test_ai_filter.py
+added     +44    -0     tests/test_ai_integration.py
+added     +30    -0     tests/test_ai_plan.py
+added     +52    -0     tests/test_ai_providers.py
+added     +29    -0     tests/test_ai_suggest.py
+modified  +45    -0     tests/test_async_support.py
+modified  +46    -0     tests/test_avro.py
+added     +68    -0     tests/test_catalog.py
+modified  +1     -3     tests/test_db_engines.py
+modified  +19    -0     tests/test_duckdb.py
+modified  +73    -47    tests/test_format_conformance.py
+added     +125   -0     tests/test_format_registry.py
+modified  +16    -0     tests/test_ingest.py
+added     +49    -0     tests/test_ingest_identifiers.py
+added     +33    -0     tests/test_llms_txt.py
+added     +37    -0     tests/test_mcp_server.py
+modified  +51    -0     tests/test_ops_inspect.py
+modified  +30    -2     tests/test_orc.py
+modified  +2     -2     tests/test_parquet.py
+modified  +21    -4     tests/test_pcap.py
+modified  +27    -0     tests/test_sqlite.py
+added     +181   -0     tests/test_tools.py
+added     +156   -0     tests/test_uncovered_formats.py
+modified  +52    -105   tests/test_zipxml.py
+added     +1     -0     tests/testdata
+removed   +0     -0     tests/testdata/2cols6rows_flat_converted.csv.gz
+removed   +0     -0     tests/testdata/2cols6rows_test.csv.gz
+removed   +0     -5     tests/testdata/test_annotated_types.csv
+removed   +0     -1     tests/testdata/test_pipeline_atomic_fail.jsonl
+--- DIFF DO CÓDIGO LIGADO
+### iterable/datatypes/vortex.py
+@@ -30,7 +30,7 @@ class VortexIterable(BaseFileIterable):
+ 
+     def __init__(
+         self,
+-        filename: str = None,
++        filename: str | None = None,
+         stream: typing.IO[Any] | None = None,
+         mode: str = "r",
+         codec: BaseCodec | None = None,
+
+### iterable/helpers/detect.py
+@@ -1,1362 +1,450 @@
+-from __future__ import annotations
+-
+-import importlib
+-from typing import Any, Literal, TypedDict
+-
+-import chardet
+-
+-from ..base import BaseCodec, BaseIterable
+-
+-# Database driver registry helpers. Imported at module level (the db package is
+-# lightweight; heavy driver imports are internally guarded) so they can be
+-# patched as ``iterable.helpers.detect.get_driver`` / ``is_database_engine``.
+-from ..db import get_driver, is_database_engine
+-
+-# Re-exported so callers/tests can reference and patch them as
+-# ``iterable.helpers.detect.<Driver>``; the heavy driver dependencies are guarded
+-# inside these modules, so importing the classes here is cheap and safe.
+-from ..db.clickhouse import ClickHouseDriver  # noqa: F401
+-from ..db.postgres import PostgresDriver  # noqa: F401
+-from ..exceptions import IterableDataError
+-from ..types import CodecArgs, IterableArgs
+-from .debug import file_io_logger, format_detection_logger, is_debug_enabled
+-
+-
+-def _load_symbol(module_path: str, symbol: str):
+-    """
+-    Lazy-load a datatype/codec class to avoid importing all optional dependencies at import time.
+-    """
+-    try:
+-        module = importlib.import_module(module_path)
+-        return getattr(module, symbol)
+-    except ImportError as e:
+-        raise ImportError(
+-            f"Failed to import '{symbol}' from '{module_path}': {e}. "
+-            f"This format/codec requires an optional dependency that is not installed. "
+-            f"Install the extra for this format (see the format's documentation or the "
+-            f"'[project.optional-dependencies]' section of pyproject.toml), or install "
+-            f"everything with `pip install 'iterabledata[all]'`."
+-        ) from e
+-
+-
+-# Plugin discovery flag
+-_plugins_discovered = False
+-
+-
+-def _ensure_plugins_discovered() -> None:
+-    """Ensure plugins are discovered (lazy discovery)."""
+-    global _plugins_discovered
+-    if not _plugins_discovered:
+-        try:
+-            from ..plugins import discover_plugins
+-
+-            discover_plugins()
+-        except Exception as e:
+-            # Don't let a broken plugin block built-in formats, but surface the
+-            # failure at warning level so misconfigured entry points are visible.
+-            format_detection_logger.warning("Plugin discovery failed: %s", e)
+-        _plugins_discovered = True
+-
+-
+-def _get_format_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged format registry (built-in + plugins).
+-
+-    Built-in formats take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in formats (take precedence)
+-    merged = DATATYPE_REGISTRY.copy()
+-
+-    # Add plugin formats (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for format_id, value in registry._formats.items():
+-            if format_id not in merged:
+-                merged[format_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin formats: %s", e)
+-
+-    return merged
+-
+-
+-def _get_codec_registry() -> dict[str, tuple[str, str]]:
+-    """Get merged codec registry (built-in + plugins).
+-
+-    Built-in codecs take precedence over plugins.
+-    """
+-    _ensure_plugins_discovered()
+-
+-    # Start with built-in codecs (take precedence)
+-    merged = CODEC_REGISTRY.copy()
+-
+-    # Add plugin codecs (don't override built-in)
+-    try:
+-        from ..plugins import get_plugin_registry
+-
+-        registry = get_plugin_registry()
+-        for codec_id, value in registry._codecs.items():
+-            if codec_id not in merged:
+-                merged[codec_id] = value
+-    except Exception as e:
+-        format_detection_logger.warning("Failed to load plugin codecs: %s", e)
+-
+-    return merged
+-
+-
+-# Lazy registries: extension -> (module_path, class_name)
+-DATATYPE_REGISTRY: dict[str, tuple[str, str]] = {
+-    "avro": ("iterable.datatypes.avro", "AVROIterable"),
+-    "bson": ("iterable.datatypes.bsonf", "BSONIterable"),
+-    "csv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "tsv": ("iterable.datatypes.csv", "CSVIterable"),
+-    "dbf": ("iterable.datatypes.dbf", "DBFIterable"),
+-    "json": ("iterable.datatypes.json", "JSONIterable"),
+-    "jsonl": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "ndjson": ("iterable.datatypes.jsonl", "JSONLinesIterable"),
+-    "jsonld": ("iterable.datatypes.jsonld", "JSONLDIterable"),
+-    "parquet": ("iterable.datatypes.parquet", "ParquetIterable"),
+-    "pickle": ("iterable.datatypes.picklef", "PickleIterable"),
+-    "orc": ("iterable.datatypes.orc", "ORCIterable"),
+-    "xls": ("iterable.datatypes.xls", "XLSIterable"),
+-    "xlsx": ("iterable.datatypes.xlsx", "XLSXIterable"),
+-    "xml": ("iterable.datatypes.xml", "XMLIterable"),
+-    "arrow": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "feather": ("iterable.datatypes.arrow", "ArrowIterable"),
+-    "msgpack": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "mp": ("iterable.datatypes.msgpack", "MessagePackIterable"),
+-    "fwf": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "fixed": ("iterable.datatypes.fwf", "FixedWidthIterable"),
+-    "yaml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "yml": ("iterable.datatypes.yaml", "YAMLIterable"),
+-    "sas7bdat": ("iterable.datatypes.sas", "SASIterable"),
+-    "sas": ("iterable.datatypes.sas", "SASIterable"),
+-    "dta": ("iterable.datatypes.stata", "StataIterable"),
+-    "stata": ("iterable.datatypes.stata", "StataIterable"),
+-    "sav": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "spss": ("iterable.datatypes.spss", "SPSSIterable"),
+-    "protobuf": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "pb": ("iterable.datatypes.protobuf", "ProtobufIterable"),
+-    "ion": ("iterable.datatypes.ion", "IonIterable"),
+-    "hdf5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "h5": ("iterable.datatypes.hdf5", "HDF5Iterable"),
+-    "geojson": ("iterable.datatypes.geojson", "GeoJSONIterable"),
+-    "toml": ("iterable.datatypes.toml", "TOMLIterable"),
+-    "delta": ("iterable.datatypes.delta", "DeltaIterable"),
+-    "cbor": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cbors": ("iterable.datatypes.cbor", "CBORIterable"),
+-    "cdf": ("iterable.datatypes.cdf", "CDFIterable"),
+-    "ods": ("iterable.datatypes.ods", "ODSIterable"),
+-    "sqlite": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "db": ("iterable.datatypes.sqlite", "SQLiteIterable"),
+-    "duckdb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "ddb": ("iterable.datatypes.duckdb", "DuckDBIterable"),
+-    "psv": ("iterable.datatypes.psv", "PSVIterable"),
+-    "ssv": ("iterable.datatypes.psv", "SSVIterable"),
+-    "ubjson": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "ubj": ("iterable.datatypes.ubjson", "UBJSONIterable"),
+-    "capnp": ("iterable.datatypes.capnp", "CapnpIterable"),
+-    "iceberg": ("iterable.datatypes.iceberg", "IcebergIterable"),
+-    "turtle": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "ttl": ("iterable.datatypes.turtle", "TurtleIterable"),
+-    "flatbuffers": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "fbs": ("iterable.datatypes.flatbuffers", "FlatBuffersIterable"),
+-    "thrift": ("iterable.datatypes.thrift", "ThriftIterable"),
+-    "txt": ("iterable.datatypes.txt", "TxtIterable"),
+-    "text": ("iterable.datatypes.txt", "TxtIterable"),
+-    "hudi": ("iterable.datatypes.hudi", "HudiIterable"),
+-    "apachelog": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "access.log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "log": ("iterable.datatypes.apachelog", "ApacheLogIterable"),
+-    "tfrecord": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "tfrecords": ("iterable.datatypes.tfrecord", "TFRecordIterable"),
+-    "sequencefile": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "seq": ("iterable.datatypes.sequencefile", "SequenceFileIterable"),
+-    "gelf": ("iterable.datatypes.gelf", "GELIterable"),
+-    "cef": ("iterable.datatypes.cef", "CEFIterable"),
+-    "ntriples": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nt": ("iterable.datatypes.ntriples", "NTriplesIterable"),
+-    "nquads": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "nq": ("iterable.datatypes.nquads", "NQuadsIterable"),
+-    "kafka": ("iterable.datatypes.kafka", "KafkaIterable"),
+-    "pulsar": ("iterable.datatypes.pulsar", "PulsarIterable"),
+-    "flink": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "ckpt": ("iterable.datatypes.flink", "FlinkIterable"),
+-    "beam": ("iterable.datatypes.beam", "BeamIterable"),
+-    "recordio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rio": ("iterable.datatypes.recordio", "RecordIOIterable"),
+-    "rdfxml": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "rdf": ("iterable.datatypes.rdfxml", "RDFXMLIterable"),
+-    "ilp": ("iterable.datatypes.ilp", "ILPIterable"),
+-    "annotatedcsv": ("iterable.datatypes.annotatedcsv", "AnnotatedCSVIterable"),
+-    "cdx": ("iterable.datatypes.cdx", "CDXIterable"),
+-    "warc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "arc": ("iterable.datatypes.warc", "WARCIterable"),
+-    "ldif": ("iterable.datatypes.ldif", "LDIFIterable"),
+-    "mbox": ("iterable.datatypes.mbox", "MBOXIterable"),
+-    "ini": ("iterable.datatypes.ini", "INIIterable"),
+-    "properties": ("iterable.datatypes.ini", "INIIterable"),
+-    "conf": ("iterable.datatypes.ini", "INIIterable"),
+-    "edn": ("iterable.datatypes.edn", "EDNIterable"),
+-    "smile": ("iterable.datatypes.smile", "SMILEIterable"),
+-    "bencode": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "torrent": ("iterable.datatypes.bencode", "BencodeIterable"),
+-    "vcf": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "vcard": ("iterable.datatypes.vcf", "VCFIterable"),
+-    "ical": ("iterable.datatypes.ical", "ICALIterable"),
+-    "ics": ("iterable.datatypes.ical", "ICALIterable"),
+-    "eml": ("iterable.datatypes.eml", "EMLIterable"),
+-    "mysqldump": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "sql": ("iterable.datatypes.mysqldump", "MySQLDumpIterable"),
+-    "pgcopy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "copy": ("iterable.datatypes.pgcopy", "PGCopyIterable"),
+-    "hocon": ("iterable.datatypes.hocon", "HOCONIterable"),
+-    "flexbuffers": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "flexbuf": ("iterable.datatypes.flexbuffers", "FlexBuffersIterable"),
+-    "asn1": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "der": ("iterable.datatypes.asn1", "ASN1Iterable"),
+-    "mhtml": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "mht": ("iterable.datatypes.mhtml", "MHTMLIterable"),
+-    "ltsv": ("iterable.datatypes.ltsv", "LTSVIterable"),
+-    "px": ("iterable.datatypes.px", "PXIterable"),
+-    "kml": ("iterable.datatypes.kml", "KMLIterable"),
+-    "kmz": ("iterable.datatypes.kmz", "KMZIterable"),
+-    "gpx": ("iterable.datatypes.gpx", "GPXIterable"),
+-    "gml": ("iterable.datatypes.gml", "GMLIterable"),
+-    "shapefile": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "shp": ("iterable.datatypes.shapefile", "ShapefileIterable"),
+-    "geopackage": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "gpkg": ("iterable.datatypes.geopackage", "GeoPackageIterable"),
+-    "csvw": ("iterable.datatypes.csvw", "CSVWIterable"),
+-    "rdata": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rda": ("iterable.datatypes.rdata", "RDataIterable"),
+-    "rds": ("iterable.datatypes.rds", "RDSIterable"),
+-    "lance": ("iterable.datatypes.lance", "LanceIterable"),
+-    "pcap": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "pcapng": ("iterable.datatypes.pcap", "PCAPIterable"),
+-    "nc": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "netcdf": ("iterable.datatypes.netcdf", "NetCDFIterable"),
+-    "mvt": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "pbf": ("iterable.datatypes.mvt", "MVTIterable"),
+-    "topojson": ("iterable.datatypes.topojson", "TopoJSONIterable"),
+-    "feed": ("iterable.datatypes.feed", "FeedIterable"),
+-    "atom": ("iterable.datatypes.feed", "FeedIterable"),
+-    "rss": ("iterable.datatypes.feed", "FeedIterable"),
+-    "dxf": ("iterable.datatypes.dxf", "DXFIterable"),
+-    "libsvm": ("iterable.datatypes.libsvm", "LIBSVMIterable"),
+-    "npy": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "npz": ("iterable.datatypes.numpy", "NumPyIterable"),
+-    "html": ("iterable.datatypes.html", "HTMLIterable"),
+-    "htm": ("iterable.datatypes.html", "HTMLIterable"),
+-    "arff": ("iterable.datatypes.arff", "ARFFIterable"),
+-    "trig": ("iterable.datatypes.trig", "TriGIterable"),
+-    "n3": ("iterable.datatypes.n3", "N3Iterable"),
+-    "trix": ("iterable.datatypes.trix", "TriXIterable"),
+-    "xlsb": ("iterable.datatypes.xlsb", "XLSBIterable"),
+-    "fasta": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fna": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "faa": ("iterable.datatypes.fasta", "FASTAIterable"),
+-    "fastq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "fq": ("iterable.datatypes.fastq", "FASTQIterable"),
+-    "graphml": ("iterable.datatypes.graphml", "GraphMLIterable"),
+-    "gexf": ("iterable.datatypes.gexf", "GEXFIterable"),
+-    "dot": ("iterable.datatypes.dot", "DOTIterable"),
+-    "gv": ("iterable.datatypes.dot", "DOTIterable"),
+-    "bam": ("iterable.datatypes.bam", "BAMIterable"),
+-    "sam": ("iterable.datatypes.sam", "SAMIterable"),
+-    "vortex": ("iterable.datatypes.vortex", "VortexIterable"),
+-    "vtx": ("iterable.datatypes.vortex", "VortexIterable"),
+-    # Usable via explicit format override: iterableargs={"format": "zipxml", "tagname": ...}
+-    "zipxml": ("iterable.datatypes.zipxml", "ZIPXMLSource"),
+-}
+-
+-CODEC_REGISTRY: dict[str, tuple[str, str]] = {
+-    "bz2": ("iterable.codecs.bz2codec", "BZIP2Codec"),
+-    "gz": ("iterable.codecs.gzipcodec", "GZIPCodec"),
+-    "lz4": ("iterable.codecs.lz4codec", "LZ4Codec"),
+-    "xz": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "lzma": ("iterable.codecs.lzmacodec", "LZMACodec"),
+-    "zip": ("iterable.codecs.zipcodec", "ZIPCodec"),
+-    "br": ("iterable.codecs.brotlicodec", "BrotliCodec"),
+-    "zstd": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "zst": ("iterable.codecs.zstdcodec", "ZSTDCodec"),
+-    "snappy": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "sz": ("iterable.codecs.snappycodec", "SnappyCodec"),
+-    "lzo": ("iterable.codecs.lzocodec", "LZOCodec"),
+-    "lzop": ("iterable.codecs.lzocodec", "LZOCodec"),
+-}
+-
+-# Formats that are read-only (do not support write operations)
+-# This set includes formats that explicitly raise WriteNotSupportedError
+-# or use the base class default (which also raises WriteNotSupportedError)
+-READ_ONLY_FORMATS: set[str] = {
+-    # Formats that explicitly raise WriteNotSupportedError
+-    "arff",
+-    "delta",
+-    "feed",
+
+===== P016 | repo nold-ai/specfact-cli | PR #610: Release dev to main | capacidade: review-scorer
+--- SPEC VIVA
+# review-scorer Specification
+
+## Purpose
+
+TBD - created by archiving change code-review-01-module-scaffold. Update Purpose after archive.
+
+## Requirements
+
+### Requirement: Review Scoring Algorithm
+
+The system SHALL compute `score` (0-120) and `reward_delta = score - 80` from findings and bonus conditions. Base score is 100; deductions: blocking error=-15, fixable error=-5, warning=-2, info=-1; bonuses: +5 each for five conditions.
+
+#### Scenario: Single blocking error deducts 15
+
+- **GIVEN** one finding with `severity=error`, `fixable=False`
+- **WHEN** score is computed with no bonuses
+- **THEN** `score` equals `85` and `reward_delta` equals `5`
+
+#### Scenario: Auto-fixable error deducts 5
+
+- **GIVEN** one finding with `severity=error`, `fixable=True`
+- **WHEN** score is computed
+- **THEN** `score` equals `95` and `reward_delta` equals `15`
+
+#### Scenario: Warnings deduct 2 each
+
+- **GIVEN** three findings with `severity=warning`
+- **WHEN** score is computed
+- **THEN** `score` equals `94`
+
+#### Scenario: Verdict thresholds applied correctly
+
+- **GIVEN** scores of 85, 60, and 45
+- **WHEN** verdict is determined
+- **THEN** score 85 → `"PASS"`, score 60 → `"PASS_WITH_ADVISORY"`, score 45 → `"FAIL"`
+
+#### Scenario: Score capped at 120
+
+- **GIVEN** conditions that would produce a score exceeding 120
+- **WHEN** score is computed
+- **THEN** `score` equals `120`
+
+--- ARQUIVOS DO PR (50)
+modified  +518   -107   .github/workflows/pr-orchestrator.yml
+modified  +2     -2     .github/workflows/publish-modules.yml
+modified  +2     -2     .github/workflows/sign-modules-on-approval.yml
+modified  +2     -2     .github/workflows/sign-modules.yml
+modified  +42    -0     CHANGELOG.md
+modified  +16    -1     docs/agent-rules/50-quality-gates-and-review.md
+modified  +9     -6     docs/guides/module-signing-and-key-rotation.md
+modified  +12    -0     docs/modules/code-review.md
+modified  +8     -5     docs/reference/module-security.md
+modified  +2     -2     openspec/changes/cli-val-04-acceptance-test-runner/design.md
+modified  +3     -3     openspec/changes/cli-val-04-acceptance-test-runner/proposal.md
+modified  +4     -3     openspec/changes/cli-val-04-acceptance-test-runner/specs/acceptance-test-runner/spec.md
+added     +280   -0     openspec/changes/cli-val-05-ci-integration/TDD_EVIDENCE.md
+added     +25    -0     openspec/changes/cli-val-05-ci-integration/design.md
+added     +44    -0     openspec/changes/cli-val-05-ci-integration/proposal.md
+added     +73    -0     openspec/changes/cli-val-05-ci-integration/specs/cli-validation-ci-gates/spec.md
+added     +64    -0     openspec/changes/cli-val-05-ci-integration/tasks.md
+modified  +3     -1     pyproject.toml
+modified  +3     -3     resources/bundled-module-registry/index.json
+modified  +21    -3     scripts/check_version_sources.py
+modified  +2     -1     scripts/module-verify-policy.sh
+modified  +5     -1     scripts/pre-commit-verify-modules.sh
+added     +114   -0     scripts/semgrep_sast_gate.py
+modified  +5     -1     scripts/sign-module.sh
+modified  +1     -1     setup.py
+modified  +1     -1     src/__init__.py
+modified  +1     -1     src/specfact_cli/__init__.py   <== código ligado à spec
+modified  +2     -2     src/specfact_cli/adapters/ado.py
+modified  +1     -1     src/specfact_cli/generators/persona_exporter.py
+modified  +1     -1     src/specfact_cli/generators/plan_generator.py
+modified  +1     -1     src/specfact_cli/generators/protocol_generator.py
+modified  +1     -1     src/specfact_cli/generators/report_generator.py
+modified  +1     -1     src/specfact_cli/generators/workflow_generator.py
+modified  +3     -3     src/specfact_cli/modules/module_registry/module-package.yaml
+modified  +12    -4     src/specfact_cli/modules/module_registry/src/commands.py
+modified  +11    -8     src/specfact_cli/registry/dependency_resolver.py
+modified  +1     -1     src/specfact_cli/registry/module_installer.py
+modified  +10    -4     src/specfact_cli/telemetry.py
+modified  +38    -7     tests/integration/test_bundle_install.py
+added     +144   -0     tests/unit/registry/test_dependency_resolver_properties.py
+modified  +28    -0     tests/unit/scripts/test_check_version_sources.py
+modified  +7     -0     tests/unit/scripts/test_pre_commit_verify_modules.py
+added     +45    -0     tests/unit/scripts/test_semgrep_sast_gate.py
+modified  +24    -4     tests/unit/specfact_cli/registry/test_signing_artifacts.py
+modified  +1     -0     tests/unit/tools/test_smart_test_coverage_enhanced.py
+modified  +2     -0     tests/unit/workflows/test_sign_modules_on_approval.py
+modified  +195   -13    tests/unit/workflows/test_trustworthy_green_checks.py
+added     +6     -0     tools/semgrep/sast-baseline.json
+added     +97    -0     tools/semgrep/sast.yml
+modified  +2     -3     tools/smart_test_coverage.py
+--- DIFF DO CÓDIGO LIGADO
+### src/specfact_cli/__init__.py
+@@ -76,6 +76,6 @@ def _install_progressive_disclosure() -> None:
+ # keeps missing-command and missing-parameter UX consistent outside the root CLI too.
+ _install_progressive_disclosure()
+ 
+-__version__ = "0.47.7"
++__version__ = "0.47.11"
+ 
+ __all__ = ["__version__"]
+
+===== P017 | repo quiqr/quiqr-desktop | PR #661: main | capacidade: user-feedback
+--- SPEC VIVA
+# User Feedback
+
+**Status**: active  
+**Capability**: user-feedback  
+**Owner**: frontend
+
+## Purpose
+
+This spec defines requirements for providing user feedback when application state changes or operations complete. Users must receive clear, timely feedback for all state-changing operations to understand what happened and whether their actions succeeded.
+## Requirements
+### Requirement: Snackbar Messages for State Changes
+
+All operations that change application state, workspace state, or site content MUST display a snackbar message indicating success or failure.
+
+**Severity levels**:
+- `success` - Operation completed successfully
+- `error` - Operation failed due to an error
+- `warning` - Operation completed but with issues
+- `info` - Informational message
+
+**Examples of state-changing operations**:
+- Creating, updating, or deleting content items
+- Renaming or copying files
+- Converting file structures
+- Saving form data
+- Publishing content
+- Changing settings
+
+#### Scenario: Delete item shows success message
+
+WHEN a user deletes a collection item and the operation succeeds  
+THEN a success snackbar SHALL display "Item deleted successfully"
+
+#### Scenario: Create item shows error on failure
+
+WHEN a user creates a collection item and the operation fails  
+THEN an error snackbar SHALL display "Failed to create item: {error reason}"
+
+### Requirement: Error Messages Must Be Actionable
+
+Error messages MUST include the underlying error reason when available to help users understand and resolve issues.
+
+**Pattern**:
+```typescript
+onError: (error: any) => {
+  addSnackMessage(`Failed to {operation}: ${error.message}`, { severity: 'error' });
+}
+```
+
+#### Scenario: Error includes specific reason
+
+WHEN a mutation fails with an error  
+THEN the error snackbar SHALL include the error message text from the exception
+
+### Requirement: Read-Only Operations Do Not Require Feedback
+
+Operations that only read data (queries) SHALL NOT display snackbar messages. Instead, they MUST use loading indicators:
+- `<LinearProgress />` for background refetching
+- `<CircularProgress />` or skeleton UI for initial loading
+
+#### Scenario: Query shows loading indicator instead of snackbar
+
+WHEN a collection items query is fetching or refetching data  
+THEN a LinearProgress indicator SHALL be displayed at the top of the collection list  
+AND no snackbar messages SHALL be shown for the query
+
+## Migration Notes
+
+When adding snackbar messages to existing code:
+
+1. Identify all mutation operations in the component
+2. Check if they have `onSuccess` and `onError` callbacks
+3. Add `addSnackMessage()` calls with appropriate messages
+4. Test both success and error paths
+
+### Requirement: Interface Style Change Feedback
+
+The system SHALL display a snackbar message when the interface style user preference is changed.
+
+#### Scenario: User changes interface style to dark
+- **WHEN** user changes interface style from light to dark
+- **AND** save operation succeeds
+- **THEN** system SHALL display success snackbar "Interface style changed to quiqr10-dark"
+
+#### Scenario: User changes interface style to light
+- **WHEN** user changes interface style from dark to light
+- **AND** save operation succeeds
+- **THEN** system SHALL display success snackbar "Interface style changed to quiqr10-light"
+
+#### Scenario: Interface style change fails
+- **WHEN** user changes interface style
+- **AND** save operation fails
+- **THEN** system SHALL display error snackbar "Failed to change interface style: {error.message}"
+
+### Requirement: Custom Open Command Feedback
+
+The system SHALL display snackbar messages for all custom open command operations (save and execute).
+
+#### Scenario: Custom command saved successfully
+- **WHEN** user saves custom open command preference
+- **AND** operation succeeds
+- **THEN** system SHALL display success snackbar "Custom open command saved"
+
+#### Scenario: Custom command save fails
+- **WHEN** user saves custom open command preference
+- **AND** operation fails
+- **THEN** system SHALL display error snackbar "Failed to save custom open command: {error.message}"
+
+#### Scenario: Custom command cleared successfully
+- **WHEN** user clears custom open command preference
+- **AND** operation succeeds
+- **THEN** system SHALL display success snackbar "Custom open command cleared"
+
+#### Scenario: Custom command executed successfully
+- **WHEN** user clicks "Open In..." button to open site with custom command
+- **AND** operation succeeds
+- **THEN** system SHALL display success snackbar "Opened site in {command}"
+
+#### Scenario: Custom command execution fails
+- **WHEN** user clicks "Open In..." button
+- **AND** operation fails
+- **THEN** system SHALL display error snackbar "Failed to open site: {error.message}"
+
+### Requirement: Git Settings Change Feedback
+
+The system SHALL display snackbar messages when Git instance settings are changed.
+
+#### Scenario: Git binary path updated successfully
+- **WHEN** user updates Git binary path instance setting
+- **AND** operation succeeds
+- **THEN** system SHALL display success snackbar "Git binary path updated"
+
+#### Scenario: Git binary path update fails
+- **WHEN** user updates Git binary path instance setting
+- **AND** operation fails
+- **THEN** system SHALL display error snackbar "Failed to update Git binary path: {error.message}"
+
+### Requirement: Logging Settings Change Feedback
+
+The system SHALL display snackbar messages when logging instance settings are changed.
+
+#### Scenario: Log retention updated successfully
+- **WHEN** user updates log retention instance setting
+- **AND** operation succeeds
+- **THEN** system SHALL display success snackbar "Log retention updated to {value} days"
+
+#### Scenario: Log retention update fails
+- **WHEN** user updates log retention instance setting
+- **AND** operation fails
+- **THEN** system SHALL display error snackbar "Failed to update log retention: {error.message}"
+
+## Related Specs
+
+- **Frontend State Management**: Defines mutation patterns using TanStack Query
+- **Frontend Components**: Snackbar context implementation
+- **Collection Management**: Examples of applying user feedback to collection operations
+
+--- ARQUIVOS DO PR (43)
+modified  +12    -0     CHANGELOG.md
+added     +2     -0     openspec/changes/archive/2026-04-24-nixpkgs-standalone-integration/.openspec.yaml
+added     +63    -0     openspec/changes/archive/2026-04-24-nixpkgs-standalone-integration/design.md
+added     +30    -0     openspec/changes/archive/2026-04-24-nixpkgs-standalone-integration/proposal.md
+added     +75    -0     openspec/changes/archive/2026-04-24-nixpkgs-standalone-integration/specs/adapters/spec.md
+added     +26    -0     openspec/changes/archive/2026-04-24-nixpkgs-standalone-integration/tasks.md
+added     +122   -0     openspec/changes/archive/2026-04-24-restore-build-actions/design.md
+added     +99    -0     openspec/changes/archive/2026-04-24-restore-build-actions/proposal.md
+added     +33    -0     openspec/changes/archive/2026-04-24-restore-build-actions/specs/communication-layer/spec.md
+added     +74    -0     openspec/changes/archive/2026-04-24-restore-build-actions/specs/frontend-components/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-24-restore-build-actions/tasks.md
+added     +75    -0     openspec/changes/archive/2026-04-24-restore-global-build-variables/design.md
+added     +87    -0     openspec/changes/archive/2026-04-24-restore-global-build-variables/proposal.md
+added     +40    -0     openspec/changes/archive/2026-04-24-restore-global-build-variables/specs/application-settings-ui/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-24-restore-global-build-variables/specs/backend-architecture/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-24-restore-global-build-variables/tasks.md
+modified  +74    -0     openspec/specs/adapters/spec.md
+modified  +39    -0     openspec/specs/application-settings-ui/spec.md
+modified  +52    -2     openspec/specs/backend-architecture/spec.md
+modified  +32    -0     openspec/specs/communication-layer/spec.md
+modified  +73    -0     openspec/specs/frontend-components/spec.md
+modified  +2     -2     package-lock.json
+modified  +1     -1     package.json
+modified  +49    -16    packages/adapters/standalone/src/main.ts
+added     +80    -0     packages/backend/src/api/handlers/file-download-handler.ts
+modified  +26    -5     packages/backend/src/api/server.ts
+modified  +1     -0     packages/backend/src/config/__tests__/config-resolver-simplified.test.ts
+modified  +1     -0     packages/backend/src/config/config-resolver.ts
+modified  +1     -0     packages/backend/src/config/config-store.ts
+modified  +2     -0     packages/backend/src/config/unified-config-service.ts
+modified  +28    -0     packages/backend/src/services/workspace/workspace-config-provider.ts
+modified  +41    -2     packages/backend/src/services/workspace/workspace-service.ts
+added     +128   -0     packages/backend/test/api/file-download-handler.test.ts
+added     +99    -0     packages/backend/test/build-actions/variable-merge.test.ts
+modified  +15    -0     packages/frontend/src/api.ts   <== código ligado à spec
+added     +93    -0     packages/frontend/src/components/SukohForm/BuildActionOutput.tsx
+modified  +90    -26    packages/frontend/src/components/SukohForm/index.tsx
+modified  +2     -0     packages/frontend/src/containers/Prefs/PrefsRouted.tsx
+modified  +6     -0     packages/frontend/src/containers/Prefs/PrefsSidebar.tsx
+added     +192   -0     packages/frontend/src/containers/Prefs/PrefsVariables.tsx
+modified  +25    -0     packages/frontend/src/containers/WorkspaceMounted/Collection/CollectionItem.tsx
+modified  +25    -0     packages/frontend/src/containers/WorkspaceMounted/Single.tsx
+modified  +17    -2     packages/types/src/schemas/config.ts
+--- DIFF DO CÓDIGO LIGADO
+### packages/frontend/src/api.ts
+@@ -267,6 +267,20 @@ export function buildSingle(siteKey: string, workspaceKey: string, singleKey: st
+   return request('buildSingle', {siteKey, workspaceKey, singleKey, buildAction});
+ }
+ 
++/**
++ * Trigger a browser download for a file within the workspace's site directory.
++ * Uses a hidden anchor element to initiate the download from the file-download endpoint.
++ */
++export function fileDownload(siteKey: string, workspaceKey: string, filePath: string) {
++  const url = `/api/sites/${encodeURIComponent(siteKey)}/workspaces/${encodeURIComponent(workspaceKey)}/file-download?path=${encodeURIComponent(filePath)}`;
++  const a = document.createElement('a');
++  a.href = url;
++  a.download = '';
++  document.body.appendChild(a);
++  a.click();
++  document.body.removeChild(a);
++}
++
+ export function updateCollectionItem(siteKey: string, workspaceKey: string, collectionKey: string, collectionItemKey: string, document: Record<string, unknown>){
+   return request('updateCollectionItem', {siteKey, workspaceKey, collectionKey, collectionItemKey, document});
+ }
+@@ -833,6 +847,7 @@ export interface API {
+   openCollectionItemInEditor: typeof openCollectionItemInEditor;
+   buildCollectionItem: typeof buildCollectionItem;
+   buildSingle: typeof buildSingle;
++  fileDownload: typeof fileDownload;
+   updateCollectionItem: typeof updateCollectionItem;
+   createCollectionItemKey: typeof createCollectionItemKey;
+   deleteCollectionItem: typeof deleteCollectionItem;
+
+===== P018 | repo codeready-toolchain/claw-operator | PR #108: feat: implement device pairing approval via pod exec in ClawDevicePairingRequestReconciler | capacidade: standard-library-testing
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Test functions use standard naming
+All test functions MUST follow Go standard library conventions with `Test*` naming and accept `*testing.T` parameter.
+
+#### Scenario: Top-level test function
+- **WHEN** a test file contains tests
+- **THEN** each test MUST be a function named `Test<Name>(t *testing.T)`
+
+#### Scenario: Nested subtests
+- **WHEN** a test has multiple related scenarios
+- **THEN** subtests MUST be created using `t.Run(name, func(t *testing.T) {...})`
+
+### Requirement: Assertions use standard testing methods
+Test assertions MUST use standard `testing` package methods and helper functions instead of external assertion libraries.
+
+#### Scenario: Basic equality check
+- **WHEN** comparing expected and actual values
+- **THEN** test MUST use `if got != want { t.Errorf(...) }` pattern
+
+#### Scenario: Fatal errors
+- **WHEN** a condition prevents further test execution
+- **THEN** test MUST use `t.Fatal()` or `t.Fatalf()` to stop immediately
+
+#### Scenario: Error reporting
+- **WHEN** reporting test failures
+- **THEN** error messages MUST include both expected and actual values using `t.Errorf("got %v, want %v", got, want)`
+
+### Requirement: Async assertions use polling helpers
+Tests requiring eventual consistency MUST use polling helper functions instead of external assertion libraries.
+
+#### Scenario: Wait for condition
+- **WHEN** a test needs to wait for an async condition (e.g., Kubernetes resource ready)
+- **THEN** test MUST use a polling helper that checks condition repeatedly with timeout
+
+#### Scenario: Timeout exceeded
+- **WHEN** polling exceeds timeout without success
+- **THEN** helper MUST call `t.Fatalf()` with clear timeout message
+
+#### Scenario: Polling configuration
+- **WHEN** polling for conditions
+- **THEN** timeout MUST be 10 seconds and poll interval MUST be 250 milliseconds (matching Gomega Eventually defaults)
+
+### Requirement: Test suite setup uses TestMain
+Test suites requiring shared setup (e.g., envtest) MUST use `TestMain` function for initialization and cleanup.
+
+#### Scenario: Envtest initialization
+- **WHEN** tests require Kubernetes API server (envtest)
+- **THEN** `TestMain(m *testing.M)` MUST start envtest before `m.Run()` and stop after
+
+#### Scenario: Cleanup on exit
+- **WHEN** TestMain completes
+- **THEN** cleanup MUST run via `defer` to ensure resources release even on test failure
+
+#### Scenario: Exit code propagation
+- **WHEN** TestMain exits
+- **THEN** it MUST call `os.Exit(m.Run())` to propagate test result code
+
+### Requirement: Table-driven tests for multiple scenarios
+Tests with multiple input/output combinations MUST use table-driven test pattern.
+
+#### Scenario: Test table structure
+- **WHEN** a test has multiple scenarios
+- **THEN** test MUST define a slice of structs containing `name`, `input`, and `want` fields
+
+#### Scenario: Subtest per table entry
+- **WHEN** iterating table entries
+- **THEN** each entry MUST run as subtest using `t.Run(tt.name, func(t *testing.T) {...})`
+
+#### Scenario: Parallel execution
+- **WHEN** table-driven tests are independent
+- **THEN** subtests MAY call `t.Parallel()` for concurrent execution
+
+### Requirement: Test cleanup uses t.Cleanup
+Tests requiring cleanup MUST use `t.Cleanup()` instead of `defer` for resource cleanup.
+
+#### Scenario: Resource cleanup
+- **WHEN** a test creates resources (e.g., Kubernetes objects)
+- **THEN** test MUST register cleanup using `t.Cleanup(func() {...})` immediately after creation
+
+#### Scenario: Cleanup order
+- **WHEN** multiple cleanup handlers registered
+- **THEN** handlers MUST execute in LIFO order (last registered runs first)
+
+#### Scenario: Cleanup on failure
+- **WHEN** test fails or panics
+- **THEN** all registered cleanup handlers MUST still execute
+
+### Requirement: No external test dependencies
+Unit tests MUST NOT depend on Ginkgo or Gomega packages.
+
+#### Scenario: Import statements
+- **WHEN** reviewing test file imports
+- **THEN** imports MUST NOT include `github.com/onsi/ginkgo` or `github.com/onsi/gomega`
+
+#### Scenario: Module dependencies
+- **WHEN** running `go mod tidy` after migration
+- **THEN** `go.mod` MUST NOT contain Ginkgo or Gomega dependencies
+
+### Requirement: Test coverage preserved
+Migrated tests MUST maintain 100% coverage of existing test scenarios.
+
+#### Scenario: Existing test scenarios
+- **WHEN** comparing migrated tests to original Ginkgo tests
+- **THEN** every Ginkgo `It` block MUST have corresponding standard library test or subtest
+
+#### Scenario: Assertion count
+- **WHEN** counting assertions in migrated tests
+- **THEN** number of assertions MUST equal or exceed original Ginkgo tests
+
+--- ARQUIVOS DO PR (13)
+modified  +10    -2     cmd/main.go
+modified  +6     -0     config/rbac/role.yaml
+modified  +4     -1     go.mod
+modified  +8     -0     go.sum
+modified  +115   -10    internal/controller/claw_device_pairing_request_controller.go
+modified  +408   -0     internal/controller/claw_device_pairing_request_controller_test.go
+modified  +15    -1     internal/controller/suite_test.go   <== código ligado à spec
+added     +2     -0     openspec/changes/archive/2026-05-07-device-pairing-request-processing/.openspec.yaml
+added     +68    -0     openspec/changes/archive/2026-05-07-device-pairing-request-processing/design.md
+added     +26    -0     openspec/changes/archive/2026-05-07-device-pairing-request-processing/proposal.md
+added     +44    -0     openspec/changes/archive/2026-05-07-device-pairing-request-processing/specs/device-pairing-exec/spec.md
+added     +21    -0     openspec/changes/archive/2026-05-07-device-pairing-request-processing/tasks.md
+added     +42    -0     openspec/specs/device-pairing-exec/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/controller/suite_test.go
+@@ -30,7 +30,10 @@ import (
+ 	corev1 "k8s.io/api/core/v1"
+ 	netv1 "k8s.io/api/networking/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	apimeta "k8s.io/apimachinery/pkg/api/meta"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/runtime/schema"
+ 	"k8s.io/client-go/kubernetes/scheme"
+ 	"k8s.io/client-go/rest"
+ 	ctrl "sigs.k8s.io/controller-runtime"
+@@ -150,6 +153,7 @@ func deleteAndWaitAllResources(t *testing.T, namespace string, instanceNames ...
+ 		{&corev1.ServiceAccount{}, client.ObjectKey{Name: getDevicePairingServiceAccountName(instanceName), Namespace: namespace}},
+ 		{&corev1.Service{}, client.ObjectKey{Name: getDevicePairingServiceName(instanceName), Namespace: namespace}},
+ 		{&appsv1.Deployment{}, client.ObjectKey{Name: getDevicePairingDeploymentName(instanceName), Namespace: namespace}},
++		{newRouteUnstructured(), client.ObjectKey{Name: getDevicePairingRouteName(instanceName), Namespace: namespace}},
+ 	}
+ 
+ 	for _, r := range resources {
+@@ -169,7 +173,7 @@ func deleteAndWait(obj client.Object, key client.ObjectKey) error {
+ 	for time.Now().Before(deadline) {
+ 		fresh := obj.DeepCopyObject().(client.Object)
+ 		if err := k8sClient.Get(ctx, key, fresh); err != nil {
+-			if apierrors.IsNotFound(err) {
++			if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+ 				return nil
+ 			}
+ 			time.Sleep(interval)
+@@ -380,3 +384,13 @@ func reconcileClaw(t *testing.T, ctx context.Context, reconciler *ClawResourceRe
+ 	})
+ 	require.NoError(t, err, "reconcile failed")
+ }
++
++func newRouteUnstructured() *unstructured.Unstructured {
++	u := &unstructured.Unstructured{}
++	u.SetGroupVersionKind(schema.GroupVersionKind{
++		Group:   "route.openshift.io",
++		Version: "v1",
++		Kind:    RouteKind,
++	})
++	return u
++}
+
+===== P019 | repo inventage-ai/asylum | PR #27: Fix Java kit ignoring configured versions | capacidade: project-entrypoint
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Project entrypoint assembly
+The image package SHALL provide an `assembleProjectEntrypoint` function that builds a project-level entrypoint script from project kit `EntrypointSnippet`s and `BannerLines`. The script SHALL begin with `#!/bin/bash` and `set -e`.
+
+#### Scenario: Project kits with entrypoint snippets
+- **WHEN** project kits have non-empty `EntrypointSnippet`s
+- **THEN** the assembled script SHALL contain all snippets concatenated in kit order
+
+#### Scenario: No project kits have entrypoint snippets or banner lines
+- **WHEN** no project kits have `EntrypointSnippet`s or `BannerLines`
+- **THEN** `assembleProjectEntrypoint` SHALL return nil (no script generated)
+
+### Requirement: Project banner lines exported as variable
+When project kits have `BannerLines`, the project entrypoint script SHALL export a `PROJECT_BANNER` variable containing the assembled banner line commands. The base entrypoint SHALL evaluate this variable in the welcome banner block.
+
+#### Scenario: Project kit with banner lines
+- **WHEN** a project kit has `BannerLines`
+- **THEN** the project entrypoint SHALL contain an `export PROJECT_BANNER=...` line with the assembled banner commands
+
+#### Scenario: No project banner lines
+- **WHEN** no project kits have `BannerLines`
+- **THEN** the project entrypoint SHALL NOT contain a `PROJECT_BANNER` export
+
+### Requirement: Project entrypoint embedded in project image
+When a project entrypoint script is generated, it SHALL be written to the build context and COPY'd into the project image at `/usr/local/bin/project-entrypoint.sh` with execute permissions.
+
+#### Scenario: Project image with entrypoint
+- **WHEN** project kits produce a non-nil project entrypoint
+- **THEN** the project Dockerfile SHALL include a `COPY` instruction for `project-entrypoint.sh`
+
+#### Scenario: Project image without entrypoint
+- **WHEN** no project entrypoint is generated
+- **THEN** the project Dockerfile SHALL NOT reference `project-entrypoint.sh`
+
+--- ARQUIVOS DO PR (29)
+modified  +1     -0     CHANGELOG.md
+modified  +4     -4     cmd/asylum/main.go
+modified  +4     -2     docs/kits/java.md
+modified  +5     -5     integration/image_test.go
+modified  +1     -1     integration/integration_test.go
+modified  +13    -8     internal/config/config.go
+modified  +14    -14    internal/config/config_test.go
+modified  +6     -5     internal/container/container.go
+modified  +5     -4     internal/container/container_test.go
+modified  +4     -4     internal/image/assembly_test.go
+modified  +10    -17    internal/image/image.go   <== código ligado à spec
+modified  +4     -54    internal/image/image_test.go
+modified  +17    -3     internal/image/order.go
+modified  +4     -4     internal/image/order_test.go
+modified  +57    -9     internal/kit/java.go
+modified  +96    -13    internal/kit/kit.go
+modified  +166   -2     internal/kit/kit_test.go
+added     +2     -0     openspec/changes/archive/2026-04-19-config-aware-kits/.openspec.yaml
+added     +82    -0     openspec/changes/archive/2026-04-19-config-aware-kits/design.md
+added     +36    -0     openspec/changes/archive/2026-04-19-config-aware-kits/proposal.md
+added     +22    -0     openspec/changes/archive/2026-04-19-config-aware-kits/specs/container-assembly/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-19-config-aware-kits/specs/image-build/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-19-config-aware-kits/specs/kit-snippet-generation/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-19-config-aware-kits/specs/mise-java/spec.md
+added     +30    -0     openspec/changes/archive/2026-04-19-config-aware-kits/tasks.md
+modified  +15    -0     openspec/specs/container-assembly/spec.md
+modified  +6     -2     openspec/specs/image-build/spec.md
+added     +61    -0     openspec/specs/kit-snippet-generation/spec.md
+modified  +32    -26    openspec/specs/mise-java/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### internal/image/image.go
+@@ -140,8 +140,8 @@ func buildImage(dockerfileContent []byte, extraFiles map[string][]byte, tag stri
+ // for optimal Docker layer caching. previousOrder is the source order from the
+ // last successful build (from state.json). Returns (rebuilt, newOrder, err)
+ // where newOrder should be saved to state on success.
+-func EnsureBase(profiles []*kit.Kit, agentInstalls []*agent.AgentInstall, version string, noCache bool, previousOrder []string) (bool, []string, error) {
+-	sources := collectSources(profiles, agentInstalls)
++func EnsureBase(profiles []*kit.Kit, agentInstalls []*agent.AgentInstall, kitConfig func(string) *kit.SnippetConfig, version string, noCache bool, previousOrder []string) (bool, []string, error) {
++	sources := collectSources(profiles, kitConfig, agentInstalls)
+ 	orderedIDs := computeSourceOrder(sources, previousOrder)
+ 
+ 	snippetOf := map[string]string{}
+@@ -191,23 +191,20 @@ func EnsureBase(profiles []*kit.Kit, agentInstalls []*agent.AgentInstall, versio
+ 	return true, orderedIDs, nil
+ }
+ 
+-// Pre-installed Java versions in the base image.
+-var preinstalledJava = map[string]bool{"17": true, "21": true, "25": true}
+-
+-func EnsureProject(projectProfiles []*kit.Kit, packages map[string][]string, javaVersion string, version string, baseRebuilt bool, noCache bool) (string, error) {
+-	profileSnippets := kit.AssembleDockerSnippets(projectProfiles)
++func EnsureProject(projectProfiles []*kit.Kit, allKits []*kit.Kit, packages map[string][]string, kitConfig func(string) *kit.SnippetConfig, version string, baseRebuilt bool, noCache bool) (string, error) {
++	profileSnippets := kit.AssembleDockerSnippets(projectProfiles, kitConfig)
+ 	projectEntrypoint := assembleProjectEntrypoint(projectProfiles)
+-	needsCustomJava := javaVersion != "" && !preinstalledJava[javaVersion]
++	kitProjectSnippets := kit.AssembleProjectSnippets(allKits, kitConfig)
+ 
+-	if len(packages) == 0 && !needsCustomJava && profileSnippets == "" && projectEntrypoint == nil {
++	if len(packages) == 0 && kitProjectSnippets == "" && profileSnippets == "" && projectEntrypoint == nil {
+ 		return baseTag, nil
+ 	}
+ 
+ 	username := "claude"
+ 	if u, err := user.Current(); err == nil {
+ 		username = u.Username
+ 	}
+-	dockerfile, err := generateProjectDockerfile(profileSnippets, packages, javaVersion, username, projectEntrypoint != nil)
++	dockerfile, err := generateProjectDockerfile(profileSnippets, packages, kitProjectSnippets, username, projectEntrypoint != nil)
+ 	if err != nil {
+ 		return "", err
+ 	}
+@@ -245,7 +242,6 @@ var knownPackageTypes = map[string]bool{
+ }
+ 
+ var validPackageName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9+\-.@:/~_]*$`)
+-var validJavaVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+ 
+ func validatePackageNames(pkgType string, names []string) error {
+ 	for _, name := range names {
+@@ -256,7 +252,7 @@ func validatePackageNames(pkgType string, names []string) error {
+ 	return nil
+ }
+ 
+-func generateProjectDockerfile(profileSnippets string, packages map[string][]string, javaVersion string, username string, hasProjectEntrypoint bool) (string, error) {
++func generateProjectDockerfile(profileSnippets string, packages map[string][]string, kitProjectSnippets string, username string, hasProjectEntrypoint bool) (string, error) {
+ 	for k := range packages {
+ 		if !knownPackageTypes[k] {
+ 			return "", fmt.Errorf("unknown package type %q (valid: apt, npm, pip, cx-lang, run)", k)
+@@ -316,12 +312,9 @@ func generateProjectDockerfile(profileSnippets string, packages map[string][]str
+ 	writeUserRuns("cx lang add ", packages["cx-lang"])
+ 	writeUserRuns("", packages["run"])
+ 
+-	if javaVersion != "" && !preinstalledJava[javaVersion] {
+-		if !validJavaVersion.MatchString(javaVersion) {
+-			return "", fmt.Errorf("invalid java version %q", javaVersion)
+-		}
++	if kitProjectSnippets != "" {
+ 		b.WriteString("\nUSER " + username + "\n")
+-		b.WriteString("RUN $HOME/.local/bin/mise install java@" + javaVersion + " && $HOME/.local/bin/mise use --global java@" + javaVersion + "\n")
++		b.WriteString(kitProjectSnippets)
+ 	}
+ 
+ 	if hasProjectEntrypoint {
+

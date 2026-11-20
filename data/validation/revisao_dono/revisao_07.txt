@@ -1,0 +1,477 @@
+===== P038 | Chorus-AIDLC/Chorus PR #407 | capacidade do par: agent-connection-observability
+PR: chore: release v0.13.1
+arquivos ligados: src/services/daemon-connection.service.ts
+--- linhas alteradas (40; mostrando até 40)
+-      // behaving exactly as before.
++      // behaving exactly as before. (No generation reconcile here: a cwd-less old
++      // daemon never self-reports startedAt, so a generation change is unprovable.)
++    // Generation probe (restart-window seam, fix-daemon-exit-orphan-running-turn):
++    // read the row's stored startedAt BEFORE the upsert refreshes it, so a NEW
++    // PROCESS GENERATION (different self-reported process start) is detectable. A
++    // crashed daemon that restarts within the staleness window reuses this row with
++    // a fresh lastSeenAt, which permanently defeats the age-only orphan-turn
++    // reconcile — the generation change is the only remaining evidence that the
++    // previous process (and any turn it left `running`) is dead.
++    const prior = await prisma.daemonConnection.findFirst({
++      where: { agentUuid, clientType: report.clientType, host, cwd },
++      select: { uuid: true, startedAt: true },
++    });
++    // New-generation orphan-turn reconcile: fire only when the row pre-existed AND
++    // both generations are provable (non-null startedAt on both sides) AND they
++    // differ. Same startedAt = the same process reconnecting (transient SSE drop) —
++    // nothing to reconcile. Null on either side is treated conservatively as
++    // unprovable (bias toward not interrupting). Fire-and-forget + lazily imported:
++    // registration must never fail, slow, or cycle on the session service
++    // (daemon-session.service imports this module for STALE_THRESHOLD_MS).
++    const incomingStartedAt = report.startedAt ?? null;
++    const priorStartedAt = prior?.startedAt instanceof Date ? prior.startedAt : null;
++    if (
++      prior &&
++      priorStartedAt !== null &&
++      incomingStartedAt !== null &&
++      priorStartedAt.getTime() !== incomingStartedAt.getTime()
++    ) {
++      void import("@/services/daemon-session.service")
++        .then(({ reconcileOrphanTurns }) =>
++          reconcileOrphanTurns(companyUuid, row.uuid, { force: true }),
++        )
++        .catch((err) => {
++          logger.error(
++            { err, companyUuid, connectionUuid: row.uuid },
++            "New-generation orphan-turn reconcile failed to dispatch",
++          );
++        });
++    }
+--- candidata: daemon-session-conversation [PR+termos]
+  | # daemon-session-conversation Specification
+  | ## MODIFIED Requirements
+  | ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > # daemon-session-conversation Specification
+  > ### Requirement: Every daemon wake SHALL be recorded as a turn on its DaemonSession
+  > The server SHALL define a Prisma model `DaemonSessionTurn` representing one wake on a conversation. It SHALL carry at least: `uuid`, `sessionUuid` (referencing `DaemonSession.uuid`), `seq` (monotonic 
+  > #### Scenario: An autonomous task dispatch records a turn
+  > - **GIVEN** a task is assigned to a daemon agent, producing a wake on session I
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "task_assigned"`
+  > - **GIVEN** a human submits a free-text instruction to session I
+  > - **THEN** a `DaemonSessionTurn` MUST be created on session I with `trigger = "human_instruction"` and `promptText` set to the submitted text
+--- candidata: cli-daemon [PR+termos]
+  | # cli-daemon
+  | ## ADDED Requirements
+  | ### Requirement: Daemon subcommand and notification subscription
+  > # cli-daemon
+  > The CLI SHALL provide a `chorus daemon` subcommand that runs a long-lived client process. On start it SHALL resolve credentials (see cli-auth), open a Server-Sent Events subscription to the remote Cho
+  > - **WHEN** the user runs `chorus daemon` with resolvable credentials
+  > - **THEN** the process authenticates, opens the notification SSE subscription, logs the connected agent identity, and stays running
+  > - **THEN** the Chorus server launches exactly as before, with no daemon behavior triggered
+  > ### Requirement: Task-dispatch wake of local headless Claude Code
+  > On receiving a relevant notification (at minimum `task_assigned`), the daemon SHALL spawn a local headless Claude Code subprocess (`claude -p` with `--output-format stream-json` and the Chorus MCP ser
+  > - **THEN** the daemon spawns a headless `claude -p` subprocess wired to the Chorus MCP server, passing the task context prompt over stdin, and the subprocess can act via `chorus_*` MCP tools
+--- candidata: daemon-interrupt-resume [PR]
+  | # daemon-interrupt-resume Specification
+  | ## ADDED Requirements
+  | ### Requirement: Control commands SHALL travel a reverse channel that is distinct from the wake path
+  > # daemon-interrupt-resume Specification
+  > The system SHALL provide a server→daemon control channel that reuses the existing
+  > daemon SHALL route it to a control handler WITHOUT enqueuing any wake. The control command
+  > action SHALL NOT be a member of the daemon's `WAKE_ACTIONS` set, and receiving a control
+  > event SHALL NOT spawn a new Claude subprocess. The server-side publish step SHALL be hidden
+  > behind a single control-dispatch function so a future dedicated bidirectional channel can
+  > - **WHEN** the daemon receives an SSE event with `type = "control"`
+  > - **AND** it MUST NOT enqueue anything on the WakeQueue or spawn a new subprocess
+--- candidata: daemon-session-transcript-read [PR]
+  | # daemon-session-transcript-read
+  | ## ADDED Requirements
+  | ### Requirement: Single-session transcript read API
+  > # daemon-session-transcript-read
+  > ### Requirement: Single-session transcript read API
+  > The system SHALL expose `GET /api/daemon-sessions/{sessionUuid}` returning the
+  > session together with its ordered turns, each turn carrying its retained
+  > owner/self + company visibility fence as the session list: an AGENT-KEY caller
+  > sees only its own sessions; a USER / super_admin caller sees only sessions of
+  > agents they own. A session that does not exist, lives in another company, or
+  > (non-disclosure) — the response MUST NOT reveal that another caller's session
+--- candidata: openclaw-event-bridge [PR]
+  | ## ADDED Requirements
+  | ### Requirement: The plugin SHALL run the SSE notification listener as a registered background service
+  | The plugin MUST register a background service via `api.registerService({ id, start, stop })` that opens the Chorus SSE notification stream (`<chorusUrl>/api/events/notifications`, Bearer auth) on `sta
+  > ### Requirement: The plugin SHALL run the SSE notification listener as a registered background service
+  > The plugin MUST register a background service via `api.registerService({ id, start, stop })` that opens the Chorus SSE notification stream (`<chorusUrl>/api/events/notifications`, Bearer auth) on `sta
+  > #### Scenario: Service starts and stops the SSE stream
+  > - **WHEN** the registered service's `start` is invoked
+  > ### Requirement: The plugin SHALL wake the agent in-process via enqueueSystemEvent, not via the HTTP hooks endpoint
+  > When an actionable notification arrives, the event router MUST wake the agent by calling `api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey })`. The legacy HTTP POST to the gateway 
+  > - **WHEN** the router dispatches it
+  > - **WHEN** both are dispatched before the agent consumes the first
+
+===== P039 | tsenoner/protspace_web PR #280 | capacidade do par: support-contact
+PR: fix: route Biocentral-unavailable failures to Colab
+arquivos ligados: app/src/explore/notifications.ts
+--- linhas alteradas (12; mostrando até 40)
+-import { MAX_UPLOAD_LABEL, MAX_SEQUENCES } from './fasta-prep-limits';
++import { COLAB_NOTEBOOK_URL, MAX_UPLOAD_LABEL, MAX_SEQUENCES } from './fasta-prep-limits';
+-    'The embedding service is temporarily unavailable. Please wait a moment and try again.',
++    'The embedding service is currently unavailable. You can run the same preparation in Google Colab.',
+-    action: buildReportAction('Dataset import', prepError ?? detail.message),
++    // A Biocentral outage is a known, routine condition with a clear next step
++    // (Colab), so it takes the single action slot; every other failure offers
++    // the "Report this" bug-report action instead.
++    action:
++      code === 'BIOCENTRAL_UNAVAILABLE'
++        ? { label: 'Open in Colab ↗', href: COLAB_NOTEBOOK_URL }
++        : buildReportAction('Dataset import', prepError ?? detail.message),
+--- candidata: prep-failure-routing [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Biocentral-unavailable failures are classified
+  | The prep pipeline SHALL classify an embedding failure as
+  > ### Requirement: Biocentral-unavailable failures are classified
+  > The prep pipeline SHALL classify an embedding failure as
+  > `BIOCENTRAL_UNAVAILABLE` when the subprocess output indicates the Biocentral
+  > embedding service is unreachable, including the case where no healthy Biocentral
+  > service becomes available before the embedder times out.
+  > #### Scenario: Embedder times out waiting for a healthy service
+  > `No healthy biocentral service became available in time`
+  > - **THEN** the pipeline raises a failure tagged `BIOCENTRAL_UNAVAILABLE`
+--- candidata: prep-observability [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Structured logging pipeline
+  | The `protspace-prep` service SHALL route all log output through a single `structlog`-based pipeline configured once at startup, before any module acquires a logger. The renderer SHALL be selectable vi
+  > The `protspace-prep` service SHALL route all log output through a single `structlog`-based pipeline configured once at startup, before any module acquires a logger. The renderer SHALL be selectable vi
+  > - **WHEN** the service starts with JSON logging disabled
+  > - **WHEN** the service starts with JSON logging enabled
+  > - **THEN** each log record is emitted as a single valid JSON object on one line, including timestamp, level, logger name, and event fields
+  > Every log line emitted during the execution of a preparation job SHALL carry the job's `job_id` as a structured field. The background pipeline task SHALL clear any inherited request/context state and 
+  > - **THEN** context inherited from the request that submitted the job is cleared before `job_id` is bound
+  > ### Requirement: Failure detail is logged, not shown to users
+  > When a preparation step fails, the full diagnostic detail (such as subprocess exit code and captured stderr) SHALL be recorded in the structured logs correlated by `job_id`. The message returned to th
+--- candidata: annotation-metadata [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Canonical annotation-metadata registry
+  | The frontend SHALL provide a single canonical registry, in `@protspace/utils`, mapping known
+  > The frontend SHALL provide a single canonical registry, in `@protspace/utils`, mapping known
+  > annotation column names to metadata: a human-friendly `label`, a `source`
+  > (`UniProt` | `InterPro` | `Taxonomy` | `TED` | `Biocentral` | `Other`), an `isPredicted` boolean,
+  > a short `description`, and an optional `docsUrl`. This registry SHALL be the single source of truth
+  > source map currently in `annotation-categories.ts`.
+  > - **WHEN** code requests metadata for a known column such as `ec`
+  > - **THEN** it receives the registry entry (label `"EC number"`, source `UniProt`,
+  > - **THEN** they all read it from this registry and no other hardcoded annotation source list
+
+===== P040 | Gentleman-Programming/gentle-ai PR #1083 | capacidade do par: persona-behavior-contract
+PR: feat(review): precision-gated 4R review framework (v2)
+arquivos ligados: internal/assets/assets_test.go
+--- linhas alteradas (13; mostrando até 40)
++		"claude/agents/review-refuter.md",
++		"cursor/agents/review-refuter.md",
++		"kiro/agents/review-refuter.md",
++		"kimi/agents/review-refuter.yaml",
++		"kimi/agents/review-refuter.md",
+-	if len(agentEntries) != 17 {
+-		t.Fatalf("claude agents count = %d, want 17", len(agentEntries))
++	if len(agentEntries) != 18 {
++		t.Fatalf("claude agents count = %d, want 18", len(agentEntries))
+-		"If multiple rows match, run the narrow set that covers the risk",
++		"run exactly ONE lens",
++		"run no lens",
++		"run the full 4R set",
+--- candidata: organic-agent-trigger-rules [PR+termos]
+  | # Organic Agent Trigger Rules Specification
+  | **Domain**: `organic-agent-trigger-rules`
+  | **Type**: NEW Capability
+  > The system MUST define exactly the following six events and no others. Any `on` value outside this set MUST be treated as invalid.
+  > | `pre-pr` | Before a Pull Request is opened or marked ready-for-review | The branch is pushed; a PR is about to be created or promoted from draft. |
+  > | `post-sdd-phase` | Immediately after an SDD phase completes | Phase name is known (e.g., `design`, `apply`). Used for phase-scoped agents. |
+  > | `on-schedule` | On a recurring schedule | Interval is defined in configuration; intended for periodic review sweeps. |
+  > #### Scenario: Catalog contains exactly six events
+  > - THEN exactly six events are returned: `pre-commit`, `pre-push`, `pre-pr`, `post-sdd-phase`, `on-ci`, `on-schedule`
+  > - GIVEN a binding `{ on: "pre-pr", when: { MinDiffLines: 400 }, run: ["review-risk"], mode: "strong" }`
+  > - GIVEN a binding `{ when: { Always: true }, run: ["review-readability"], mode: "advisory" }` with no `on` field
+--- candidata: sdd-orchestrator-assets [tasks+termos]
+  | # SDD orchestrator assets
+  | ## ADDED Requirements
+  | ### Requirement: Antigravity uses dynamic subagent orchestration
+  > The `antigravity` SDD orchestrator asset MUST instruct the agent to define and invoke phase subagents dynamically at runtime.
+  > - GIVEN the Antigravity orchestrator asset is reviewed
+  > - AND it directs Antigravity to read phase skills from `~/.gemini/antigravity-cli/skills/{phase}/SKILL.md` or workspace `.agents/skills/{phase}/SKILL.md`
+  > The `antigravity` SDD orchestrator asset MUST instruct the agent to define and invoke phase subagents dynamically at runtime.
+  > - GIVEN the Antigravity orchestrator asset is reviewed
+  > - AND it directs Antigravity to read phase skills from `~/.gemini/antigravity-cli/skills/{phase}/SKILL.md` or workspace `.agents/skills/{phase}/SKILL.md`
+  > The guidance MUST enumerate exactly these selectable strategies:
+  > - GIVEN Windsurf and Antigravity orchestrator assets are reviewed
+--- candidata: review-findings-ledger [PR] (sem texto no censo)
+--- candidata: gga [termos]
+  | # Delta for GGA
+  | ## ADDED Requirements
+  | ### Requirement: Welcome Screen — OpenCode SDD Profiles Option
+  > exists, the option MUST display the current profile count as a badge:
+  > #### Scenario: Welcome shows profile count badge
+  > - GIVEN the cursor is on "OpenCode SDD Profiles"
+  > - WHEN `gentle-ai sync --profile cheap:anthropic/claude-haiku-3.5-20241022` runs
+  > - THEN `sdd-orchestrator-cheap` and 10 sub-agents are added to `opencode.json`
+  > - AND all other `cheap` sub-agents use `haiku`
+  > - GIVEN `gga.ps1` already exists with content matching the current embedded asset
+
+===== P041 | tatargabor/set-core PR #6 | capacidade do par: lineage-selector
+PR: feat(planner): serial-default decompose + hash-based replan reuse (Tier A of decompose-replan-optimization)
+arquivos ligados: lib/set_orch/engine.py;lib/set_orch/planner.py
+--- linhas alteradas (538; mostrando até 40)
++    # decompose-replan-optimization: planner strategy routing.
++    # planner_strategy: "serial" (always single-call), "parallel" (always
++    # 3-phase), or "auto" (estimate-then-pick). Default `auto` resolves to
++    # `serial` for typical specs and only routes to `parallel` when the
++    # estimated flat-prompt would exceed the threshold below. The legacy
++    # `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic in planner.py is removed in
++    # favor of this directive.
++    planner_strategy: str = "auto"
++    planner_single_call_max_input_tokens: int = field(
++        default_factory=lambda: DIRECTIVE_DEFAULTS["planner_single_call_max_input_tokens"],
++    )
++    # decompose-replan-optimization: planner strategy routing.
++    d.planner_strategy = _str(raw, "planner_strategy", d.planner_strategy)
++    d.planner_single_call_max_input_tokens = _int(
++        raw, "planner_single_call_max_input_tokens", d.planner_single_call_max_input_tokens,
++    )
++            load_saved_domain_plans, resolve_domain_reuse_decisions,
+-        # Load saved domain plans
+-        with open(domains_file) as f:
+-            saved = json.load(f)
+-        saved_brief = saved.get("brief", {})
+-        saved_domain_plans = saved.get("domain_plans", {})
++        # Load saved domain plans + hashes (capability replan-domain-plan-reuse).
++        loaded = load_saved_domain_plans(state_file)
++        if loaded is None:
++            with open(domains_file) as f:
++                saved = json.load(f)
++            saved_brief = saved.get("brief", {})
++            saved_domain_plans = saved.get("domain_plans", {})
++            saved_hashes: dict[str, str] = {}
++        else:
++            saved_brief, saved_domain_plans, saved_hashes = loaded
++        # Hash-based reuse decision: filter trigger-flagged domains by
++        # actual input-hash mismatch. Domains whose inputs didn't change
++        # are reused as-is. New domains (no saved hash) are always redone.
++        reuse_set, _ = resolve_domain_reuse_decisions(
++            saved_hashes, domain_data, saved_brief,
++        )
+-            # Full re-decompose
+-            logger.info("Replan: full re-decompose (spec changed)")
+--- candidata: planner-strategy-routing [tasks+PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - Directive `planner.strategy` with values `serial | parallel | auto` (default `auto`).
+  > - `auto` mode that picks `serial` or `parallel` based on estimated flat-prompt input tokens.
+  > - Function `estimate_flat_prompt_tokens(digest_dir, replan_ctx)` that returns an integer estimate without invoking Claude.
+  > - Removal of the legacy `DOMAIN_PARALLEL_MIN_REQS = 30` heuristic.
+  > - Single-call decompose path becomes the primary code path (the existing flat path at `planner.py:2674-2693` lifted out of the fallback branch).
+  > - Choosing models per strategy (covered by `model_config` and the cost-optimized preset).
+  > - The 3-phase pipeline implementation itself (covered by `orch-plan-python`).
+  > - Replan strategy selection (covered by `replan-scoped-patch`).
+--- candidata: replan-domain-plan-reuse [tasks+PR+termos]
+  | ## ADDED Requirements
+  | <!--
+  | IN SCOPE:
+  > - On replan, look up `domains-plans-<lineage>.json` and reuse cached domain plans whose input hasn't changed.
+  > - Domain-input hashing (digest summary + requirements + planning brief).
+  > - Reuse logic for the 3-phase parallel path.
+  > - Reuse logic for the serial path (whole-plan reuse on identical digest input).
+  > - Telemetry recording how many domains were reused vs re-planned.
+  > - Generating the saved domain plans (that's `orch-plan-python`).
+  > - Diff-update digest pipeline (that's `digest-diff-update`).
+  > - The replan trigger logic itself (that's `orch-replan-python`).
+--- candidata: orch-plan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python planning orchestration
+  | The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > ### Requirement: Python planning orchestration
+  > The planning pipeline orchestration (input detection, freshness check, triage gate, Claude invocation, response parsing, plan enrichment) SHALL be available as a Python function callable from `auto_re
+  > #### Scenario: Planning from Python replan
+  > - **WHEN** `auto_replan_cycle()` needs to generate a new plan
+  > - **THEN** it SHALL call `planner.run_planning_pipeline()` which orchestrates the full flow
+  > - **AND** the pipeline SHALL use existing Python functions: `detect_test_infra()`, `build_decomposition_context()`, `validate_plan()`, `enrich_plan_metadata()`
+  > ### Requirement: Design bridge integration in Python planning
+  > The Python planning pipeline SHALL support design bridge integration (Figma/Penpot snapshot) when a design MCP server is registered.
+--- candidata: orch-replan-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python auto-replan cycle without bash dependency
+  | The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > ### Requirement: Python auto-replan cycle without bash dependency
+  > The Python engine SHALL implement `auto_replan_cycle()` entirely in Python, eliminating the circular dependency where Python shells out to bash which shells back to Python.
+  > #### Scenario: Auto-replan triggered after all changes complete
+  > - **WHEN** all changes reach terminal status and `auto_replan` directive is true
+  > - **THEN** the Python monitor SHALL call `engine.auto_replan_cycle()` directly (Python function)
+  > - **AND** `auto_replan_cycle()` SHALL NOT shell out to bash `planner.sh`
+  > ### Requirement: Python replan collects context via Python functions
+  > The Python `auto_replan_cycle()` SHALL collect replan context by calling Python functions directly.
+--- candidata: orch-digest-python [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Python digest orchestration
+  | The system SHALL provide a Python implementation of the full spec digestion pipeline in `lib/set_orch/digest.py`, callable via `set-orch-core digest run`. The implementation SHALL replicate all behavi
+  > ### Requirement: Python digest orchestration
+  > The system SHALL provide a Python implementation of the full spec digestion pipeline in `lib/set_orch/digest.py`, callable via `set-orch-core digest run`. The implementation SHALL replicate all behavi
+  > #### Scenario: Full digest run
+  > - **WHEN** `set-orch-core digest run --state-file <path> --spec-dir <dir>` is invoked
+  > - **THEN** the system scans the spec directory, calls Claude API for analysis, writes digest output files (index.json, requirements.json), and updates state
+  > #### Scenario: Freshness check skips re-digest
+  > - **WHEN** digest is invoked and spec files have not changed since last digest (hash match)
+  > - **THEN** the system skips API calls and returns the cached digest
+
+===== P042 | LuSrackhall/KeyTone PR #129 | capacidade do par: signature-management
+PR: Add waveform sound trimmer 在裁剪定义声音步骤中, 引入音频波形可视化组件, 降低用户制作键音专辑的难度
+arquivos ligados: sdk/server/server.go
+--- linhas alteradas (85; mostrando até 40)
++	"mime"
++		// ============================================================================
++		// 体验策略：SDK 预览播放严格限制 <= 5000ms
++		//
++		// 背景：SDK 侧目前缺少“暂停”能力；如果允许长片段预览，将造成体验不可控。
++		// 处理：当 isPreviewMode=true 时，严格拒绝超过 5 秒的预览请求。
++		// 注意：这里既做服务端兜底（权威限制），前端也会做一次提前校验以给更友好的提示。
++		// ============================================================================
++		if arg.IsPreviewMode {
++			const maxPreviewMs = 5000.0
++			if (arg.EndTime - arg.StartTime) > maxPreviewMs {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{
++					"message": "error: SDK预览播放仅支持<=5000ms的片段，请使用前端试听播放条",
++				})
++				return
++			}
++		}
++	// ============================================================================
++	// GET /get_audio_stream - 读取当前编辑专辑下的音频源文件（用于前端波形渲染）
++	//
++	// 说明：
++	// - 前端通过 sha256 + type（扩展名，如 ".wav"）定位 audioFiles/<sha256><type>
++	// - 该接口返回音频文件内容，支持 Range（由 http.ServeContent 处理）
++	// - 仅用于编辑器场景（依赖 audio_pkg_uuid 已加载）
++	// ============================================================================
++	keytonePkgRouters.GET("/get_audio_stream", func(ctx *gin.Context) {
++		type Arg struct {
++			Sha256 string `form:"sha256"`
++			Type   string `form:"type"`
++		}
++		var arg Arg
++		if err := ctx.ShouldBindQuery(&arg); err != nil || arg.Sha256 == "" || arg.Type == "" {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{
++				"message": "error: 参数接收失败",
++			})
++			return
++		}
++		// 基础校验：防止路径穿越/非法扩展名
++		if len(arg.Sha256) != 64 {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
+--- candidata: album-config-encryption [tasks+termos]
+  | # 规格增量：专辑配置加密
+  | ## 新增需求
+  | ### 需求：专辑配置加密触发
+  > - **给定** 专辑 UUID 存在于配置中的 `audio_pkg_uuid` 字段或目录名
+  > - **则** 配置以旧密钥（originalAlbumId）解密、更新 `audio_pkg_uuid` 为新 ID，并使用新 ID 重新加密写回 `core`，而后指示 JSON 随之刷新
+  > Normative: The `/keytone_pkg/apply_signature_config` endpoint SHALL accept albumPath, signatureId, requireAuthorization, contactEmail, contactAdditional, updateSignatureContent, and authorizationUUID 
+  > - **THEN** 返回200状态码和`{ message: "ok", qualificationCode: "<sha256>" }`响应体
+  > - **THEN** 返回400错误和`{ message: "error: 需要授权时必须提供联系邮箱" }`
+  > - **THEN** 返回404错误和`{ message: "error: 签名不存在或已被删除" }`
+  > - **THEN** 返回错误和`{ message: "error: 该签名未获得原始作者授权，无法应用到此专辑" }`
+  > Normative: The signature application process SHALL handle missing image files gracefully by skipping the copy and setting cardImagePath to empty string, log errors for debugging, and ensure partial fa
+--- candidata: export-flow [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: 导出状态机编排
+  | Normative: The composable `useExportSignatureFlow` SHALL 根据专辑状态按顺序驱动签名确认、授权策略、授权门控及签名选择；无论用户是否选择“需要签名”，流程都 MUST 在完成授权策略判断后才进入 `done`，取消任何步骤 MUST 终止本次导出并重置状态。
+  > Normative: The album selector component SHALL display direct export author signature information for albums that have signatures; the selected state display MUST be positioned on the top-right border 
+  > Normative: The AuthRequestDialog component SHALL automatically load signature data with authorization status when opened; the component MUST filter and display only unauthorized signatures to allow us
+  > - **WHEN** AuthRequestDialog 打开（visible=true）
+  > Normative: The system SHALL provide an AuthRequestDialog component that guides users through a 3-step wizard to generate authorization request files; the dialog MUST display only unauthorized signatur
+  > - **WHEN** AuthRequestDialog 打开
+  > - **WHEN** 状态机收到 authRequest 事件
+  > - **WHEN** AuthRequestDialog 发出 done 事件
+  > - **WHEN** AuthRequestDialog 发出 cancel 事件
+--- candidata: keytone-album-editor [PR+termos]
+  | # keytone-album-editor Spec Delta (add-album-sound-selector-search)
+  | ## ADDED Requirements
+  | ### Requirement: 键音专辑关键选择器支持输入搜索
+  > Normative: 系统 SHALL 提供可被前端访问的音频流数据源，用于从当前专辑的音频源文件生成波形；该数据源应当能够通过源文件引用信息定位（例如 sha256 + type）。
+  > - **GIVEN** 前端通过 `messageAudioPackage` 事件接收来自后端的键音包配置数据
+  > Normative: `initData()`、`watch(audioFiles)` 与 SSE 更新 三条路径 SHALL 复用 `keytoneAlbumMappers` 中的纯函数，以确保映射行为一致、避免重复代码与行为漂移。
+  > Normative: 联动声效步骤（Step4）的 UI 模板 SHALL 从父组件中拆出到 `steps/StepLinkageEffects.vue`，并通过 inject 使用父组件 provide 的 Context，以降低父组件模板复杂度且保持行为不变。
+  > Normative: 对于同一 `sha256` 的音频源文件，系统在新增别名时 SHALL 生成唯一 UUID 作为 `name_id`；删除旧别名后，后续新增 SHALL NOT 复用历史 `name_id`。
+  > - **GIVEN** 用户曾导入某音频文件（`sha256=A`）并产生别名 `name_id=U1`
+  > - **WHEN** 用户再次导入同一音频文件（同 `sha256=A`）
+  > - **GIVEN** 用户连续多次导入同一 `sha256` 文件
+--- candidata: encrypted-outputs [tasks]
+  | # Encrypted Outputs（增量）
+  | ## MODIFIED Requirements
+  | ### Requirement: 构建身份与对称密钥来源
+  > Note: A local debug tool (ktalbum-tools) MAY additionally try both the injected key and the default open-source key for the same version to improve inspection compatibility. This does not change the m
+
+===== P043 | opencue/gitguardex PR #660 | capacidade do par: reuse-dirty-matching-worktree-on-branch-start
+PR: Prevent dirty primary auto-revert
+arquivos ligados: test/branch.test.js
+--- linhas alteradas (22; mostrando até 40)
++test('post-checkout guard skips auto-revert and auto-stash when primary tree is dirty', () => {
++  const { repoDir } = createBootstrappedRepo({ branch: 'main', committed: true });
++  const packageJsonPath = path.join(repoDir, 'package.json');
++  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
++  packageJson.description = 'dirty primary edit';
++  fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
++  fs.writeFileSync(path.join(repoDir, 'untracked-primary.txt'), 'untracked primary work\n', 'utf8');
++  const checkoutResult = runCmd('git', ['checkout', '-b', 'feature/dirty-primary'], repoDir, {
++    CODEX_THREAD_ID: 'test-thread',
++  });
++  assert.equal(checkoutResult.status, 0, checkoutResult.stderr || checkoutResult.stdout);
++  assert.match(checkoutResult.stderr, /Working tree dirty .* auto-revert skipped/);
++  const currentBranch = runCmd('git', ['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
++  assert.equal(currentBranch.status, 0, currentBranch.stderr || currentBranch.stdout);
++  assert.equal(currentBranch.stdout.trim(), 'feature/dirty-primary');
++  const currentPackageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
++  assert.equal(currentPackageJson.description, 'dirty primary edit');
++  assert.equal(fs.existsSync(path.join(repoDir, 'untracked-primary.txt')), true);
++  const stashList = runCmd('git', ['stash', 'list'], repoDir);
++  assert.equal(stashList.status, 0, stashList.stderr || stashList.stdout);
++  assert.doesNotMatch(stashList.stdout, /guardex-auto-revert/);
++});
+--- candidata: primary-checkout-immutability [PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Primary checkout cannot be silently switched during agent sessions
+  | The `post-checkout` hook SHALL print a `[agent-primary-branch-guard]` warning
+  > ### Requirement: Primary checkout cannot be silently switched during agent sessions
+  > The `post-checkout` hook SHALL print a `[agent-primary-branch-guard]` warning
+  > when the primary working tree (where `git-dir == git-common-dir`) is switched
+  > AWAY from a protected branch (`main`, `dev`, `master`, or any branch listed
+  > `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `OMX_SESSION_ID`, or
+  > `CODEX_CI=1`. If the working tree is clean, the hook SHALL auto-revert the
+  > primary checkout to the previous protected branch. If the working tree is
+  > dirty, the hook SHALL NOT stash changes and SHALL NOT switch branches again.
+--- candidata: cli-surface-cleanup [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: cli-surface-cleanup behavior
+  | The system SHALL enforce cli-surface-cleanup behavior as defined by this change.
+  > - **WHEN** the integration suite exercises setup/doctor/branch/finish/sandbox/release
+  > ### Requirement: default status/update flows avoid surprise side effects
+  > The default status path SHALL favor explicit user action over automatic mutation.
+  > - **WHEN** the integration suite exercises setup/doctor/branch/finish/sandbox/release
+  > ### Requirement: default status/update flows avoid surprise side effects
+  > The default status path SHALL favor explicit user action over automatic mutation.
+  > - **WHEN** the integration suite exercises setup/doctor/branch/finish/sandbox/release
+  > ### Requirement: default status/update flows avoid surprise side effects
+--- candidata: vscode-active-agents-extension [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Active Agents exposes terminal-first inline session controls
+  | The VS Code Active Agents companion SHALL prioritize jumping into the live session terminal over opening a per-file diff from the session row.
+  > - **WHEN** the extension contributes inline actions for a `gitguardex.session` row
+  > The VS Code Active Agents companion SHALL reveal the live integrated terminal that owns the selected session whenever the session metadata can be matched to a VS Code terminal process.
+  > #### Scenario: Session `pid` matches an open terminal
+  > #### Scenario: No live terminal match exists yet
+  > - **WHEN** the operator triggers `Show Terminal` for a session without a matching live terminal
+  > The VS Code Active Agents companion SHALL stop live sessions through the matched terminal first so the operator sees and controls the running task directly.
+  > - **GIVEN** the selected session matches an open integrated terminal by `pid`
+  > #### Scenario: Stop falls back when no terminal can be matched
+--- candidata: gitguardex-agent-lifecycle [termos]
+  | # Spec Delta: gitguardex-agent-lifecycle
+  | ## ADDED Requirements
+  | ### Requirement: Paired scripts under `scripts/` and `templates/scripts/` MUST be symlinked
+  > # Spec Delta: gitguardex-agent-lifecycle
+  > For every script tracked under both `scripts/` and `templates/scripts/` that the gx CLI also bundles into consumer repos as a legacy workflow shim, the `scripts/` copy MUST be a symlink to the matchin
+  > - **GIVEN** the gitguardex repo is checked out with the symlinks in place
+  > - **WHEN** a contributor runs `bash scripts/agent-branch-start.sh --no-transfer ...`
+  > - **THEN** the shell follows the symlink to `templates/scripts/agent-branch-start.sh`
+  > - **AND** the runtime-canonical script's argument parser handles the flag
+  > - **WHEN** the gx CLI runs `python3 scripts/agent-file-locks.py status`
+  > #### Scenario: `npm run agent:branch:start` still works

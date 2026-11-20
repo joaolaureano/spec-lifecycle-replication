@@ -1,0 +1,413 @@
+===== P205 | spencermarx/open-code-review PR #49 | capacidade do par: reviewer-management
+PR: Pre-release hardening: shared-package extraction, canonical verdict contract, process supervision + DB integrity
+arquivos ligados: packages/cli-e2e/src/agent-sessions.test.ts;packages/cli/src/commands/models.ts;packages/cli/src/commands/review.ts;packages/cli/src/commands/session.ts;packages/dashboard/src/server/db.ts;packages/dashboard/src/server/routes/agent-sessions.ts;packages/dashboard/src/server/routes/team.ts;packages/dashboard/src/server/socket/command-runner.ts
+--- linhas alteradas (953; mostrando até 40)
+-  it("rejects a workflow with no captured vendor session id", async () => {
++  it("hands off to the baseline skill path when no vendor session id was captured", async () => {
+-    // Start an agent session BUT do not bind a vendor id
+-    await spawnCli(
++    // Start an agent session BUT do not bind a vendor id, then end it so the
++    // owning turn is dead → the run is a stranded, forward-resumable mid-pipeline
++    // run with no resumable vendor conversation.
++    const start = await spawnCli(
++    const agentId = start.stdout.trim();
++    await spawnCli(["session", "end-instance", agentId, "--exit-code", "0"], {
++      cwd: project.dir,
++    });
+-    expect(result.exitCode).not.toBe(0);
+-    expect(result.stderr).toMatch(/no vendor session id/i);
++    // Intentional behavior change: rather than erroring, `--resume` with no
++    // captured vendor id now performs the honest baseline handoff (exit 0) —
++    // re-invoke the review skill, which forward-resumes with no adapter.
++    expect(result.exitCode).toBe(0);
++    expect(result.stderr).toMatch(/no resumable vendor session|re-invoking the review skill/i);
++      // APPROVE: the 50 findings are all `should_fix` (residual work, zero
++      // blockers), so the merge gate is open — REQUEST CHANGES would require a
++      // blocker under the directional verdict↔blocker-count contract.
+-      verdict: "REQUEST CHANGES",
++      verdict: "APPROVE",
+-    expect(written.verdict).toBe("REQUEST CHANGES");
++    expect(written.verdict).toBe("APPROVE");
+-} from "../lib/models.js";
++} from "@open-code-review/config/models";
+- * Today this is a thin pipe: `--resume <workflow-id>` looks up the vendor
+- * session id captured for that workflow's most recent `agent_sessions` row
+- * and execs the corresponding AI CLI with its native resume flag. The AI
+- * picks up the conversation where it left off; the user can then continue
+- * the OCR review workflow naturally.
++ * `--resume <workflow-id>` is the OPTIONAL convenience path that backs the
++ * dashboard's "Continue here" affordance and the "Pick up in terminal" handoff.
++ * The BASELINE forward-resume path needs no flag at all: a human re-invokes the
++ * review skill, whose Phase 0 reads `ocr state status --json` and continues from
++ * `current_phase`. This command adds the same forward-only guarantees the
++ * watchdog uses:
+- * A full `ocr review` flow (target args, `--fresh`, `--team`, `--reviewer`)
+--- candidata: dashboard [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Session List
+  | The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > ## ADDED Requirements
+  > The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > #### Scenario: Sessions exist
+  > - **GIVEN** one or more sessions exist in SQLite
+  > - **WHEN** user opens the dashboard
+  > - **THEN** sessions are listed sorted by `updated_at` descending
+  > - **AND** each session shows: branch name, status badge (active/closed), current phase, workflow type (review/map), start date, elapsed time
+  > #### Scenario: No sessions
+--- candidata: session-management [tasks+PR+termos]
+  | # Session Management
+  | Review session storage, history, and artifact management.
+  | ## ADDED Requirements
+  > Review session storage, history, and artifact management.
+  > ## ADDED Requirements
+  > The system SHALL store all review artifacts in a structured session directory.
+  > - **GIVEN** a new review is initiated
+  > - **WHEN** the session begins
+  > - **THEN** the system SHALL create directory `.ocr/sessions/{YYYY-MM-DD}-{branch}/`
+  > #### Scenario: Session ID format
+  > - **GIVEN** a review runs on branch `feat/auth-flow`
+--- candidata: cli [tasks+PR+termos]
+  | # Capability: CLI
+  | ## ADDED Requirements
+  | ### Requirement: CLI Package Distribution
+  > ## ADDED Requirements
+  > The CLI SHALL be distributed as an npm package (`@open-code-review/cli`) that can be executed via `npx`, `pnpm dlx`, or global installation.
+  > - **WHEN** user runs `npx @open-code-review/cli --help`
+  > - **THEN** the CLI help message is displayed
+  > - **GIVEN** user runs `npm install -g @open-code-review/cli`
+  > - **THEN** the CLI help message is displayed
+  > - **WHEN** user runs `pnpm dlx @open-code-review/cli init`
+  > - **THEN** the init command executes
+--- candidata: sqlite-state [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: SQLite as Single Source of Truth
+  | The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > ## ADDED Requirements
+  > ### Requirement: SQLite as Single Source of Truth
+  > The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > #### Scenario: Database location
+  > - **GIVEN** OCR is initialized in a project
+  > - **WHEN** any consumer needs to read or write state
+  > - **AND** the database file SHALL be gitignored
+  > #### Scenario: Three-layer schema
+--- candidata: review-orchestration [tasks+PR]
+  | # Review Orchestration
+  | Core multi-agent code review workflow orchestrated by the Tech Lead.
+  | ## ADDED Requirements
+  > # Review Orchestration
+  > Core multi-agent code review workflow orchestrated by the Tech Lead.
+  > ## ADDED Requirements
+  > The system SHALL provide a Tech Lead agent that orchestrates the complete code review process, coordinating context discovery, requirements analysis, reviewer assignment, discourse facilitation, and f
+  > #### Scenario: Complete review orchestration
+  > - **GIVEN** user requests a code review
+  > - **THEN** Tech Lead SHALL execute the 8-phase workflow:
+  > 1. Context Discovery (including requirements/specs)
+
+===== P206 | langoai/lango PR #41 | capacidade do par: p2p-owner-shield
+PR: buyer-side auto-payment, trust-based post-pay, and settlement service
+arquivos ligados: internal/p2p/paygate/gate.go
+--- linhas alteradas (97; mostrando até 40)
++	// StatusPostPayApproved means the peer has high enough trust to defer
++	// payment until after tool execution (post-pay).
++	StatusPostPayApproved ResultStatus = "postpay_approved"
+-	Status     ResultStatus            `json:"status"`
+-	Auth       *eip3009.Authorization  `json:"auth,omitempty"`
+-	PriceQuote *PriceQuote             `json:"priceQuote,omitempty"`
+-	Reason     string                  `json:"reason,omitempty"`
++	Status       ResultStatus           `json:"status"`
++	Auth         *eip3009.Authorization `json:"auth,omitempty"`
++	PriceQuote   *PriceQuote            `json:"priceQuote,omitempty"`
++	Reason       string                 `json:"reason,omitempty"`
++	SettlementID string                 `json:"settlementId,omitempty"`
+-	PricingFn PricingFunc
+-	LocalAddr string
+-	ChainID   int64
+-	USDCAddr  common.Address
+-	RPCClient *ethclient.Client
+-	Logger    *zap.SugaredLogger
++	PricingFn    PricingFunc
++	ReputationFn ReputationFunc
++	TrustCfg     TrustConfig
++	LocalAddr    string
++	ChainID      int64
++	USDCAddr     common.Address
++	RPCClient    *ethclient.Client
++	Logger       *zap.SugaredLogger
+-	pricingFn PricingFunc
+-	localAddr string
+-	chainID   int64
+-	usdcAddr  common.Address
+-	rpcClient *ethclient.Client
+-	logger    *zap.SugaredLogger
++	pricingFn    PricingFunc
++	reputationFn ReputationFunc
++	trustCfg     TrustConfig
++	ledger       *DeferredLedger
++	localAddr    string
++	chainID      int64
++	usdcAddr     common.Address
++	rpcClient    *ethclient.Client
+--- candidata: trust-payment-tiers [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Post-pay for high-trust peers
+  | The payment gate SHALL grant post-pay status to peers whose reputation score is strictly greater than the configured `PostPayMinScore` threshold (default: 0.8). Post-pay means the tool executes first 
+  > ### Requirement: Post-pay for high-trust peers
+  > The payment gate SHALL grant post-pay status to peers whose reputation score is strictly greater than the configured `PostPayMinScore` threshold (default: 0.8). Post-pay means the tool executes first 
+  > #### Scenario: High-trust peer gets post-pay
+  > - **WHEN** a peer with trust score 0.9 invokes a paid tool
+  > - **THEN** the gate returns `StatusPostPayApproved` with a non-empty `SettlementID`
+  > #### Scenario: Score exactly at threshold stays prepay
+  > - **WHEN** a peer with trust score exactly 0.8 invokes a paid tool
+  > - **THEN** the gate returns `StatusPaymentRequired` (prepay path)
+--- candidata: p2p-settlement [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Event-driven settlement trigger
+  | The settlement service SHALL subscribe to `ToolExecutionPaidEvent` from the event bus and process settlements asynchronously in a separate goroutine.
+  > ### Requirement: Event-driven settlement trigger
+  > The settlement service SHALL subscribe to `ToolExecutionPaidEvent` from the event bus and process settlements asynchronously in a separate goroutine.
+  > #### Scenario: Paid tool execution triggers settlement
+  > - **WHEN** a `ToolExecutionPaidEvent` is published with a valid `*eip3009.Authorization`
+  > - **THEN** the settlement service initiates the on-chain settlement lifecycle
+  > - **THEN** the settlement service logs a warning and takes no action
+  > - **THEN** the settlement service logs a warning and takes no action
+  > The settlement service SHALL execute the full lifecycle: create DB record → build EIP-1559 transaction with `transferWithAuthorization` calldata → sign via wallet → submit with retry → wait for confir
+--- candidata: p2p-buyer-auto-payment [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: EIP-3009 authorization signing
+  | The tool SHALL create and sign an EIP-3009 `transferWithAuthorization` using the buyer's wallet, the seller's address from the price quote, and the canonical USDC contract for the chain. If unsigned a
+  > ### Requirement: EIP-3009 authorization signing
+  > The tool SHALL create and sign an EIP-3009 `transferWithAuthorization` using the buyer's wallet, the seller's address from the price quote, and the canonical USDC contract for the chain. If unsigned a
+  > #### Scenario: Successful authorization signing
+  > - **THEN** the tool SHALL call `eip3009.NewUnsigned()` with the buyer address, seller address, amount, and a 10-minute deadline, then sign it with `eip3009.Sign()`
+  > #### Scenario: Nonce generation failure aborts payment
+  > - **WHEN** unsigned EIP-3009 authorization creation fails while generating the nonce
+  > - **THEN** the paid invocation tool SHALL return an error identifying authorization creation
+  > - **AND** it SHALL NOT call `eip3009.Sign()`
+--- candidata: p2p-pricing [PR]
+  | ## ADDED Requirements
+  | ### Requirement: TrustThresholds config field
+  | `P2PPricingConfig` SHALL include a `TrustThresholds` field with `PostPayMinScore` (float64, default 0.8).
+  > ### Requirement: TrustThresholds config field
+  > `P2PPricingConfig` SHALL include a `TrustThresholds` field with `PostPayMinScore` (float64, default 0.8).
+  > #### Scenario: Default trust threshold
+  > - **WHEN** `TrustThresholds.PostPayMinScore` is zero or unset
+  > - **THEN** the payment gate uses 0.8 as the default threshold
+  > #### Scenario: Default settlement config
+  > - **THEN** the settlement service uses 2 minutes as the default timeout
+  > ### Requirement: Gate.SubmitOnChain method
+--- candidata: p2p-payment-gate [tasks]
+  | ## Purpose
+  | Payment gate that sits between the P2P firewall and tool executor, enforcing USDC payment requirements for paid tool invocations using EIP-3009 pre-signed authorizations.
+  | ## Requirements
+  > Payment gate that sits between the P2P firewall and tool executor, enforcing USDC payment requirements for paid tool invocations using EIP-3009 pre-signed authorizations.
+  > The system SHALL allow remote peers to query tool pricing before invocation.
+  > - **WHEN** a peer queries the price of a tool with no configured price
+  > - **THEN** the system returns isFree=true
+  > - **WHEN** a peer queries the price of a tool with configured pricing
+  > - **THEN** the system returns a PriceQuote containing toolName, price, currency, USDC contract, chainId, sellerAddr, and quoteExpiry
+  > The system SHALL verify EIP-3009 payment authorizations before executing paid tools.
+  > #### Scenario: Valid authorization
+
+===== P207 | elastic/terraform-provider-elasticstack PR #3722 | capacidade do par: provider-pf-only
+PR: [OpenSpec] Fix multiple Authorization headers when ES and Kibana use different auth
+arquivos ligados: internal/clients/kibanaoapi/client.go
+--- linhas alteradas (13; mostrando até 40)
+-	if t.Username != "" {
+-		req.SetBasicAuth(t.Username, t.Password)
+-	}
+-	if t.APIKey != "" {
+-		req.Header.Add("Authorization", "ApiKey "+t.APIKey)
+-	}
+-	if t.BearerToken != "" {
++	switch {
++	case t.BearerToken != "":
++	case t.APIKey != "":
++		req.Header.Set("Authorization", "ApiKey "+t.APIKey)
++	case t.Username != "":
++		req.SetBasicAuth(t.Username, t.Password)
+--- candidata: kibana-client-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Kibana auth config resolution uses method-scoped clearing
+  | When `buildKibanaOapiConfigFromFramework` applies the Kibana provider block on top of the ES base config, it MUST detect which auth method the Kibana block introduces and clear fields from conflicting
+  > - **BasicAuth**: `Username` + `Password`
+  > - **APIKey**: `APIKey`
+  > - **BearerToken**: `BearerToken`
+  > - BasicAuth introduced → clear `APIKey` and `BearerToken` inherited from ES base
+  > - APIKey introduced → clear `Username`, `Password`, and `BearerToken` inherited from ES base
+  > - BearerToken introduced → clear `Username`, `Password`, and `APIKey` inherited from ES base
+  > #### Scenario: ES APIKey + Kibana BasicAuth → Kibana config has BasicAuth only
+  > - **THEN** the resolved `kibanaOapiConfig` SHALL have `Username` and `Password` set
+--- candidata: provider-configuration-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: ES credentials inherited into Kibana config only when no Kibana auth is configured
+  | The provider MUST inherit ES authentication credentials into the Kibana config (via `base.toKibanaOapiConfig()`) so that users who configure a single auth source for all services do not need to repeat
+  > - **THEN** the resolved Kibana config SHALL have `Username` and `Password` set
+  > - **AND** `APIKey` SHALL NOT be present in the Kibana config
+  > - **AND** Kibana requests SHALL carry exactly one `Authorization` header
+  > Fleet (provider block and env) is the lowest-priority auth source for Kibana resources. `withFleetBlockFallback` MUST check whether any auth method is already set in the Kibana config before filling a
+  > This prevents a cleared auth method from being re-introduced. For example: if the Kibana block sets BasicAuth (causing inherited ES `APIKey` to be cleared), `withFleetBlockFallback` must not refill `A
+  > #### Scenario: Kibana BasicAuth set, Fleet block has APIKey → Fleet auth not used
+  > - **GIVEN** the Kibana config has `Username` and `Password` set (from the Kibana provider block, after method-scoped clearing)
+  > - **THEN** the Kibana config SHALL retain `Username` and `Password`
+--- candidata: fleet-client-auth [tasks+PR+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Fleet auth config resolution uses method-scoped clearing
+  | When `newFleetConfigFromFramework` applies the Fleet provider block on top of the already-resolved Kibana config, it MUST detect which auth method the Fleet block introduces and clear fields from conf
+  > - BasicAuth introduced (`Username` or `Password` set) → clear `APIKey` and `BearerToken`
+  > - APIKey introduced → clear `Username`, `Password`, and `BearerToken`
+  > - BearerToken introduced → clear `Username`, `Password`, and `APIKey`
+  > #### Scenario: Kibana BasicAuth + Fleet APIKey block → Fleet config has APIKey only
+  > - **GIVEN** the Kibana config has `Username` and `Password` set (resolved from ES base or Kibana block)
+  > - **THEN** the resolved `fleetConfig` SHALL have `APIKey` set
+  > - **AND** `Username` and `Password` SHALL be empty
+  > - **AND** `BearerToken` SHALL be empty
+
+===== P208 | epam/ai-dial-admin-frontend PR #3392 | capacidade do par: adaptive-value-grid-collapsible
+PR: feat(deployments): add node pool keys (Issue #3105)
+arquivos ligados: apps/ai-dial-admin/src/constants/i18n.ts;apps/ai-dial-admin/src/locales/en.ts
+--- linhas alteradas (4; mostrando até 40)
++  NodePoolId = 'EntityFields.NodePoolId',
++  NodePoolName = 'EntityFields.NodePoolName',
++    NodePoolId: 'Node pool ID',
++    NodePoolName: 'Node pool name',
+--- candidata: activity-audit-deployments-detail [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Audit detail page resolves container activities from the deployment-manager backend
+  | For activities whose `resourceType` is one of `AdapterDeployment`, `ApplicationDeployment`, `InterceptorDeployment`, `McpDeployment`, `NimDeployment`, or `InferenceDeployment`, the audit detail route 
+  > Row label keys: `minReplicas`/`maxReplicas` use `ContainersI18nKey.MinReplicas`/`MaxReplicas`; `scaleToZeroDelaySeconds` uses `ContainersI18nKey.ScaleToZero` ("Automatic scale-to-zero"); `scalingStrat
+  > The flattened `source.$type` row in Properties SHALL be labelled with `EntityFieldsI18nKey.source` ("Source"). Its value SHALL be formatted via a container-aware source-type formatter:
+  > - `nodePoolId` → `EntityFieldsI18nKey.NodePoolId` ("Node pool ID")
+  > - `nodePoolName` → `EntityFieldsI18nKey.NodePoolName` ("Node pool name")
+  > Row label keys: `minReplicas`/`maxReplicas` use `ContainersI18nKey.MinReplicas`/`MaxReplicas`; `scaleToZeroDelaySeconds` uses `ContainersI18nKey.ScaleToZero` ("Automatic scale-to-zero"); `scalingStrat
+  > The flattened `source.$type` row in Properties SHALL be labelled with `EntityFieldsI18nKey.source` ("Source"). Its value SHALL be formatted via a container-aware source-type formatter:
+  > - `nodePoolId` → `EntityFieldsI18nKey.NodePoolId` ("Node pool ID")
+  > - `nodePoolName` → `EntityFieldsI18nKey.NodePoolName` ("Node pool name")
+--- candidata: activity-audit-deployments-view [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Deployments view row action menu shows Open-in-new-tab; click behavior depends on resource type
+  | The per-row action menu in the Deployments view SHALL render exactly one item: `Open in new tab`. For every deployment-manager resource type (the four `*ImageDefinition` types, `ImageBuildDomainWhitel
+--- candidata: analytics-metric-bindings-display [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: AnalyticsTab fetches results and snapshots in parallel under a single loader
+  | `AnalyticsTab` SHALL fire `getTestCaseRunResults` and `getMetricSnapshots` concurrently. A single loading state SHALL cover both — the grid and metric bindings SHALL only become available once both fe
+--- candidata: app-route-name-validation [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: App Route Display Name restricted to alphanumeric and underscore
+  | The Display Name field for App Routes SHALL only accept characters matching `^[a-zA-Z0-9_]+$` (uppercase and lowercase letters, digits, and underscore). Any other character is forbidden.
+--- candidata: detail-panel-extracted-columns [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: RunResultDetailPanel displays Extracted Columns section
+  | `RunResultDetailPanel` SHALL render an `AdaptiveValueGrid` section titled with the `RunsI18nKey.ExtractedColumns` i18n key, driven by `result.extractedColumns`.
+
+===== P209 | BlackBeltTechnology/pi-agent-dashboard PR #204 | capacidade do par: session-status-banner
+PR: feat(restore-pi-version-skew-surface): pi-version advisory + per-session pi version
+arquivos ligados: packages/extension/src/bridge.ts;packages/shared/src/protocol.ts
+--- linhas alteradas (21; mostrando até 40)
+-import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfCh
++import { sendModelUpdateIfChanged as _sendModelUpdateIfChanged, sendSessionNameIfChanged as _sendSessionNameIfChanged, sendGitInfoIfChanged as _sendGitInfoIfCh
++  function sendPiVersionIfChanged() { _sendPiVersionIfChanged(syncBc()); }
+-    // Send initial git info
++    // Send initial git info + the session's pi version
++    sendPiVersionIfChanged();
++      sendPiVersionIfChanged,
++/**
++ * Bridge -> server: the pi-coding-agent version of the process this bridge
++ * runs inside, read via `createRequire` from pi's own tree (ground truth for
++ * the session). Sent at register and whenever the polled value changes
++ * (e.g. after an out-of-band `pi update --self`). Server stores it as
++ * `DashboardSession.piVersion` and re-broadcasts. See change:
++ * restore-pi-version-skew-surface.
++ */
++export interface PiVersionUpdateMessage {
++  type: "pi_version_update";
++  sessionId: string;
++  version: string;
++}
++  | PiVersionUpdateMessage
+--- candidata: bridge-extension [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Extension lifecycle and server connection
+  | The bridge extension SHALL be a global pi extension installed at `~/.pi/agent/extensions/` (via pi package). On `session_start`, it SHALL connect to the dashboard server via WebSocket at a configurabl
+  > ### Requirement: Extension lifecycle and server connection
+  > The bridge extension SHALL be a global pi extension installed at `~/.pi/agent/extensions/` (via pi package). On `session_start`, it SHALL connect to the dashboard server via WebSocket at a configurabl
+  > #### Scenario: Successful connection on session start
+  > - **WHEN** pi session starts and the bridge extension loads
+  > - **THEN** the extension SHALL connect to the dashboard server and send a `session_register` message with session metadata
+  > #### Scenario: Dashboard server not running
+  > - **WHEN** the bridge extension cannot connect to the dashboard server
+  > - **WHEN** pi session shuts down
+--- candidata: dashboard-server [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: Server configuration
+  | The dashboard server SHALL accept configuration via CLI flags, environment variables, and the shared config module which reads `~/.pi/dashboard/config.json`. The server CLI SHALL import `loadConfig()`
+  > ### Requirement: Server configuration
+  > The dashboard server SHALL accept configuration via CLI flags, environment variables, and the shared config module which reads `~/.pi/dashboard/config.json`. The server CLI SHALL import `loadConfig()`
+  > - `autoStart` (default: true) — read by the bridge extension, not used by the server itself
+  > On startup, the server SHALL call `ensureConfig()` from the shared config module to create the default config file if it does not exist.
+  > - **WHEN** the server starts with `--port 3000 --pi-port 3001`
+  > - **WHEN** the server starts with no configuration
+  > #### Scenario: First-time server start creates config
+  > - **WHEN** the server starts and `~/.pi/dashboard/config.json` does not exist
+--- candidata: mid-turn-prompt-queue [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Bridge holds a per-session mid-turn prompt queue
+  | The bridge extension SHALL maintain a per-session, in-memory FIFO of `PendingPrompt` records where `PendingPrompt = { id: string; text: string; images?: ImageContent[] }`. The `id` is a bridge-minted 
+  > ### Requirement: Bridge holds a per-session mid-turn prompt queue
+  > The bridge extension SHALL maintain a per-session, in-memory FIFO of `PendingPrompt` records where `PendingPrompt = { id: string; text: string; images?: ImageContent[] }`. The `id` is a bridge-minted 
+  > - **WHEN** a bridge registers a session for the first time
+  > - **THEN** the bridge's queue for that session SHALL be empty
+  > #### Scenario: Queue resets on re-register
+  > - **WHEN** a bridge re-registers for a session whose prior bridge instance had a non-empty queue
+  > - **THEN** the new instance SHALL start with an empty queue and SHALL NOT inherit the prior bridge's entries
+  > - **WHEN** the bridge enqueues two prompts within the same session lifetime
+--- candidata: extension-ui-system [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: GenericExtensionDialog SHALL trap and restore focus
+  | `GenericExtensionDialog` MUST trap keyboard focus inside the dialog while mounted: Tab and Shift+Tab MUST cycle through focusable descendants without leaving the dialog. On mount, the component MUST r
+  > ### Requirement: GenericExtensionDialog SHALL trap and restore focus
+  > `GenericExtensionDialog` MUST trap keyboard focus inside the dialog while mounted: Tab and Shift+Tab MUST cycle through focusable descendants without leaving the dialog. On mount, the component MUST r
+  > #### Scenario: Focus is trapped inside the dialog
+  > - **THEN** focus moves to the first control inside the dialog (NOT to elements behind the backdrop)
+  > - **THEN** the toast renders inside an `aria-live="polite"` region; screen readers queue the announcement
+  > - **THEN** the toast renders with `role="alert"` (or inside an `aria-live="assertive"` sub-region); screen readers interrupt to announce
+  > Tone foreground/background combinations MUST meet WCAG 2.1 AA contrast (≥ 4.5:1) in both light and dark themes. Implementations MUST verify with an automated contrast check; failures SHALL block the c
+  > The repository MUST include `packages/client/src/__tests__/extension-ui-a11y.test.tsx` that renders each Extension UI System slot component with fixture data and asserts no `serious` or `critical` vio
+--- candidata: model-selector [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Model selector in status bar
+  | The status bar SHALL display the current model name. Clicking it SHALL open an autocomplete dropdown listing all available models.
+  > The status bar SHALL display the current model name. Clicking it SHALL open an autocomplete dropdown listing all available models.
+  > #### Scenario: Display current model
+  > - **WHEN** a session has a model selected (e.g., "anthropic/claude-4")
+  > - **THEN** the status bar shows the model name on the left side
+  > #### Scenario: Open model dropdown
+  > - **WHEN** user clicks the model name
+  > - **THEN** a dropdown appears with a text filter and scrollable list of available models
+  > #### Scenario: Filter models
+
+===== P210 | nold-ai/specfact-cli PR #610 | capacidade do par: implementation-status-docs
+PR: Release dev to main
+arquivos ligados: src/specfact_cli/__init__.py
+--- linhas alteradas (2; mostrando até 40)
+-__version__ = "0.47.7"
++__version__ = "0.47.11"
+--- candidata: acceptance-test-runner [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Dual-Path Scenario Execution
+  | The system SHALL execute CLI behavior scenarios via both in-process (CliRunner) and subprocess (built-wheel installed binary) paths.
+--- candidata: adapter-development-guide [tasks]
+  | # adapter-development-guide Specification
+  | Adapter developers have a guide that describes the full BridgeAdapter interface, ToolCapabilities, and how to implement or extend adapters.
+  | ## ADDED Requirements
+--- candidata: adr-template [tasks]
+  | # adr-template Specification
+  | Architecture Decision Records (ADRs) are available so that major architectural decisions are recorded and discoverable.
+  | ## ADDED Requirements
+--- candidata: api-error-diagnostics [tasks]
+  | # api-error-diagnostics Specification
+  | ## Purpose
+  | Define how SpecFact CLI captures, logs, and surfaces API errors (especially ADO PATCH failures) so that with `--debug` users see response body and patch paths, and without debug users see clear, actio
+--- candidata: backlog-adapter [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: BacklogAdapter Interface
+  | The system SHALL provide a standard `BacklogAdapter` interface that all backlog sources (GitHub, ADO, JIRA, GitLab, etc.) must implement.

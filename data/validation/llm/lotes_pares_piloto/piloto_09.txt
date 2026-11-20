@@ -1,0 +1,2860 @@
+===== P044 | repo tduretz/MDOODZ7.0 | PR #165: Add performance metrics: PCG thermal solver, fused interpolation, logging, benchmarking | capacidade: skill-code-glossary
+--- SPEC VIVA
+## ADDED Requirements
+
+### Requirement: Skill provides variable-to-physics mapping for tensor quantities
+The skill SHALL provide a lookup table mapping code variable names for stress and strain rate tensors to their physical meaning, equation notation, and SI units:
+- `sxxd` / `szzd` / `sxz` → deviatoric stress components τ'_xx, τ'_zz, τ_xz [Pa]
+- `exxd` / `ezzd` / `exz` → deviatoric strain rate components ε̇'_xx, ε̇'_zz, ε̇_xz [s⁻¹]
+- `Tii` / `Eii` → second invariant of deviatoric stress τ_II = √(½(τ'_xx² + τ'_zz²) + τ_xz²) [Pa] / strain rate ε̇_II [s⁻¹]
+- `sxxd0` / `szzd0` / `sxz0` → old (previous time step) stress, used in viscoelastic update
+- `Tensor2D` struct: `.xx`, `.zz`, `.yy`, `.xz`, `.zx`, `.ii` (invariant), `.ii2` (squared invariant)
+- `wxz` → vorticity component ω_xz = ½(∂vx/∂z - ∂vz/∂x) [s⁻¹]
+
+#### Scenario: User encounters sxxd in the code
+- **WHEN** the user asks what `sxxd` means
+- **THEN** the skill SHALL explain it is the xx-component of deviatoric stress (τ'_xx), the "d" suffix stands for "deviatoric" (trace removed), stored in Pa (or scaled units internally)
+
+### Requirement: Skill provides variable-to-physics mapping for material properties
+The skill SHALL map material property variable names to physical quantities:
+- `rho` → density ρ [kg/m³]
+- `eta` / `eta_n` / `eta_s` → effective viscosity η [Pa·s], at cell centres (_n) or vertices (_s)
+- `G` → elastic shear modulus G [Pa]
+- `Cp` → specific heat capacity [J/kg/K]
+- `k` / `kx` / `kz` → thermal conductivity [W/m/K], directional components
+- `Qr` → radiogenic heat production [W/m³]
+- `alp` → thermal expansivity α [K⁻¹]
+- `bet` → compressibility β [Pa⁻¹]
+- `C` / `C_n` / `C_s` → cohesion [Pa]
+- `phi` / `fric_n` / `fric_s` → friction angle φ [degrees in .txt, radians internally]
+- `psi` / `dil_n` / `dil_s` → dilation angle ψ [degrees/.txt, radians internally]
+- `d` / `d_n` / `d_s` → grain size [m]
+- `phi_n` (on grid, not friction) → porosity φ (context-dependent: distinguish from friction angle)
+
+#### Scenario: User asks what alp and bet mean
+- **WHEN** the user encounters `alp` and `bet` in a phase definition
+- **THEN** the skill SHALL explain: `alp` = thermal expansivity α (typically 3.2e-5 K⁻¹), `bet` = compressibility β (typically 1e-11 Pa⁻¹), used in the equation of state ρ = ρ₀(1 - α(T-T₀))(1 + β(P-P₀))
+
+### Requirement: Skill provides grid array naming conventions
+The skill SHALL explain the systematic naming convention for grid arrays:
+- `_n` suffix → cell centres (nodes), e.g., `eta_n`, `T`, `P`, `rho_n`
+- `_s` suffix → cell vertices (staggered), e.g., `eta_s`, `rho_s`, `sxz`
+- `_0` suffix → value from previous time step, e.g., `sxxd0`, `T0_n`, `p0_n`
+- `u` / `v` → horizontal (Vx) and vertical (Vz) velocity, stored on staggered edges
+- `p` → pressure, stored at cell centres
+- `BCu` / `BCv` / `BCp` / `BCt` → boundary condition structs for Vx, Vz, P, T
+- `phase_perc_n` / `phase_perc_s` → phase volume fractions per cell (for averaging)
+- `eII_pwl`, `eII_exp`, `eII_lin`, `eII_gbs`, `eII_cst`, `eII_el`, `eII_pl` → strain rate partitioned by mechanism
+
+#### Scenario: User asks what _n and _s mean
+- **WHEN** the user sees `eta_n` and `eta_s` and asks the difference
+- **THEN** the skill SHALL explain: `_n` = cell-centroid value (used for normal stress), `_s` = vertex value (used for shear stress), reflecting the staggered grid layout where different physical quantities live at different grid locations
+
+### Requirement: Skill provides creep mechanism abbreviation glossary
+The skill SHALL decode all flow law abbreviations used in the code:
+- `pwl` → power law (dislocation creep): η_pwl = f(A, n, Q, V, T, P, ε̇)
+- `lin` → linear (diffusion creep): η_lin = f(A, n, m, Q, V, T, P, d)
+- `exp` → exponential (Peierls creep): low-T, high-stress mechanism
+- `gbs` → grain boundary sliding: η_gbs = f(A, n, m, Q, V, T, P, d)
+- `cst` / `cstv` → constant viscosity (η = η₀, no T/P/ε̇ dependence)
+- `eta_ve` → visco-elastic effective viscosity: η_ve = η·G·Δt/(η + G·Δt)
+- `eta_vep` → visco-elasto-plastic viscosity (after yield correction)
+- `B_pwl`, `C_pwl` → pre-exponential factor intermediates in viscosity calculation
+- `Fpwl`, `Flin`, `Fgbs` → correction factors for flow laws
+- Subscript meaning in `mat_prop`: `t` prefix (e.g., `tpwl`) = type flag, `Q` = activation energy, `V` = activation volume, `n` = stress exponent, `m` = grain size exponent, `A` = pre-exponential, `a`/`f`/`r` = fugacity-related parameters
+
+#### Scenario: User asks what pwlv=40 and linv=40 mean together
+- **WHEN** the user sees both `pwlv = 40` and `linv = 40` for a mantle phase
+- **THEN** the skill SHALL explain: both dislocation (`pwl`) and diffusion (`lin`) creep are active using Hirth & Kohlstedt 2003 Dry Olivine parameters; the code computes both viscosities and combines them harmonically, so the weaker mechanism dominates at each point
+
+### Requirement: Skill provides particle/marker field glossary
+The skill SHALL map marker (particle) field names to physical quantities:
+- `x`, `z` → particle position [m scaled]
+- `Vx`, `Vz` → interpolated velocity [m/s scaled]
+- `P` → pressure [Pa scaled]
+- `T` → temperature [K scaled]
+- `phase` → material phase index (integer)
+- `d` → grain size [m scaled]
+- `phi` → porosity
+- `X` → chemical composition / melt fraction
+- `progress` → reaction progress variable
+- `strain`, `strain_el`, `strain_pl` → total, elastic, plastic accumulated strain
+- `strain_pwl`, `strain_exp`, `strain_lin`, `strain_gbs` → strain partitioned by creep mechanism
+- `Fxx`, `Fxz`, `Fzx`, `Fzz` → finite deformation gradient tensor F components
+- `nx`, `nz` → director (fabric normal) components
+- `aniso_angle` → fabric angle θ [radians]
+- `generation` → particle generation (for reseeding tracking)
+- `noise` → random perturbation field
+- `T0`, `P0`, `x0`, `z0` → initial values (for P-T path tracking)
+- `Tmax`, `Pmax` → max T and P experienced (for metamorphic path)
+
+#### Scenario: User asks about finite strain tracking on particles
+- **WHEN** the user asks what `Fxx`, `Fxz`, `Fzx`, `Fzz` are
+- **THEN** the skill SHALL explain these are components of the deformation gradient tensor F, tracking accumulated finite strain on each particle, used to compute finite strain ellipse aspect ratio (`FS_AR`) and to evolve anisotropy when `ani_fstrain = 1`
+
+### Requirement: Skill provides solver process stage glossary
+The skill SHALL describe what is physically happening at each major stage of the time loop, mapping function names to physical processes:
+- `SetBCs` → apply mechanical boundary conditions (plate velocities, free slip, periodic)
+- `P2Mastah` → interpolate particle properties to grid (particles → grid: homogenisation of heterogeneous medium)
+- `RheologyDensity` → evaluate constitutive law: compute effective viscosity from T, P, ε̇, composition at each grid point
+- `BuildStokesOperator` / `StokesAssemblyDecoupled` → assemble discretised momentum + continuity equations into sparse matrix
+- `SolveStokes` → solve the linear system for velocity and pressure increments
+- `UpdateNonLinearSolution` → update velocity/pressure with line search (Newton step)
+- `EvaluateRheology` → re-evaluate viscosity with updated strain rates (nonlinear iteration)
+- `ThermalSolver` → solve the energy equation: heat conduction + sources → temperature update
+- `AdvectFreeSurface` → move the free surface marker chain with the velocity field (topography evolution)
+- `RogerGunther` / particle advection → move material particles with RK integration (material transport)
+- `Interp_Grid2P` → interpolate updated fields back to particles (grid → particles)
+- `CountPartCell` / `ParticleReseeding` → maintain particle distribution (numerical housekeeping)
+- `WriteOutputHDF5` → save snapshot to disk
+
+#### Scenario: User asks what P2Mastah does physically
+- **WHEN** the user encounters `P2Mastah` in the code
+- **THEN** the skill SHALL explain: this is the particle-to-grid interpolation step — it computes grid-level material properties (viscosity, density, conductivity, etc.) by averaging over particles within each cell, effectively homogenising the heterogeneous marker cloud into continuous fields the finite difference solver can use
+
+### Requirement: Skill provides scaling and unit convention reference
+The skill SHALL document the unit conventions:
+- All internal computations use non-dimensional (scaled) values
+- Physical value = internal value × scale factor
+- The `scale` struct fields: `eta` (viscosity), `L` (length), `V` (velocity), `T` (temperature), `t` (time = L/V), `a` (acceleration), `E` (energy), `S` (stress = η·V/L), `m` (mass), `rho` (density), `F` (force), `J` (Joule), `W` (Watt), `Cp` (heat capacity), `rhoE` (energy density), `k` (conductivity)
+- Common conversion patterns: `MinMaxArray(array, scaling.X, N, "label")` prints min/max in physical units
+
+#### Scenario: User wants to convert internal values to SI
+- **WHEN** the user reads an internal value and wants the physical equivalent
+- **THEN** the skill SHALL explain: multiply by the corresponding scale factor, e.g., stress_Pa = stress_internal × scaling.S, where S = η_scale · V_scale / L_scale
+
+### Requirement: Skill provides constants and special values reference
+The skill SHALL document the physical constants defined in the code:
+- `zeroC = 273.15` → 0°C in Kelvin
+- `Rg = 8.314510` → universal gas constant R [J/mol/K]
+- `PI = 3.14159...` → π
+- `Rad_Earth = 6370000` → Earth radius [m]
+- BC type codes: `0` = Dirichlet (physical boundary), `11` = Dirichlet (non-physical), `2` = Neumann (non-physical), `13` = Neumann (physical), `-2` = periodic, `-1` = interior, `30` = air/inactive
+- Averaging modes: `ARITHMETIC = 0`, `HARMONIC = 1`, `GEOMETRIC = 2`
+
+#### Scenario: User asks why 273.15 appears everywhere
+- **WHEN** the user sees `zeroC` or `273.15` in temperature calculations
+- **THEN** the skill SHALL explain this is the Celsius-to-Kelvin offset: T_Kelvin = T_Celsius + 273.15, and the code uses Kelvin internally
+
+--- ARQUIVOS DO PR (851)
+added     +193   -0     .claude/skills/skill-anisotropy/SKILL.md
+added     +515   -0     .claude/skills/skill-benchmarking/SKILL.md
+added     +193   -0     .claude/skills/skill-build-and-run/SKILL.md
+added     +248   -0     .claude/skills/skill-code-glossary/SKILL.md
+added     +139   -0     .claude/skills/skill-debugging/SKILL.md
+added     +175   -0     .claude/skills/skill-logging/SKILL.md
+added     +132   -0     .claude/skills/skill-melting/SKILL.md
+added     +388   -0     .claude/skills/skill-model-setup/SKILL.md
+added     +191   -0     .claude/skills/skill-parameter-validation/SKILL.md
+added     +91    -0     .claude/skills/skill-particle-reseeding/SKILL.md
+added     +214   -0     .claude/skills/skill-physics-theory/SKILL.md
+added     +276   -0     .claude/skills/skill-rheology/SKILL.md
+added     +221   -0     .claude/skills/skill-scenario-gallery/SKILL.md
+added     +296   -0     .claude/skills/skill-solvers/SKILL.md
+added     +283   -0     .claude/skills/skill-stokes-benchmark/SKILL.md
+added     +449   -0     .claude/skills/skill-testing-guide/SKILL.md
+added     +224   -0     .claude/skills/skill-thermal/SKILL.md
+added     +349   -0     .claude/skills/skill-visualisation/SKILL.md
+modified  +50    -45    .github/copilot-instructions.md
+modified  +19    -2     .github/skills/skill-anisotropy/SKILL.md
+added     +515   -0     .github/skills/skill-benchmarking/SKILL.md
+modified  +34    -0     .github/skills/skill-build-and-run/SKILL.md
+modified  +24    -0     .github/skills/skill-code-glossary/SKILL.md
+added     +139   -0     .github/skills/skill-debugging/SKILL.md
+added     +175   -0     .github/skills/skill-logging/SKILL.md
+added     +132   -0     .github/skills/skill-melting/SKILL.md
+modified  +51    -0     .github/skills/skill-model-setup/SKILL.md
+modified  +4     -1     .github/skills/skill-parameter-validation/SKILL.md
+added     +91    -0     .github/skills/skill-particle-reseeding/SKILL.md
+modified  +39    -2     .github/skills/skill-rheology/SKILL.md
+modified  +11    -6     .github/skills/skill-scenario-gallery/SKILL.md
+modified  +71    -10    .github/skills/skill-solvers/SKILL.md
+added     +283   -0     .github/skills/skill-stokes-benchmark/SKILL.md
+modified  +30    -26    .github/skills/skill-testing-guide/SKILL.md
+modified  +53    -0     .github/skills/skill-visualisation/SKILL.md
+modified  +7     -0     .gitignore
+modified  +1     -1     Deps.cmake
+modified  +41    -39    MDLIB/AdvectionRoutines.c   <== código ligado à spec
+modified  +485   -81    MDLIB/AnisotropyRoutines.c   <== código ligado à spec
+modified  +2     -2     MDLIB/CMakeLists.txt
+modified  +70    -70    MDLIB/CheckBC.ipynb
+modified  +14    -5     MDLIB/ChemicalRoutines.c
+modified  +2     -0     MDLIB/FD_Jacobian.c
+modified  +810   -74    MDLIB/FlowLaws.c   <== código ligado à spec
+modified  +103   -28    MDLIB/FreeSurface.c   <== código ligado à spec
+modified  +5     -3     MDLIB/GridRoutines.c
+modified  +42    -25    MDLIB/HDF5Output.c   <== código ligado à spec
+modified  +234   -87    MDLIB/InputOutput.c
+modified  +488   -207   MDLIB/Main_DOODZ.c   <== código ligado à spec
+added     +306   -0     MDLIB/MdoodzLog.c
+modified  +4     -3     MDLIB/MeltingRoutines.c
+modified  +58    -7     MDLIB/MemoryAllocFree.c
+modified  +26    -24    MDLIB/MiscFunctions.c
+modified  +9     -7     MDLIB/ParticleReseeding.c
+modified  +886   -276   MDLIB/ParticleRoutines.c   <== código ligado à spec
+modified  +245   -210   MDLIB/RheologyDensity.c   <== código ligado à spec
+modified  +4     -0     MDLIB/RheologyDensity.h   <== código ligado à spec
+modified  +666   -332   MDLIB/RheologyParticles.c
+modified  +32    -31    MDLIB/Setup.c   <== código ligado à spec
+modified  +68    -56    MDLIB/Solvers.c   <== código ligado à spec
+modified  +3     -1     MDLIB/SparseTools.c
+modified  +19    -54    MDLIB/StokesAssemblyDecoupled.c   <== código ligado à spec
+modified  +79    -43    MDLIB/StokesRoutines.c
+modified  +106   -28    MDLIB/ThermalRoutines.c
+modified  +181   -6     MDLIB/ThermalSolver.c   <== código ligado à spec
+added     +75    -0     MDLIB/include/mdoodz-log.h
+modified  +86    -3     MDLIB/include/mdoodz.h   <== código ligado à spec
+modified  +72    -10    MDLIB/mdoodz-private.h   <== código ligado à spec
+added     +0     -0     OPTIMIZATIONS.md
+added     +0     -0     SETS/AniFstrainCalciteBruijn.c
+added     +0     -0     SETS/AniFstrainCalciteBruijn.txt
+added     +0     -0     SETS/AniFstrainCalciteBruijn/README.md
+added     +0     -0     SETS/AniFstrainCalciteBruijn/img/mdoodz_vs_bruijn.png
+added     +0     -0     SETS/AniFstrainCalciteBruijn/mdoodz_vs_bruijn.py
+added     +0     -0     SETS/AniFstrainCalciteBruijn/run.sh
+added     +0     -0     SETS/AniFstrainCalcitePieri.c
+renamed   +0     -0     SETS/AniFstrainCalcitePieri.txt
+added     +0     -0     SETS/AniFstrainCalcitePieri/README.md
+added     +0     -0     SETS/AniFstrainCalcitePieri/img/mdoodz_vs_pieri.png
+added     +0     -0     SETS/AniFstrainCalcitePieri/mdoodz_vs_pieri.py
+added     +0     -0     SETS/AniFstrainCalcitePieri/run.sh
+added     +0     -0     SETS/AniFstrainCalciteSchuster.c
+added     +0     -0     SETS/AniFstrainCalciteSchuster.txt
+added     +0     -0     SETS/AniFstrainCalciteSchuster/README.md
+added     +0     -0     SETS/AniFstrainCalciteSchuster/img/mdoodz_vs_schuster.png
+added     +0     -0     SETS/AniFstrainCalciteSchuster/mdoodz_vs_schuster.py
+added     +0     -0     SETS/AniFstrainCalciteSchuster/run.sh
+added     +0     -0     SETS/AniFstrainOlivineBoneh_InitFS.c
+added     +0     -0     SETS/AniFstrainOlivineBoneh_InitFS.txt
+added     +0     -0     SETS/AniFstrainQuartzBlackford.c
+added     +0     -0     SETS/AniFstrainQuartzBlackford.txt
+added     +0     -0     SETS/AniFstrainQuartzBlackford/README.md
+added     +0     -0     SETS/AniFstrainQuartzBlackford/img/mdoodz_vs_blackford.png
+added     +0     -0     SETS/AniFstrainQuartzBlackford/mdoodz_vs_blackford.py
+added     +0     -0     SETS/AniFstrainQuartzBlackford/run.sh
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni.c
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni.txt
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/README.md
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/img/mdoodz_vs_pennacchioni.png
+added     +0     -0     SETS/AniFstrainQuartzPennacchioni/mdoodz_vs_pennacchioni.py
+added     +27    -0     SETS/AniFstrainQuartzPennacchioni/run.sh
+added     +59    -0     SETS/AnisoFstrainBox.c
+added     +129   -0     SETS/AnisoFstrainBox.txt
+modified  +1     -1     SETS/BlankenBench.c
+modified  +14    -0     SETS/CMakeLists.txt
+added     +59    -0     SETS/PinchSwellGSEAniso.c
+added     +148   -0     SETS/PinchSwellGSEAniso.txt
+modified  +5     -0     SETS/Popov2025_Pureshear_VEVP.c
+modified  +11    -4     SETS/Popov2025_Pureshear_VEVP.txt
+modified  +5     -0     SETS/Popov2025_Tensile_VEVP.c
+modified  +11    -4     SETS/Popov2025_Tensile_VEVP.txt
+modified  +1     -0     SETS/RiftingChenin.txt
+added     +140   -0     SETS/RiftingCombinedYield.c
+added     +308   -0     SETS/RiftingCombinedYield.txt
+added     +308   -0     SETS/RiftingCombinedYield_medium.txt
+added     +308   -0     SETS/RiftingCombinedYield_quick.txt
+added     +140   -0     SETS/RiftingComprehensive.c
+added     +330   -0     SETS/RiftingComprehensive.txt
+added     +329   -0     SETS/RiftingComprehensive_highres.txt
+added     +329   -0     SETS/RiftingComprehensive_lowres.txt
+added     +329   -0     SETS/RiftingComprehensive_medres.txt
+added     +255   -0     TESTS/AnalyticalBench/SolKz_chol.txt
+modified  +1312  -473   TESTS/AnalyticalSolutions.md
+renamed   +122   -119   TESTS/AnisotropyBenchmark/AniFstrainEvolution.txt
+modified  +121   -119   TESTS/AnisotropyBenchmark/DirectorEvolution.txt
+renamed   +123   -119   TESTS/AnisotropyBenchmark/DirectorEvolutionInterpMode1.txt
+renamed   +123   -119   TESTS/AnisotropyBenchmark/DirectorEvolutionInterpMode2.txt
+modified  +2     -0     TESTS/AnisotropyBenchmark/StressAngle.txt
+added     +80    -0     TESTS/AnisotropyBenchmark/plot_aniso_factor.gp
+modified  +2062  -444   TESTS/AnisotropyBenchmarkTests.cpp
+added     +118   -0     TESTS/BlankenBench/BlankenBenchOptimized.txt
+added     +124   -0     TESTS/BlankenBench/BlankenBenchRun7.txt
+added     +124   -0     TESTS/BlankenBench/BlankenBenchRun8.txt
+modified  +12    -7     TESTS/BlankenBench/BlankenBenchSteady.txt
+added     +296   -0     TESTS/BlankenBench/Blankenbach.md
+added     +0     -0     TESTS/BlankenBench/blankenbach_run5_vs_run6.png
+added     +87    -0     TESTS/BlankenBench/check_vrms.py
+added     +45    -0     TESTS/BlankenBench/pattern_check.gp
+added     +52    -0     TESTS/BlankenBench/pattern_evolution.gp
+added     +90    -0     TESTS/BlankenBench/plot_3run_comparison.py
+added     +58    -0     TESTS/BlankenBench/timeseries.py
+modified  +165   -93    TESTS/BlankenBenchTests.cpp
+added     +134   -0     TESTS/BoundaryCondition/PeriodicSimpleShearInterpMode1.txt
+added     +134   -0     TESTS/BoundaryCondition/PeriodicSimpleShearInterpMode2.txt
+modified  +180   -153   TESTS/BoundaryConditionTests.cpp
+modified  +67    -3     TESTS/CMakeLists.txt
+added     +147   -0     TESTS/Compressibility/DilatantFlowInterpMode1.txt
+added     +147   -0     TESTS/Compressibility/DilatantFlowInterpMode2.txt
+modified  +96    -69    TESTS/CompressibilityTests.cpp
+added     +136   -0     TESTS/ConvergenceRate/NewtonPwlInterpMode1.txt
+added     +136   -0     TESTS/ConvergenceRate/NewtonPwlInterpMode2.txt
+modified  +141   -114   TESTS/ConvergenceRateTests.cpp
+added     +136   -0     TESTS/Density/HydrostaticPressureInterpMode1.txt
+added     +136   -0     TESTS/Density/HydrostaticPressureInterpMode2.txt
+modified  +27    -0     TESTS/DensityTests.cpp
+added     +136   -0     TESTS/FiniteStrain/PureShearStrainInterpMode1.txt
+added     +136   -0     TESTS/FiniteStrain/PureShearStrainInterpMode2.txt
+modified  +103   -76    TESTS/FiniteStrainTests.cpp
+added     +136   -0     TESTS/FreeSurface/SinkingBlockInterpMode1.txt
+added     +136   -0     TESTS/FreeSurface/SinkingBlockInterpMode2.txt
+modified  +140   -113   TESTS/FreeSurfaceTests.cpp
+added     +200   -0     TESTS/InitAnisoFromFiniteStrainTests.cpp
+added     +116   -0     TESTS/InterpEquiv/InterpEquiv_Mode0.txt
+added     +116   -0     TESTS/InterpEquiv/InterpEquiv_Mode3.txt
+added     +107   -0     TESTS/InterpEquivalenceTests.cpp
+added     +113   -0     TESTS/NeumannBC/StressBCPureShearInterpMode1.txt
+added     +113   -0     TESTS/NeumannBC/StressBCPureShearInterpMode2.txt
+modified  +104   -77    TESTS/NeumannBCTests.cpp
+modified  +28    -1     TESTS/NewtonIterationConvergence.cpp
+added     +147   -0     TESTS/Plasticity/DruckerPragerYieldInterpMode1.txt
+added     +147   -0     TESTS/Plasticity/DruckerPragerYieldInterpMode2.txt
+modified  +165   -138   TESTS/PlasticityTests.cpp
+added     +320   -0     TESTS/Popov2025/Popov0DAnalytical.cpp
+added     +69    -0     TESTS/Popov2025/Popov0DAnalytical.h
+added     +145   -0     TESTS/Popov2025/Popov0D_DeviatoricShear.txt
+added     +153   -0     TESTS/Popov2025/Popov0D_MixedStrain.txt
+added     +153   -0     TESTS/Popov2025/Popov0D_VolumetricExtension.txt
+added     +75    -0     TESTS/Popov2025/plots/README.md
+added     +210   -0     TESTS/Popov2025/plots/extract_popov2025.cpp
+added     +110   -0     TESTS/Popov2025/plots/fig5_0d_stress.gp
+added     +2     -0     TESTS/Popov2025/plots/out/.gitignore
+added     +0     -0     TESTS/Popov2025/plots/reference/fig5_0d_stress.png
+added     +550   -0     TESTS/Popov2025Tests.cpp
+modified  +179   -32    TESTS/README.md
+added     +112   -0     TESTS/RheologyCreep/GrainSizeSteadyState.txt
+added     +112   -0     TESTS/RheologyCreep/GrainSizeSweepCoupledBase.txt
+added     +140   -0     TESTS/RheologyCreep/PinchSwellGSEAnisoSmoke.txt
+added     +121   -0     TESTS/RheologyCreep/PinchSwellGSESmoke.txt
+added     +136   -0     TESTS/RheologyCreep/PowerLawCreepInterpMode1.txt
+added     +136   -0     TESTS/RheologyCreep/PowerLawCreepInterpMode2.txt
+added     +80    -0     TESTS/RheologyCreep/plot_grain_size.gp
+added     +88    -0     TESTS/RheologyCreep/plot_grain_size_paper_view.gp
+modified  +728   -162   TESTS/RheologyCreepTests.cpp
+added     +136   -0     TESTS/RotationAdvection/RotationMode0.txt
+added     +136   -0     TESTS/RotationAdvection/VortexMode0.txt
+added     +174   -0     TESTS/RotationAdvection/plot_rotation.py
+added     +323   -0     TESTS/RotationAdvectionTests.cpp
+added     +155   -0     TESTS/ShearBand/ConjugateBands_chol.txt
+added     +176   -0     TESTS/ShearBand/SingleBand_chol.txt
+added     +116   -0     TESTS/ShearHeating/ViscousDissipationInterpMode1.txt
+added     +116   -0     TESTS/ShearHeating/ViscousDissipationInterpMode2.txt
+modified  +47    -0     TESTS/ShearHeatingTests.cpp
+added     +138   -0     TESTS/ShearTemplate/LinearPureshearIsotropicInterpMode1.txt
+added     +138   -0     TESTS/ShearTemplate/LinearPureshearIsotropicInterpMode2.txt
+added     +102   -0     TESTS/SolCx/SolCx21.txt
+added     +102   -0     TESTS/SolCx/SolCx41.txt
+added     +102   -0     TESTS/SolCx/SolCx51.txt
+added     +102   -0     TESTS/SolCx/SolCx81.txt
+added     +2891  -0     TESTS/SolCx/SolCxAnalytical.cpp
+added     +47    -0     TESTS/SolCx/SolCxAnalytical.h
+added     +47    -0     TESTS/SolCx/plot_solcx.gp
+added     +0     -0     TESTS/SolCx/solcx_convergence.png
+added     +278   -0     TESTS/SolCxBenchmarkTests.cpp
+added     +102   -0     TESTS/SolViBenchmark/SolViRes51InterpMode1.txt
+added     +102   -0     TESTS/SolViBenchmark/SolViRes51InterpMode2.txt
+added     +127   -0     TESTS/SolViBenchmark/SolViRes51_anisotropy_chol.txt
+added     +100   -0     TESTS/SolViBenchmark/SolViRes51_chol.txt
+added     +100   -0     TESTS/SolViBenchmark/SolViRes51_newton_chol.txt
+modified  +27    -0     TESTS/SolViBenchmarkTests.cpp
+added     +134   -0     TESTS/SolverMode/AdaptiveDtInterpMode1.txt
+added     +134   -0     TESTS/SolverMode/AdaptiveDtInterpMode2.txt
+modified  +106   -79    TESTS/SolverModeTests.cpp
+modified  +79    -0     TESTS/TestHelpers.h
+added     +116   -0     TESTS/Thermal/GaussianDiffusionInterpMode1.txt
+added     +116   -0     TESTS/Thermal/GaussianDiffusionInterpMode2.txt
+added     +114   -0     TESTS/Thermal/GaussianDiffusionL2.txt
+added     +115   -0     TESTS/Thermal/OceanicCooling.txt
+added     +116   -0     TESTS/Thermal/ThermoElastic.txt
+modified  +215   -0     TESTS/ThermalTests.cpp
+added     +310   -0     TESTS/ThermalVerificationTests.cpp
+added     +106   -0     TESTS/TopoBench/TopoBenchConvergence31InterpMode1.txt
+added     +106   -0     TESTS/TopoBench/TopoBenchConvergence31InterpMode2.txt
+added     +113   -0     TESTS/TopoBench/TopoRelax_chol.txt
+modified  +265   -237   TESTS/TopoBenchTests.cpp
+added     +134   -0     TESTS/VelocityField/PureShearVelocityInterpMode1.txt
+added     +134   -0     TESTS/VelocityField/PureShearVelocityInterpMode2.txt
+modified  +27    -0     TESTS/VelocityFieldTests.cpp
+added     +137   -0     TESTS/ViscoElastic/StressAccumulationInterpMode1.txt
+added     +137   -0     TESTS/ViscoElastic/StressAccumulationInterpMode2.txt
+modified  +108   -81    TESTS/ViscoElasticTests.cpp
+added     +0     -0     TESTS/aniso_factor_evolution.png
+added     +189   -0     TESTS/benchmark_results/REPORT-20260412-175030.md
+added     +122   -0     TESTS/benchmark_results/REPORT-20260413-113812.md
+added     +105   -0     TESTS/extract_blankenbach.py
+added     +0     -0     TESTS/grain_size_benchmark.png
+added     +0     -0     TESTS/grain_size_paper_view.png
+added     +414   -0     TESTS/mdoodz.log
+added     +0     -0     TESTS/rotation_advection_comparison.png
+added     +0     -0     TESTS/thermoelastic_benchmark.png
+added     +0     -0     TESTS/vortex_advection_comparison.png
+modified  +48    -2     VISUAL_TESTS/CMakeLists.txt
+added     +211   -0     VISUAL_TESTS/ClosedBoxRunner.cpp
+added     +15    -0     VISUAL_TESTS/InterpEquivalence.gnu
+added     +16    -0     VISUAL_TESTS/OceanicCooling.gnu
+added     +15    -0     VISUAL_TESTS/PCGConvergence.gnu
+added     +116   -0     VISUAL_TESTS/PCGConvergence.txt
+added     +521   -0     VISUAL_TESTS/ReseedingGuide.cpp
+added     +160   -0     VISUAL_TESTS/ReseedingGuide.md
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode0.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/ClosedBoxMode2.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode0.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/CompareMode2.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeHighPart.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeLowPart.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/EdgeLowPart_Mode1.txt
+added     +161   -0     VISUAL_TESTS/ReseedingGuide/EdgeMultiphase.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/HighDensMode1.txt
+added     +138   -0     VISUAL_TESTS/ReseedingGuide/HighDensMode2.txt
+added     +25    -0     VISUAL_TESTS/ThermalAccuracy.gnu
+added     +34    -0     VISUAL_TESTS/ThermoElastic.gnu
+added     +281   -0     VISUAL_TESTS/Validation.cpp
+added     +32    -0     VISUAL_TESTS/advection_anim.gnu
+added     +37    -0     VISUAL_TESTS/advection_primer.gnu
+added     +483   -0     VISUAL_TESTS/aniso_fstrain/CALIBRATION_AND_DYNAMIC_FSTRAIN.md
+added     +252   -0     VISUAL_TESTS/aniso_fstrain/INDEX.md
+added     +108   -0     VISUAL_TESTS/aniso_fstrain/notes/07_rifting_comparison_provenance.md
+added     +101   -0     VISUAL_TESTS/aniso_fstrain/plot_01_fstrain_compare.py
+added     +142   -0     VISUAL_TESTS/aniso_fstrain/plot_02_finit_angle_panel.py
+added     +127   -0     VISUAL_TESTS/aniso_fstrain/plot_03_finit_factor_roundtrip.py
+added     +112   -0     VISUAL_TESTS/aniso_fstrain/plot_04_inheritance_reset.py
+added     +91    -0     VISUAL_TESTS/aniso_fstrain/plot_05_T_sweep_decay.py
+added     +128   -0     VISUAL_TESTS/aniso_fstrain/plot_06_regime_map.py
+added     +190   -0     VISUAL_TESTS/aniso_fstrain/plot_07_rifting_comparison.py
+added     +210   -0     VISUAL_TESTS/aniso_fstrain/runners/_lib.py
+added     +49    -0     VISUAL_TESTS/aniso_fstrain/runners/run_01_fstrain_compare.py
+added     +44    -0     VISUAL_TESTS/aniso_fstrain/runners/run_02_finit_angle.py
+added     +44    -0     VISUAL_TESTS/aniso_fstrain/runners/run_03_finit_factor.py
+added     +43    -0     VISUAL_TESTS/aniso_fstrain/runners/run_04_inheritance.py
+added     +46    -0     VISUAL_TESTS/aniso_fstrain/runners/run_05_T_sweep.py
+added     +110   -0     VISUAL_TESTS/aniso_fstrain/runners/run_06_regime_map.py
+added     +129   -0     VISUAL_TESTS/aniso_fstrain/templates/base.txt
+added     +46    -0     VISUAL_TESTS/cell_uniformity.gnu
+added     +122   -0     VISUAL_TESTS/closed_box_crash_anim.gnu
+added     +38    -0     VISUAL_TESTS/deactivation_strategy.gnu
+added     +40    -0     VISUAL_TESTS/edge_empty_cell.gnu
+added     +38    -0     VISUAL_TESTS/edge_multiphase.gnu
+added     +0     -0     VISUAL_TESTS/img/advection_anim.gif
+added     +0     -0     VISUAL_TESTS/img/advection_primer.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/01_fstrain_compare.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/02_finit_angle_panel.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/03_finit_factor_roundtrip.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/04_inheritance_reset.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/05_T_sweep_decay.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/06_regime_map.png
+added     +0     -0     VISUAL_TESTS/img/aniso_fstrain/07_rifting_comparison_5Ma.png
+added     +0     -0     VISUAL_TESTS/img/cell_uniformity.png
+added     +0     -0     VISUAL_TESTS/img/closed_box_crash_anim.gif
+added     +0     -0     VISUAL_TESTS/img/deactivation_strategy.png
+added     +0     -0     VISUAL_TESTS/img/edge_empty_cell.png
+added     +0     -0     VISUAL_TESTS/img/edge_multiphase.png
+modified  +0     -0     VISUAL_TESTS/img/gse.gif
+added     +0     -0     VISUAL_TESTS/img/interp_equivalence.png
+added     +0     -0     VISUAL_TESTS/img/mode_comparison_anim.gif
+added     +0     -0     VISUAL_TESTS/img/mode_comparison_check.png
+added     +0     -0     VISUAL_TESTS/img/nbpart_timeseries.png
+added     +0     -0     VISUAL_TESTS/img/oceanic_cooling.png
+added     +0     -0     VISUAL_TESTS/img/overnight/angle_sweep_summary.png
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso00_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso30_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_erfc_d_vs_ani.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_min_vs_erfc.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/aniso45_min_vs_erfc_delta.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso00.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso30.gif
+added     +0     -0     VISUAL_TESTS/img/overnight/gse_vs_aniso45.gif
+added     +0     -0     VISUAL_TESTS/img/pcg_convergence.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_final.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_ic.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_compare_mid.png
+added     +0     -0     VISUAL_TESTS/img/pinchswell_gse_vs_aniso.gif
+added     +0     -0     VISUAL_TESTS/img/placement_zoom.png
+added     +0     -0     VISUAL_TESTS/img/reseed_placement.png
+added     +0     -0     VISUAL_TESTS/img/slot_usage.png
+added     +0     -0     VISUAL_TESTS/img/stress_comparison.png
+added     +0     -0     VISUAL_TESTS/img/thermal_accuracy.png
+added     +0     -0     VISUAL_TESTS/img/thermoelastic.png
+modified  +102   -9     VISUAL_TESTS/main.cpp
+added     +58    -0     VISUAL_TESTS/mode_comparison_anim.gnu
+added     +31    -0     VISUAL_TESTS/nbpart_timeseries.gnu
+added     +70    -0     VISUAL_TESTS/placement_zoom.gnu
+added     +44    -0     VISUAL_TESTS/reseed_placement.gnu
+added     +28    -0     VISUAL_TESTS/slot_usage.gnu
+added     +32    -0     VISUAL_TESTS/stress_comparison.gnu
+modified  +7     -0     VISUAL_TESTS/visual-tests.h
+added     +81    -0     WebVis/README.md
+added     +52    -0     WebVis/field-cache.mjs
+added     +124   -0     WebVis/fields.mjs
+added     +458   -0     WebVis/hdf5-reader.mjs
+added     +14    -0     WebVis/node_modules/.package-lock.json
+added     +9     -0     WebVis/node_modules/h5wasm/.editorconfig
+added     +13    -0     WebVis/node_modules/h5wasm/.github/dependabot.yml
+added     +80    -0     WebVis/node_modules/h5wasm/.github/workflows/test-publish.yml
+added     +498   -0     WebVis/node_modules/h5wasm/CHANGELOG.md
+added     +101   -0     WebVis/node_modules/h5wasm/CMakeLists.txt
+added     +23    -0     WebVis/node_modules/h5wasm/DEVELOPER.md
+added     +141   -0     WebVis/node_modules/h5wasm/LICENSE.txt
+added     +557   -0     WebVis/node_modules/h5wasm/README.md
+added     +68    -0     WebVis/node_modules/h5wasm/dist/esm/file_handlers.js
+added     +1208  -0     WebVis/node_modules/h5wasm/dist/esm/hdf5_hl.js
+added     +0     -0     WebVis/node_modules/h5wasm/dist/esm/hdf5_util.js
+added     +30830 -0     WebVis/node_modules/h5wasm/dist/iife/h5wasm.js
+added     +1208  -0     WebVis/node_modules/h5wasm/dist/node/hdf5_hl.js
+added     +2     -0     WebVis/node_modules/h5wasm/dist/node/hdf5_util.js
+added     +45    -0     WebVis/node_modules/h5wasm/package.json
+added     +380   -0     WebVis/node_modules/h5wasm/src/emscripten.d.ts
+added     +74    -0     WebVis/node_modules/h5wasm/src/file_handlers.ts
+added     +209   -0     WebVis/node_modules/h5wasm/src/hdf5_hl.d.ts
+added     +1486  -0     WebVis/node_modules/h5wasm/src/hdf5_hl.ts
+added     +1532  -0     WebVis/node_modules/h5wasm/src/hdf5_util.cc
+added     +3     -0     WebVis/node_modules/h5wasm/src/hdf5_util.d.ts
+added     +159   -0     WebVis/node_modules/h5wasm/src/hdf5_util_helpers.d.ts
+added     +4     -0     WebVis/node_modules/h5wasm/src/node_esm_shim.js
+added     +0     -0     WebVis/node_modules/h5wasm/test/array.h5
+added     +25    -0     WebVis/node_modules/h5wasm/test/bigendian_read.mjs
+added     +47    -0     WebVis/node_modules/h5wasm/test/bool_test.mjs
+added     +49    -0     WebVis/node_modules/h5wasm/test/chunks_resize.mjs
+added     +128   -0     WebVis/node_modules/h5wasm/test/compound_and_array_test.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/compressed.h5
+added     +277   -0     WebVis/node_modules/h5wasm/test/create_compound_dataset.mjs
+added     +54    -0     WebVis/node_modules/h5wasm/test/create_delete_attributes.mjs
+added     +90    -0     WebVis/node_modules/h5wasm/test/create_group_dataset.mjs
+added     +93    -0     WebVis/node_modules/h5wasm/test/create_read_compressed.mjs
+added     +97    -0     WebVis/node_modules/h5wasm/test/create_read_links.mjs
+added     +96    -0     WebVis/node_modules/h5wasm/test/create_read_references.mjs
+added     +33    -0     WebVis/node_modules/h5wasm/test/datatype_test.mjs
+added     +60    -0     WebVis/node_modules/h5wasm/test/dimension_labels.mjs
+added     +79    -0     WebVis/node_modules/h5wasm/test/dimension_scales.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/empty.h5
+added     +40    -0     WebVis/node_modules/h5wasm/test/empty_dataset_and_attrs.mjs
+added     +34    -0     WebVis/node_modules/h5wasm/test/filters_test.mjs
+added     +321   -0     WebVis/node_modules/h5wasm/test/libver_test.mjs
+added     +46    -0     WebVis/node_modules/h5wasm/test/make_test_files.py
+added     +18    -0     WebVis/node_modules/h5wasm/test/nonthrowing_error_handler.mjs
+added     +118   -0     WebVis/node_modules/h5wasm/test/overwrite_dataset.mjs
+added     +49    -0     WebVis/node_modules/h5wasm/test/subarray_write_test.mjs
+added     +91    -0     WebVis/node_modules/h5wasm/test/swmr_test.mjs
+added     +77    -0     WebVis/node_modules/h5wasm/test/test.mjs
+added     +58    -0     WebVis/node_modules/h5wasm/test/test_throwing_error_handler.mjs
+added     +80    -0     WebVis/node_modules/h5wasm/test/to_array_test.mjs
+added     +115   -0     WebVis/node_modules/h5wasm/test/track_order.mjs
+added     +0     -0     WebVis/node_modules/h5wasm/test/vlen.h5
+added     +65    -0     WebVis/node_modules/h5wasm/test/vlen_test.mjs
+added     +21    -0     WebVis/package-lock.json
+added     +13    -0     WebVis/package.json
+added     +135   -0     WebVis/public/app.mjs
+added     +1     -0     WebVis/public/colormaps/maps.json
+added     +272   -0     WebVis/public/controller.mjs
+added     +37    -0     WebVis/public/index.html
+added     +363   -0     WebVis/public/model.mjs
+added     +250   -0     WebVis/public/overlays.mjs
+added     +529   -0     WebVis/public/style.css
+added     +35    -0     WebVis/public/time-display.mjs
+added     +119   -0     WebVis/public/title-render.mjs
+added     +160   -0     WebVis/public/views/ColourBar.mjs
+added     +111   -0     WebVis/public/views/ControlPanel.mjs
+added     +892   -0     WebVis/public/views/FieldCanvas.mjs
+added     +71    -0     WebVis/public/views/HeaderBanner.mjs
+added     +9     -0     WebVis/public/views/LoadingOverlay.mjs
+added     +644   -0     WebVis/public/views/PanelView.mjs
+added     +37    -0     WebVis/public/views/StatusBar.mjs
+added     +131   -0     WebVis/public/views/TitleInput.mjs
+added     +352   -0     WebVis/server.mjs
+added     +59    -0     WebVis/test-reader.mjs
+added     +207   -0     misc/aniso_fstrain/calibrate/aniso_data.py
+added     +330   -0     misc/aniso_fstrain/calibrate/calibrate_amphibole.py
+added     +175   -0     misc/aniso_fstrain/calibrate/calibrate_calcite.py
+added     +227   -0     misc/aniso_fstrain/calibrate/calibrate_olivine_damped.py
+added     +216   -0     misc/aniso_fstrain/calibrate/calibrate_olivine_hansen.py
+added     +150   -0     misc/aniso_fstrain/calibrate/calibrate_quartz.py
+added     +217   -0     misc/aniso_fstrain/calibrate/calibrate_quartz_mica.py
+added     +203   -0     misc/aniso_fstrain/calibrate/lsq_quality_gate.py
+added     +302   -0     misc/aniso_fstrain/calibrate/make_derived.py
+added     +64    -0     misc/aniso_fstrain/data/amphibole/raw_Ko_Jung_2015_NatComms_table2.csv
+added     +13    -0     misc/aniso_fstrain/data/calcite/derived_HighT_8pts.csv
+added     +11    -0     misc/aniso_fstrain/data/calcite/derived_LowT_Barnhoorn04_7pts.csv
+added     +25    -0     misc/aniso_fstrain/data/calcite/derived_combined_15pts_filtered.csv
+added     +29    -0     misc/aniso_fstrain/data/calcite/raw_Barnhoorn_etal_2004_JSG.csv
+added     +40    -0     misc/aniso_fstrain/data/calcite/raw_Bruijn_etal_2011_Tectonophysics.csv
+added     +21    -0     misc/aniso_fstrain/data/calcite/raw_Pieri_etal_2001_Tectonophysics.csv
+added     +12    -0     misc/aniso_fstrain/data/calcite/raw_Schmid_1976_Tectonophysics_table1.csv
+added     +41    -0     misc/aniso_fstrain/data/calcite/raw_Schuster_etal_2018_JSG.csv
+added     +39    -0     misc/aniso_fstrain/data/olivine/derived_Bernard19_gammaEq_M.csv
+added     +20    -0     misc/aniso_fstrain/data/olivine/derived_Boneh14_gammaEq_M.csv
+added     +8     -0     misc/aniso_fstrain/data/olivine/derived_Bystricky00_Mskemer.csv
+added     +101   -0     misc/aniso_fstrain/data/olivine/derived_DampedOlivine_93pts.csv
+added     +44    -0     misc/aniso_fstrain/data/olivine/derived_HansenGroup_38pts.csv
+added     +33    -0     misc/aniso_fstrain/data/olivine/derived_Kumamoto19_gamma_M.csv
+added     +15    -0     misc/aniso_fstrain/data/olivine/derived_Tasaka16_gamma_M.csv
+added     +85    -0     misc/aniso_fstrain/data/olivine/raw_Bernard19_M_J_pairs.csv
+added     +51    -0     misc/aniso_fstrain/data/olivine/raw_Bernard_etal_2019_G3.csv
+added     +38    -0     misc/aniso_fstrain/data/olivine/raw_Boneh_Skemer_2014_EPSL.csv
+added     +16    -0     misc/aniso_fstrain/data/olivine/raw_Bystricky_etal_2000_Science.csv
+added     +17    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2012_Nature.csv
+added     +41    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2014_EPSL.csv
+added     +28    -0     misc/aniso_fstrain/data/olivine/raw_Hansen_etal_2016_EPSL.csv
+added     +47    -0     misc/aniso_fstrain/data/olivine/raw_Kumamoto_etal_2019_JGR.csv
+added     +35    -0     misc/aniso_fstrain/data/olivine/raw_Tasaka_etal_2016_JGR.csv
+added     +36    -0     misc/aniso_fstrain/data/plag_pyroxene/raw_Marti_etal_2018_SolidEarth.csv
+added     +43    -0     misc/aniso_fstrain/data/quartz/derived_Blackford24_38pts.csv
+added     +20    -0     misc/aniso_fstrain/data/quartz/derived_Pennacchioni10_17pts.csv
+added     +55    -0     misc/aniso_fstrain/data/quartz/raw_Blackford_etal_2024_Tectonics.csv
+added     +57    -0     misc/aniso_fstrain/data/quartz/raw_Pennacchioni_etal_2010_JGR.csv
+added     +0     -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.png
+added     +167   -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.py
+added     +31    -0     misc/aniso_fstrain/data/quartz_mica/case15_lsq_pooled.txt
+added     +50    -0     misc/aniso_fstrain/data/quartz_mica/raw_Tokle_etal_2023_JSG.csv
+added     +0     -0     misc/aniso_fstrain/img/calcite_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_all_datasets.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_damped_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/olivine_hansen_calibration.png
+added     +0     -0     misc/aniso_fstrain/img/quartz_calibration.png
+added     +192   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_calcite.py
+added     +220   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_olivine.py
+added     +176   -0     misc/aniso_fstrain/mdoodz_compare/mdoodz_vs_quartz.py
+added     +425   -0     misc/aniso_fstrain/notes/boneh2021_delta_relaxation.md
+added     +475   -0     misc/aniso_fstrain/notes/calcite_calibration.md
+added     +202   -0     misc/aniso_fstrain/notes/case15_calibration.md
+added     +347   -0     misc/aniso_fstrain/notes/hansen2012_comparison.md
+added     +280   -0     misc/aniso_fstrain/notes/olivine_calibration.md
+added     +662   -0     misc/aniso_fstrain/notes/quartz_calibration.md
+added     +264   -0     misc/benchmark-aws.sh
+added     +157   -0     misc/benchmark-ec2-setup.sh
+added     +161   -0     misc/benchmark-preflight.sh
+added     +225   -0     misc/benchmark-report.sh
+added     +425   -0     misc/benchmark.sh
+added     +376   -0     misc/perf_sweep.py
+added     +2     -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/.openspec.yaml
+added     +112   -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/design.md
+added     +31    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/proposal.md
+added     +54    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/field-renderer/spec.md
+added     +97    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/multi-panel-layout/spec.md
+added     +158   -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/title-interpolation/spec.md
+added     +20    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/web-server/spec.md
+added     +85    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/specs/web-ui/spec.md
+added     +86    -0     openspec/changes/archive/2025-04-15-webvis-multi-panel-titles/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/.openspec.yaml
+added     +127   -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/design.md
+added     +73    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/benchmark-solvi/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-density-tests/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/l2-error-framework/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/specs/skill-testing-guide/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-09-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/.openspec.yaml
+added     +116   -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/design.md
+added     +49    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/proposal.md
+added     +36    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/specs/scenario-quick-verify/spec.md
+added     +85    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/specs/scenario-rift-combined-yield/spec.md
+added     +30    -0     openspec/changes/archive/2026-04-09-rift-vep-melting-combined-yield/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-10-logging-utility/.openspec.yaml
+added     +211   -0     openspec/changes/archive/2026-04-10-logging-utility/design.md
+added     +32    -0     openspec/changes/archive/2026-04-10-logging-utility/proposal.md
+added     +147   -0     openspec/changes/archive/2026-04-10-logging-utility/specs/log-api/spec.md
+added     +75    -0     openspec/changes/archive/2026-04-10-logging-utility/specs/phase-timing/spec.md
+added     +93    -0     openspec/changes/archive/2026-04-10-logging-utility/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/design.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/benchmark-solvi/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-density-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/l2-error-framework/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/specs/skill-testing-guide/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-04-12-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/.openspec.yaml
+added     +116   -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/HANDOFF.md
+added     +194   -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/design.md
+added     +46    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/proposal.md
+added     +99    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/aws-benchmark-automation/spec.md
+added     +91    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/perf-scenario-integration/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/scenario-rift-combined-yield/spec.md
+added     +76    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/scenario-rift-comprehensive/spec.md
+added     +47    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/specs/skill-aws-benchmarking/spec.md
+added     +81    -0     openspec/changes/archive/2026-04-12-comprehensive-perf-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/.openspec.yaml
+added     +67    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/design.md
+added     +25    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/proposal.md
+added     +14    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/specs/phase-timing/spec.md
+added     +57    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/specs/thermal-factorization-cache/spec.md
+added     +39    -0     openspec/changes/archive/2026-04-13-cache-thermal-factorization/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/.openspec.yaml
+added     +98    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/design.md
+added     +34    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/proposal.md
+added     +93    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/specs/full-phase-coverage/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/specs/phase-timing/spec.md
+added     +58    -0     openspec/changes/archive/2026-04-13-close-perf-gaps-and-rerun/tasks.md
+added     +81    -0     openspec/changes/archive/2026-04-13-comprehensive-perf-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/.openspec.yaml
+added     +81    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/design.md
+added     +32    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/proposal.md
+added     +38    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/specs/cholmod-threading/spec.md
+added     +8     -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/specs/phase-timing/spec.md
+added     +59    -0     openspec/changes/archive/2026-04-13-enable-cholmod-threading/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/.openspec.yaml
+added     +58    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/design.md
+added     +27    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/proposal.md
+added     +23    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/specs/accumulated-strain-omp/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-13-fix-accumulated-strain-omp/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/.openspec.yaml
+added     +172   -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/design.md
+added     +40    -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/proposal.md
+added     +143   -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/specs/interp-buffer-pool/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-13-interp-persistent-buffers/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/.openspec.yaml
+added     +104   -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/design.md
+added     +31    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/proposal.md
+added     +78    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/specs/pcg-thermal-solve/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-13-pcg-thermal-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/.openspec.yaml
+added     +202   -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/design.md
+added     +30    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/proposal.md
+added     +52    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/specs/persistent-omp-region/spec.md
+added     +8     -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/specs/phase-timing/spec.md
+added     +74    -0     openspec/changes/archive/2026-04-13-persistent-omp-thread-pool/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/.openspec.yaml
+added     +93    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/design.md
+added     +26    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-oceanic-cooling/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-thermal-tests/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/specs/ci-thermoelastic-coupling/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-14-add-thermal-verification-tests/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/.openspec.yaml
+added     +218   -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/design.md
+added     +28    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/proposal.md
+added     +120   -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/specs/fused-p2g-interp/spec.md
+added     +54    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/specs/interp-buffer-pool/spec.md
+added     +58    -0     openspec/changes/archive/2026-04-14-fuse-p2mastah/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/.openspec.yaml
+added     +190   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/design.md
+added     +38    -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/proposal.md
+added     +107   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/field-renderer/spec.md
+added     +140   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/hdf5-reader/spec.md
+added     +137   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/web-server/spec.md
+added     +133   -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/specs/web-ui/spec.md
+added     +86    -0     openspec/changes/archive/2026-04-14-hdf5-web-visualiser/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/.openspec.yaml
+added     +71    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/design.md
+added     +31    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/proposal.md
+added     +55    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/specs/local-m1-benchmark/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-14-local-m1-benchmark/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-14-validate-optimizations/.openspec.yaml
+added     +90    -0     openspec/changes/archive/2026-04-14-validate-optimizations/design.md
+added     +35    -0     openspec/changes/archive/2026-04-14-validate-optimizations/proposal.md
+added     +27    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/interp-equivalence-test/spec.md
+added     +67    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/optimization-docs/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/pcg-convergence-export/spec.md
+added     +28    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/pcg-thermal-solve/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/thermal-accuracy-comparison/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-14-validate-optimizations/specs/validation-visualisation/spec.md
+added     +47    -0     openspec/changes/archive/2026-04-14-validate-optimizations/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/.openspec.yaml
+added     +43    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/design.md
+added     +27    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/proposal.md
+added     +44    -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/specs/thermal-pressurisation-plot/spec.md
+added     +6     -0     openspec/changes/archive/2026-04-15-add-thermal-pressurisation-visual-test/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/.openspec.yaml
+added     +127   -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/design.md
+added     +73    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/benchmark-anisotropy/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/benchmark-solvi/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-density-tests/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-neumann-bc-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-shear-heating-tests/spec.md
+added     +27    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-thermal-tests/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-velocity-field-tests/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/ci-viscoelastic-tests/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/l2-error-framework/spec.md
+added     +29    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/specs/skill-testing-guide/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-15-analytical-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/.openspec.yaml
+added     +162   -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/design.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/proposal.md
+added     +57    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/field-renderer/spec.md
+added     +312   -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/overlay-layers/spec.md
+added     +69    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/specs/web-ui/spec.md
+added     +72    -0     openspec/changes/archive/2026-04-15-webvis-overlay-layers/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/.openspec.yaml
+added     +81    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/design.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/proposal.md
+added     +71    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/field-renderer/spec.md
+added     +96    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/multi-panel-layout/spec.md
+added     +73    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/specs/web-ui/spec.md
+added     +37    -0     openspec/changes/archive/2026-04-15-webvis-polish-and-perf/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/.openspec.yaml
+added     +84    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/design.md
+added     +34    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/proposal.md
+added     +63    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-cache/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-labels/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/field-renderer/spec.md
+added     +52    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/hdf5-reader/spec.md
+added     +73    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/time-display/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/web-server/spec.md
+added     +132   -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/specs/web-ui/spec.md
+added     +84    -0     openspec/changes/archive/2026-04-15-webvis-ux-polish/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-add-particle-recycling/.openspec.yaml
+added     +87    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/design.md
+added     +27    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/proposal.md
+added     +39    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/ci-blankenbach-convection/spec.md
+added     +51    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/particle-excess-deactivation/spec.md
+added     +43    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/specs/skill-particle-reseeding/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-17-add-particle-recycling/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/.openspec.yaml
+added     +122   -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/design.md
+added     +33    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/proposal.md
+added     +79    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/specs/improved-reseeding/spec.md
+added     +49    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/specs/rotation-advection-test/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-17-improve-particle-reseeding/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/.openspec.yaml
+added     +168   -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/design.md
+added     +43    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/proposal.md
+added     +101   -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/specs/reseeding-visual-guide/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/specs/skill-particle-reseeding/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-17-reseeding-visual-guide/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/.openspec.yaml
+added     +65    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_a/run_sweep.sh
+added     +33    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_b/walk_81_cycle1.txt
+added     +114   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/d1_probe_b/walk_vcycle.py
+added     +156   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/design.md
+added     +63    -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/proposal.md
+added     +100   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/specs/gmg-stokes-solver/spec.md
+added     +118   -0     openspec/changes/archive/2026-04-18-add-gmg-upleg-fix/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/.openspec.yaml
+added     +228   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/design.md
+added     +52    -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/proposal.md
+added     +265   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/specs/gmg-stokes-solver/spec.md
+added     +203   -0     openspec/changes/archive/2026-04-19-add-gmg-stokes-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/.openspec.yaml
+added     +223   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/design.md
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_active_mask.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_fgmres_controlflow.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_picard_newton.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_stencil_bridge.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/defence_vcycle_tree.png
+added     +465   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/make_defence_figs.py
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_memory_scaling.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_strong_scaling.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/perf_walltime_comparison.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_sol_cx_41.gif
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_01.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_02.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_03.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_04.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_05.png
+added     +0     -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/figs/vcycle_still_06.png
+added     +65    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/proposal.md
+added     +93    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/gmg-defence-materials/spec.md
+added     +101   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/gmg-performance-harness/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/specs/skill-solvers/spec.md
+added     +132   -0     openspec/changes/archive/2026-04-21-add-gmg-stokes-defence/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/.openspec.yaml
+added     +156   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/RETROSPECTIVE.md
+added     +287   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/design.md
+added     +121   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/proposal.md
+added     +55    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-defence-materials/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-performance-harness/spec.md
+added     +157   -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/specs/gmg-stokes-solver/spec.md
+added     +46    -0     openspec/changes/archive/2026-04-21-remove-gmg-stokes-solver/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/.openspec.yaml
+added     +180   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/RETROSPECTIVE.md
+added     +123   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/design.md
+added     +35    -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/proposal.md
+added     +157   -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/specs/cholmod-factor-recycling/spec.md
+added     +87    -0     openspec/changes/archive/2026-04-22-add-cholmod-factor-recycling/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/.openspec.yaml
+added     +146   -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/design.md
+added     +29    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/proposal.md
+added     +58    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/specs/ci-popov2025-vevp-tests/spec.md
+added     +56    -0     openspec/changes/archive/2026-04-24-add-popov2025-vevp-tests/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/.openspec.yaml
+added     +134   -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/design.md
+added     +42    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/proposal.md
+added     +97    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/specs/benchmark-solcx/spec.md
+added     +60    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/specs/set-grid-density-callback/spec.md
+added     +54    -0     openspec/changes/archive/2026-04-24-add-stokes-ci-benchmarks/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/.openspec.yaml
+added     +113   -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/design.md
+added     +34    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/proposal.md
+added     +70    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/specs/ci-grain-size-evolution/spec.md
+added     +56    -0     openspec/changes/archive/2026-05-06-extend-gse-ci-coverage/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/.openspec.yaml
+added     +125   -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/design.md
+added     +30    -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/proposal.md
+added     +109   -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/specs/ci-grain-size-evolution/spec.md
+added     +62    -0     openspec/changes/archive/2026-05-06-fix-grain-size-evolution/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/.openspec.yaml
+added     +167   -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/design.md
+added     +39    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/proposal.md
+added     +83    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/specs/ci-finite-strain-anisotropy/spec.md
+added     +49    -0     openspec/changes/archive/2026-05-06-fix-pure-shear-fstrain-segfault/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/.openspec.yaml
+added     +150   -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/design.md
+added     +38    -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/proposal.md
+added     +120   -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/specs/ci-finite-strain-anisotropy/spec.md
+added     +54    -0     openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/.openspec.yaml
+added     +160   -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/design.md
+added     +56    -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/proposal.md
+added     +100   -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/specs/ci-gse-anisotropy-coupled/spec.md
+added     +59    -0     openspec/changes/archive/2026-05-06-merge-gse-anisotropy/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/.openspec.yaml
+added     +228   -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/design.md
+added     +50    -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/proposal.md
+added     +178   -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/specs/ci-finite-strain-anisotropy/spec.md
+added     +44    -0     openspec/changes/archive/2026-05-07-add-calcite-delta-form/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/.openspec.yaml
+added     +284   -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/design.md
+added     +59    -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/proposal.md
+added     +102   -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/specs/ci-finite-strain-anisotropy/spec.md
+added     +67    -0     openspec/changes/archive/2026-05-07-add-hansen-olivine-delta-form/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/design.md
+added     +55    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/proposal.md
+added     +134   -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/specs/aniso-delta-relaxation/spec.md
+added     +22    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/specs/ci-finite-strain-anisotropy/spec.md
+added     +67    -0     openspec/changes/archive/2026-05-14-ani-fstrain3-delta-relaxation/tasks.md
+added     +2     -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/.openspec.yaml
+added     +222   -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/design.md
+added     +46    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/proposal.md
+added     +44    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/specs/aniso-delta-relaxation/spec.md
+added     +88    -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/specs/aniso-init-from-finite-strain/spec.md
+added     +100   -0     openspec/changes/archive/2026-05-15-aniso-init-from-finite-strain/tasks.md
+added     +23    -0     openspec/specs/accumulated-strain-omp/spec.md
+added     +162   -0     openspec/specs/aniso-delta-relaxation/spec.md
+added     +97    -0     openspec/specs/aniso-init-from-finite-strain/spec.md
+modified  +5     -9     openspec/specs/benchmark-anisotropy/spec.md
+added     +101   -0     openspec/specs/benchmark-solcx/spec.md
+added     +161   -0     openspec/specs/cholmod-factor-recycling/spec.md
+added     +38    -0     openspec/specs/cholmod-threading/spec.md
+modified  +31    -2     openspec/specs/ci-blankenbach-convection/spec.md
+modified  +15    -7     openspec/specs/ci-density-tests/spec.md
+added     +821   -0     openspec/specs/ci-finite-strain-anisotropy/spec.md
+added     +178   -0     openspec/specs/ci-grain-size-evolution/spec.md
+added     +100   -0     openspec/specs/ci-gse-anisotropy-coupled/spec.md
+modified  +1     -1     openspec/specs/ci-neumann-bc-tests/spec.md
+added     +38    -0     openspec/specs/ci-oceanic-cooling/spec.md
+added     +56    -0     openspec/specs/ci-popov2025-vevp-tests/spec.md
+modified  +2     -7     openspec/specs/ci-shear-heating-tests/spec.md
+modified  +7     -14    openspec/specs/ci-thermal-tests/spec.md
+added     +39    -0     openspec/specs/ci-thermoelastic-coupling/spec.md
+modified  +5     -30    openspec/specs/ci-velocity-field-tests/spec.md
+modified  +1     -8     openspec/specs/ci-viscoelastic-tests/spec.md
+added     +63    -0     openspec/specs/field-cache/spec.md
+added     +53    -0     openspec/specs/field-labels/spec.md
+added     +57    -0     openspec/specs/field-renderer/spec.md
+added     +93    -0     openspec/specs/full-phase-coverage/spec.md
+added     +120   -0     openspec/specs/fused-p2g-interp/spec.md
+added     +28    -0     openspec/specs/gmg-defence-materials/spec.md
+added     +28    -0     openspec/specs/gmg-performance-harness/spec.md
+added     +33    -0     openspec/specs/gmg-stokes-solver/spec.md
+added     +52    -0     openspec/specs/hdf5-reader/spec.md
+added     +79    -0     openspec/specs/improved-reseeding/spec.md
+added     +54    -0     openspec/specs/interp-buffer-pool/spec.md
+added     +27    -0     openspec/specs/interp-equivalence-test/spec.md
+added     +147   -0     openspec/specs/log-api/spec.md
+added     +96    -0     openspec/specs/multi-panel-layout/spec.md
+added     +67    -0     openspec/specs/optimization-docs/spec.md
+added     +312   -0     openspec/specs/overlay-layers/spec.md
+added     +27    -0     openspec/specs/pcg-convergence-export/spec.md
+added     +28    -0     openspec/specs/pcg-thermal-solve/spec.md
+added     +51    -0     openspec/specs/phase-timing/spec.md
+added     +105   -0     openspec/specs/reseeding-visual-guide/spec.md
+added     +49    -0     openspec/specs/rotation-advection-test/spec.md
+added     +36    -0     openspec/specs/scenario-quick-verify/spec.md
+added     +85    -0     openspec/specs/scenario-rift-combined-yield/spec.md
+added     +64    -0     openspec/specs/set-grid-density-callback/spec.md
+added     +76    -0     openspec/specs/skill-particle-reseeding/spec.md
+modified  +92    -64    openspec/specs/skill-solvers/spec.md
+modified  +2     -68    openspec/specs/skill-testing-guide/spec.md
+added     +176   -0     openspec/specs/stokes-perf-stack/spec.md
+added     +34    -0     openspec/specs/thermal-accuracy-comparison/spec.md
+added     +57    -0     openspec/specs/thermal-factorization-cache/spec.md
+added     +44    -0     openspec/specs/thermal-pressurisation-plot/spec.md
+added     +73    -0     openspec/specs/time-display/spec.md
+added     +162   -0     openspec/specs/title-interpolation/spec.md
+added     +34    -0     openspec/specs/validation-visualisation/spec.md
+added     +113   -0     openspec/specs/web-server/spec.md
+added     +91    -0     openspec/specs/web-ui/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### MDLIB/AdvectionRoutines.c
+@@ -26,6 +26,8 @@
+ #include "time.h"
+ #include "mdoodz-private.h"
+ 
++#include "mdoodz-log.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -35,7 +37,7 @@
+ #endif
+ 
+ #ifdef _VG_
+-#define printf(...) printf("")
++#define LOG_INFO(...) LOG_INFO("")
+ #endif
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -261,7 +263,7 @@ firstprivate( Nb_part, model ) //schedule ( static )
+         DoodzFree(OmD);
+     }
+ 
+-    printf("** Time for Roger Gunther = %lf sec\n",  (double)((double)omp_get_wtime() - t_omp) );
++    LOG_TIME("Roger Gunther = %lf sec",  (double)((double)omp_get_wtime() - t_omp));
+ 
+ }
+ 
+@@ -398,7 +400,7 @@ for (k=0;k<Nb_part;k++) {
+     }
+     isoutPart( particles, &model, k );
+ }
+-    printf("** Time for Roger Gunther = %lf sec --- using conservative interpolation: %0d\n",  (double)((double)omp_get_wtime() - t_omp), model.conserv_interp );
++    LOG_TIME("Roger Gunther = %lf sec --- using conservative interpolation: %0d",  (double)((double)omp_get_wtime() - t_omp), model.conserv_interp);
+ }
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -495,15 +497,15 @@ void PureShearALE( params *model, grid *mesh, markers *topo_chain, scale scaling
+     //    else                              model->zmax +=  dzmax;
+ 
+ 
+-    printf("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e\n", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
+-    printf("xmin = %lf, xmax = %lf\n", model->xmin*scaling.L, model->xmax*scaling.L);
+-    printf("zmin = %lf, zmax = %lf\n", model->zmin*scaling.L, model->zmax*scaling.L);
++    LOG_INFO("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
++    LOG_INFO("xmin = %lf, xmax = %lf", model->xmin*scaling.L, model->xmax*scaling.L);
++    LOG_INFO("zmin = %lf, zmax = %lf", model->zmin*scaling.L, model->zmax*scaling.L);
+ 
+     // Remesh
+     SetGridCoordinates( mesh, model, model->Nx, model->Nz);
+ 
+     // Re-generate homogeneous pure shear fields
+-    printf("Re-generate homogeneous pure shear fields\n");
++    LOG_INFO("Re-generate homogeneous pure shear fields");
+ }
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -518,8 +520,8 @@ void DefineInitialTimestep( params *model, grid *mesh, markers particles, mat_pr
+ // Define initial timestep is elasticity is turned on
+ if ( model->elastic == 1 && model->constant_dt != 1 ) {
+ 
+-    P2Mastah( model, particles, materials.G,     mesh, mesh->mu_n,   mesh->BCp.type,  0, 0, interp, cent, model->interp_stencil );
+-    P2Mastah( model, particles, materials.G,     mesh, mesh->mu_s,   mesh->BCg.type,  0, 0, interp, vert, model->interp_stencil );
++    P2Mastah( model, particles, materials.G,     mesh, mesh->mu_n,   mesh->BCp.type,  0, 0, interp, cent, model->interp_stencil, NULL );
++    P2Mastah( model, particles, materials.G,     mesh, mesh->mu_s,   mesh->BCg.type,  0, 0, interp, vert, model->interp_stencil, NULL );
+ 
+     for ( k=0; k<mesh->Nx*mesh->Nz; k++) {
+ 
+@@ -537,7 +539,7 @@ if ( model->elastic == 1 && model->constant_dt != 1 ) {
+     if (dt_maxwell < model->dt) {
+         model->dt = dt_maxwell;
+         model->dt0 = model->dt;
+-        printf("Setting initial dt to minimum Maxwell time: %2.2e\n", dt_maxwell*scaling.t);
++        LOG_INFO("Setting initial dt to minimum Maxwell time: %2.2e", dt_maxwell*scaling.t);
+     }
+ }
+ 
+@@ -550,9 +552,9 @@ if ( model->elastic == 1 && model->constant_dt != 1 ) {
+ //    printf("new dt = %2.2e s\n", model->dt*scaling.t);
+ //}
+ 
+-if (model->elastic == 1) printf("min. Maxwell = %2.2e s, max. Maxwell = %2.2e s\n", minMaxwell*scaling.t, maxMaxwell*scaling.t);
+-if (model->elastic == 1) printf("Suggested dt = %2.2e s, VE dt = %2.2e s\n", model->dt*scaling.t, exp((log(minMaxwell)+log(maxMaxwell))/2.0)*scaling.t );
+-printf("Initial timestep = %2.2e s\n", model->dt*scaling.t);
++if (model->elastic == 1) LOG_INFO("min. Maxwell = %2.2e s, max. Maxwell = %2.2e s", minMaxwell*scaling.t, maxMaxwell*scaling.t);
++if (model->elastic == 1) LOG_INFO("Suggested dt = %2.2e s, VE dt = %2.2e s", model->dt*scaling.t, exp((log(minMaxwell)+log(maxMaxwell))/2.0)*scaling.t);
++LOG_INFO("Initial timestep = %2.2e s", model->dt*scaling.t);
+ 
+ }
+ 
+@@ -602,8 +604,8 @@ void EvaluateCourantCriterion( double* Vx, double* Vz, params *model, scale scal
+         dt_therm = max_dT_allowed/dTmax*model->dt;
+     }
+ 
+-    if (quiet==0) printf("Min Vxm = %2.2e m/s / Max Vxm = %2.2e m/s\n", minVx * scaling.V, maxVx * scaling.V);
+-    if (quiet==0) printf("Min Vzm = %2.2e m/s / Max Vzm = %2.2e m/s\n", minVz * scaling.V, maxVz * scaling.V);
++    if (quiet==0) LOG_INFO("Min Vxm = %2.2e m/s / Max Vxm = %2.2e m/s", minVx * scaling.V, maxVx * scaling.V);
++    if (quiet==0) LOG_INFO("Min Vzm = %2.2e m/s / Max Vzm = %2.2e m/s", minVz * scaling.V, maxVz * scaling.V);
+ 
+     dmin = MINV(model->dx, model->dz);
+     vmax = MAXV(fabs(maxVx), fabs(maxVz));
+@@ -624,51 +626,51 @@ void EvaluateCourantCriterion( double* Vx, double* Vz, params *model, scale scal
+ 
+         // Courant dt
+         dtc = C * dmin / fabs(vmax);
+-        printf("Courant number = %2.2e --- dtc     = %2.2e\n", C, dtc*scaling.t);
++        LOG_INFO("Courant number = %2.2e --- dtc     = %2.2e", C, dtc*scaling.t);
+         
+         // Surface dt
+         if ( model->surface_processes>0 ) {
+             dt_surf = C * dmin / fabs(Vinc) ;
+-            printf("Courant number = %2.2e --- dt_surf = %2.2e\n", C, dt_surf*scaling.t);
++            LOG_INFO("Courant number = %2.2e --- dt_surf = %2.2e", C, dt_surf*scaling.t);
+         }
+ 
+         // Timestep cutoff : Do not allow for very large timestep increase
+         if (dtc > fact*model->dt0 ) {
+             dtc = fact*model->dt0;
+-            printf("Do not allow for large time step increase: dt0 = %2.2e \n", model->dt0*scaling.t);
++            LOG_INFO("Do not allow for large time step increase: dt0 = %2.2e ", model->dt0*scaling.t);
+         }
+ 
+         // If timestep is adaptive
+         if ( model->constant_dt != 1 ) {
+-            printf("Timestep limited by advection\n");
++            LOG_INFO("Timestep limited by advection");
+             model->dt = dtc;
+             if ( model->surface_processes>0 && dt_surf<model->dt) {
+-                printf("Timestep limited by surface processes\n");
++                LOG_INFO("Timestep limited by surface processes");
+                 model->dt = dt_surf;
+             }
+         }
+         
+         // If timestep is adaptive: Chemical limitation
+         if ( model->constant_dt != 1 && model->chemical_diffusion == 1 && dt_reac<model->dt ) {
+-                printf("EvaluateCourantCriterion: --> min_tau_kin = %2.2e s \n", min_tau_kin*scaling.t);
+-                printf("Timestep limited by Chemical Reaction\n");
++                LOG_INFO("EvaluateCourantCriterion: --> min_tau_kin = %2.2e s ", min_tau_kin*scaling.t);
++                LOG_INFO("Timestep limited by Chemical Reaction");
+                 model->dt = dt_reac;
+         }
+ 
+         // If there is no motion, then the timestep becomes huge: cut off the motion.
+         if ( model->dt>1.0e30 || vmax<1.0e-30) {
+-            printf("Cutting off dt because of negligible motion\n");
++            LOG_INFO("Cutting off dt because of negligible motion");
+             dtc = 0.0;
+             model->dt = model->dt_start;
+         }
+ 
+         // THESE LINES ARE MORE DANGEROUS THAN USEFUL
+          if ( model->dt>model->dt_max ) {
+-             printf("Setting dt to dt_max\n");
++             LOG_INFO("Setting dt to dt_max");
+              model->dt = model->dt_max;
+          }
+          if ( model->dt<model->dt_min ) {
+-             printf("Setting dt to dt_min\n");
++             LOG_INFO("Setting dt to dt_min");
+              model->dt = model->dt_min;
+          }
+ 
+@@ -677,11 +679,11 @@ void EvaluateCourantCriterion( double* Vx, double* Vz, params *model, scale scal
+         //      model->dt = dt_therm;
+         // }
+ 
+-        if (quiet==0) printf("Current dt = %2.2e s / Courant dt = %2.2e s, dt_therm = %2.2e\n", model->dt * scaling.t, dtc * scaling.t, dt_therm * scaling.t );
++        if (quiet==0) LOG_INFO("Current dt = %2.2e s / Courant dt = %2.2e s, dt_therm = %2.2e", model->dt * scaling.t, dtc * scaling.t, dt_therm * scaling.t);
+     }
+     else {
+         model->dt = model->dt_start;
+-        if (quiet==0) printf("Fixed timestep dt = %2.2e s\n", model->dt * scaling.t );
++        if (quiet==0) LOG_INFO("Fixed timestep dt = %2.2e s", model->dt * scaling.t);
+     }
+ 
+ }
+@@ -717,8 +719,8 @@ void Check_dt_for_advection( double* Vx, double* Vz, params *model, scale scalin
+             minVz = MINV(minVz, (Vz[c]));
+         }
+     }
+-    if (quiet==0) printf("Min Vxm = %2.2e m/s / Max Vxm = %2.2e m/s\n", minVx * scaling.V, maxVx * scaling.V);
+-    if (quiet==0) printf("Min Vzm = %2.2e m/s / Max Vzm = %2.2e m/s\n", minVz * scaling.V, maxVz * scaling.V);
++    if (quiet==0) LOG_INFO("Min Vxm = %2.2e m/s / Max Vxm = %2.2e m/s", minVx * scaling.V, maxVx * scaling.V);
++    if (quiet==0) LOG_INFO("Min Vzm = %2.2e m/s / Max Vzm = %2.2e m/s", minVz * scaling.V, maxVz * scaling.V);
+ 
+     dmin = MINV(model->dx, model->dz);
+     vmax = MAXV(fabs(maxVx), fabs(maxVz));
+@@ -729,12 +731,12 @@ void Check_dt_for_advection( double* Vx, double* Vz, params *model, scale scalin
+     dtc = C * dmin / fabs(vmax);
+ 
+     // If timestep is adaptive
+-        printf("dt_Courant = %2.2e\n", dtc*scaling.t);
+-        printf("dt_Solve   = %2.2e\n", dt_solve*scaling.t);
++        LOG_INFO("dt_Courant = %2.2e", dtc*scaling.t);
++        LOG_INFO("dt_Solve   = %2.2e", dt_solve*scaling.t);
+ 
+     model->dt = MINV(dtc,dt_solve);
+ 
+-        printf("dt selected for advection = %2.2e\n",  model->dt*scaling.t);
++        LOG_INFO("dt selected for advection = %2.2e",  model->dt*scaling.t);
+ 
+         // If there is no motion, then the timestep becomes huge: cut off the motion.
+         if( model->dt>1.0e30 || vmax<1.0e-30) {
+@@ -746,7 +748,7 @@ void Check_dt_for_advection( double* Vx, double* Vz, params *model, scale scalin
+     }
+     else {
+         model->dt = model->dt_start;
+-        if (quiet==0) printf("Fixed timestep dt = %2.2e s\n", model->dt * scaling.t );
++        if (quiet==0) LOG_INFO("Fixed timestep dt = %2.2e s", model->dt * scaling.t);
+     }
+ }
+ 
+@@ -920,9 +922,9 @@ void PureShearALE_X( params *model,  grid *mesh, markers *topo_chain, scale scal
+        model->zmax +=  dzmax;
+     }
+ 
+-    printf("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e\n", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
+-    printf("xmin = %lf, xmax = %lf\n", model->xmin*scaling.L, model->xmax*scaling.L);
+-    printf("zmin = %lf, zmax = %lf\n", model->zmin*scaling.L, model->zmax*scaling.L);
++    LOG_INFO("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
++    LOG_INFO("xmin = %lf, xmax = %lf", model->xmin*scaling.L, model->xmax*scaling.L);
++    LOG_INFO("zmin = %lf, zmax = %lf", model->zmin*scaling.L, model->zmax*scaling.L);
+ 
+     // Remesh
+     SetGridCoordinates( mesh, model, model->Nx, model->Nz);
+@@ -1011,9 +1013,9 @@ void PureShearALE_Z( params *model,  grid *mesh, markers *topo_chain, scale scal
+     if (model->pure_shear_ALE == 2)  model->zmax = MaxFreeSurfaceAltitude + 10.0e3/scaling.L;
+     else                              model->zmax +=  dzmax;
+ 
+-    printf("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e\n", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
+-    printf("xmin = %lf, xmax = %lf\n", model->xmin*scaling.L, model->xmax*scaling.L);
+-    printf("zmin = %lf, zmax = %lf\n", model->zmin*scaling.L, model->zmax*scaling.L);
++    LOG_INFO("Adjusting the mesh: Epsilon_xx = %2.2e, Volume = %2.2e", model->bkg_strain_rate * model->dt, (model->xmax - model->xmin) *(model->zmax - model->zmin) * scaling.L*scaling.L);
++    LOG_INFO("xmin = %lf, xmax = %lf", model->xmin*scaling.L, model->xmax*scaling.L);
++    LOG_INFO("zmin = %lf, zmax = %lf", model->zmin*scaling.L, model->zmax*scaling.L);
+ 
+     // Remesh
+     SetGridCoordinates( mesh, model, model->Nx, model->Nz);
+
+### MDLIB/AnisotropyRoutines.c
+@@ -32,6 +32,8 @@
+ #include "include/mdoodz.h"
+ #include "RheologyDensity.h"
+ 
++#include "mdoodz-log.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -40,17 +42,217 @@
+ #define omp_get_wtime() clock()/CLOCKS_PER_SEC
+ #endif
+ 
+-// Compute finite strain anisotropy factor
+-double AnisoFactorEvolv( double FS_AR, double aniso_fac_max ) {
+-  // saturation at a maximum anisotropy factor 
+-  // (for details see Matlab script)
+-  // const double delta_ratio = aniso_fac_max / 4.0;
+-  // const double FS_AR_crit  = aniso_fac_max / 2.0;
+-  // const double x = 0.5*erfc((FS_AR - FS_AR_crit) / delta_ratio);
+-  // return x * FS_AR + (1.0-x) * aniso_fac_max;
++// =========================================================================
++// Per-phase analytic inverses of aniso_delta_fn — used by the init-from-
++// finite-strain helper (see RheologyParticles.c::aniso_init_finite_strain
++// _for_marker). Each helper returns γ_eff such that aniso_delta_fn(FS_AR(
++// γ_eff)) == δ, for the saturating-exponential family
++//     δ(γ_eff) = c2 · (1 − exp(−γ_eff / γ_e)) + 1
++// whose analytic inverse is
++//     γ_eff(δ) = − γ_e · ln(1 − (δ − 1)/c2)            (δ ∈ [1, c2+1))
++// Out-of-range (δ above the saturation ceiling) is clamped to (c2+1) − ε
++// with a one-shot LOG_WARN; the caller proceeds with the saturated γ_eff.
++// Below-1 input is clamped to 1.0 (returns 0, F_init = I).
++// =========================================================================
++
++// Hansen olivine (case 1): δ = 24.5·0.536·(1 − exp(−γ_eff/3.96)) + 1
++//   c2 = 24.5·0.536 = 13.132,  γ_e = 3.96,  δ_max = 14.132
++double aniso_delta_inv_hansen( double delta ) {
++    const double c2      = 13.132;
++    const double gamma_e = 3.96;
++    const double eps     = 1.0e-9;
++    const double delta_max = 1.0 + c2;        // 14.132
++    double d = delta;
++    if ( !isfinite(d) || d < 1.0 ) {
++        // Below the physical floor — caller should have caught this; clamp.
++        d = 1.0;
++    }
++    if ( d > delta_max - eps ) {
++        // One-shot warn (suppressed on repeat) — clamp to just-below-saturation.
++        static int warned = 0;
++        if ( !warned ) {
++            LOG_WARN("aniso_delta_inv_hansen: delta=%g exceeds Hansen olivine saturation %g; clamped to %g", delta, delta_max, delta_max - eps);
++            warned = 1;
++        }
++        d = delta_max - eps;
++    }
++    // Analytic inverse:  γ_eff = − γ_e · ln(1 − (δ − 1)/c2)
++    const double frac = (d - 1.0) / c2;
++    return -gamma_e * log( 1.0 - frac );
++}
++
++// Compute the finite-strain anisotropy factor δ given the per-cell strain-
++// ellipse aspect ratio FS_AR, the user-set ceiling aniso_fac_max, the
++// per-phase form selector ani_fstrain, and (when ani_fstrain == 2) the
++// per-phase mineral-specific function pointer aniso_delta_fn populated by
++// ReadDataAnisotropy() in MDLIB/FlowLaws.c.
++//
++//   ani_fstrain == 1: δ = min(FS_AR, aniso_fac_max)        — MDOODZ default
++//   ani_fstrain == 2: δ = aniso_delta_fn(FS_AR), capped    — mineral-specific,
++//                     populated by FlowLaws.c (case 1 = Hansen olivine, case 2
++//                     = future calcite, case 3 = future quartz, …)
++//                     IF aniso_d_threshold > 0, an additional d-coupling
++//                     modifier randomizes CPO toward δ = 1 when the local
++//                     grain size drops below the threshold (DisGBS / GBM
++//                     regime). Default threshold is 0 (modifier inactive)
++//                     for cases 1–8; case 9 (plagioclase BRACKETED) sets
++//                     it to 5e-6 m by default per Mehl & Hirth (2008).
++//   ani_fstrain == 3: ani_fstrain==2 δ-dispatch + a temperature-dependent
++//                     kinetic relaxation of δ toward the isotropic limit
++//                     (δ → 1) on the Boneh et al. 2021 (G3) discontinuous-
++//                     static-recrystallization timescale. The relaxed δ is
++//                     a per-marker integrated state variable (markers->
++//                     aniso_delta), updated inside FiniteStrainAspectRatio
++//                     and P2G'd to mesh->aniso_delta_n/_s; the ==3 arm here
++//                     just returns that grid value (passed in as the
++//                     relaxed_delta argument) instead of recomputing
++//                     aniso_delta_fn(FS_AR). See FiniteStrainAspectRatio in
++//                     RheologyParticles.c and DeltaRelaxationTau below.
++//
++// All branches honour aniso_fac_max as a hard ceiling. The dispatch is
++// per-phase, so heterogeneous mineral assemblages can mix forms. This file
++// has no mineral-specific knowledge — every calibration lives in FlowLaws.c.
++//
++//   d-coupling modifier formula (when aniso_d_threshold > 0 and d > 0):
++//     if d < d_threshold:
++//         f      = (d / d_threshold)^d_decay     in [0, 1]
++//         δ_eff  = 1 + f · (δ − 1)
++//     else: δ_eff = δ unchanged.
++//   Limit cases: as d → 0, δ → 1 (isotropic limit, complete CPO randomization).
++//                as d → d_threshold from below, δ → δ continuously.
++//                d_decay = 1.0 → linear blend; > 1.0 → modifier kicks in
++//                more sharply only near d=0; < 1.0 → gentler decay.
++//
++//   relaxed_delta: the P2G'd, temperature-relaxed δ at this grid point
++//                  (mesh->aniso_delta_n/_s) — consumed ONLY by the
++//                  ani_fstrain == 3 arm. For ani_fstrain ∈ {0,1,2} it is
++//                  ignored and those arms stay byte-identical.
++double AnisoFactorEvolv( double FS_AR, double aniso_fac_max, int ani_fstrain,
++                         double (*aniso_delta_fn)(double FS_AR),
++                         double grain_size,
++                         double aniso_d_threshold,
++                         double aniso_d_decay,
++                         double relaxed_delta ) {
++  if (ani_fstrain == 3) {
++    // ani_fstrain==3: the relaxed δ is computed elsewhere — it is a per-marker
++    // integrated state variable (markers->aniso_delta), updated inside
++    // FiniteStrainAspectRatio by the Boneh-2021 DiSRX relaxation law and then
++    // P2G'd to mesh->aniso_delta_n/_s. UpdateAnisoFactor passes that grid
++    // value in as relaxed_delta; here we just clamp it to the ceiling and
++    // return it (the relaxation routine already floors it at 1.0). This keeps
++    // the relaxed δ flowing through the same per-phase phase_perc weighting
++    // and harmonic/geometric averaging as every other ani_fstrain arm.
++    return MINV(relaxed_delta, aniso_fac_max);
++  }
++  if (ani_fstrain == 2) {
++    if (aniso_delta_fn == NULL) {
++      LOG_ERR("AnisoFactorEvolv: ani_fstrain=%d but aniso_delta_fn is NULL — "
++              "did the input file set aniso_db?", ani_fstrain); exit(12);
++    }
++    double delta = aniso_delta_fn(FS_AR);
++    // d-coupling modifier — only active when threshold is set AND d is
++    // valid AND d is below threshold. Default behavior (threshold=0) is
++    // byte-identical to pre-modifier code.
++    if ( aniso_d_threshold > 0.0 && grain_size > 0.0
++         && grain_size < aniso_d_threshold ) {
++      const double f = pow(grain_size / aniso_d_threshold, aniso_d_decay);
++      delta = 1.0 + f * (delta - 1.0);
++    }
++    return MINV(delta, aniso_fac_max);
++  }
++  // ani_fstrain == 1: default MDOODZ behaviour (raw FS_AR capped, no Hansen)
+   return MINV(FS_AR, aniso_fac_max);
+ }
+ 
++// ===========================================================================
++//  ani_fstrain == 3 — temperature-dependent δ-relaxation (Boneh et al. 2021)
++// ===========================================================================
++//
++// MODELLING LEAP (caveat, design D7c): Boneh et al. 2021 (G3, "The effect of
++// discontinuous static recrystallization on olivine crystallographic preferred
++// orientation") establish the *kinetics* of discontinuous static recrystalli-
++// zation (DiSRX) — the grain-boundary-migration velocity V and the time for an
++// annealed grain to grow — and they show DiSRX *qualitatively* weakens CPO.
++// They do NOT give a closed-form δ(t) relaxation law. The construction below —
++// "δ relaxes toward the isotropic limit (δ → 1) on the DiSRX grain-growth
++// timescale τ_relax = L_relax / V" — is THIS MODEL'S OWN, not Boneh's. It is a
++// defensible first-order coupling (when grain boundaries sweep a marker faster,
++// its inherited CPO is overwritten faster), but it is a modelling choice; the
++// quantitative δ(t) curve is not lab-validated. See
++// misc/aniso_fstrain/notes/ for the derivation and the tiered validation plan.
++//
++// Boneh et al. 2021 grain-boundary-migration kinetics. These constants are
++// mineral-specific and now live in the per-phase material database
++// (mat_prop::ani_relax_*), set in ReadDataAnisotropy (FlowLaws.c) — mirroring
++// how the ani_fstrain==2 δ-calibrations are dispatched per phase. The full
++// citation, the M0-units note, and the Δρ-proxy caveats travel WITH the
++// constants and now live next to their initialisation in FlowLaws.c. The
++// values currently populated there are the OLIVINE calibration; this routine
++// stays mineral-agnostic and just consumes whatever the caller passes in.
++
++// Dislocation-density driving force Δρ, proxied from the per-marker accumulated
++// dislocation-creep strain strain_pwl (design D3, O2). MDOODZ tracks no
++// dislocation density, so Δρ is derived on the fly from a field it already
++// carries. Saturating exponential mapping: Δρ → drho_min at zero stored strain,
++// → drho_max for strain ≫ eps_ref; result is always finite and in
++// [drho_min, drho_max].
++//
++// drho_min, drho_max, eps_ref are passed in per-phase from
++// materials->ani_relax_drho_{min,max} / ani_relax_eps_ref[phase] (SI units).
++// The Δρ-proxy CAVEATS (monotonicity / no-recovery; absolute stored strain vs.
++// boundary contrast — design D7b) and the calibration rationale travel WITH
++// the constants — see ReadDataAnisotropy in FlowLaws.c.
++static double DeltaRhoProxy( double strain_pwl,
++                             double drho_min, double drho_max, double eps_ref ) {
++  double s = strain_pwl;
++  if ( s < 0.0 || !isfinite(s) ) s = 0.0;          // guard: finite & non-negative
++  const double frac = 1.0 - exp( -s / eps_ref );
++  double drho = drho_min + (drho_max - drho_min) * frac;
++  if ( drho < drho_min ) drho = drho_min;
++  if ( drho > drho_max ) drho = drho_max;
++  return drho;
++}
++
++// Relaxation timescale τ_relax = L_relax / V (design D1), with the grain-
++// boundary-migration velocity V = M0 · exp(−Q/RT) · μ · b² · Δρ.
++//
++// V uses ONLY the strain-energy driving force F_s = μ·b²·Δρ; the surface-
++// energy term F_b = 3γ/d from Boneh's full ΣF = F_s + F_b is dropped (caveat,
++// design D7d): ΣF ≈ F_s, justified because F_s ≫ F_b for mantle grain sizes
++// ≥ 1 mm (Boneh 2021 §4.2, Fig. 8).
++//
++// The Boneh-2021 kinetics constants (Q, M0, mu, b) and the Δρ-proxy range
++// (drho_min, drho_max, eps_ref) are mineral-specific and are passed in
++// per-phase from materials->ani_relax_*[phase] (all in SI units; see
++// ReadDataAnisotropy in FlowLaws.c for the calibration and caveats).
++//
++// T_scaled, L_relax_scaled and R_scaled are in MDOODZ scaled units; the
++// routine converts to SI, computes τ_relax in seconds, then converts back to
++// scaled time. Returns a (scaled) τ_relax; the caller does the analytic
++// exponential update. A non-positive or non-finite L_relax / T / Δρ yields a
++// huge τ (→ effectively frozen), never a crash or a NaN.
++double DeltaRelaxationTau( double T_scaled, double L_relax_scaled,
++                           double strain_pwl, double R_scaled, scale scaling,
++                           double Q, double M0, double mu, double b,
++                           double drho_min, double drho_max, double eps_ref ) {
++  const double T_SI       = T_scaled       * scaling.T;   // K
++  const double L_relax_SI = L_relax_scaled * scaling.L;   // m
++  // R_scaled is materials->R (scaled); R_SI = R_scaled * (scaling.J/scaling.T).
++  const double R_SI       = R_scaled * (scaling.J / scaling.T);   // J/(mol·K)
++  if ( !(T_SI > 0.0) || !(L_relax_SI > 0.0) || !isfinite(T_SI) || !isfinite(L_relax_SI) ) {
++    return 1.0e300;  // degenerate input → effectively frozen
++  }
++  const double d_rho = DeltaRhoProxy( strain_pwl, drho_min, drho_max, eps_ref ); // m^-2, always > 0
++  // V = M0 · exp(−Q/RT) · μ · b² · Δρ   [m/s]
++  const double V_SI = M0 * exp( -Q / (R_SI * T_SI) )
++                      * mu * b * b * d_rho;
++  if ( !(V_SI > 0.0) || !isfinite(V_SI) ) {
++    return 1.0e300;  // cold marker: exp(−Q/RT) underflowed → V → 0 → τ → ∞
++  }
++  const double tau_SI = L_relax_SI / V_SI;                 // s
++  return tau_SI / scaling.t;                               // scaled time
++}
++
+ // Squared second invariant of deviatoric stress
+ double Y2( Tensor2D *T, double ani_fac ) {
+   // printf("Y2 %2.2e\n", ani_fac);
+@@ -83,7 +285,11 @@ double ViscosityConciseAniso( int phase, double lxlz, double lx2, double angle,
+     // !!!!!!!!!!!!!!!!!!!!!!!!
+     // General paramaters
+     const double tol    = 1e-11, R = materials->R, dt = model->dt, min_eta = model->min_eta, max_eta = model->max_eta;
+-    const int    nitmax = 20;
++    // nitmax bumped 20 → 50 to match RheologyDensity.c:205 — bisection-then-
++    // Newton occasionally needs >20 Newton iterations when bisection ends
++    // ~5 dex from the visco-elastic root and Newton converges quadratically
++    // in the final ~3 iters but linearly in the approach.
++    const int    nitmax = 50;
+     int noisy = 0;
+     double eta = 0.0, eta_el = 1e20, eta_cst = 0.0;
+     double TmaxPeierls = (1200.0 + zeroC) / scaling->T;// max. T for Peierls
+@@ -132,7 +338,7 @@ double ViscosityConciseAniso( int phase, double lxlz, double lx2, double angle,
+ 
+     if ( diffusion == 1 ) {
+       if (m_lin>0.0 && *d < 1e-13/scaling->L) {
+-        printf("Cannot run with grain size dependent viscosity if grain size is set to 0 --> d = %2.2e!!!\n", *d*scaling->L);
++        LOG_WARN("Cannot run with grain size dependent viscosity if grain size is set to 0 --> d = %2.2e!!!", *d*scaling->L);
+         exit(1);
+       }
+       B_lin = F_lin * pow(A_lin,-1.0/n_lin) * exp( (Ea_lin + P*Va_lin)/R/n_lin/T ) * pow(f_lin, -r_lin/n_lin) * exp(-a_lin*phi/n_lin); // * pow(d, m_lin/n_lin) !!!!!!!!!!!!!!!!!!!!!!!!
+@@ -178,8 +384,8 @@ double ViscosityConciseAniso( int phase, double lxlz, double lx2, double angle,
+     // Local iterations to determine eta_vep and ani_vep
+     double f0_n, f0_s, f_n, f_s, dfnden, dfndes, dfsden, dfsdes;
+     double I2_v, Y2_v, Eii_vis, W_n, W_s, ieta_pwl, deta_n, deta_s;
+-    // Construct initial guess for viscosity: Isolated viscosities 
+-    double Eii = sqrt(I2( &E_rot )); 
++    // Construct initial guess for viscosity: Isolated viscosities
++    double Eii = sqrt(I2( &E_rot ));
+     if (constant)    eta_cst  = materials->eta0[phase];
+     if (dislocation) eta_pwl  = B_pwl * pow( Eii, (1-n_pwl)/n_pwl );
+     if (elastic)     eta_el   = G*dt;
+@@ -194,28 +400,137 @@ double ViscosityConciseAniso( int phase, double lxlz, double lx2, double angle,
+     // T_rot.xx = 2.0 * eta_ve * E_rot.xx;
+     // T_rot.zz = 2.0 * eta_ve * E_rot.zz;
+     // T_rot.xz = 2.0 * eta_ve * E_rot.xz/ani_fac;
+-    // T_rot.yy = -T_rot.xx - T_rot.xx; 
++    // T_rot.yy = -T_rot.xx - T_rot.xx;
+ 
+     // Define viscosity bounds
+     double eta_up = 1.0e100 / scaling->eta;
+-    if (constant)    eta_up = MINV(eta_up, eta_cst);
+-    if (dislocation) eta_up = MINV(eta_up, eta_pwl);
+-    if (elastic)     eta_up = MINV(eta_up, eta_el);
+-    if (peierls)     eta_up = MINV(eta_up, eta_exp);
+-    if (diffusion)   eta_up = MINV(eta_up, eta_lin);
++    double eta_lo = -1.0e100 / scaling->eta;
++    if (constant)    { eta_up = MINV(eta_up, eta_cst); eta_lo = MAXV(eta_lo, eta_cst); }
++    if (dislocation) { eta_up = MINV(eta_up, eta_pwl); eta_lo = MAXV(eta_lo, eta_pwl); }
++    if (elastic)     { eta_up = MINV(eta_up, eta_el);  eta_lo = MAXV(eta_lo, eta_el);  }
++    if (peierls)     { eta_up = MINV(eta_up, eta_exp); eta_lo = MAXV(eta_lo, eta_exp); }
++    if (diffusion)   { eta_up = MINV(eta_up, eta_lin); eta_lo = MAXV(eta_lo, eta_lin); }
+ 
+     // if (centroid==0 && index==65) noisy = 1;
+ 
+     // Initial guess
+     eta_ve = eta_up;
+     // Iterations for visco-elastic trial
+-    if (noisy) printf("Start local VE iterations for phase %d (cst: %d --- el: %d --- pwl: %d)\n", phase, constant, elastic, dislocation);
+-    if (noisy) printf("ani_fac = %1.1f\n", ani_fac );    // DELETE
+-    if (noisy) printf("eta_ve=%2.2e eta_el=%2.2e eta_pwl=%2.2e eta_cst=%2.2e eta_up=%2.2e\n", eta_ve, eta_el, eta_pwl, eta_cst, eta_up); // DELETE
+-    
+-    // VISCO ELASTICITY
+-    double r, r0, drdeta;
+
+### MDLIB/FlowLaws.c
+@@ -26,6 +26,8 @@
+ #include "mdoodz-private.h"
+ #include "ctype.h"
+ 
++#include "mdoodz-log.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -34,7 +36,7 @@
+ #endif
+ 
+ #ifdef _VG_
+-#define printf(...) printf("")
++#define LOG_INFO(...) LOG_INFO("")
+ #endif
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -48,13 +50,13 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+     switch ( abs(number) ) {
+             
+         case 0 :
+-            printf ("should not be here\n");
++            LOG_INFO("should not be here");
+             success      = 0;
+             break;
+             
+         /****************** SPECIAL CASE: user-defined power law flow law ******************/
+         case 1 :
+-            printf("'Homemade' power law flow of the form: eta = eta0 * exp(-Q/n/R/T) * Eii^(1/n - 1):\n" );
++            LOG_INFO("'Homemade' power law flow of the form: eta = eta0 * exp(-Q/n/R/T) * Eii^(1/n - 1):");
+             mat->tpwl[k] = 0.0;
+             mat->npwl[k] = mat->npwl[k];
+             mat->mpwl[k] = 0.0;
+@@ -68,22 +70,22 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+ 
+         case 2 :
+-            printf("'Homemade' power law flow with constrained reference stress (tau0)\n" );
++            LOG_INFO("'Homemade' power law flow with constrained reference stress (tau0)");
+             mat->tpwl[k] = 0.0;
+             mat->npwl[k] = mat->npwl[k];
+             mat->mpwl[k] = 0.0;
+             mat->rpwl[k] = 0.0;
+             mat->Qpwl[k] = mat->Qpwl[k];
+             mat->Vpwl[k] = 0.0;
+             mat->Apwl[k] = pow( pow(2.0, mat->npwl[k]) * mat->eps0[k]/pow(mat->tau0[k], mat->npwl[k]), -mat->npwl[k]);//pow(mat->eta0[k], -mat->npwl[k]);
+-            printf("pre exp = %2.2e\n", mat->Apwl[k]);
++            LOG_INFO("pre exp = %2.2e", mat->Apwl[k]);
+             mat->fpwl[k] = 0.0;
+             mat->apwl[k] = 0.0;
+             success      = 1;
+             break;
+ 
+         case 3 :
+-            printf("'Homemade' power law flow of the form: eta = A * exp(-Q/n/R/T) * Eii^(1/n - 1):\n" );
++            LOG_INFO("'Homemade' power law flow of the form: eta = A * exp(-Q/n/R/T) * Eii^(1/n - 1):");
+             mat->tpwl[k] = 0.0;
+             mat->npwl[k] = mat->npwl[k];
+             mat->mpwl[k] = 0.0;
+@@ -99,7 +101,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+         /******************************** Crust flow laws *********************************/
+                 
+         case 10:
+-            printf("Westerly Granite (dry) - Hansen & Carter (1983):\n" );
++            LOG_INFO("Westerly Granite (dry) - Hansen & Carter (1983):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.3;
+             mat->mpwl[k] = 0.0;
+@@ -113,7 +115,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 11:
+-            printf("Maryland Diabase - Mackwell et al. (1998):\n" );
++            LOG_INFO("Maryland Diabase - Mackwell et al. (1998):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.7;
+             mat->mpwl[k] = 0.0;
+@@ -127,7 +129,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+ 
+         case 12:
+-            printf("Maryland Diabase - Carter & Tsenn (1987):\n" );
++            LOG_INFO("Maryland Diabase - Carter & Tsenn (1987):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.0;
+             mat->mpwl[k] = 0.0;
+@@ -141,7 +143,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 13:
+-            printf("Wet Quartzite - Ranalli (1995):\n" );
++            LOG_INFO("Wet Quartzite - Ranalli (1995):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 2.3;
+             mat->mpwl[k] = 0.0;
+@@ -155,7 +157,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 14:
+-            printf("Rocksalt - Ranalli (1995):\n" );
++            LOG_INFO("Rocksalt - Ranalli (1995):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 5.3;
+             mat->mpwl[k] = 0.0;
+@@ -169,7 +171,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 15:
+-            printf("Calcite - Renner et al. (2002):\n" );
++            LOG_INFO("Calcite - Renner et al. (2002):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.7;
+             mat->mpwl[k] = 0.0;
+@@ -183,7 +185,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 16:
+-            printf("Felsic granulite - Ranalli (1995):\n" );
++            LOG_INFO("Felsic granulite - Ranalli (1995):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.1;
+             mat->mpwl[k] = 0.0;
+@@ -197,7 +199,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 17:
+-            printf("Mafic granulite - Ranalli (1995):\n" );
++            LOG_INFO("Mafic granulite - Ranalli (1995):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.2;
+             mat->mpwl[k] = 0.0;
+@@ -211,7 +213,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 18:
+-            printf("Calcite - Schmid et al. (1977):\n" );
++            LOG_INFO("Calcite - Schmid et al. (1977):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.7;
+             mat->mpwl[k] = 0.0;
+@@ -225,7 +227,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 19:
+-            printf("Anorthite 100 - 0.007 H20 Wt%% - Rybacki & Dresen (2000, 2004):\n" );
++            LOG_INFO("Anorthite 100 - 0.007 H20 Wt%% - Rybacki & Dresen (2000, 2004):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.0;
+             mat->mpwl[k] = 0.0;
+@@ -239,7 +241,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+          
+         case 20:
+-            printf("Garnet - Ji and Martignole (1994):\n" );
++            LOG_INFO("Garnet - Ji and Martignole (1994):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 2.22;
+             mat->mpwl[k] = 0.0;
+@@ -253,7 +255,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+ 
+         case 21:
+-            printf("Omphacite - Zhang et al. (2006):\n" );
++            LOG_INFO("Omphacite - Zhang et al. (2006):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.5;
+             mat->mpwl[k] = 0.0;
+@@ -267,7 +269,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 22:
+-            printf("Qtz - Koch et al. (1989):\n" );
++            LOG_INFO("Qtz - Koch et al. (1989):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 2.72;
+             mat->mpwl[k] = 0.0;
+@@ -281,7 +283,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 23:
+-            printf("Fsp - Shelton and Tullis (1981):\n" );
++            LOG_INFO("Fsp - Shelton and Tullis (1981):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.2;
+             mat->mpwl[k] = 0.0;
+@@ -295,7 +297,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 24:
+-            printf("Mica - Kronenberg et al. (1990):\n" );
++            LOG_INFO("Mica - Kronenberg et al. (1990):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 18.0;
+             mat->mpwl[k] = 0.0;
+@@ -309,7 +311,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 25:
+-            printf("Plagioclase - Shelton (1981) - Ph.D. Thesis:\n" );
++            LOG_INFO("Plagioclase - Shelton (1981) - Ph.D. Thesis:");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.0;
+             mat->mpwl[k] = 0.0;
+@@ -323,7 +325,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+         
+         case 26:
+-            printf("Wet Quartzite - Burov (2011), Brace and Kohlstedt (1980), Kirby and Kronenberg (1987), Kohlstedt et al. (1995):\n" );
++            LOG_INFO("Wet Quartzite - Burov (2011), Brace and Kohlstedt (1980), Kirby and Kronenberg (1987), Kohlstedt et al. (1995):");
+             mat->tpwl[k] = 1; //1           // NEED TO CHECKED!!!
+             mat->npwl[k] = 2.4;
+             mat->mpwl[k] = 0.0;
+@@ -337,7 +339,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 27:
+-            printf("Dry Quartz - Ranalli et al. (1995, 1997), Ranalli (2003):\n" );
++            LOG_INFO("Dry Quartz - Ranalli et al. (1995, 1997), Ranalli (2003):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 2.4;
+             mat->mpwl[k] = 0.0;
+@@ -352,7 +354,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             
+             
+         case 28:
+-            printf("Qtz - Hirth et al. (2001) - uniaxial:\n" );
++            LOG_INFO("Qtz - Hirth et al. (2001) - uniaxial:");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.0;
+             mat->mpwl[k] = 0.0;
+@@ -366,7 +368,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 29 :
+-            printf("Basalt - Hacker & Chritie (1990):\n" );
++            LOG_INFO("Basalt - Hacker & Chritie (1990):");
+             mat->tpwl[k] = 0.0;
+             mat->npwl[k] = 3.7;
+             mat->mpwl[k] = 0.0;
+@@ -381,7 +383,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             
+         // Granulite Eclogite Setups:
+         case 30:
+-            printf("Anorthite dry - Rybacki and Dresen (2000):\n" );
++            LOG_INFO("Anorthite dry - Rybacki and Dresen (2000):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.0;
+             mat->mpwl[k] = 0.0;
+@@ -395,7 +397,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 31:
+-            printf("DRY CPX - Bystricky & Mackwell, 2001:\n" );
++            LOG_INFO("DRY CPX - Bystricky & Mackwell, 2001:");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 4.7;
+             mat->mpwl[k] = 0.0;
+@@ -409,7 +411,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 32:
+-            printf("Anorthite 60 - Rybacki & Dresen (2004):\n" ); // added by Pauline
++            LOG_INFO("Anorthite 60 - Rybacki & Dresen (2004):"); // added by Pauline
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.0;
+             mat->mpwl[k] = 0.0;
+@@ -423,7 +425,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+         
+         case 33:
+-            printf("Garnet - Ji and Martignole (1994):\n" ); // Activation volume set to 10 for incompressible (like in Mei 2010)
++            LOG_INFO("Garnet - Ji and Martignole (1994):"); // Activation volume set to 10 for incompressible (like in Mei 2010)
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 2.22;
+             mat->mpwl[k] = 0.0;
+@@ -437,7 +439,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+         
+ 	    case 34:
+-            printf("Westerly Granite + melt weakening (dry) - Hansen & Carter (1983):\n" );
++            LOG_INFO("Westerly Granite + melt weakening (dry) - Hansen & Carter (1983):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.3;
+             mat->mpwl[k] = 0.0;
+@@ -453,7 +455,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+         /******************************** Mantle flow laws ********************************/
+             
+         case 40:
+-            printf("Olivine Dry Dislocation creep - Hirth & Kohlstedt (2003):\n" );
++            LOG_INFO("Olivine Dry Dislocation creep - Hirth & Kohlstedt (2003):");
+             mat->tpwl[k] = 1;
+             mat->npwl[k] = 3.5;
+             mat->mpwl[k] = 0.0;
+@@ -468,7 +470,7 @@ void ReadDataPowerLaw( mat_prop* mat, params* model, int k, int number, scale* s
+             break;
+             
+         case 41:
+-            printf("Olivine Wet Dislocation creep - Hirth & Kohlstedt (2003):\n" );
++            LOG_INFO("Olivine Wet Dislocation creep - Hirth & Kohlstedt (2003):");
+
+### MDLIB/FreeSurface.c
+@@ -25,9 +25,10 @@
+ #include "math.h"
+ //---- M-Doodz header file
+ #include "mdoodz-private.h"
++#include "mdoodz-log.h"
+ 
+ #ifdef _VG_
+-#define printf(...) printf("")
++#define LOG_INFO(...) LOG_INFO("")
+ #endif
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -62,7 +63,7 @@ void SetTopoChainHorizontalCoords( surface *topo, markers *topo_chain, params mo
+         topo_chain->z0[k]    = 0.0/scaling.L;
+         topo_chain->phase[k] = 0;
+     }
+-    printf( "Topographic chain initialised with %d markers\n", topo_chain->Nb_part );
++    LOG_INFO("Topographic chain initialised with %d markers", topo_chain->Nb_part);
+ }
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -148,6 +149,10 @@ void AddPartSed( markers *particles, mat_prop materials, markers *topo_chain, su
+                 particles->strain_exp[new_ind]    =  0.0;
+                 particles->strain_lin[new_ind]    =  0.0;
+                 particles->strain_gbs[new_ind]    =  0.0;
++                // Fresh sediment is isotropic — ani_fstrain == 3 δ-relaxation
++                // state starts at δ = 1.
++                particles->aniso_delta[new_ind]         =  1.0;
++                particles->aniso_delta_fs_prev[new_ind] =  1.0;
+                 particles->d[new_ind]             =  materials.gs_ref[sed_phase];
+                 particles->T[new_ind]             =  zeroC/scaling.T;
+                 particles->P[new_ind]             =  0.0;
+@@ -158,10 +163,16 @@ void AddPartSed( markers *particles, mat_prop materials, markers *topo_chain, su
+                 particles->sxz[new_ind]           =  0.0;
+                 
+                 if (finite_strain==1) {
++                    // Identity F for fresh sediment markers. Pre-fix values
++                    // Fzx=1.0, Fzz=0.0 made det(F)=0 — a singular F that the
++                    // downstream SVD (FiniteStrainAspectRatio) saturated to
++                    // FS_AR_CAP. Restored to identity (Fxx=Fzz=1, off-diag=0).
++                    // (Surfaced by Agent 2 + Agent 7 during the aniso-init-
++                    // from-finite-strain audit.)
+                     particles->Fxx[new_ind]           = 1.0;
+                     particles->Fxz[new_ind]           = 0.0;
+-                    particles->Fzx[new_ind]           = 1.0;
+-                    particles->Fzz[new_ind]           = 0.0;
++                    particles->Fzx[new_ind]           = 0.0;
++                    particles->Fzz[new_ind]           = 1.0;
+                 }
+                 
+                 if (track_T_P_x_z==1) {
+@@ -194,7 +205,7 @@ void RemeshMarkerChain( markers *topo_chain, surface *topo, params model, scale
+     int    in, minPartCell=4, NewInd, inc = 0;
+     int    res = 2;
+     
+-    printf("Remesh surface markers, step %d \n", mode);
++    LOG_INFO("Remesh surface markers, step %d ", mode);
+   
+     // Here the marker chain is not remeshed but new marker points are added in deficient locations
+     NumMarkCell = DoodzCalloc( res*Ncx, sizeof(int) );
+@@ -231,7 +242,7 @@ void RemeshMarkerChain( markers *topo_chain, surface *topo, params model, scale
+         
+         ii = 0;
+         if (nout>0) recycle = 1;
+-        printf("%d surface markers are out, so recycle is %d\n", nout, recycle);
++        LOG_INFO("%d surface markers are out, so recycle is %d", nout, recycle);
+         
+         for ( k=0; k<res*Ncx; k++ ) {
+             
+@@ -278,7 +289,7 @@ void RemeshMarkerChain( markers *topo_chain, surface *topo, params model, scale
+                     topo_chain->z0[NewInd] = topo->b0[in] + topo->a0[in] * topo_chain->x[NewInd];
+                 }
+                 else {
+-                    printf("The max. number of topographic particles (currently %d) needs to be increased (number of particles %d)\n", topo_chain->Nb_part_max, topo_chain->Nb_part);
++                    LOG_INFO("The max. number of topographic particles (currently %d) needs to be increased (number of particles %d)", topo_chain->Nb_part_max, topo_chain->Nb_part);
+                     exit(45);
+                 }
+             }
+@@ -302,10 +313,10 @@ void RemeshMarkerChain( markers *topo_chain, surface *topo, params model, scale
+                 inc++;
+             //}
+         }
+-        printf("Had to correct %d marker topographies for a mismax of %lf\n", inc, mismax);
++        LOG_INFO("Had to correct %d marker topographies for a mismax of %lf", inc, mismax);
+     }
+     
+-    printf( "Surface remesher 1: old number of marker %d --> New number of markers %d \n", Nb_part0, topo_chain->Nb_part );
++    LOG_INFO("Surface remesher 1: old number of marker %d --> New number of markers %d ", Nb_part0, topo_chain->Nb_part);
+     DoodzFree( NumMarkCell );
+     
+ }
+@@ -417,7 +428,7 @@ void MarkerChainPolyFit( surface *topo, markers *topo_chain, params model, grid
+ 
+ void AllocateMarkerChain( surface *topo, markers* topo_chain, params model ) {
+     
+-    topo_chain->Nb_part_max = 50*model.Nx;
++    topo_chain->Nb_part_max = 500*model.Nx;  // bumped 50->500 to support long-run, large-displacement free-surface scenarios (e.g. multi-Myr ridge-spread) that overflowed the 50*Nx cap
+     topo_chain->x           = DoodzMalloc( topo_chain->Nb_part_max*sizeof(DoodzFP) );
+     topo_chain->z           = DoodzMalloc( topo_chain->Nb_part_max*sizeof(DoodzFP) );
+     topo_chain->z0           = DoodzMalloc( topo_chain->Nb_part_max*sizeof(DoodzFP) );
+@@ -435,7 +446,7 @@ void AllocateMarkerChain( surface *topo, markers* topo_chain, params model ) {
+     topo->a0                = DoodzCalloc( (model.Nx-1),sizeof(DoodzFP) );
+     topo->b0                = DoodzCalloc( (model.Nx-1),sizeof(DoodzFP) );
+     topo->VertInd           = DoodzCalloc( model.Nx,sizeof(DoodzFP) );
+-    printf( "Marker chain for topography was allocated, %d\n", topo_chain->Nb_part_max );
++    LOG_INFO("Marker chain for topography was allocated, %d", topo_chain->Nb_part_max);
+     
+ }
+ 
+@@ -782,17 +793,81 @@ void CellFlagging( grid *mesh, params model, surface topo, scale scaling ) {
+             }
+             
+             if ( i==nx-1 && j>0 && j<nz-1 && mesh->BCg.type[c1] == 30 ) {
+-                
++
+                 if ( mesh->BCp.type[c2-1] == -1  && mesh->BCp.type[c2-1-ncx] == -1 ) {
+                     mesh->BCg.type[c1] = -1;
+                 }
+-                
++
+             }
+-            
+-            
++
++
+         }
+     }
+-    
++
++    //------------- DE-ORPHAN Vx DOFs -------------//
++    // The extended-grid PVtag can flag a Vx DOF active (BCu.type = -1) even when its
++    // entire real-grid X-momentum stencil neighbourhood is non-fluid. Such a DOF gets
++    // a structurally-zero momentum row (zero diagonal) -> zero pivot in the Stokes
++    // factorisation. Mirror the vertex de-orphaning passes above: demote any active Vx
++    // DOF whose real-grid stencil neighbours (pressure cells E/W via BCp.type, vertices
++    // N/S via BCg.type) are all non-fluid back to passive (30).
++    // A pressure cell is "non-fluid" if BCp.type != -1 (air/above-surface 30/31) or it
++    // is a grid corner cell, which SetBCs converts to a corner pressure BC (type 0).
++    // Loop bounds match the inner-node guard of Xmomentum_InnerNodesDecoupled
++    // (l in 1..nzvx-2 == 1..ncz, k restricted so both pressure cells iPrW/iPrE exist).
++    for( j=1; j<ncz+1; j++ ) {
++        for ( i=1; i<ncx; i++ ) {
++
++            c1 = i + j*nx;          // Vx node (BCu.type), == ixyN
++            c2 = i-1 + (j-1)*ncx;   // West pressure cell (BCp.type), == iPrW
++
++            if ( mesh->BCu.type[c1] == -1 ) {
++
++                // West/East pressure cells of the X-momentum stencil
++                const int piW = i-1, pjW = j-1, piE = i, pjE = j-1;
++                const int orphW = mesh->BCp.type[c2]     != -1 || ( (piW==0 || piW==ncx-1) && (pjW==0 || pjW==ncz-1) );
++                const int orphE = mesh->BCp.type[c2+1]   != -1 || ( (piE==0 || piE==ncx-1) && (pjE==0 || pjE==ncz-1) );
++                // North/South vertices of the X-momentum stencil
++                const int orphN = mesh->BCg.type[c1]     == 30;
++                const int orphS = mesh->BCg.type[c1-nx]  == 30;
++
++                if ( orphW && orphE && orphN && orphS ) {
++                    mesh->BCu.type[c1] = 30;
++                    mesh->BCu.val[c1]  = 0.0;
++                }
++            }
++        }
++    }
++
++    //------------- DE-ORPHAN Vz DOFs -------------//
++    // Same defect for Vz DOFs: demote any active Vz DOF whose real-grid Z-momentum
++    // stencil neighbours (pressure cells N/S via BCp.type, vertices W/E via BCg.type)
++    // are all non-fluid back to passive (30).
++    for( j=1; j<ncz; j++ ) {
++        for ( i=1; i<ncx+1; i++ ) {
++
++            c1 = i + j*nx;              // == ixyE of the Z-momentum stencil
++            c2 = i-1 + (j-1)*ncx;       // South pressure cell (BCp.type), == iPrS
++            const int c3 = i + j*nxvz;  // Vz node (BCv.type)
++
++            if ( mesh->BCv.type[c3] == -1 ) {
++
++                // South/North pressure cells of the Z-momentum stencil
++                const int piS = i-1, pjS = j-1, piN = i-1, pjN = j;
++                const int orphS = mesh->BCp.type[c2]     != -1 || ( (piS==0 || piS==ncx-1) && (pjS==0 || pjS==ncz-1) );
++                const int orphN = mesh->BCp.type[c2+ncx] != -1 || ( (piN==0 || piN==ncx-1) && (pjN==0 || pjN==ncz-1) );
++                // West/East vertices of the Z-momentum stencil
++                const int orphW = mesh->BCg.type[c1-1]   == 30;
++                const int orphE = mesh->BCg.type[c1]     == 30;
++
++                if ( orphS && orphN && orphW && orphE ) {
++                    mesh->BCv.type[c3] = 30;
++                    mesh->BCv.val[c3]  = 0.0;
++                }
++            }
++        }
++    }
++
+     DoodzFree( PVtag  );
+     DoodzFree( PVtag0 );
+ }
+@@ -915,15 +990,15 @@ void DiffuseAlongTopography( grid *mesh, params model, scale scaling, double *ar
+     double Wvalley    = model.surf_Winc;
+     double Vinc       = -model.surf_Vinc, Vinc_num;
+     
+-    printf("****** Surface processes ******\n");
+-    printf("Going to make %03d substeps for surface processes\n", nstep);
+-    printf("Kero       = %2.2e m2.s-1\n", diff*(pow(scaling.L,2.0)/scaling.t));
++    LOG_INFO("****** Surface processes ******");
++    LOG_INFO("Going to make %03d substeps for surface processes", nstep);
++    LOG_INFO("Kero       = %2.2e m2.s-1", diff*(pow(scaling.L,2.0)/scaling.t));
+ 
+     if ( model.surface_processes == 1 || model.surface_processes == 5 ) {
+ 
+         if ( model.surface_processes == 5 ) {
+-            printf("W valley   = %2.2e m\n", Wvalley*scaling.L);
+-            printf("Vincision  = %2.2e m.s-1\n", Vinc*scaling.V);
++            LOG_INFO("W valley   = %2.2e m", Wvalley*scaling.L);
++            LOG_INFO("Vincision  = %2.2e m.s-1", Vinc*scaling.V);
+         
+             // Compute volume of cells in the valley region
+             int ncell = 0;
+@@ -936,10 +1011,10 @@ void DiffuseAlongTopography( grid *mesh, params model, scale scaling, double *ar
+             // Recompute erosion rate to satisfy mass
+             Vinc_num = Wvalley*dt*Vinc / (ncell*dx*dt);
+ 
+-            printf("We currently have %0d cell(s) within the valley region\n", ncell);
+-            printf("Real surface of eroded material should be: %2.2e\n", Wvalley*dt*Vinc);
+-            printf("Actual surface of eroded material is     : %2.2e\n", ncell*dx*dt*Vinc);
+-            printf("Corrected surface of eroded material is  : %2.2e\n", ncell*dx*dt*Vinc_num);
++            LOG_INFO("We currently have %0d cell(s) within the valley region", ncell);
++            LOG_INFO("Real surface of eroded material should be: %2.2e", Wvalley*dt*Vinc);
++            LOG_INFO("Actual surface of eroded material is     : %2.2e", ncell*dx*dt*Vinc);
++            LOG_INFO("Corrected surface of eroded material is  : %2.2e", ncell*dx*dt*Vinc_num);
+         }
+         
+         // Calculate timestep for diffusion sub-steps
+@@ -970,12 +1045,12 @@ void DiffuseAlongTopography( grid *mesh, params model, scale scaling, double *ar
+             }
+             time += dtr;
+         }
+-        printf("Do %d topographic diffusion steps - whole time: %2.2e s - final time: %2.2e s - explicit dt: %2.2e s - diffusivity: %2.2e m^2/s\n", nstep, diff_time*scaling.t, time*scaling.t, dt*scaling.t, diff*pow(scaling.L,2)/scaling.t );
++        LOG_INFO("Do %d topographic diffusion steps - whole time: %2.2e s - final time: %2.2e s - explicit dt: %2.2e s - diffusivity: %2.2e m^2/s", nstep, diff_time*scaling.t, time*scaling.t, dt*scaling.t, diff*pow(scaling.L,2)/scaling.t);
+     }
+     
+     // Instantaneous basin filling
+     if (model.surface_processes == 2) {
+-         printf("Sed. rate  = %2.2e m/y with base level: %2.2e m\n", model.surf_sedirate*scaling.V*3600.0*365.0*24.0, base_level*scaling.L);
++         LOG_INFO("Sed. rate  = %2.2e m/y with base level: %2.2e m", model.surf_sedirate*scaling.V*3600.0*365.0*24.0, base_level*scaling.L);
+         for (i=0; i<size; i++) {
+             if (array[i]<base_level)
+                 array[i]  = array_ini[i] + sedi_rate*model.dt;
+@@ -1067,7 +1142,7 @@ void SurfaceVelocity( grid *mesh, params model, surface *topo, markers* topo_cha
+ /*--------------------------------------------------------------------------------------------------------------------*/
+ 
+ void KeepZeroMeanTopo(params *model, surface *topo, markers *topo_chain ) {
+-    printf("Make zero mean topo\n");
++    LOG_INFO("Make zero mean topo");
+     double mean_z = 0.0;
+     for (int i=0; i<model->Nx; i++){
+         mean_z += topo->height[i];
+
+### MDLIB/HDF5Output.c
+@@ -33,6 +33,8 @@
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
++#include "mdoodz-log.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -182,9 +184,9 @@ void AddFieldToGroup( const char filename[], const char group[], const char fiel
+ 	if(compress==_TRUE_) {
+ 		SET_CREATION_PLIST = plist;
+         if ( quiet == 0 ) {
+-            printf("*** Compression info *** \n");
+-            printf("  chunk_size = %f \n", chunk_size );
+-            printf("  deflation level = %d \n", deflation_level );
++            LOG_INFO("*** Compression info *** ");
++            LOG_INFO("  chunk_size = %f ", chunk_size);
++            LOG_INFO("  deflation level = %d ", deflation_level);
+         }
+ 	}
+ 	else {
+@@ -217,7 +219,7 @@ void AddFieldToGroup( const char filename[], const char group[], const char fiel
+ 	}
+ 
+ 	else {
+-		printf("ERROR: Only know how to write doubles (d), ints (i), or chars (c) \n");
++		LOG_ERR("ERROR: Only know how to write doubles (d), ints (i), or chars (c) ");
+ 		exit(1);
+ 	}
+ 
+@@ -259,7 +261,9 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+     double A[8];
+     int k;
+     double *strain, *strain_el, *strain_pl, *strain_pl_vol, *strain_pwl, *strain_exp, *strain_lin, *strain_gbs, *X;
++    double *aniso_delta;
+     float *Crho_s, *Crho_n, *Ceta_s, *Ceta_n, *CVx, *CVz, *CP, *Csxxd, *Cszzd, *Csxz, *Cexxd, *Cezzd, *Cexz, *Cstrain, *Cstrain_el, *Cstrain_pl, *Cstrain_pl_vol, *Cstrain_pwl, *Cstrain_exp, *Cstrain_lin, *Cstrain_gbs, *CT, *Cd;
++    float *Caniso_delta;
+     float *Cxg_coord, *Czg_coord, *Cxc_coord, *Czc_coord, *Czvx_coord, *Cxvz_coord;
+     float *CeII_el, *CeII_pl, *CeII_pwl, *CeII_exp, *CeII_lin, *CeII_gbs, *CX;
+     double *Fxx, *Fxz, *Fzx, *Fzz, *nx, *nz;
+@@ -324,7 +328,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+     // ---------------------------------------------------------
+     // Smooth rheological contrasts
+-    if (model.diffuse_X) P2Mastah( &model, *particles, particles->X,     mesh, mesh->X_n,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    if (model.diffuse_X) P2Mastah( &model, *particles, particles->X,     mesh, mesh->X_n,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     // ---------------------------------------------------------
+     // Cast grid arrays
+     Crho_s  = DoodzMalloc( sizeof(float)*model.Nx*model.Nz);
+@@ -485,74 +489,80 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+     // Total strain
+     strain  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain,     mesh, strain,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain,     mesh, strain,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain, Cstrain, (model.Nx-1)*(model.Nz-1) );
+ 
+     // Elastic strain
+     strain_el  = DoodzCalloc((model.Nx-1)*(model.Nz-1),sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_el,     mesh, strain_el,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_el,     mesh, strain_el,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_el  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_el, Cstrain_el, (model.Nx-1)*(model.Nz-1) );
+ 
+     // Deviatoric plastic strain
+     strain_pl  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_pl,     mesh, strain_pl,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_pl,     mesh, strain_pl,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_pl  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_pl, Cstrain_pl, (model.Nx-1)*(model.Nz-1) );
+     
+     // Volumetric plastic strain
+     strain_pl_vol  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_pl_vol,     mesh, strain_pl_vol,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_pl_vol,     mesh, strain_pl_vol,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_pl_vol  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_pl_vol, Cstrain_pl_vol, (model.Nx-1)*(model.Nz-1) );
+ 
+     // Power-law strain
+     strain_pwl  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_pwl,     mesh, strain_pwl,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_pwl,     mesh, strain_pwl,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_pwl  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_pwl, Cstrain_pwl, (model.Nx-1)*(model.Nz-1) );
+ 
++    // ani_fstrain == 3 relaxed anisotropy factor δ (per-marker state)
++    aniso_delta  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
++    P2Mastah( &model, *particles, particles->aniso_delta,     mesh, aniso_delta,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
++    Caniso_delta  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
++    DoubleToFloat( aniso_delta, Caniso_delta, (model.Nx-1)*(model.Nz-1) );
++
+     // Exponential flow strain
+     strain_exp  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_exp,     mesh, strain_exp,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_exp,     mesh, strain_exp,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_exp  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_exp, Cstrain_exp, (model.Nx-1)*(model.Nz-1) );
+ 
+     // Linear flow strain
+     strain_lin  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_lin,     mesh, strain_lin,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_lin,     mesh, strain_lin,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_lin  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_lin, Cstrain_lin, (model.Nx-1)*(model.Nz-1) );
+ 
+     // GBS flow strain
+     strain_gbs  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-    P2Mastah( &model, *particles, particles->strain_gbs,     mesh, strain_gbs,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++    P2Mastah( &model, *particles, particles->strain_gbs,     mesh, strain_gbs,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+     Cstrain_gbs  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+     DoubleToFloat( strain_gbs, Cstrain_gbs, (model.Nx-1)*(model.Nz-1) );
+ 
+     if ( model.finite_strain == 1 ) {
+         // Fxx
+         Fxx  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->Fxx,     mesh, Fxx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Fxx,     mesh, Fxx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         CFxx  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( Fxx, CFxx, (model.Nx-1)*(model.Nz-1) );
+ 
+         // Fxz
+         Fxz  = DoodzCalloc((model.Nx-1)*(model.Nz-1),sizeof(double));
+-        P2Mastah( &model, *particles, particles->Fxz,     mesh, Fxz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Fxz,     mesh, Fxz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         CFxz  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( Fxz, CFxz, (model.Nx-1)*(model.Nz-1) );
+ 
+         // Fzx
+         Fzx  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->Fzx,     mesh, Fzx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Fzx,     mesh, Fzx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         CFzx  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( Fzx, CFzx, (model.Nx-1)*(model.Nz-1) );
+ 
+         // Fzz
+         Fzz  = DoodzCalloc((model.Nx-1)*(model.Nz-1),sizeof(double));
+-        P2Mastah( &model, *particles, particles->Fzz,     mesh, Fzz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Fzz,     mesh, Fzz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         CFzz = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( Fzz, CFzz, (model.Nx-1)*(model.Nz-1) );
+     }
+@@ -561,13 +571,13 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // nx
+         nx  = DoodzCalloc((model.Nx-1)*(model.Nz-1),sizeof(double));
+-        P2Mastah( &model, *particles, particles->nx,     mesh, nx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->nx,     mesh, nx,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         Cnx = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( nx, Cnx, (model.Nx-1)*(model.Nz-1) );
+ 
+         // nz
+         nz  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->nz,     mesh, nz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->nz,     mesh, nz,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         Cnz = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( nz, Cnz, (model.Nx-1)*(model.Nz-1) );
+ 
+@@ -584,7 +594,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // T0
+         T0  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->T0,     mesh, T0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->T0,     mesh, T0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         for (k=0; k<(mesh->Nx-1)*(mesh->Nz-1); k++) {
+             if ( mesh->BCt.type[k] == 30 ) T0[k]   = zeroC/scaling.T;
+         }
+@@ -594,7 +604,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // P0
+         P0  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->P0,     mesh, P0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->P0,     mesh, P0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         for (k=0; k<(mesh->Nx-1)*(mesh->Nz-1); k++) {
+             if ( mesh->BCt.type[k] == 30 ) P0[k]   = 0.0;
+         }
+@@ -604,7 +614,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // Tmax
+         Tmax  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->Tmax,     mesh, Tmax,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Tmax,     mesh, Tmax,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         for (k=0; k<(mesh->Nx-1)*(mesh->Nz-1); k++) {
+             if ( mesh->BCt.type[k] == 30 ) Tmax[k] = zeroC/scaling.T;
+         }
+@@ -614,7 +624,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // Pmax
+         Pmax  = DoodzCalloc((model.Nx-1)*(model.Nz-1),sizeof(double));
+-        P2Mastah( &model, *particles, particles->Pmax,     mesh, Pmax,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->Pmax,     mesh, Pmax,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         for (k=0; k<(mesh->Nx-1)*(mesh->Nz-1); k++) {
+             if ( mesh->BCt.type[k] == 30 ) Pmax[k] = 0.0;
+         }
+@@ -625,14 +635,14 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+ 
+         // x0
+         x0  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->x0,     mesh, x0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->x0,     mesh, x0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         Cx0  = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( x0, Cx0, (model.Nx-1)*(model.Nz-1) );
+         ScaleBack( Cx0, scaling.L, (model.Nx-1)*(model.Nz-1) );
+ 
+         // z0
+         z0  = DoodzCalloc((model.Nx-1)*(model.Nz-1), sizeof(double));
+-        P2Mastah( &model, *particles, particles->z0,     mesh, z0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil);
++        P2Mastah( &model, *particles, particles->z0,     mesh, z0,   mesh->BCp.type,  1, 0, interp, cent, model.interp_stencil, NULL);
+         Cz0 = DoodzMalloc( sizeof(float)*(model.Nx-1)*(model.Nz-1));
+         DoubleToFloat( z0, Cz0, (model.Nx-1)*(model.Nz-1) );
+         ScaleBack( Cz0, scaling.L, (model.Nx-1)*(model.Nz-1) );
+@@ -725,6 +735,10 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+     // Parameter array
+     AddFieldToGroup( FileName, "Model", "Params"   , 'd', 8,  A, 1 );
+ 
++    // Particle count
++    int nb_part_out = particles->Nb_part;
++    AddFieldToGroup( FileName, "Model", "Nb_part"  , 'i', 1,  &nb_part_out, 1 );
++
+     // Add time series
+     AddFieldToGroup(  FileName, "TimeSeries", "Time_time"      , 'd', model.Nt+1,  mesh->Time_time      , 1 );
+     AddFieldToGroup(  FileName, "TimeSeries", "Short_time"     , 'd', model.Nt+1,  mesh->Short_time     , 1 );
+@@ -777,6 +791,7 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+     AddFieldToGroup( FileName, "Centers" , "strain_pl", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_pl, 1 );
+     AddFieldToGroup( FileName, "Centers" , "strain_pl_vol", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_pl_vol, 1 );
+     AddFieldToGroup( FileName, "Centers" , "strain_pwl", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_pwl, 1 );
++    AddFieldToGroup( FileName, "Centers" , "aniso_delta", 'f', (model.Nx-1)*(model.Nz-1), Caniso_delta, 1 );
+     AddFieldToGroup( FileName, "Centers" , "strain_exp", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_exp, 1 );
+     AddFieldToGroup( FileName, "Centers" , "strain_lin", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_lin, 1 );
+     AddFieldToGroup( FileName, "Centers" , "strain_gbs", 'f', (model.Nx-1)*(model.Nz-1), Cstrain_gbs, 1 );
+@@ -896,11 +911,13 @@ void WriteOutputHDF5( grid *mesh, markers *particles, surface *topo, markers* to
+     DoodzFree( strain_exp );
+     DoodzFree( strain_lin );
+     DoodzFree( strain_gbs );
++    DoodzFree( aniso_delta );
+     DoodzFree( Cstrain     );
+     DoodzFree( Cstrain_el  );
+     DoodzFree( Cstrain_pl  );
+     DoodzFree( Cstrain_pl_vol  );
+     DoodzFree( Cstrain_pwl );
++    DoodzFree( Caniso_delta );
+     DoodzFree( Cstrain_exp );
+     DoodzFree( Cstrain_lin );
+     DoodzFree( Cstrain_gbs );
+
+### MDLIB/Main_DOODZ.c
+@@ -29,6 +29,9 @@
+ #include "mdoodz-private.h"
+ #include "mdoodz.h"
+ 
++#include "mdoodz-log.h"
++#include "sys/resource.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -43,15 +46,42 @@
+ 
+ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+ 
+-    printf("\n********************************************************\n");
+-    printf("************ Starting MDOODZ 7.0 simulation ************\n");
+-    printf("********************************************************\n");
++    mdoodz_log_init(NULL);
++
++    LOG_INFO("********************************************************");
++    LOG_INFO("************ Starting MDOODZ 7.0 simulation ************");
++    LOG_INFO("********************************************************");
++
++    // Apple Silicon (macOS 15+): suppress Accelerate's internal GCD thread pool
++    // so it doesn't oversubscribe against our OpenMP threads. Per-thread setting.
++#if defined(__APPLE__)
++    {
++        #include <dlfcn.h>
++        typedef int (*blas_set_threading_fn_t)(unsigned int);
++        blas_set_threading_fn_t blas_set = (blas_set_threading_fn_t)dlsym(RTLD_DEFAULT, "BLASSetThreading");
++        if (blas_set != NULL) {
++            // BLAS_THREADING_SINGLE_THREADED = 1
++            int rc = blas_set(1);
++            LOG_INFO("BLASSetThreading(SINGLE_THREADED) via dlsym = %d", rc);
++        } else {
++            LOG_INFO("BLASSetThreading not available (macOS<15)");
++        }
++    }
++#endif
+ 
+     Input inputFile   = ReadInputFile(inputFileName);
++
++    mdoodz_log_reconfigure(&inputFile.model.log);
+     char *BaseOutputFileName, *BaseParticleFileName;
+     asprintf(&BaseOutputFileName, "Output");
+     asprintf(&BaseParticleFileName, "Particles");
+ 
++    // Open performance CSV
++    FILE *perf_csv = fopen("perf.csv", "w");
++    if (perf_csv) {
++        fprintf(perf_csv, "step,wall_s,time_ma,rheology_s,assembly_s,solve_s,thermal_s,advection_s,free_surface_s,reseeding_s,melting_s,anisotropy_s,gse_s,output_s,interp_s,stokes_setup_s,nl_overhead_s,post_solve_s,nit,n_particles,neq_mom,neq_cont,peak_rss_mb,user_cpu_s,sys_cpu_s\n");
++    }
++
+     MdoodzInput input = (MdoodzInput){
+             .model             = inputFile.model,
+             .scaling           = inputFile.scaling,
+@@ -60,6 +90,26 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+             .flux              = NULL,
+     };
+ 
++    // Startup validation + registration for the optional SetGridDensity grid-override callback.
++    // Semantics (see mdoodz.h SetGridDensity_f): when the callback is set it overrides
++    // mesh->rho_n / mesh->rho_s at every rheology pass. To prevent silent conflict with the
++    // phase-based density pipeline, refuse the combination of the callback with any non-zero
++    // density_model on any phase.
++    {
++        SetGridDensity_f setrho_cb = (setup->SetParticles ? setup->SetParticles->SetGridDensity : NULL);
++        if (setrho_cb != NULL) {
++            for (int k = 0; k < input.materials.Nb_phases; k++) {
++                if (input.materials.density_model[k] != 0) {
++                    LOG_ERR("SetGridDensity callback is active but phase %d has density_model=%d. "
++                            "Either remove the callback or set density_model = 0 on every phase.",
++                            k, input.materials.density_model[k]);
++                    exit(1);
++                }
++            }
++        }
++        RegisterSetGridDensityCallback(&input, setrho_cb);
++    }
++
+     if (input.model.free_surface) {
+       input.flux = malloc(sizeof(LateralFlux));
+       if (input.flux != NULL) {
+@@ -73,19 +123,50 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+ 
+     if (setup->MutateInput) {
+       setup->MutateInput(&input);
++      // Re-run the anisotropy database population after MutateInput so that
++      // tests / scenario harnesses that flip ani_fstrain or aniso_db in the
++      // mutate callback (post-input-file-parse) still get the per-phase
++      // function pointer populated. Two cases handled:
++      //   (a) ani_fstrain=2 or 3 + aniso_db=0 → auto-default to aniso_db=1
++      //       (olivine). ani_fstrain=3 is "ani_fstrain=2 δ-dispatch +
++      //       δ-relaxation", so it needs aniso_db > 0 just like ==2.
++      //   (b) aniso_db>0 → always (re-)call ReadDataAnisotropy to populate
++      //       the function pointer (parser didn't see the post-MutateInput
++      //       value, so aniso_delta_fn[k] would still be NULL otherwise).
++      // Idempotent: ReadDataAnisotropy just reassigns the function pointer.
++      for (int k = 0; k < input.materials.Nb_phases; k++) {
++        if ((input.materials.ani_fstrain[k] == 2 || input.materials.ani_fstrain[k] == 3) && input.materials.aniso_db[k] == 0) {
++          input.materials.aniso_db[k] = 1;
++        }
++        if (input.materials.aniso_db[k] > 0) {
++          ReadDataAnisotropy(&input.materials, &input.model, k,
++                              input.materials.aniso_db[k], &input.scaling);
++        }
++      }
+     }
+ 
+     // ValidateSetup(setup, &input);
+     input.model.L0 = input.model.xmax - input.model.xmin;
+ 
+-    printf("*************************************\n");
+-    printf("****** Allocate and initialise ******\n");
+-    printf("*************************************\n");
++    LOG_INFO("*************************************");
++    LOG_INFO("****** Allocate and initialise ******");
++    LOG_INFO("*************************************");
+ 
+     // Multi resolution allocation pointers
+     grid mesh = GridAlloc(&input.model );
+     int          Ncx = mesh.Nx - 1 , Ncz =  mesh.Nz - 1;
+ 
++    // Persistent interpolation buffer pool (modes 1, 2)
++    InterpBufPool *pool = NULL;
++    if (input.model.interp_mode >= 1) {
++#ifdef _OMP_
++        int nthreads_pool = omp_get_max_threads();
++#else
++        int nthreads_pool = 1;
++#endif
++        pool = InterpBufPoolInit(&mesh, input.model.interp_mode, nthreads_pool);
++    }
++
+     // Initialise grid coordinates
+     SetGridCoordinates( &mesh, &input.model, input.model.Nx, input.model.Nz );
+ 
+@@ -106,11 +187,13 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+     {
+         num_threads = omp_get_num_threads();
+     }
+-    printf("Num threads = %03d\n", omp_get_num_threads());
++    LOG_INFO("Num threads = %03d", omp_get_num_threads());
++    int cholmod_nthreads = (input.model.cholmod_threads == -1) ? num_threads : input.model.cholmod_threads;
++    LOG_INFO("CHOLMOD threads: %d", cholmod_nthreads);
+ 
+-    printf("*************************************\n");
+-    printf("******* Initialize particles ********\n");
+-    printf("*************************************\n");
++    LOG_INFO("*************************************");
++    LOG_INFO("******* Initialize particles ********");
++    LOG_INFO("*************************************");
+ 
+     // Initialize and allocate particle fields
+     markers particles = PartAlloc(inputFile.particles, &input.model );
+@@ -123,6 +206,16 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+ 
+     // Set new particle distribution
+     int cent=1, vert=0, prop=1, interp=0, vxnodes=-1, vznodes=-2;
++
++    // Initialize persistent thermal CHOLMOD solver (before irestart branch, used by both paths)
++    DirectSolver ThermalSolver;
++    cholmod_start( &ThermalSolver.c );
++#if CHOLMOD_MAIN_VERSION >= 4
++    ThermalSolver.c.nthreads_max = cholmod_nthreads;
++#endif
++    ThermalSolver.Analyze = 1;
++    ThermalSolver.Lfact = NULL;
++
+     if ( input.model.irestart == 0 ) {
+ 
+       input.model.step = 0;
+@@ -137,7 +230,7 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+             const double k_crazy         = input.crazyConductivity->multiplier * input.materials.k[phase];
+             input.materials.k_eff[phase] = k_crazy;
+           }
+-          printf("Running with crazy conductivity for the asthenosphere!!\n");
++          LOG_INFO("Running with crazy conductivity for the asthenosphere!!");
+         }
+ 
+         // Initial grid tags
+@@ -179,20 +272,21 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+         if (input.model.free_surface == 1 ) CleanUpSurfaceParticles( &particles, &mesh, topo, input.scaling );
+ 
+         // Create phase percentage arrays
+-        if ( input.model.reseed_mode == 0 ) CountPartCell_OLD( &particles, &mesh, input.model, topo, topo_ini, 0, input.scaling );
+-        if ( input.model.reseed_mode == 1 ) CountPartCell( &particles, &mesh, input.model, topo, topo_ini, 0, input.scaling );
++        if ( input.model.reseed_mode == 0 ) CountPartCell_OLD( &particles, &mesh, input.model, topo, topo_ini, 0, input.scaling, pool );
++        if ( input.model.reseed_mode == 1 ) CountPartCell( &particles, &mesh, input.model, topo, topo_ini, 0, input.scaling, pool );
++        if ( input.model.reseed_mode == 2 ) CountPartCell_v2( &particles, &mesh, input.model, topo, topo_ini, 0, input.scaling, pool );
+ 
+-        P2Mastah( &input.model, particles, input.materials.eta0, &mesh, mesh.eta_s, mesh.BCg.type,  0, 0, interp, vert, input.model.interp_stencil);
+-        P2Mastah( &input.model, particles, input.materials.eta0, &mesh, mesh.eta_n, mesh.BCp.type,  0, 0, interp, cent, input.model.interp_stencil);
++        P2Mastah( &input.model, particles, input.materials.eta0, &mesh, mesh.eta_s, mesh.BCg.type,  0, 0, interp, vert, input.model.interp_stencil, pool);
++        P2Mastah( &input.model, particles, input.materials.eta0, &mesh, mesh.eta_n, mesh.BCp.type,  0, 0, interp, cent, input.model.interp_stencil, pool);
+ 
+-        P2Mastah( &input.model, particles, particles.noise, &mesh, mesh.noise_s, mesh.BCg.type,  1, 0, interp, vert, input.model.interp_stencil);
+-        P2Mastah( &input.model, particles, particles.noise, &mesh, mesh.noise_n, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil);
++        P2Mastah( &input.model, particles, particles.noise, &mesh, mesh.noise_s, mesh.BCg.type,  1, 0, interp, vert, input.model.interp_stencil, pool);
++        P2Mastah( &input.model, particles, particles.noise, &mesh, mesh.noise_n, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil, pool);
+ 
+-        P2Mastah( &input.model, particles, particles.T,  &mesh, mesh.T , mesh.BCp.type,  1, 0, interp, cent, 1);
+-        P2Mastah( &input.model, particles, input.materials.Cp, &mesh, mesh.Cp, mesh.BCp.type,  0, 0, interp, cent, 1);
++        P2Mastah( &input.model, particles, particles.T,  &mesh, mesh.T , mesh.BCp.type,  1, 0, interp, cent, 1, pool);
++        P2Mastah( &input.model, particles, input.materials.Cp, &mesh, mesh.Cp, mesh.BCp.type,  0, 0, interp, cent, 1, pool);
+ 
+-        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kx, mesh.BCu.type,  0, 0, interp, vxnodes, 1);
+-        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kz, mesh.BCv.type,  0, 0, interp, vznodes, 1);
++        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kx, mesh.BCu.type,  0, 0, interp, vxnodes, 1, pool);
++        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kz, mesh.BCv.type,  0, 0, interp, vznodes, 1, pool);
+ 
+         if (input.model.noisy == 1 ) {
+             MinMaxArray( mesh.u_in, input.scaling.V, (mesh.Nx)*(mesh.Nz+1),   "Vx. grid" );
+@@ -205,7 +299,7 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+             const double k_crazy         = input.crazyConductivity->multiplier * input.materials.k[phase];
+             input.materials.k_eff[phase] = k_crazy;
+           }
+-          printf("Running with crazy conductivity for the asthenosphere!!\n");
++          LOG_INFO("Running with crazy conductivity for the asthenosphere!!");
+         }
+         // Initial solution fields
+         SetBCs(*setup->SetBCs, &input, &mesh, &topo);
+@@ -214,50 +308,50 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+             InitialiseSolutionFields( &mesh, &input.model );
+         }
+         else {
+-            P2Mastah( &input.model, particles, particles.Vx, &mesh, mesh.u_in, mesh.BCu.type,  1, 0, interp, vxnodes, 1);
+-            P2Mastah( &input.model, particles, particles.Vz, &mesh, mesh.v_in, mesh.BCv.type,  1, 0, interp, vznodes, 1);
++            P2Mastah( &input.model, particles, particles.Vx, &mesh, mesh.u_in, mesh.BCu.type,  1, 0, interp, vxnodes, 1, pool);
++            P2Mastah( &input.model, particles, particles.Vz, &mesh, mesh.v_in, mesh.BCv.type,  1, 0, interp, vznodes, 1, pool);
+             ApplyBC( &mesh, &input.model );
+         }
+ 
+         MinMaxArray( mesh.u_in, input.scaling.V, (mesh.Nx)*(mesh.Nz+1),   "Vx. grid" );
+         MinMaxArray( mesh.v_in, input.scaling.V, (mesh.Nx+1)*(mesh.Nz),   "Vz. grid" );
+         MinMaxArray( mesh.p_in, input.scaling.S, (mesh.Nx-1)*(mesh.Nz-1), "       P" );
+ 
+-        printf("*************************************\n");
+-        printf("****** Initialize temperature *******\n");
+-        printf("*************************************\n");
++        LOG_INFO("*************************************");
++        LOG_INFO("****** Initialize temperature *******");
++        LOG_INFO("*************************************");
+ 
+         // Get energy and related material parameters from particles
+-        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kx, mesh.BCu.type,  0, 0, interp, vxnodes, 1);
+-        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kz, mesh.BCv.type,  0, 0, interp, vznodes, 1);
+-        P2Mastah( &input.model, particles, particles.T,     &mesh, mesh.T , mesh.BCp.type,  1, 0, interp, cent, 1);
+-        P2Mastah( &input.model, particles, input.materials.Cp,    &mesh, mesh.Cp, mesh.BCp.type,  0, 0, interp, cent, 1);
+-        P2Mastah( &input.model, particles, input.materials.Qr,    &mesh, mesh.Qr, mesh.BCp.type,  0, 0, interp, cent, 1);
++        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kx, mesh.BCu.type,  0, 0, interp, vxnodes, 1, pool);
++        P2Mastah( &input.model, particles, input.materials.k_eff, &mesh, mesh.kz, mesh.BCv.type,  0, 0, interp, vznodes, 1, pool);
++        P2Mastah( &input.model, particles, particles.T,     &mesh, mesh.T , mesh.BCp.type,  1, 0, interp, cent, 1, pool);
++        P2Mastah( &input.model, particles, input.materials.Cp,    &mesh, mesh.Cp, mesh.BCp.type,  0, 0, interp, cent, 1, pool);
++        P2Mastah( &input.model, particles, input.materials.Qr,    &mesh, mesh.Qr, mesh.BCp.type,  0, 0, interp, cent, 1, pool);
+ 
+         SetBCs(*setup->SetBCs, &input, &mesh, &topo);
+         UpdateDensity( &mesh, &particles, &input.materials, &input.model, &input.scaling );
+-        if (input.model.initial_cooling == 1 ) ThermalSteps(   &mesh, input.model, mesh.rhs_t, &particles, input.model.cooling_duration, input.scaling );
++        if (input.model.initial_cooling == 1 ) ThermalSteps(   &mesh, input.model, mesh.rhs_t, &particles, input.model.cooling_duration, input.scaling, &ThermalSolver );
+         if (input.model.therm_perturb   == 1 ) SetThermalPert( &mesh, input.model, input.scaling );
+         Interp_Grid2P_centroids2( particles, particles.T,    &mesh, mesh.T, mesh.xvz_coord,  mesh.zvx_coord,  mesh.Nx-1, mesh.Nz-1, mesh.BCt.type, &input.model );
+         ArrayEqualArray( mesh.T0_n, mesh.T, (mesh.Nx-1)*(mesh.Nz-1) );
+ 
+         //--------------------------------------------------------------------------------------------------------
+-        printf("*************************************\n");
+-        printf("******** Initialize stresses ********\n");
+-        printf("*************************************\n");
++        LOG_INFO("*************************************");
++        LOG_INFO("******** Initialize stresses ********");
++        LOG_INFO("*************************************");
+         
+         // stresses on particles should have been set in SetParticles, so here we only have to interpolate to the mesh
+-        P2Mastah( &input.model, particles, particles.sxxd,   &mesh, mesh.sxxd0, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil);
+-        P2Mastah( &input.model, particles, particles.szzd,   &mesh, mesh.szzd0, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil);
+-        P2Mastah( &input.model, particles, particles.sxz,    &mesh, mesh.sxz0,  mesh.BCg.type,  1, 0, interp, vert, input.model.interp_stencil);
++        P2Mastah( &input.model, particles, particles.sxxd,   &mesh, mesh.sxxd0, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil, pool);
++        P2Mastah( &input.model, particles, particles.szzd,   &mesh, mesh.szzd0, mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil, pool);
++        P2Mastah( &input.model, particles, particles.sxz,    &mesh, mesh.sxz0,  mesh.BCg.type,  1, 0, interp, vert, input.model.interp_stencil, pool);
+ 
+         MinMaxArrayTag( mesh.sxxd0, input.scaling.S,   (mesh.Nx-1)*(mesh.Nz-1), "Sxx initial ", mesh.BCp.type );
+         MinMaxArrayTag( mesh.szzd0, input.scaling.S,   (mesh.Nx-1)*(mesh.Nz-1), "Szz initial ", mesh.BCp.type );
+ 
+ 
+-        printf("*************************************\n");
+-        printf("******** Initialize pressure ********\n");
+-        printf("*************************************\n");
++        LOG_INFO("*************************************");
++        LOG_INFO("******** Initialize pressure ********");
++        LOG_INFO("*************************************");
+ 
+         // Compute deviatoric strain rate tensor components
+         ApplyBC( &mesh, &input.model );
+@@ -273,7 +367,7 @@ void RunMDOODZ(char *inputFileName, MdoodzSetup *setup) {
+             // Compute pressure
+             ComputeLithostaticPressure( &mesh, &input.model, input.materials.rho[0], input.scaling, 1 );
+             Interp_Grid2P_centroids2( particles, particles.P,    &mesh, mesh.p_lith, mesh.xvz_coord,  mesh.zvx_coord,  mesh.Nx-1, mesh.Nz-1, mesh.BCp.type, &input.model );
+-            P2Mastah( &input.model, particles, particles.P,     &mesh, mesh.p_in , mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil);
++            P2Mastah( &input.model, particles, particles.P,     &mesh, mesh.p_in , mesh.BCp.type,  1, 0, interp, cent, input.model.interp_stencil, pool);
+             ArrayEqualArray( mesh.p_in, mesh.p_lith,  (mesh.Nx-1)*(mesh.Nz-1) );
+
+### MDLIB/ParticleRoutines.c
+@@ -22,9 +22,12 @@
+ #include "stdio.h"
+ #include "math.h"
+ #include "stdlib.h"
++#include "string.h"
+ #include "mdoodz-private.h"
+ #include "time.h"
+ 
++#include "mdoodz-log.h"
++
+ #ifdef _OMP_
+ #include "omp.h"
+ #else
+@@ -34,7 +37,7 @@
+ #endif
+ 
+ #ifdef _VG_
+-#define printf(...) printf("")
++#define LOG_INFO(...) LOG_INFO("")
+ #endif
+ 
+ /*--------------------------------------------------------------------------------------------------------------------*/
+@@ -477,7 +480,11 @@ double Vertices2Particle( markers* particles, double* NodeField, double* X_vect,
+             j_part = 0;
+         }
+         if (j_part>Nx-2) {
+-            printf("Should never be here II! (Vertices2Particle)\n"); exit(1);
++            // Match cases I, IV, V above: clamp to nearest valid cell instead
++            // of exiting. The exit was an oversight when sibling checks were
++            // disabled — see openspec/changes/archive/2026-05-06-gate-finite-strain-anisotropy/
++            // for context. Triggered by particles drifting outside the post-ALE-shrink
++            // mesh in pure-shear + anisotropy scenarios.
+             j_part = Nx-2;
+         }
+         
+@@ -537,7 +544,7 @@ double Vertices2Particle( markers* particles, double* NodeField, double* X_vect,
+         
+     }
+     else {
+-        printf("Should never be here VI ! (Vertices2Particle)\n"); exit(1);
++        LOG_ERR("Should never be here VI ! (Vertices2Particle)"); exit(1);
+     }
+     return val;
+ }
+@@ -560,7 +567,7 @@ void ParticleInflowCheck ( markers* particles, grid *mesh, MdoodzInput *input, s
+     for (k=0; k<Nb_part; k++) {
+         if ( particles->phase[k] == -1 ) np_reuse++;
+     }
+-    printf( GREEN "Particles available for recycling: %04d\n" RESET, np_reuse);
++    LOG_INFO(GREEN "Particles available for recycling: %04d" RESET, np_reuse);
+ 
+     // Stores indices of particles to recycle
+     int *ip_reuse = DoodzCalloc( np_reuse, sizeof(int));
+@@ -600,8 +607,8 @@ reduction(+:npW,npE )
+                 }
+             }
+         }
+-        printf("Number of particles west boundary: %d\n", npW);
+-        printf("Number of particles east boundary: %d\n", npE);
++        LOG_INFO("Number of particles west boundary: %d", npW);
++        LOG_INFO("Number of particles east boundary: %d", npE);
+     }
+     
+     if (flag == 1) {
+@@ -632,7 +639,7 @@ reduction(+:npW,npE )
+                         Nb_part++;
+                     }
+                     else {
+-                        printf("Too many particles in my mind %d, maximum %d\n", Nb_part, particles->Nb_part_max);
++                        LOG_WARN("Too many particles in my mind %d, maximum %d", Nb_part, particles->Nb_part_max);
+                     }
+ 
+                     // Add particles
+@@ -659,7 +666,7 @@ reduction(+:npW,npE )
+                         Nb_part++;
+                     }
+                     else {
+-                        printf("Too many particles in my mind %d, maximum %d\n", Nb_part, particles->Nb_part_max);
++                        LOG_WARN("Too many particles in my mind %d, maximum %d", Nb_part, particles->Nb_part_max);
+                     }
+                     
+                     // Add particles
+@@ -670,12 +677,12 @@ reduction(+:npW,npE )
+                 }
+             }
+         }
+-        printf("Number of particles west boundary: %d\n", npW);
+-        printf("Number of particles east boundary: %d\n", npE);
++        LOG_INFO("Number of particles west boundary: %d", npW);
++        LOG_INFO("Number of particles east boundary: %d", npE);
+         particles->Nb_part = Nb_part;
+     }
+     
+-    printf("** Time for particles inflow check = %lf sec\n",  (double)((double)omp_get_wtime() - t_omp) );
++    LOG_TIME("particles inflow check = %lf sec",  (double)((double)omp_get_wtime() - t_omp));
+     
+     DoodzFree(ip_reuse);
+ 
+@@ -686,10 +693,10 @@ reduction(+:npW,npE )
+ /*--------------------------------------------------------------------------------------------------------------------*/
+ 
+ void AssignMarkerProperties (markers* particles, int new_ind, int min_index, params *model, grid* mesh, int direct_neighbour ) {
+-    
++
+     particles->phase[new_ind]         = particles->phase[min_index];
+     particles->dual[new_ind]          = particles->dual[min_index];
+-    if (particles->phase[min_index]==-1) {printf("New particle is has phase -1, error! (AssignMarkerProperties)\n" ); exit(99);}
++    if (particles->phase[min_index]==-1) {LOG_ERR("New particle is has phase -1, error! (AssignMarkerProperties)"); exit(99);}
+     particles->Vx[new_ind]            = particles->Vx[min_index];
+     particles->Vz[new_ind]            = particles->Vz[min_index];
+     particles->strain[new_ind]        = particles->strain[min_index];
+@@ -699,6 +706,9 @@ void AssignMarkerProperties (markers* particles, int new_ind, int min_index, par
+     particles->strain_exp[new_ind]    = particles->strain_exp[min_index];
+     particles->strain_lin[new_ind]    = particles->strain_lin[min_index];
+     particles->strain_gbs[new_ind]    = particles->strain_gbs[min_index];
++    // ani_fstrain == 3 δ-relaxation state — inherit from the source marker.
++    particles->aniso_delta[new_ind]         = particles->aniso_delta[min_index];
++    particles->aniso_delta_fs_prev[new_ind] = particles->aniso_delta_fs_prev[min_index];
+     particles->divth[new_ind]         = particles->divth[min_index]; // to be changed
+     if ( direct_neighbour == 1 ) {
+         particles->d[new_ind]             = particles->d[min_index];
+@@ -757,10 +767,10 @@ void AssignMarkerProperties (markers* particles, int new_ind, int min_index, par
+ 
+ void AssignMarkerPropertiesInflow (markers* particles, int new_ind, int min_index, MdoodzInput *input, grid* mesh, int direct_neighbour, SetParticles_ff setParticles ) {
+     
+-    params *model = &(input->model);  
++    params *model = &(input->model);
+     particles->phase[new_ind]         = particles->phase[min_index];
+     particles->dual[new_ind]          = particles->dual[min_index];
+-    if (particles->phase[min_index]==-1) {printf("New particle is has phase -1, error! (AssignMarkerProperties)\n" ); exit(99);}
++    if (particles->phase[min_index]==-1) {LOG_ERR("New particle is has phase -1, error! (AssignMarkerProperties)"); exit(99);}
+     particles->Vx[new_ind]            = particles->Vx[min_index];
+     particles->Vz[new_ind]            = particles->Vz[min_index];
+     particles->strain[new_ind]        = particles->strain[min_index];
+@@ -770,6 +780,9 @@ void AssignMarkerPropertiesInflow (markers* particles, int new_ind, int min_inde
+     particles->strain_exp[new_ind]    = particles->strain_exp[min_index];
+     particles->strain_lin[new_ind]    = particles->strain_lin[min_index];
+     particles->strain_gbs[new_ind]    = particles->strain_gbs[min_index];
++    // ani_fstrain == 3 δ-relaxation state — inherit from the source marker.
++    particles->aniso_delta[new_ind]         = particles->aniso_delta[min_index];
++    particles->aniso_delta_fs_prev[new_ind] = particles->aniso_delta_fs_prev[min_index];
+     particles->divth[new_ind]         = particles->divth[min_index]; // to be changed
+     if ( direct_neighbour == 1 ) {
+         particles->d[new_ind]             = particles->d[min_index];
+@@ -891,6 +904,9 @@ void PartInit( markers *particles, params* model ) {
+         particles->strain_exp[k] = 0.0;
+         particles->strain_lin[k] = 0.0;
+         particles->strain_gbs[k] = 0.0;
++        // ani_fstrain == 3 δ-relaxation state — isotropic start (δ = 1).
++        particles->aniso_delta[k]         = 1.0;
++        particles->aniso_delta_fs_prev[k] = 1.0;
+         particles->T[k]          = 0.0;
+         particles->phi[k]        = 0.0;
+         particles->X[k]          = 0.0;
+@@ -1017,7 +1033,7 @@ void FindClosestPhaseVertex( markers* particles, int ic, int jc, grid mesh, int
+     }
+ 
+     if (particles->phase[min_index] <-1 || particles->phase[min_index]>50 ) {
+-        printf("Could not find matching phase for newly created particle, this is a bug (attribute phase id : %d)\n Error at node ic = %d jc = %d \nExiting...", particles->phase[min_index], ic, jc);
++        LOG_ERR("Could not find matching phase for newly created particle, this is a bug (attribute phase id : %d)\n Error at node ic = %d jc = %d \nExiting...", particles->phase[min_index], ic, jc);
+         exit(50);
+     }
+ 
+@@ -1029,57 +1045,6 @@ void FindClosestPhaseVertex( markers* particles, int ic, int jc, grid mesh, int
+ /*------------------------------------------------------ M-Doodz -----------------------------------------------------*/
+ /*--------------------------------------------------------------------------------------------------------------------*/
+ 
+-void AddPartCell( markers *particles, grid mesh, int ic, int jc, int* ind_list, params model, int nb_neigh, int *ind_part_reuse, int *inc_reuse, int nb_part_reuse, surface topo  ) {
+-
+-    // This functions add particles to cells that are tag as 'particle deficient'.
+-    // So far, it adds 4 new particles at different locations within the cell.
+-    // The new particles get the phase and stored stresses of the closest particle.
+-    int nxp=1, nzp=1;
+-    int Nb_add = nxp*nzp;
+-    double new_x, new_z, h=model.zmax;
+-    int new_ind;
+-    int k, l;
+-
+-    // Reallocate particle arrays if no more space in arrays (TO BE IMPLEMENTED)
+-    if (particles->Nb_part + Nb_add > particles->Nb_part_max && Nb_add > nb_part_reuse) {
+-        printf("You have reached the maximum number of particles currently available (%d), please increase it...\n", particles->Nb_part_max );
+-        printf("Exiting...\n");
+-        exit(1);
+-    }
+-
+-    for (l=0;l<nzp;l++) {
+-        for (k=0;k<nxp;k++) {
+-
+-            //-------------------------------------------------------------------------------------------------------------------------//
+-
+-            new_x = mesh.xg_coord[ic] + (1+k)*mesh.dx/(nxp+1) - 0.0*mesh.dx/10.0;
+-            new_z = mesh.zg_coord[jc] + (1+l)*mesh.dz/(nzp+1) - 0.0*mesh.dz/10.0;
+-
+-            if ( new_x > model.xmin && new_z > model.zmin && new_z<h  ) {
+-                if ( (*inc_reuse) < nb_part_reuse && nb_part_reuse>0  ) {
+-                    new_ind = ind_part_reuse[*inc_reuse];
+-                    (*inc_reuse)++;
+-                }
+-                else {
+-                    new_ind = particles->Nb_part;
+-                    particles->Nb_part++;
+-                }
+-
+-                // Add 4 particules
+-                particles->x[new_ind]      = new_x;
+-                particles->z[new_ind]      = new_z;
+-                FindClosestPhase( particles, ic, jc, mesh, ind_list, new_ind, nb_neigh, &model  );
+-            }
+-
+-        }
+-    }
+-
+-}
+-
+-/*--------------------------------------------------------------------------------------------------------------------*/
+-/*------------------------------------------------------ M-Doodz --------------------------------------
+

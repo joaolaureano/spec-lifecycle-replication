@@ -1,0 +1,2691 @@
+===== P236 | repo quiqr/quiqr-desktop | PR #649: feat: consolidate settings into preferences UI and fix reactivity | capacidade: storage-path-configuration
+--- SPEC VIVA
+# storage-path-configuration Specification
+
+## Purpose
+TBD - created by archiving change add-application-settings-views. Update Purpose after archive.
+## Requirements
+### Requirement: Display current storage path
+
+The Storage settings page SHALL display the current storage path value from `AppConfig.prefs.dataFolder`.
+
+#### Scenario: Storage page loads
+- **WHEN** user navigates to the Storage settings page
+- **THEN** system displays the current value of `AppConfig.prefs.dataFolder` in a read-only text field
+
+#### Scenario: Storage path not yet set
+- **WHEN** `AppConfig.prefs.dataFolder` is null or undefined
+- **THEN** system displays the default value `~/Quiqr`
+
+### Requirement: Storage path modification interface
+
+The system SHALL provide a button to open a directory picker dialog for changing the storage path.
+
+#### Scenario: User clicks Change Path button in Electron mode
+- **WHEN** user clicks "Change Path" or "Browse" button in Electron runtime
+- **THEN** system opens a native directory selection dialog
+
+#### Scenario: User clicks Change Path button in standalone mode
+- **WHEN** user clicks "Change Path" button in standalone runtime
+- **THEN** system opens an appropriate directory selection mechanism (browser-based or text input fallback)
+
+#### Scenario: User selects a new directory
+- **WHEN** user selects a directory from the picker and confirms
+- **THEN** system updates the displayed path in the text field
+
+### Requirement: Storage path persistence
+
+The system SHALL save the modified storage path to `AppConfig.prefs.dataFolder` and persist it to the config file.
+
+#### Scenario: User confirms path change
+- **WHEN** user selects a new directory and the change is applied
+- **THEN** system calls a backend API to update `AppConfig.prefs.dataFolder` and saves the config file
+
+#### Scenario: Path save succeeds
+- **WHEN** backend successfully saves the new storage path
+- **THEN** system displays a success notification to the user
+
+#### Scenario: Path save fails
+- **WHEN** backend fails to save the new storage path (e.g., permissions error)
+- **THEN** system displays an error message and retains the previous path value
+
+### Requirement: Storage path API endpoints
+
+The backend SHALL expose API endpoints for reading and writing the storage path.
+
+#### Scenario: GET storage path request
+- **WHEN** frontend requests `GET /api/storage-path`
+- **THEN** backend responds with JSON containing the current storage path from `AppConfig.prefs.dataFolder`
+- **THEN** response conforms to Zod schema `apiSchemas.getStoragePathResponse`
+
+#### Scenario: POST storage path request
+- **WHEN** frontend sends `POST /api/storage-path` with `{ path: string }` in request body
+- **THEN** backend validates the request against Zod schema `apiSchemas.setStoragePathRequest`
+- **THEN** backend updates `AppConfig.prefs.dataFolder` with the new path
+- **THEN** backend saves the config file
+- **THEN** backend responds with success status and updated path
+
+#### Scenario: Invalid storage path request
+- **WHEN** frontend sends malformed request to `POST /api/storage-path`
+- **THEN** backend responds with 400 Bad Request and Zod validation error details
+
+### Requirement: Zod schemas for storage path API
+
+The system SHALL define Zod schemas for storage path API requests and responses in `packages/types/src/schemas/api.ts`.
+
+#### Scenario: Storage path request schema definition
+- **WHEN** developer imports `apiSchemas` from types package
+- **THEN** schemas include `setStoragePathRequest` with `path: z.string()`
+
+#### Scenario: Storage path response schema definition
+- **WHEN** developer imports `apiSchemas` from types package
+- **THEN** schemas include `getStoragePathResponse` with `path: z.string()`
+
+### Requirement: Restart advisory for path changes
+
+The system SHALL inform users that storage path changes may require an application restart to take full effect.
+
+#### Scenario: User successfully changes storage path
+- **WHEN** backend confirms storage path update
+- **THEN** system displays a message indicating "Storage path updated. Restart may be required for changes to take effect."
+
+
+--- ARQUIVOS DO PR (26)
+modified  +1     -0     CHANGELOG.md
+added     +2     -0     openspec/changes/move-and-fix-settings-preferences/.openspec.yaml
+added     +269   -0     openspec/changes/move-and-fix-settings-preferences/design.md
+added     +59    -0     openspec/changes/move-and-fix-settings-preferences/proposal.md
+added     +130   -0     openspec/changes/move-and-fix-settings-preferences/specs/application-settings-ui/spec.md
+added     +57    -0     openspec/changes/move-and-fix-settings-preferences/specs/unified-config/spec.md
+added     +71    -0     openspec/changes/move-and-fix-settings-preferences/tasks.md
+modified  +8792  -6194  package-lock.json
+modified  +26    -77    packages/adapters/electron/src/ui-managers/menu-manager.ts
+modified  +94    -30    packages/adapters/standalone/src/adapters/index.test.ts
+modified  +38    -53    packages/adapters/standalone/src/adapters/menu-adapter.ts
+modified  +6     -0     packages/backend/src/api/handlers/config-handlers.ts   <== código ligado à spec
+modified  +2     -0     packages/backend/src/api/handlers/menu-handlers.ts
+modified  +9     -19    packages/frontend/src/App.tsx
+modified  +20    -0     packages/frontend/src/api.ts   <== código ligado à spec
+modified  +14    -2     packages/frontend/src/components/MenuBar/MenuBar.tsx
+modified  +33    -49    packages/frontend/src/containers/Prefs/PrefsAdvanced.tsx
+added     +79    -0     packages/frontend/src/containers/Prefs/PrefsAppSettingsGeneral.tsx
+modified  +33    -1     packages/frontend/src/containers/Prefs/PrefsGeneral.tsx
+added     +93    -0     packages/frontend/src/containers/Prefs/PrefsHugo.tsx
+modified  +6     -0     packages/frontend/src/containers/Prefs/PrefsRouted.tsx
+modified  +19    -1     packages/frontend/src/containers/Prefs/PrefsSidebar.tsx
+modified  +5     -22    packages/frontend/src/containers/SiteLibrary/SiteLibraryToolbarRight.tsx
+modified  +6     -8     packages/frontend/src/containers/SiteLibrary/hooks/useSiteLibraryData.ts
+modified  +70    -0     packages/frontend/src/queries/options.ts
+modified  +2     -2     packages/frontend/test/containers/Prefs/PrefsGeneral.test.tsx
+--- DIFF DO CÓDIGO LIGADO
+### packages/backend/src/api/handlers/config-handlers.ts
+@@ -348,6 +348,12 @@ export function createGetInstanceSettingHandler(container: AppContainer) {
+ export function createUpdateInstanceSettingsHandler(container: AppContainer) {
+   return async ({ settings }: { settings: Record<string, unknown> }) => {
+     await container.unifiedConfig.updateInstanceSettings(settings);
++
++    // Rebuild menu if experimental features setting changed
++    if ('experimentalFeatures' in settings) {
++      container.adapters.menu.createMainMenu();
++    }
++
+     return true;
+   };
+ }
+
+### packages/frontend/src/api.ts
+@@ -728,6 +728,26 @@ export function updateInstanceSettings(settings: Partial<InstanceSettings>): Pro
+   return request('updateInstanceSettings', { settings }) as Promise<boolean>;
+ }
+ 
++/**
++ * Set a specific instance setting by path (convenience wrapper)
++ * Converts dot-notation path to nested object for updateInstanceSettings
++ */
++export function setInstanceSetting(path: string, value: unknown): Promise<boolean> {
++  // Convert dot notation path to nested object
++  // e.g., 'hugo.serveDraftMode' -> { hugo: { serveDraftMode: value } }
++  const pathParts = path.split('.');
++  const settings: Record<string, unknown> = {};
++  let current: Record<string, unknown> = settings;
++
++  for (let i = 0; i < pathParts.length - 1; i++) {
++    current[pathParts[i]] = {};
++    current = current[pathParts[i]] as Record<string, unknown>;
++  }
++  current[pathParts[pathParts.length - 1]] = value;
++
++  return updateInstanceSettings(settings as Partial<InstanceSettings>);
++}
++
+ /**
+  * Get site-specific settings
+  */
+
+===== P237 | repo rozx/Tsukuyomi | PR #78: Memory overhaul | capacidade: single-para-polish
+--- SPEC VIVA
+# single-para-polish Specification
+
+## Purpose
+TBD - created by archiving change single-para-polish-simplified. Update Purpose after archive.
+## Requirements
+### Requirement: 单段落润色/校对直接处理模式
+
+系统 MUST 为单段落润色（polish）和校对（proofreading）提供直接处理模式，跳过状态机流程（不经历 planning → preparing → working → end），直接构建 prompt 并调用 AI 模型返回结果。
+
+#### Scenario: 单段落润色直接返回结果
+
+- **WHEN** 用户对单个段落触发润色操作
+- **THEN** 系统 MUST 直接构建包含上下文的 prompt 并调用 AI 模型
+- **AND THEN** 系统 MUST 不创建状态机、不调用 `update_task_status` 工具
+- **AND THEN** AI 通过 `add_translation_batch` 工具提交润色结果后，系统 MUST 结束任务
+
+#### Scenario: 单段落校对直接返回结果
+
+- **WHEN** 用户对单个段落触发校对操作
+- **THEN** 系统 MUST 直接构建包含上下文的 prompt 并调用 AI 模型
+- **AND THEN** 系统 MUST 不创建状态机、不调用 `update_task_status` 工具
+- **AND THEN** AI 通过 `add_translation_batch` 工具提交校对结果后，系统 MUST 结束任务
+
+#### Scenario: 批量润色/校对保持原有流程
+
+- **WHEN** 用户对多个段落或整个章节触发润色或校对操作
+- **THEN** 系统 MUST 继续使用原有的 `processTextTask()` 流程和状态机
+- **AND THEN** 行为与本变更之前完全一致
+
+### Requirement: 默认上下文自动注入 prompt
+
+系统 MUST 在单段落润色/校对的 prompt 中自动注入以下默认上下文信息，无需 AI 通过工具调用获取：
+
+#### Scenario: 注入前后各 3 段上下文
+
+- **WHEN** 系统为单段落润色/校对构建 prompt
+- **THEN** prompt MUST 包含当前段落的前 3 段内容（原文 + 翻译）
+- **AND THEN** prompt MUST 包含当前段落的后 3 段内容（原文 + 翻译）
+- **AND THEN** 若前方或后方不足 3 段，MUST 包含实际可用的全部段落
+
+#### Scenario: 注入相关术语信息
+
+- **WHEN** 系统为单段落润色/校对构建 prompt
+- **THEN** 系统 MUST 使用 `findUniqueTermsInText()` 匹配当前段落中出现的术语
+- **AND THEN** prompt MUST 包含每个匹配术语的名称、翻译和描述
+
+#### Scenario: 注入本章出场角色信息
+
+- **WHEN** 系统为单段落润色/校对构建 prompt
+- **THEN** 系统 MUST 提供本章出场的角色信息
+- **AND THEN** prompt MUST 包含每个角色的名称、翻译、性别、描述、说话风格和别名
+
+#### Scenario: 注入书籍基本信息
+
+- **WHEN** 系统为单段落润色/校对构建 prompt
+- **THEN** prompt MUST 包含书籍基本信息（书名、简介、标签等）
+- **AND THEN** 系统 MUST 复用 `buildBookContextSection()` 构建书籍上下文
+
+#### Scenario: 注入当前章节摘要
+
+- **WHEN** 系统为单段落润色/校对构建 prompt
+- **THEN** prompt MUST 包含当前章节的标题和摘要信息
+- **AND THEN** 系统 MUST 复用 `buildChapterContextSection()` 构建章节上下文
+
+### Requirement: 上下文获取工具集注册
+
+系统 MUST 为单段落润色/校对模式注册以下只读上下文获取工具和翻译提交工具，供 AI 按需使用：
+
+#### Scenario: 段落工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下段落工具 MUST 可用：`get_previous_paragraphs`、`get_next_paragraphs`、`get_paragraph_info`、`find_paragraph_by_keywords`、`search_paragraphs_by_regex`、`get_translation_history`
+
+#### Scenario: 术语和角色工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下术语工具 MUST 可用：`get_term`、`search_terms_by_keywords`、`list_terms`
+- **AND THEN** 以下角色工具 MUST 可用：`get_character`、`search_characters_by_keywords`、`list_characters`
+
+#### Scenario: 记忆工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下记忆工具 MUST 可用：`search_memory_by_keywords`、`get_memory`、`list_memories`
+
+#### Scenario: 书籍工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下书籍工具 MUST 可用：`get_book_info`、`get_chapter_info`、`search_chapter_summaries`
+
+#### Scenario: 网络搜索工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下网络搜索工具 MUST 可用：`search_web`、`fetch_webpage`
+
+#### Scenario: 翻译提交工具可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** `add_translation_batch` 工具 MUST 可用，用于提交润色/校对结果
+
+#### Scenario: 数据修改工具不可用
+
+- **WHEN** AI 在单段落润色/校对模式中运行
+- **THEN** 以下工具 MUST 不可用：`create_term`、`update_term`、`delete_term`、`create_character`、`update_character`、`delete_character`、`create_memory`、`update_memory`、`delete_memory`
+- **AND THEN** `update_task_status` MUST 不可用
+- **AND THEN** `ask_user`、`ask_user_batch` MUST 不可用
+- **AND THEN** 待办事项工具（`create_todo`、`update_todos`、`mark_todo_done`、`delete_todo`、`list_todos`）MUST 不可用
+
+### Requirement: 单段落任务记录
+
+系统 MUST 为单段落润色/校对创建简化的 `AIProcessingTask` 记录，用于任务历史追踪。
+
+#### Scenario: 创建简化任务记录
+
+- **WHEN** 用户触发单段落润色或校对
+- **THEN** 系统 MUST 创建 `AIProcessingTask`，`type` 为 `polish` 或 `proofreading`
+- **AND THEN** 任务 MUST 不设置 `workflowStatus`（无状态机阶段）
+- **AND THEN** 任务状态 MUST 从 `thinking` 直接转为 `end`（成功时）或 `error`（失败时）
+
+#### Scenario: 任务可被取消
+
+- **WHEN** 用户在单段落润色/校对进行中取消操作
+- **THEN** 系统 MUST 通过 `AbortController` 中止 AI 请求
+- **AND THEN** 任务状态 MUST 更新为 `cancelled`
+
+
+--- ARQUIVOS DO PR (77)
+modified  +2     -1     .claude/settings.local.json
+modified  +4     -2     AGENTS.md
+modified  +5     -3     CLAUDE.md
+modified  +3     -1     README.md
+modified  +47    -0     bun.lock
+added     +2     -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/.openspec.yaml
+added     +496   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/design.md
+added     +102   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/proposal.md
+added     +140   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/ai-context-building/spec.md
+added     +15    -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-attachment-visualization/spec.md
+added     +37    -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-attachments/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-detail-view/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-entity-filtering/spec.md
+added     +236   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-management/spec.md
+added     +167   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/memory-relevance-scoring/spec.md
+added     +269   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/semantic-memory-embedding/spec.md
+added     +44    -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/specs/translation-memory-visibility/spec.md
+added     +189   -0     openspec/changes/archive/2026-04-12-optimize-memory-injection/tasks.md
+modified  +1     -0     package.json
+modified  +51    -96    public/help/book-details-memory.md
+removed   +0     -356   src/__tests__/context-builder.memories.test.ts
+added     +197   -0     src/__tests__/context-builder.test.ts
+added     +253   -0     src/__tests__/embedding-queue.test.ts
+added     +251   -0     src/__tests__/embedding-service.test.ts
+added     +146   -0     src/__tests__/indexed-db-migration.test.ts
+removed   +0     -281   src/__tests__/memory-helper.test.ts
+added     +288   -0     src/__tests__/memory-scoring.test.ts
+added     +200   -0     src/__tests__/memory-service-cache.test.ts
+added     +79    -0     src/__tests__/memory-service-queue.test.ts
+removed   +0     -1204  src/__tests__/memory-service.test.ts
+removed   +0     -108   src/__tests__/memory-tools.attachments.test.ts
+modified  +0     -3     src/__tests__/memory-tools.list-memories.test.ts
+modified  +0     -13    src/__tests__/sync-data-service.test.ts
+modified  +1     -1     src/auto-components.d.ts
+modified  +68    -6     src/components/dialogs/SettingsDialog.vue
+modified  +1     -1     src/components/layout/ChatActionBadge.vue
+removed   +0     -116   src/components/novel/MemoryAttachmentTag.vue
+modified  +39    -72    src/components/novel/MemoryCard.vue
+modified  +72    -73    src/components/novel/MemoryDetailDialog.vue
+modified  +134   -245   src/components/novel/MemoryPanel.vue
+modified  +79    -4     src/components/novel/MemoryReferencePanel.vue
+added     +253   -0     src/components/settings/MemoryInjectionTab.vue
+modified  +45    -7     src/composables/book-details/useChapterTranslation.ts   <== código ligado à spec
+removed   +0     -239   src/composables/useMemoryAttachments.ts
+modified  +1     -1     src/constants/version.ts
+modified  +42    -0     src/i18n/en-US/index.ts
+modified  +41    -0     src/i18n/zh-CN/index.ts
+modified  +41    -0     src/i18n/zh-TW/index.ts
+modified  +18    -1     src/layouts/MainLayout.vue
+modified  +2     -15    src/models/memory.ts
+modified  +19    -0     src/models/novel.ts
+modified  +36    -0     src/models/settings.ts
+modified  +127   -99    src/pages/BookDetailsPage.vue
+modified  +1     -2     src/services/ai/tasks/assistant-service.ts
+modified  +1     -3     src/services/ai/tasks/explain-service.ts
+modified  +7     -9     src/services/ai/tasks/prompts/common.ts
+modified  +21    -2     src/services/ai/tasks/translation-service.ts
+modified  +208   -142   src/services/ai/tasks/utils/context-builder.ts   <== código ligado à spec
+modified  +1     -2     src/services/ai/tasks/utils/productivity-monitor.ts
+modified  +1     -1     src/services/ai/tasks/utils/task-runner.ts
+modified  +2     -2     src/services/ai/tools/character-tools.ts
+modified  +1     -1     src/services/ai/tools/index.ts
+modified  +18    -58    src/services/ai/tools/memory-helper.ts
+modified  +21    -285   src/services/ai/tools/memory-tools.ts
+modified  +1     -1     src/services/ai/tools/paragraph-tools.ts
+modified  +2     -2     src/services/ai/tools/terminology-tools.ts
+added     +348   -0     src/services/embedding-queue.ts
+added     +309   -0     src/services/embedding-service.ts
+added     +132   -0     src/services/memory-scoring.ts
+modified  +233   -506   src/services/memory-service.ts
+modified  +76    -5     src/services/sync-data-service.ts
+modified  +2     -2     src/stores/chat-sessions.ts
+modified  +61    -1     src/stores/settings.ts
+modified  +1     -1     src/utils/action-info-utils.ts
+added     +25    -0     src/utils/cosine-similarity.ts
+modified  +55    -3     src/utils/indexed-db.ts
+modified  +1     -1     tsconfig.tsbuildinfo
+--- DIFF DO CÓDIGO LIGADO
+### src/composables/book-details/useChapterTranslation.ts
+@@ -9,7 +9,7 @@ import { ChapterService } from 'src/services/chapter-service';
+ import { isEmptyParagraph, hasParagraphTranslation } from 'src/utils';
+ import { generateShortId } from 'src/utils/id-generator';
+ import { selectChangedParagraphTranslations } from 'src/utils/translation-updates';
+-import type { Chapter, Novel, Paragraph } from 'src/models/novel';
++import type { Chapter, Novel, Paragraph, ScoreBreakdown } from 'src/models/novel';
+ import type { ActionInfo } from 'src/services/ai/tools/types';
+ import type { MenuItem } from 'primevue/menuitem';
+ 
+@@ -62,20 +62,27 @@ export function useChapterTranslation(
+     translation: string,
+     aiModelId: string,
+     referencedMemories?: string[],
++    memoryScoreBreakdown?: Record<string, ScoreBreakdown>,
+   ) => {
+     return {
+       id: generateShortId(),
+       translation: translation,
+       aiModelId,
+       ...(referencedMemories ? { referencedMemories } : {}),
++      ...(memoryScoreBreakdown ? { memoryScoreBreakdown } : {}),
+     };
+   };
+ 
+   /**
+    * 更新段落翻译的通用辅助函数（立即更新 UI，然后保存）
+    */
+   const updateParagraphsFromResults = async (
+-    paragraphResults: { id: string; translation: string; referencedMemories?: string[] }[],
++    paragraphResults: {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
++      memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++    }[],
+     aiModelId: string,
+     targetChapterId: string,
+     targetBookId?: string,
+@@ -85,13 +92,18 @@ export function useChapterTranslation(
+ 
+     const paragraphUpdates = new Map<
+       string,
+-      { translation: string; referencedMemories?: string[] }
++      {
++        translation: string;
++        referencedMemories?: string[];
++        memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++      }
+     >();
+     for (const pt of paragraphResults) {
+       if (pt?.id && typeof pt.translation === 'string') {
+         paragraphUpdates.set(pt.id, {
+           translation: pt.translation,
+           ...(pt.referencedMemories ? { referencedMemories: pt.referencedMemories } : {}),
++          ...(pt.memoryScoreBreakdown ? { memoryScoreBreakdown: pt.memoryScoreBreakdown } : {}),
+         });
+       }
+     }
+@@ -111,7 +123,14 @@ export function useChapterTranslation(
+    * @returns 如果 skipSave=true，返回需要保存的章节对象；否则返回 undefined
+    */
+   const updateParagraphsAndSave = async (
+-    paragraphUpdates: Map<string, { translation: string; referencedMemories?: string[] }>,
++    paragraphUpdates: Map<
++      string,
++      {
++        translation: string;
++        referencedMemories?: string[];
++        memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++      }
++    >,
+     aiModelId: string,
+     targetChapterId: string,
+     options?: { updateSelected?: boolean; skipSave?: boolean; targetBookId?: string | undefined },
+@@ -164,6 +183,7 @@ export function useChapterTranslation(
+             update.translation,
+             aiModelId,
+             update.referencedMemories,
++            update.memoryScoreBreakdown,
+           );
+           const updatedTranslations = ChapterService.addParagraphTranslation(
+             para.translations || [],
+@@ -358,7 +378,12 @@ export function useChapterTranslation(
+    * @returns 更新后的段落数量
+    */
+   const updateParagraphsIncrementally = async (
+-    paragraphTranslations: { id: string; translation: string; referencedMemories?: string[] }[],
++    paragraphTranslations: {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
++      memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++    }[],
+     aiModelId: string,
+     targetChapterId: string,
+     lastAppliedTranslations: Map<string, string>,
+@@ -373,18 +398,28 @@ export function useChapterTranslation(
+     const newTranslations = selectChangedParagraphTranslations(
+       paragraphTranslations as { id: string; translation: string }[],
+       lastAppliedTranslations,
+-    ) as { id: string; translation: string; referencedMemories?: string[] }[];
++    ) as {
++      id: string;
++      translation: string;
++      referencedMemories?: string[];
++      memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++    }[];
+ 
+     if (newTranslations.length === 0) return 0;
+ 
+     const translationMap = new Map<
+       string,
+-      { translation: string; referencedMemories?: string[] }
++      {
++        translation: string;
++        referencedMemories?: string[];
++        memoryScoreBreakdown?: Record<string, ScoreBreakdown>;
++      }
+     >();
+     newTranslations.forEach((pt) => {
+       translationMap.set(pt.id, {
+         translation: pt.translation,
+         ...(pt.referencedMemories ? { referencedMemories: pt.referencedMemories } : {}),
++        ...(pt.memoryScoreBreakdown ? { memoryScoreBreakdown: pt.memoryScoreBreakdown } : {}),
+       });
+     });
+ 
+@@ -960,6 +995,9 @@ export function useChapterTranslation(
+                 {
+                   translation: t.translation,
+                   ...(t.referencedMemories ? { referencedMemories: t.referencedMemories } : {}),
++                  ...(t.memoryScoreBreakdown
++                    ? { memoryScoreBreakdown: t.memoryScoreBreakdown }
++                    : {}),
+                 },
+               ]),
+             ),
+
+### src/services/ai/tasks/utils/context-builder.ts
+@@ -1,8 +1,23 @@
+-import type { Paragraph, CharacterSetting, Terminology } from 'src/models/novel';
++import type {
++  Paragraph,
++  CharacterSetting,
++  Terminology,
++  ScoreBreakdown,
++} from 'src/models/novel';
+ import { getSelectedTranslation } from 'src/utils/text-utils';
+ import { ChapterContentService } from 'src/services/chapter-content-service';
+ import { MemoryService } from 'src/services/memory-service';
+ import type { Memory } from 'src/models/memory';
++import {
++  scoreMemory,
++  selectByBudget,
++  DEFAULT_CHAR_BUDGET,
++  HARD_ITEM_CAP,
++  DEFAULT_MIN_SCORE,
++  type ScoredMemory,
++} from 'src/services/memory-scoring';
++import { EmbeddingService } from 'src/services/embedding-service';
++import { useSettingsStore } from 'src/stores/settings';
+ import { TASK_TYPE_LABELS, type TaskType, MAX_DESC_LEN } from './task-types';
+ import { getPostToolCallReminder } from './todo-helper';
+ import { getCurrentStatusInfo } from '../prompts/common';
+@@ -218,181 +233,232 @@ export function buildPostOutputPrompt(taskType: TaskType, taskId?: string): stri
+ }
+ 
+ /**
+- * 获取与 chunk 相关的记忆
+- * 按优先级顺序获取记忆：character → term → chapter → book → global
+- * 确保总记忆数量不超过限制
+- * @param bookId 书籍 ID
+- * @param chunkText chunk 文本内容
+- * @param maxMemories 最大返回记忆数量（默认 10）
+- * @param chapterId 章节 ID（可选，用于获取章节级别记忆）
+- * @returns 格式化的记忆上下文字符串
++ * 遗留 LRU 实现:纯粹的"最近访问时间"兜底。
++ * 保留作为新打分路径出错或无可用数据时的 fallback。
+  */
+-export async function getRelatedMemoriesForChunk(
++export async function getRelatedMemoriesForChunkLegacy(
+   bookId: string,
+   chunkText: string,
+   maxMemories: number = 15,
+-  chapterId?: string,
+-  existingTerms?: Terminology[],
+-  existingCharacters?: CharacterSetting[],
+ ): Promise<string> {
+-  if (!bookId || !chunkText) {
++  if (!bookId || !chunkText) return '';
++  try {
++    const recentMemories = await MemoryService.getRecentMemories(
++      bookId,
++      maxMemories,
++      'lastAccessedAt',
++      false,
++    );
++    if (recentMemories.length === 0) return '';
++    const lines = recentMemories.map((m: Memory) => `  - [${m.id}] ${m.summary}`);
++    return `\n\n【相关记忆】\n${lines.join('\n')}`;
++  } catch (error) {
++    console.warn('Failed to get related memories (legacy fallback):', error);
+     return '';
+   }
++}
+ 
+-  try {
+-    let terms: Terminology[];
+-    let characters: CharacterSetting[];
++// ============================================================================
++// 三信号打分路径 — 任务级 chunk embedding 缓存 + 选中记忆的 breakdown 旁路
++// ============================================================================
+ 
+-    if (existingTerms && existingCharacters) {
+-      terms = existingTerms;
+-      characters = existingCharacters;
+-    } else {
+-      const booksStore = useBooksStore();
+-      const book = booksStore.getBookById(bookId);
+-      if (!book) {
+-        return '';
+-      }
++/**
++ * 任务级 chunk embedding 缓存:同一任务中不同分块会重复读取同一 chunkText,
++ * 避免反复调用 transformers.js。键 = 原始文本,值 = 归一化后的向量或 null。
++ *
++ * 调用方应在任务结束时调用 `clearChunkEmbeddingCache()`。
++ */
++const CHUNK_CACHE_MAX_SIZE = 50;
++const chunkEmbeddingCache = new Map<string, Float32Array | null>();
+ 
+-      terms = existingTerms || findUniqueTermsInText(chunkText, book.terminologies || []);
+-      characters =
+-        existingCharacters || findUniqueCharactersInText(chunkText, book.characterSettings || []);
+-    }
++export function clearChunkEmbeddingCache(): void {
++  chunkEmbeddingCache.clear();
++  lastScoreBreakdownsByBook.clear();
++}
+ 
+-    // 使用 Map 去重（按 memory ID），同时保持优先级顺序
+-    const uniqueMemories = new Map<string, Memory>();
++/**
++ * 最近一次打分得到的 breakdown 列表(按 bookId 索引)。
++ * translation-service 在分块构造 Translation 时可从此读取,不影响其他调用方。
++ * 采用"最后写入覆盖"语义,因为同一时刻一个 bookId 只有一个任务在跑。
++ */
++const lastScoreBreakdownsByBook = new Map<string, Record<string, ScoreBreakdown>>();
+ 
+-    // 内存填充策略：
+-    // 不再使用严格的分类限制（如只能放3个角色），而是按优先级顺序填充
+-    // 优先级：角色 > 术语 > 章节 > 书籍 > 全局
+-    // 为防止单一实体（如主角）占用所有名额，设置每个实体的最大记忆数限制
+-    const PER_ENTITY_LIMIT = Math.max(3, Math.floor(maxMemories * 0.4));
++export function getLastScoreBreakdowns(bookId: string): Record<string, ScoreBreakdown> | undefined {
++  return lastScoreBreakdownsByBook.get(bookId);
++}
+ 
+-    const getUniqueEntityIds = (ids: Array<string | undefined>): string[] => {
+-      const seen = new Set<string>();
+-      const result: string[] = [];
++export function clearLastScoreBreakdowns(bookId?: string): void {
++  if (bookId) {
++    lastScoreBreakdownsByBook.delete(bookId);
++  } else {
++    lastScoreBreakdownsByBook.clear();
++  }
++}
+ 
+-      for (const id of ids) {
+-        if (!id || seen.has(id)) continue;
+-        seen.add(id);
+-        result.push(id);
+-      }
++/**
++ * 尝试计算 chunk 的语义向量。
++ * - 语义检索未启用 / service 未就绪 → 返回 null(调用方走纯关键词+时间衰减降级)
++ * - 命中缓存直接返回
++ */
++async function computeChunkEmbedding(chunkText: string): Promise<Float32Array | null> {
++  // 读取用户设置
++  let enableSemantic = true;
++  try {
++    const settings = useSettingsStore();
++    enableSemantic = settings.settings?.memoryInjection?.enableSemantic !== false;
++  } catch {
++    // store 初始化失败时保持默认启用
++  }
++  if (!enableSemantic) return null;
++  if (!EmbeddingService.isReady()) return null;
+ 
+-      return result;
+-    };
++  const cached = chunkEmbeddingCache.get(chunkText);
++  if (cached !== undefined) return cached;
+ 
+-    const fetchEntityMemories = async (
+-      type: 'character' | 'term',
+-      entityIds: string[],
+-    ): Promise<Memory[][]> => {
+-      if (entityIds.length === 0) {
+-        return [];
+-      }
++  try {
++    const vec = await EmbeddingService.embed(chunkText);
++    if (chunkEmbeddingCache.size >= CHUNK_CACHE_MAX_SIZE) {
++      const oldest = chunkEmbeddingCache.keys().next().value;
++      if (oldest !== undefined) chunkEmbeddingCache.delete(oldest);
++    }
++    chunkEmbeddingCache.set(chunkText, vec);
++    return vec;
++  } catch (error) {
++    console.warn('[context-builder] 计算 chunk embedding 失败:', error);
++    chunkEmbeddingCache.set(chunkText, null);
++    return null;
++  }
++}
+ 
+-      const memoryGroups = await Promise.all(
+-        entityIds.map((id) =>
+-          MemoryService.getMemoriesByAttachment(bookId, {
+-            type,
+-            id,
+-          }),
+-        ),
+-      );
++/**
++ * 获取与 chunk 相关的记忆 — 三信号打分路径。
++ *
++ * 流程:
++ * 1. 读取整本书 Memory(60s TTL 缓存)
++ * 2. 从 terms/characters 构造 chunkEntities(关键词信号)
++ * 3. 可选计算 chunk 语义向量(语义信号)
++ * 4. 每条记忆打分 → 阈值过滤 → 字符预算填充
++ * 5. 空选择时兜底 getRecentMemories(5)
++ * 6. 整体 try/catch 失败时退回 legacy LRU
++ *
++ * @param bookId 书籍 ID
++ * @param chunkText chunk 文本内容
++ * @param _maxMemories 已废弃:新实现按字符预算 + HARD_ITEM_CAP 限制,此参数忽略
++ * @param _chapterId 章节 ID(保留兼容)
++ * @param existingTerms 已提取的术语列表(用于关键词信号)
++ * @param existingCharacters 已提取的角色列表(用于关键词信号)
++ * @returns 格式化的记忆上下文字符串
++ */
++export async function getRelatedMemoriesForChunk(
++  bookId: string,
++  chunkText: string,
++  // eslint-disable-next-line @typescript-eslint/no-unused-vars
++  _maxMemories: number = 15,
++  // eslint-disable-next-line @typescript-eslint/no-unused-vars
++  _chapterId?: string,
++  existingTerms?: Terminology[],
++  existingCharacters?: CharacterSetting[],
++): Promise<string> {
++  if (!bookId || !chunkText) return '';
+ 
+-      return memoryGroups.map((memories) =>
+-        memories.sort((a, b) => b.lastAccessedAt - a.lastAccessedAt).slice(0, PER_ENTITY_LIMIT),
+-      );
+-    };
+-
+-    const characterIds = getUniqueEntityIds(characters.map((character) => character.id));
+-    const termIds = getUniqueEntityIds(terms.map((term) => term.id));
+-
+-    const [characterMemoryGroups, termMemoryGroups] = await Promise.all([
+-      fetchEntityMemories('character', characterIds),
+-      fetchEntityMemories('term', termIds),
+-    ]);
+-
+-    // 1. 获取角色相关记忆（最高优先级）
+-    for (const characterMemories of characterMemoryGroups) {
+-      if (uniqueMemories.size >= maxMemories) break;
+-      for (const memory of characterMemories) {
+-        if (uniqueMemories.size >= maxMemories) break;
+-        uniqueMemories.set(memory.id, memory);
++  try {
++    // 1. 拉全量记忆(走缓存)
++    const allMemories = await MemoryService.getAllBookMemories(bookId);
++    if (allMemories.length === 0) return '';
++
++    // 2. 构造实体集合 — terms.name + characters.name + aliases
++    const chunkEntities: Array<{ name: string }> = [];
++    if (existingTerms) {
++      for (const t of existingTerms) {
++        if (t?.name) chunkEntities.push({ name: t.name });
+       }
+     }
+-
+-    // 2. 获取术语相关记忆
+-    if (uniqueMemories.size < maxMemories) {
+-      for (const termMemories of termMemoryGroups) {
+-        if (uniqueMemories.size >= maxMemories) break;
+-        for (const memory of termMemories) {
+-          if (uniqueMemories.size >= maxMemories) break;
+-          uniqueMemories.set(memory.id, memory);
++    if (existingCharacters) {
++      for (const c of existingCharacters) {
++        if (c?.name) chunkEntities.push({ name: c.name });
++        if (c?.aliases) {
++          for (const alias of c.aliases) {
++            if (alias?.name) chunkEntities.push({ name: alias.name });
++          }
+         }
+       }
+     }
+ 
+-    // 3. 获取章节相关记忆
+-    if (chapterId && uniqueMemories.size < maxMemories) {
+-      const chapterMemories = await MemoryService.getMemoriesByAttachment(bookId, {
+-        type: 'chapter',
+-        id: chapterId,
+-      });
+-      const sortedMemories = chapterMemories
+-        .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
+-        .slice(0, PER_ENTITY_LIMIT); // 章节也应用实体限制
+-
+-      for (const memory of sortedMemories) {
+-        if (uniqueMemories.size >= maxMemories) break;
+-        uniqueMemories.set(memory.id, memory);
+-      }
++    // 3. 可选语义向量
++    const chunkEmbedding = await computeChunkEmbedding(chunkText);
++
++    // 4. 逐条打分
++    const now = Date.now();
++    const scored: ScoredMemory[] = allMemories.map((memory) => ({
++      memory,
++      breakdown: scoreMemory(memory, {
++        chunkEntities,
++        chunkEmbedding: chunkEmbedding ?? undefined,
++        now,
++      }),
++    }));
++
++    // 5. 字符预算填充 — 读取用户预算设置
++    let charBudget = DEFAULT_CHAR_BUDGET;
++    let minScore = DEFAULT_MIN_SCORE;
++    try {
+
+===== P238 | repo deepcausality-rs/deep_causality | PR #680: feat(deep_causality): Preparing formalization | capacidade: boundary-zone-abstraction
+--- SPEC VIVA
+# boundary-zone-abstraction Specification
+
+## Purpose
+TBD - created by archiving change add-boundary-zone-abstraction. Update Purpose after archive.
+## Requirements
+### Requirement: Boundary conditions are first-class composable zones with layered dispatch
+The solver SHALL model every boundary condition as a `BoundaryZone` term that declares which
+solver stage(s) it affects through one hook per stage (metric/Hodge-star overlay, rate source,
+projection constraint set, time-dependent inhomogeneous lift, projection flux role, and boundary
+time-update), each hook defaulting to a no-op so a zone overrides only the layers it touches. The
+solver SHALL accept a set of zones and, at each stage, combine the contributions of the zones that
+override that stage. A single uniform `apply()` SHALL NOT be used, because zones act at different
+stages of a step (geometry, rate, projection constraint, projection flux, boundary time-update).
+
+Zone composition SHALL be **static** — a typed, monomorphized composition on the HKT foundation
+(`deep_causality_haft`), with the solver generic over the composed zone type. Trait objects, `dyn`,
+and dynamic dispatch SHALL NOT be used (per the repo's static-dispatch convention).
+
+#### Scenario: A zone contributes only to the stages it declares
+- **WHEN** a solver is configured with a set of boundary zones
+- **THEN** each zone affects only the solver stages whose hooks it overrides, and is a no-op on every other stage
+
+#### Scenario: Existing boundary conditions reduce bit-identically
+- **WHEN** the no-slip wall, moving wall, body force, and immersed-body conditions are expressed as zones and a case (Poiseuille, lid-driven cavity, immersed solid block) is marched
+- **THEN** the marched field is bit-identical to the pre-abstraction solver for that case
+
+### Requirement: Time-dependent zone values without solver state
+A zone's inhomogeneous lift and boundary time-update hooks SHALL receive the step index and time
+step so a zone can supply time-varying boundary values, while the solver remains stateless and the
+zone remains immutable configuration; any evolving value (such as a last-good fallback) SHALL be
+carried in the monad state, not in the solver or the zone.
+
+#### Scenario: A time-varying boundary value drives the march
+- **WHEN** a zone supplies a step-dependent lift value across a march
+- **THEN** the boundary value updates each step and neither the solver nor the zone retains mutable simulation state
+
+
+--- ARQUIVOS DO PR (929)
+modified  +2     -1     .github/workflows/formalization.yml
+modified  +2     -0     .github/workflows/rust_miri.yml
+modified  +35    -18    AGENTS.md
+modified  +98    -42    Cargo.lock
+modified  +3     -0     Cargo.toml
+modified  +3     -0     build/scripts/sbom.sh
+modified  +1     -0     deep_causality/Cargo.toml
+modified  +130   -106   deep_causality/deep_causality_sbom.spdx.json
+modified  +1     -1     deep_causality/deep_causality_sbom.spdx.json.sha
+modified  +195   -100   deep_causality/src/traits/causable_graph/graph_reasoning/mod.rs
+modified  +149   -66    deep_causality/src/traits/causable_graph/graph_reasoning/stateful.rs
+modified  +115   -0     deep_causality/tests/BUILD.bazel
+modified  +31    -0     deep_causality/tests/traits/causable_graph/graph_reasoning/stateful_tests.rs
+added     +70    -0     deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_reconvergence_tests.rs
+modified  +38    -0     deep_causality/tests/types/causal_types/causaloid_graph/causality_graph_reasoning_sub_tests.rs
+modified  +2     -0     deep_causality/tests/types/causal_types/causaloid_graph/mod.rs
+added     +31    -0     deep_causality_algebra/BUILD.bazel
+added     +27    -0     deep_causality_algebra/Cargo.toml
+added     +23    -0     deep_causality_algebra/LICENSE
+added     +60    -0     deep_causality_algebra/README.md
+renamed   +5     -60    deep_causality_algebra/README_ALGEBRA_TRAITS.md
+renamed   +14    -14    deep_causality_algebra/README_ISOMORPHISM.md
+added     +87    -0     deep_causality_algebra/deep_causality_algebra_sbom.spdx.json
+added     +1     -0     deep_causality_algebra/deep_causality_algebra_sbom.spdx.json.sha
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_assoc.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_assoc_div.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_base.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/algebra_div.rs
+renamed   +0     -24    deep_causality_algebra/src/algebra/associative.rs
+added     +15    -0     deep_causality_algebra/src/algebra/bounded_semilattice.rs
+renamed   +0     -24    deep_causality_algebra/src/algebra/commutative.rs
+added     +17    -0     deep_causality_algebra/src/algebra/commutative_monoid.rs
+added     +26    -0     deep_causality_algebra/src/algebra/conjunction.rs
+added     +26    -0     deep_causality_algebra/src/algebra/count.rs
+added     +26    -0     deep_causality_algebra/src/algebra/disjunction.rs
+added     +10    -0     deep_causality_algebra/src/algebra/distributive.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field_complex.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/field_real.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group.rs
+renamed   +1     -14    deep_causality_algebra/src/algebra/group_abelian.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_add.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_div.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_mul.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/group_semi.rs
+added     +17    -0     deep_causality_algebra/src/algebra/idempotent.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/magma.rs
+renamed   +9     -0     deep_causality_algebra/src/algebra/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/module.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/monoid.rs
+added     +31    -0     deep_causality_algebra/src/algebra/monoid_generic.rs
+renamed   +1     -16    deep_causality_algebra/src/algebra/normed.rs
+added     +50    -0     deep_causality_algebra/src/algebra/prob.rs
+renamed   +19    -19    deep_causality_algebra/src/algebra/real.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring_associative.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/ring_commutative.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/rotation.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/scalar.rs
+renamed   +1     -46    deep_causality_algebra/src/algebra/scalar_conjugate.rs
+renamed   +0     -0     deep_causality_algebra/src/algebra/scalar_normed.rs
+added     +54    -0     deep_causality_algebra/src/algebra/verdict.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/division_algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/field_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/group_iso.rs
+renamed   +1     -1     deep_causality_algebra/src/iso/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/ring_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/test_support.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/division_algebra_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/field_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/group_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/iso.rs
+renamed   +2     -2     deep_causality_algebra/src/iso/witness/mod.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/ring_iso.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/standard.rs
+renamed   +0     -0     deep_causality_algebra/src/iso/witness/test_support.rs
+added     +57    -0     deep_causality_algebra/src/lib.rs
+added     +6     -0     deep_causality_algebra/src/utils_tests/mod.rs
+renamed   +21    -11    deep_causality_algebra/src/utils_tests/utils_iso_tests.rs
+added     +125   -0     deep_causality_algebra/src/utils_tests/utils_iso_witness_tests.rs
+added     +62    -0     deep_causality_algebra/tests/BUILD.bazel
+renamed   +2     -6     deep_causality_algebra/tests/algebra/algebra_tests.rs
+added     +60    -0     deep_causality_algebra/tests/algebra/commutative_semilattice_tests.rs
+renamed   +1     -1     deep_causality_algebra/tests/algebra/field_real_f32_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/algebra/field_real_f64_tests.rs
+renamed   +6     -2     deep_causality_algebra/tests/algebra/mod.rs
+added     +59    -0     deep_causality_algebra/tests/algebra/monoid_generic_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/algebra/real_tests.rs
+added     +27    -0     deep_causality_algebra/tests/algebra/scalar_conjugate_tests.rs
+renamed   +5     -5     deep_causality_algebra/tests/algebra/scalar_normed_tests.rs
+added     +51    -0     deep_causality_algebra/tests/algebra/verdict_tests.rs
+renamed   +2     -1     deep_causality_algebra/tests/float106/double_algebra_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/float106/double_traits_tests.rs
+added     +11    -0     deep_causality_algebra/tests/float106/mod.rs
+added     +48    -0     deep_causality_algebra/tests/formalization_lean/commutative_monoid_tests.rs
+added     +19    -0     deep_causality_algebra/tests/formalization_lean/division_algebra_tests.rs
+added     +37    -0     deep_causality_algebra/tests/formalization_lean/field_tests.rs
+added     +33    -0     deep_causality_algebra/tests/formalization_lean/group_tests.rs
+added     +36    -0     deep_causality_algebra/tests/formalization_lean/mod.rs
+added     +64    -0     deep_causality_algebra/tests/formalization_lean/module_tests.rs
+added     +29    -0     deep_causality_algebra/tests/formalization_lean/monoid_generic_tests.rs
+added     +25    -0     deep_causality_algebra/tests/formalization_lean/monoid_tests.rs
+added     +39    -0     deep_causality_algebra/tests/formalization_lean/ring_tests.rs
+added     +60    -0     deep_causality_algebra/tests/formalization_lean/scalar_tests.rs
+added     +36    -0     deep_causality_algebra/tests/formalization_lean/verdict_tests.rs
+renamed   +4     -7     deep_causality_algebra/tests/iso/algebra_iso_tests.rs
+renamed   +4     -7     deep_causality_algebra/tests/iso/division_algebra_iso_tests.rs
+renamed   +4     -8     deep_causality_algebra/tests/iso/field_iso_tests.rs
+renamed   +36    -36    deep_causality_algebra/tests/iso/group_iso_tests.rs
+renamed   +0     -1     deep_causality_algebra/tests/iso/mod.rs
+renamed   +52    -51    deep_causality_algebra/tests/iso/ring_iso_tests.rs
+renamed   +2     -2     deep_causality_algebra/tests/iso/test_support_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/algebra_iso_tests.rs
+added     +25    -0     deep_causality_algebra/tests/iso/witness/division_algebra_iso_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/field_iso_tests.rs
+renamed   +4     -4     deep_causality_algebra/tests/iso/witness/group_iso_tests.rs
+renamed   +6     -4     deep_causality_algebra/tests/iso/witness/iso_tests.rs
+renamed   +0     -1     deep_causality_algebra/tests/iso/witness/mod.rs
+renamed   +5     -3     deep_causality_algebra/tests/iso/witness/ring_iso_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/standard_tests.rs
+renamed   +3     -3     deep_causality_algebra/tests/iso/witness/test_support_tests.rs
+added     +8     -0     deep_causality_algebra/tests/mod.rs
+modified  +1     -0     deep_causality_algorithms/BUILD.bazel
+modified  +4     -0     deep_causality_algorithms/Cargo.toml
+modified  +304   -187   deep_causality_algorithms/deep_causality_algorithms_sbom.spdx.json
+modified  +1     -1     deep_causality_algorithms/deep_causality_algorithms_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_algo.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_bootstrap.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_gst.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_learn.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_score.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_boss_search.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_config.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_dirichlet.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_gate.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_gaussian.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_linalg.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/brcd/brcd_mapconfig.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_algo.rs
+modified  +2     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_algo_cdl.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_utils/mod.rs
+modified  +1     -1     deep_causality_algorithms/src/causal_discovery/surd/surd_utils/surd_utils_cdl.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/combinatorics.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/count.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/memoization.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/mod.rs
+modified  +2     -1     deep_causality_algorithms/src/dag_sampling/sample.rs
+modified  +8     -8     deep_causality_ast/deep_causality_ast_sbom.spdx.json
+modified  +1     -1     deep_causality_ast/deep_causality_ast_sbom.spdx.json.sha
+modified  +2     -0     deep_causality_calculus/BUILD.bazel
+modified  +9     -1     deep_causality_calculus/Cargo.toml
+modified  +56    -13    deep_causality_calculus/deep_causality_calculus_sbom.spdx.json
+modified  +1     -1     deep_causality_calculus/deep_causality_calculus_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_calculus/src/extensions/differentiate_ext.rs
+modified  +1     -1     deep_causality_calculus/src/lib.rs
+modified  +1     -1     deep_causality_calculus/src/types/diff_arrow.rs
+modified  +4     -0     deep_causality_calculus/tests/BUILD.bazel
+modified  +2     -1     deep_causality_calculus/tests/extensions/differentiate_ext_tests.rs
+modified  +2     -1     deep_causality_calculus/tests/ops/quadrature_tests.rs
+modified  +1     -1     deep_causality_calculus/tests/types/diff_tests.rs
+modified  +1     -1     deep_causality_calculus/tests/types/rk4_tests.rs
+modified  +3     -0     deep_causality_cfd/BUILD.bazel
+modified  +15    -0     deep_causality_cfd/Cargo.toml
+modified  +1207  -290   deep_causality_cfd/deep_causality_cfd_sbom.spdx.json
+modified  +1     -1     deep_causality_cfd/deep_causality_cfd_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_cfd/src/coordinate/blended.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/body_fitted_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/cartesian.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/cartesian_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/metric_provider.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/metric_provider_3d.rs
+modified  +1     -1     deep_causality_cfd/src/coordinate/mod.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/eskf.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/ins_error_state.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/nav_sensors.rs
+modified  +2     -1     deep_causality_cfd/src/navigation/reentry_nav.rs
+modified  +1     -1     deep_causality_cfd/src/navigation/regime_switch.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/dec_ns_solver/no_slip.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/energy_budget.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/mod.rs
+modified  +3     -1     deep_causality_cfd/src/solvers/dec/spectral_diffusion.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/dec/step_output.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/uncertain_inflow/uncertain_boundary_source.rs
+modified  +2     -1     deep_causality_cfd/src/solvers/dec/uncertain_inflow/uncertain_inflow_zone.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/euler_1d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/fitting.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/imex.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_3d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/compressible/marcher_3d_fitted.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/immersed_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/incompressible_2d.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/mod.rs
+modified  +1     -1     deep_causality_cfd/src/solvers/qtt/observe.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/acoustic_inverse.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/codec.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/mask.rs
+modified  +1     -1     deep_causality_cfd/src/tensor_bridge/operators.rs
+modified  +3     -1     deep_causality_cfd/src/tensor_bridge/projection.rs
+modified  +1     -1     deep_causality_cfd/src/theories/compressible_ns.rs
+modified  +1     -1     deep_causality_cfd/src/theories/euler.rs
+modified  +1     -1     deep_causality_cfd/src/theories/incompressible_ns.rs
+modified  +1     -1     deep_causality_cfd/src/theories/stokes.rs
+modified  +1     -1     deep_causality_cfd/src/theories/wrappers.rs
+modified  +1     -1     deep_causality_cfd/src/traits/marchable.rs
+modified  +2     -1     deep_causality_cfd/src/types/cfd_scalar.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow/compressible_march_run.rs
+modified  +2     -1     deep_causality_cfd/src/types/flow/coupled_march.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow/qtt_march_run.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/compressible_march_config.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/manufactured.rs
+modified  +1     -1     deep_causality_cfd/src/types/flow_config/qtt_march_config.rs
+modified  +1     -0     deep_causality_cfd/tests/BUILD.bazel
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_rate_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/dec_ns_solver_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/pressure_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/run_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/seed_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/dec_ns_solver/step_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/diagnostics_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/step_output_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/taylor_green_2d_tests.rs
+modified  +2     -1     deep_causality_cfd/tests/solvers/dec/wrappers_tests.rs
+modified  +8     -8     deep_causality_core/deep_causality_core_sbom.spdx.json
+modified  +1     -1     deep_causality_core/deep_causality_core_sbom.spdx.json.sha
+modified  +3     -3     deep_causality_data_structures/deep_causality_data_structures_sbom.spdx.json
+modified  +1     -1     deep_causality_data_structures/deep_causality_data_structures_sbom.spdx.json.sha
+modified  +1     -0     deep_causality_discovery/BUILD.bazel
+modified  +4     -0     deep_causality_discovery/Cargo.toml
+modified  +1017  -895   deep_causality_discovery/deep_causality_discovery_sbom.spdx.json
+modified  +1     -1     deep_causality_discovery/deep_causality_discovery_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_discovery/src/traits/precision.rs
+modified  +82    -0     deep_causality_discovery/tests/BUILD.bazel
+modified  +143   -119   deep_causality_ethos/deep_causality_ethos_sbom.spdx.json
+modified  +1     -1     deep_causality_ethos/deep_causality_ethos_sbom.spdx.json.sha
+modified  +17    -0     deep_causality_ethos/tests/BUILD.bazel
+modified  +2     -0     deep_causality_fft/BUILD.bazel
+modified  +15    -1     deep_causality_fft/Cargo.toml
+modified  +1     -1     deep_causality_fft/benches/fft_benchmark.rs
+modified  +122   -79    deep_causality_fft/deep_causality_fft_sbom.spdx.json
+modified  +1     -1     deep_causality_fft/deep_causality_fft_sbom.spdx.json.sha
+modified  +2     -2     deep_causality_fft/src/lib.rs
+modified  +2     -1     deep_causality_fft/src/traits/fft_scalar.rs
+modified  +1     -1     deep_causality_fft/src/types/dct_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/bluestein.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/small.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan/stockham.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan_nd/axis.rs
+modified  +1     -1     deep_causality_fft/src/types/fft_plan_nd/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/rfft_plan/mod.rs
+modified  +1     -1     deep_causality_fft/src/types/rfft_plan_nd/mod.rs
+modified  +1     -1     deep_causality_fft/src/utils/complex_ops.rs
+modified  +1     -1     deep_causality_fft/src/utils/dft.rs
+modified  +1     -1     deep_causality_fft/src/utils/twiddles.rs
+modified  +24    -0     deep_causality_fft/tests/BUILD.bazel
+modified  +3     -2     deep_causality_fft/tests/types/dct_plan/dct_plan_tests.rs
+modified  +4     -3     deep_causality_fft/tests/types/fft_plan/fft_plan_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/fft_plan_nd/fft_plan_nd_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/rfft_plan/rfft_plan_tests.rs
+modified  +1     -1     deep_causality_fft/tests/types/rfft_plan_nd/rfft_plan_nd_tests.rs
+modified  +1     -1     deep_causality_fft/tests/utils/dft_tests.rs
+modified  +1     -0     deep_causality_file/BUILD.bazel
+modified  +4     -0     deep_causality_file/Cargo.toml
+modified  +319   -300   deep_causality_file/deep_causality_file_sbom.spdx.json
+modified  +1     -1     deep_causality_file/deep_causality_file_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_file/src/types/clock_types.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_clk.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_gnss.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_sp3.rs
+modified  +1     -1     deep_causality_file/src/types/loaders/read_trace.rs
+modified  +1     -1     deep_causality_file/src/types/orbit_types.rs
+modified  +3     -3     deep_causality_haft/deep_causality_haft_sbom.spdx.json
+modified  +1     -1     deep_causality_haft/deep_causality_haft_sbom.spdx.json.sha
+modified  +15    -0     deep_causality_haft/tests/BUILD.bazel
+modified  +8     -8     deep_causality_macros/deep_causality_macros_sbom.spdx.json
+modified  +1     -1     deep_causality_macros/deep_causality_macros_sbom.spdx.json.sha
+modified  +3     -3     deep_causality_metric/deep_causality_metric_sbom.spdx.json
+modified  +1     -1     deep_causality_metric/deep_causality_metric_sbom.spdx.json.sha
+modified  +2     -0     deep_causality_multivector/BUILD.bazel
+modified  +8     -0     deep_causality_multivector/Cargo.toml
+modified  +110   -33    deep_causality_multivector/deep_causality_multivector_sbom.spdx.json
+modified  +1     -1     deep_causality_multivector/deep_causality_multivector_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_multivector/src/alias/alias_complex.rs
+modified  +3     -1     deep_causality_multivector/src/alias/alias_hilbert_state.rs
+modified  +3     -1     deep_causality_multivector/src/alias/alias_hopf_state.rs
+modified  +1     -1     deep_causality_multivector/src/alias/mod.rs
+modified  +1     -1     deep_causality_multivector/src/extensions/hkt_multifield/mod.rs
+modified  +2     -2     deep_causality_multivector/src/extensions/scalar_eval/mod.rs
+modified  +1     -1     deep_causality_multivector/src/extensions/scalar_multivector/mod.rs
+modified  +1     -1     deep_causality_multivector/src/traits/l2_norm.rs
+modified  +1     -1     deep_causality_multivector/src/traits/multi_vector.rs
+modified  +1     -1     deep_causality_multivector/src/traits/scalar_eval.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/algebra/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multifield/arithmetic/mod.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/batched_matmul.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/conversions.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/differential.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/gamma.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/grades.rs
+modified  +1     -1     deep_causality_multivector/src/types/multifield/ops/products.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/algebra/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/api/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/arithmetic/mod.rs
+modified  +2     -1     deep_causality_multivector/src/types/multivector/mod.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_matrix_rep.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_misc_impl.rs
+modified  +1     -1     deep_causality_multivector/src/types/multivector/ops/ops_product_impl.rs
+modified  +24    -0     deep_causality_multivector/tests/BUILD.bazel
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_complex_tests.rs
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_hilbert_state_tests.rs
+modified  +1     -1     deep_causality_multivector/tests/alias/alias_hopf_state_tests.rs
+modified  +2     -2     deep_causality_multivector/tests/extensions/iso_multifield/iso_multifield_tests.rs
+modified  +1     -1     deep_causality_multivector/tests/traits/l2_norm_tests.rs
+modified  +3     -1     deep_causality_multivector/tests/types/multivector/algebra/algebra_tests.rs
+modified  +13    -46    deep_causality_num/README.md
+modified  +17    -17    deep_causality_num/deep_causality_num_sbom.spdx.json
+modified  +1     -1     deep_causality_num/deep_causality_num_sbom.spdx.json.sha
+removed   +0     -34    deep_causality_num/src/algebra/distributive.rs
+modified  +2     -6     deep_causality_num/src/integer/mod.rs
+modified  +0     -47    deep_causality_num/src/lib.rs
+modified  +23    -22    deep_causality_num/tests/BUILD.bazel
+removed   +0     -36    deep_causality_num/tests/algebra/monoid_tests.rs
+removed   +0     -54    deep_causality_num/tests/algebra/scalar_conjugate_tests.rs
+modified  +1     -24    deep_causality_num/tests/float_double/double_transcendental_tests.rs
+modified  +0     -4     deep_causality_num/tests/float_double/mod.rs
+added     +41    -0     deep_causality_num/tests/formalization_lean/cast_tests.rs
+added     +56    -0     deep_causality_num/tests/formalization_lean/float106_tests.rs
+added     +34    -0     deep_causality_num/tests/formalization_lean/identity_tests.rs
+added     +49    -0     deep_causality_num/tests/formalization_lean/integer_tests.rs
+added     +22    -0     deep_causality_num/tests/formalization_lean/mod.rs
+modified  +1     -0     deep_causality_num/tests/identity/one_tests.rs
+modified  +1     -0     deep_causality_num/tests/identity/zero_tests.rs
+modified  +2     -21    deep_causality_num/tests/integer/integer_tests.rs
+removed   +0     -186   deep_causality_num/tests/iso/witness/common.rs
+removed   +0     -58    deep_causality_num/tests/iso/witness/division_algebra_iso_tests.rs
+modified  +1     -4     deep_causality_num/tests/mod.rs
+added     +32    -0     deep_causality_num_complex/BUILD.bazel
+added     +31    -0     deep_causality_num_complex/Cargo.toml
+added     +23    -0     deep_causality_num_complex/LICENSE
+added     +50    -0     deep_causality_num_complex/README.md
+added     +106   -0     deep_causality_num_complex/deep_causality_num_complex_sbom.spdx.json
+added     +1     -0     deep_causality_num_complex/deep_causality_num_complex_sbom.spdx.json.sha
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/algebra.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/arithmetic.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/cast.rs
+added     +30    -0     deep_causality_num_complex/src/complex/complex_number/conjugate_scalar.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/display.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/identity.rs
+renamed   +3     -1     deep_causality_num_complex/src/complex/complex_number/mod.rs
+added     +22    -0     deep_causality_num_complex/src/complex/complex_number/normed.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/complex_number/rotation.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/mod.rs
+renamed   +7     -3     deep_causality_num_complex/src/complex/octonion_number/algebra.rs
+renamed   +14    -14    deep_causality_num_complex/src/complex/octonion_number/arithmetic.rs
+renamed   +60    -30    deep_causality_num_complex/src/complex/octonion_number/cast.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/debug.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/display.rs
+renamed   +7     -8     deep_causality_num_complex/src/complex/octonion_number/identity.rs
+renamed   +3     -3     deep_causality_num_complex/src/complex/octonion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/octonion_number/neg.rs
+renamed   +4     -3     deep_causality_num_complex/src/complex/octonion_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/octonion_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/octonion_number/rotation.rs
+renamed   +6     -3     deep_causality_num_complex/src/complex/quaternion_number/algebra.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/arithmetic.rs
+renamed   +14    -14    deep_causality_num_complex/src/complex/quaternion_number/cast.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/display.rs
+renamed   +8     -4     deep_causality_num_complex/src/complex/quaternion_number/identity.rs
+renamed   +4     -4     deep_causality_num_complex/src/complex/quaternion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/src/complex/quaternion_number/neg.rs
+renamed   +6     -6     deep_causality_num_complex/src/complex/quaternion_number/ops.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/ops_shared.rs
+renamed   +0     -0     deep_causality_num_complex/src/complex/quaternion_number/rotation.rs
+added     +26    -0     deep_causality_num_complex/src/lib.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/mod.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/utils_complex_tests.rs
+renamed   +0     -0     deep_causality_num_complex/src/utils_tests/utils_octonion_tests.rs
+added     +49    -0     deep_causality_num_complex/tests/BUILD.bazel
+added     +29    -0     deep_causality_num_complex/tests/algebra_impls/conjugate_scalar_tests.rs
+added     +78    -0     deep_causality_num_complex/tests/algebra_impls/iso_division_algebra_tests.rs
+added     +13    -0     deep_causality_num_complex/tests/algebra_impls/mod.rs
+added     +34    -0     deep_causality_num_complex/tests/algebra_impls/normed_scalar_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/algebra_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_assign_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_complex_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/complex_number/arithmetic_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/as_primitive_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/complex_field_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/complex_number/complex_impl_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/display_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/from_primitives_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/complex_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/neg_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/num_cast_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/complex_number/ordering_tests.rs
+renamed   +3     -1     deep_causality_num_complex/tests/complex/complex_number/rotation_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/complex_number/to_primitive_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/mod.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/octonion_number/algebra_tests.rs
+renamed   +2     -2     deep_causality_num_complex/tests/complex/octonion_number/arithmetic_assign_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/octonion_number/arithmetic_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/as_primitive_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/display_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/from_primitives_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/octonion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/multiplication_bug_repro_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/neg_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/num_cast_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/octonion_number/octonion_number_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/octonion_number/part_ord_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/rotation_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/octonion_number/to_primitive_tests.rs
+renamed   +2     -1     deep_causality_num_complex/tests/complex/quaternion_number/algebra_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/arithmetic_assign_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/arithmetic_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/as_primitive_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/constructors_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/debug_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/display_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/from_primitives_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/identity_tests.rs
+renamed   +0     -0     deep_causality_num_complex/tests/complex/quaternion_number/mod.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/neg_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/num_cast_tests.rs
+renamed   +4     -2     deep_causality_num_complex/tests/complex/quaternion_number/ops_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/part_ord_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/quaternion_number/quaternion_number_tests.rs
+renamed   +3     -2     deep_causality_num_complex/tests/complex/quaternion_number/rotation_tests.rs
+renamed   +1     -1     deep_causality_num_complex/tests/complex/quaternion_number/to_primitive_tests.rs
+added     +94    -0     deep_causality_num_complex/tests/formalization_lean/complex_tests.rs
+added     +19    -0     deep_causality_num_complex/tests/formalization_lean/mod.rs
+added     +85    -0     deep_causality_num_complex/tests/formalization_lean/quaternion_tests.rs
+added     +7     -0     deep_causality_num_complex/tests/mod.rs
+added     +32    -0     deep_causality_num_dual/BUILD.bazel
+added     +31    -0     deep_causality_num_dual/Cargo.toml
+added     +23    -0     deep_causality_num_dual/LICENSE
+added     +51    -0     deep_causality_num_dual/README.md
+added     +106   -0     deep_causality_num_dual/deep_causality_num_dual_sbom.spdx.json
+added     +1     -0     deep_causality_num_dual/deep_causality_num_dual_sbom.spdx.json.sha
+added     +0     -0     deep_causality_num_dual/papers/Dual-AD-2501.04159v1.pdf
+added     +0     -0     deep_causality_num_dual/papers/fceng-03-758090.pdf
+added     +0     -0     deep_causality_num_dual/papers/j_EC1.pdf
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/algebra.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/arithmetic.rs
+added     +30    -0     deep_causality_num_dual/src/dual/dual_number/conjugate_scalar.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/convert.rs
+added     +16    -0     deep_causality_num_dual/src/dual/dual_number/default.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/display.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/from_primitive.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/identity.rs
+renamed   +4     -2     deep_causality_num_dual/src/dual/dual_number/mod.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/dual_number/real.rs
+renamed   +0     -0     deep_causality_num_dual/src/dual/mod.rs
+added     +18    -0     deep_causality_num_dual/src/lib.rs
+added     +47    -0     deep_causality_num_dual/tests/BUILD.bazel
+added     +26    -0     deep_causality_num_dual/tests/algebra_impls/conjugate_scalar_tests.rs
+added     +8     -0     deep_causality_num_dual/tests/algebra_impls/mod.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/arithmetic_tests.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/convert_tests.rs
+added     +42    -0     deep_causality_num_dual/tests/dual/dual_number/default_tests.rs
+renamed   +1     -1     deep_causality_num_dual/tests/dual/dual_number/display_tests.rs
+renamed   +3     -3     deep_causality_num_dual/tests/dual/dual_number/dual_number_tests.rs
+renamed   +2     -1     deep_causality_num_dual/tests/dual/dual_number/from_primitive_tests.rs
+renamed   +1     -0     deep_causality_num_dual/tests/dual/dual_number/mod.rs
+renamed   +2     -1     deep_causality_num_dual/tests/dual/dual_number/real_tests.rs
+renamed   +0     -0     deep_causality_num_dual/tests/dual/mod.rs
+added     +76    -0     deep_causality_num_dual/tests/formalization_lean/dual_tests.rs
+added     +15    -0     deep_causality_num_dual/tests/formalization_lean/mod.rs
+added     +7     -0     deep_causality_num_dual/tests/mod.rs
+modified  +4     -4     deep_causality_par/deep_causality_par_sbom.spdx.json
+modified  +1     -1     deep_causality_par/deep_causality_par_sbom.spdx.json.sha
+modified  +3     -0     deep_causality_physics/BUILD.bazel
+modified  +15    -0     deep_causality_physics/Cargo.toml
+modified  +352   -220   deep_causality_physics/deep_causality_physics_sbom.spdx.json
+modified  +1     -1     deep_causality_physics/deep_causality_physics_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_physics/src/constants/condensed.rs
+modified  +2     -1     deep_causality_physics/src/constants/hypersonic.rs
+modified  +2     -1     deep_causality_physics/src/constants/mod.rs
+modified  +2     -1     deep_causality_physics/src/constants/universal.rs
+modified  +1     -1     deep_causality_physics/src/kernels/astro/ks_constraint.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/ks_propagator.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/two_body.rs
+modified  +2     -1     deep_causality_physics/src/kernels/astro/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/chronometric/forward_clock.rs
+modified  +1     -1     deep_causality_physics/src/kernels/chronometric/solve_gm.rs
+modified  +1     -1     deep_causality_physics/src/kernels/chronometric/wrapper.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/moire.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/phase.rs
+modified  +2     -1     deep_causality_physics/src/kernels/condensed/qgt.rs
+modified  +3     -1     deep_causality_physics/src/kernels/condensed/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/dynamics/estimation.rs
+modified  +3     -3     deep_causality_physics/src/kernels/dynamics/kinematics.rs
+modified  +1     -1     deep_causality_physics/src/kernels/dynamics/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/fields.rs
+modified  +1     -1     deep_causality_physics/src/kernels/em/forces.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/solver.rs
+modified  +2     -1     deep_causality_physics/src/kernels/em/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/fluids/boundary_layer.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/coherent_structures.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/compressible.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/constitutive.rs
+modified  +1     -1     deep_causality_physics/src/kernels/fluids/dimensionless.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/governing.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/ideal_flow.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/kinematics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/turbulence.rs
+modified  +2     -1     deep_causality_physics/src/kernels/fluids/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/finite_rate.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/ionization.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/shock.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/thermochemistry.rs
+modified  +2     -1     deep_causality_physics/src/kernels/hypersonic/wrappers.rs
+modified  +3     -2     deep_causality_physics/src/kernels/materials/mechanics.rs
+modified  +3     -2     deep_causality_physics/src/kernels/materials/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/grmhd.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/ideal.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/plasma.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/resistive.rs
+modified  +2     -1     deep_causality_physics/src/kernels/mhd/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/flavor.rs
+modified  +3     -2     deep_causality_physics/src/kernels/nuclear/lund/fragmentation.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/kinematics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/lund/string.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/physics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/qcd.rs
+modified  +2     -1     deep_causality_physics/src/kernels/nuclear/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/photonics/beam.rs
+modified  +2     -1     deep_causality_physics/src/kernels/photonics/diffraction.rs
+modified  +3     -1     deep_causality_physics/src/kernels/photonics/polarization.rs
+modified  +1     -1     deep_causality_physics/src/kernels/photonics/ray.rs
+modified  +3     -1     deep_causality_physics/src/kernels/photonics/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/quantum/gates.rs
+modified  +3     -1     deep_causality_physics/src/kernels/quantum/gates_haruna.rs
+modified  +4     -2     deep_causality_physics/src/kernels/quantum/mechanics.rs
+modified  +2     -1     deep_causality_physics/src/kernels/quantum/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/gravity.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/spacetime.rs
+modified  +2     -1     deep_causality_physics/src/kernels/relativity/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/kernels/thermodynamics/stats.rs
+modified  +2     -1     deep_causality_physics/src/kernels/thermodynamics/wrappers.rs
+modified  +1     -1     deep_causality_physics/src/kernels/waves/general.rs
+modified  +2     -1     deep_causality_physics/src/kernels/waves/wrappers.rs
+modified  +2     -1     deep_causality_physics/src/quantities/chronometric/mod.rs
+modified  +49    -48    deep_causality_physics/src/quantities/condensed/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/dimensionless/mod.rs
+modified  +16    -16    deep_causality_physics/src/quantities/dynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/em/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/body_force_one_form.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/pressure_zero_form.rs
+modified  +2     -1     deep_causality_physics/src/quantities/fluid_dynamics/solenoidal_field.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/velocity_one_form.rs
+modified  +1     -1     deep_causality_physics/src/quantities/fluid_dynamics/vorticity_two_form.rs
+modified  +65    -65    deep_causality_physics/src/quantities/fluids/mod.rs
+modified  +32    -32    deep_causality_physics/src/quantities/hypersonic/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/materials/mod.rs
+modified  +32    -32    deep_causality_physics/src/quantities/mhd/mod.rs
+modified  +28    -28    deep_causality_physics/src/quantities/nuclear/mod.rs
+modified  +38    -37    deep_causality_physics/src/quantities/photonics/mod.rs
+modified  +5     -5     deep_causality_physics/src/quantities/relativity/mod.rs
+modified  +2     -1     deep_causality_physics/src/quantities/si_primitives/mod.rs
+modified  +1     -1     deep_causality_physics/src/quantities/thermodynamics/mod.rs
+modified  +1     -1     deep_causality_physics/src/theories/electromagnetism/gauge_em_ops.rs
+modified  +2     -1     deep_causality_physics/src/theories/electromagnetism/gauge_em_ops_impl.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_impl.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_ops.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/electroweak_params.rs
+modified  +1     -1     deep_causality_physics/src/theories/electroweak/radiative.rs
+modified  +1     -1     deep_causality_physics/src/theories/general_relativity/adm_ops.rs
+modified  +1     -1     deep_causality_physics/src/theories/general_relativity/adm_state.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_lie_mapping.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_ops.rs
+modified  +3     -2     deep_causality_physics/src/theories/general_relativity/gr_ops_impl.rs
+modified  +2     -1     deep_causality_physics/src/theories/general_relativity/gr_utils.rs
+modified  +2     -1     deep_causality_physics/src/theories/weak_force/weak_field_ops.rs
+modified  +2     -1     deep_causality_physics/src/theories/weak_force/weak_field_ops_impl.rs
+modified  +2     -1     deep_causality_physics/src/utils_tests/mod.rs
+modified  +8     -0     deep_causality_physics/tests/BUILD.bazel
+modified  +1     -1     deep_causality_physics/tests/kernels/chronometric/solve_gm_tests.rs
+modified  +3     -1     deep_causality_physics/tests/kernels/condensed/generic_real_field_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/phase_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/qgt_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/condensed/wrappers_tests.rs
+modified  +1     -0     deep_causality_physics/tests/kernels/fluids/mod.rs
+modified  +2     -1     deep_causality_physics/tests/kernels/nuclear/generic_real_field_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/beam_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/polarization_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/photonics/wrappers_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/gates_haruna_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/gates_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/mechanics_tests.rs
+modified  +1     -1     deep_causality_physics/tests/kernels/quantum/wrappers_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/condensed_quantities/order_parameter_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/photonics_quantities/complex_beam_parameter_tests.rs
+modified  +1     -1     deep_causality_physics/tests/quantities/photonics_quantities/jones_vector_tests.rs
+modified  +2     -1     deep_causality_physics/tests/quantities/solenoidal_field/divergence_free_tests.rs
+modified  +2     -1     deep_causality_physics/tests/quantities/velocity_one_form/velocity_one_form_tests.rs
+modified  +1     -0     deep_causality_rand/BUILD.bazel
+modified  +4     -0     deep_causality_rand/Cargo.toml
+modified  +70    -51    deep_causality_rand/deep_causality_rand_sbom.spdx.json
+modified  +1     -1     deep_causality_rand/deep_causality_rand_sbom.spdx.json.sha
+modified  +2     -1     deep_causality_rand/src/extensions/distribution/dist_float_106.rs
+modified  +1     -1     deep_causality_rand/src/traits/real_rng.rs
+modified  +1     -1     deep_causality_rand/src/types/distr/normal/mod.rs
+modified  +1     -1     deep_causality_rand/src/types/distr/uniform/mod.rs
+modified  +2     -1     deep_causality_rand/src/utils/inverse_cdf.rs
+modified  +33    -0     deep_causality_rand/tests/BUILD.bazel
+modified  +2     -1     deep_causality_rand/tests/types/dist/normal/standard_normal_tests.rs
+modified  +2     -1     deep_causality_rand/tests/types/dist/uniform/uniform_tests.rs
+modified  +1     -0     deep_causality_sparse/BUILD.bazel
+modified  +6     -1     deep_causality_sparse/Cargo.toml
+modified  +92    -20    deep_causality_sparse/deep_causality_sparse_sbom.spdx.json
+modified  +1     -1     deep_causality_sparse/deep_causality_sparse_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_sparse/src/extensions/ext_iso.rs
+modified  +2     -1     deep_causality_sparse/src/solver/cg.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/group.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/module.rs
+modified  +2     -1     deep_causality_sparse/src/types/sparse_matrix/algebra/ring.rs
+modified  +1     -1     deep_causality_sparse/src/types/sparse_matrix/arithmetic/mod.rs
+modified  +2     -1     deep_causality_sparse/src/types/sparse_matrix/identity/mod.rs
+modified  +1     -0     deep_causality_sparse/tests/BUILD.bazel
+modified  +2     -2     deep_causality_sparse/tests/extensions/ext_iso_tests.rs
+modified  +3     -0     deep_causality_tensor/BUILD.bazel
+modified  +12    -0     deep_causality_tensor/Cargo.toml
+modified  +84    -17    deep_causality_tensor/deep_causality_tensor_sbom.spdx.json
+modified  +1     -1     deep_causality_tensor/deep_causality_tensor_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_tensor/src/extensions/ext_hkt_strict.rs
+modified  +1     -1     deep_causality_tensor/src/extensions/ext_math.rs
+modified  +2     -1     deep_causality_tensor/src/extensions/ext_stats.rs
+modified  +2     -1     deep_causality_tensor/src/traits/tensor.rs
+modified  +1     -1     deep_causality_tensor/src/traits/tensor_train.rs
+modified  +1     -1     deep_causality_tensor/src/traits/tensor_train_operator.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/group.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/module.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/algebra/ring.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/api/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_inverse/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_product/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_qr/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_reduction/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd_decomp/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor/ops/tensor_svd_truncated/mod.rs
+modified  +3     -2     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/algebra/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/api/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/construct/cross.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/construct/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/linalg/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train/round_rand/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/api/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/arrow/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/getters/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/causal_tensor_train_operator/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/cross_config/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/rng/mod.rs
+modified  +2     -1     deep_causality_tensor/src/types/causal_tensor_network/solve/local.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/solve_config/mod.rs
+modified  +1     -1     deep_causality_tensor/src/types/causal_tensor_network/truncation/mod.rs
+modified  +4     -0     deep_causality_tensor/tests/BUILD.bazel
+modified  +2     -1     deep_causality_tensor/tests/extensions/causal_tensor_ext_stats_sweep_tests.rs
+modified  +1     -8     deep_causality_tensor/tests/types/causal_tensor/algebra_tests.rs
+modified  +1     -1     deep_causality_tensor/tests/types/causal_tensor/op_tensor_inverse_tests.rs
+modified  +1     -1     deep_causality_tensor/tests/types/causal_tensor/op_tensor_svd_tests.rs
+modified  +2     -3     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_algebra_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_canonical_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_complex_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_cross_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_cross_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_operator_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_operator_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_ops_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_scalar_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_solve_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_solve_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/causal_tensor_train_tests.rs
+modified  +4     -1     deep_causality_tensor/tests/types/causal_tensor_network/conjugate_scalar_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_complex_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_qr_tests.rs
+modified  +3     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_svd_randomized_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/op_tensor_svd_truncated_tests.rs
+modified  +2     -1     deep_causality_tensor/tests/types/causal_tensor_network/truncation_tests.rs
+modified  +2     -0     deep_causality_topology/BUILD.bazel
+modified  +10    -0     deep_causality_topology/Cargo.toml
+modified  +269   -162   deep_causality_topology/deep_causality_topology_sbom.spdx.json
+modified  +1     -1     deep_causality_topology/deep_causality_topology_sbom.spdx.json.sha
+modified  +2     -3     deep_causality_topology/src/errors/light_cone_violation.rs
+modified  +2     -1     deep_causality_topology/src/extensions/hkt_gauge/hkt_curvature.rs
+modified  +3     -3     deep_causality_topology/src/extensions/hkt_gauge/hkt_gauge_witness.rs
+modified  +2     -3     deep_causality_topology/src/extensions/hkt_gauge/hkt_lattice_gauge.rs
+modified  +1     -1     deep_causality_topology/src/extensions/hkt_lattice_complex/mod.rs
+modified  +11    -7     deep_causality_topology/src/extensions/hkt_manifold/mod.rs
+modified  +4     -3     deep_causality_topology/src/extensions/iso_de_rham/mod.rs
+modified  +1     -1     deep_causality_topology/src/traits/has_hodge_star.rs
+modified  +1     -1     deep_causality_topology/src/types/chain/algebra/group.rs
+modified  +1     -1     deep_causality_topology/src/types/chain/algebra/module.rs
+modified  +1     -1     deep_causality_topology/src/types/chain/arithmetic/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/curvature.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/graded.rs
+modified  +3     -1     deep_causality_topology/src/types/cubical_regge_geometry/gradient.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/has_hodge_star.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/metric_tensor.rs
+modified  +2     -1     deep_causality_topology/src/types/cubical_regge_geometry/metropolis.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/signature.rs
+modified  +1     -1     deep_causality_topology/src/types/cubical_regge_geometry/star_cache.rs
+modified  +1     -2     deep_causality_topology/src/types/cubical_regge_geometry/volumes.rs
+modified  +2     -1     deep_causality_topology/src/types/curvature_tensor/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/carrier.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/cut_face_constraint.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/cut_face_fragment.rs
+modified  +2     -1     deep_causality_topology/src/types/cut_cell/geometry.rs
+modified  +2     -1     deep_causality_topology/src/types/cut_cell/intersection.rs
+modified  +1     -2     deep_causality_topology/src/types/cut_cell/primitive.rs
+modified  +1     -1     deep_causality_topology/src/types/cut_cell/registry.rs
+modified  +3     -1     deep_causality_topology/src/types/gauge/gauge_field/display.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field/getters.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field/mod.rs
+modified  +7     -2     deep_causality_topology/src/types/gauge/gauge_field_lattice/display.rs
+modified  +1     -1     deep_causality_topology/src/types/gauge/gauge_field_lattice/getters.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/mod.rs
+modified  +4     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_actions.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_continuum.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gauge.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gauge_transform.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_gradient_flow.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_metropolis.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_monte_carlo.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_plague.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_smearing.rs
+modified  +2     -3     deep_causality_topology/src/types/gauge/gauge_field_lattice/ops_wilson.rs
+modified  +3     -2     deep_causality_topology/src/types/gauge/gauge_field_lattice/utils.rs
+modified  +3     -4     deep_causality_topology/src/types/gauge/link_variable/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/gauge/link_variable/ops.rs
+modified  +2     -2     deep_causality_topology/src/types/gauge/link_variable/random.rs
+modified  +0     -1     deep_causality_topology/src/types/graph/api/graph_ops.rs
+modified  +0     -1     deep_causality_topology/src/types/graph/graph_ops/graph_ops_impl.rs
+modified  +1     -2     deep_causality_topology/src/types/hodge_decomposition/display.rs
+modified  +1     -1     deep_causality_topology/src/types/hodge_decomposition/getters.rs
+modified  +1     -1     deep_causality_topology/src/types/hodge_decomposition/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/hodge_decomposition/part_eq.rs
+modified  +2     -2     deep_causality_topology/src/types/lattice_complex/dual_lattice_complex.rs
+modified  +1     -1     deep_causality_topology/src/types/lattice_complex/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/constructors.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/covariance.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/api/geometry.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/constructors/constructors_impl.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/covariance/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/codifferential.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/de_rham.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/exterior.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/hodge.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/hodge_decomposition_impl.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/interior_product.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/laplacian.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/leray.rs   <== código ligado à spec
+modified  +3     -1     deep_causality_topology/src/types/manifold/differential/neumann_poisson.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/differential/spectral_poisson.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/stencil/bilinear_op.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/stencil/build.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/differential/stencil/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/stencil/stencil_op.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/utils_differential.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/differential/wedge.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/display/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/manifold/geometry/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/manifold/topology/topology_base.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/topology/topology_manifold.rs
+modified  +3     -1     deep_causality_topology/src/types/manifold/topology/topology_simplicial.rs
+modified  +4     -4     deep_causality_topology/src/types/manifold/utils/utils_manifold.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/k_ring.rs
+modified  +4     -4     deep_causality_topology/src/types/neighborhood/mod.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/moore.rs
+modified  +1     -1     deep_causality_topology/src/types/neighborhood/von_neumann.rs
+modified  +2     -1     deep_causality_topology/src/types/regge_geometry/curvature.rs
+modified  +2     -1     deep_causality_topology/src/types/regge_geometry/has_hodge_star.rs
+modified  +3     -3     deep_causality_topology/src/types/regge_geometry/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/simplicial_complex/getters/mod.rs
+modified  +2     -1     deep_causality_topology/src/types/simplicial_complex/lazy_hodge_star.rs
+modified  +1     -1     deep_causality_topology/src/types/simplicial_complex/topology/chain_complex_impl.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/display.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/from_hodge_decomposition.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/getters.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/mod.rs
+modified  +1     -2     deep_causality_topology/src/types/topological_invariants/part_eq.rs
+modified  +2     -1     deep_causality_topology/src/types/topology/ops/cup_product.rs
+modified  +2     -1     deep_causality_topology/src/utils/cg_solver.rs
+modified  +76    -0     deep_causality_topology/tests/BUILD.bazel
+modified  +1     -1     deep_causality_topology/tests/extensions/hkt_lattice_gauge_tests.rs
+modified  +1     -1     deep_causality_topology/tests/extensions/iso_de_rham_tests.rs
+modified  +2     -2     deep_causality_topology/tests/traits/has_hodge_star_tests.rs
+modified  +2     -2     deep_causality_topology/tests/types/cubical_regge_geometry/curvature_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/cubical_regge_geometry/has_hodge_star_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/cut_cell/cut_face_constraint_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/cut_cell/intersection_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field/gauge_field_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/continuum_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/gradient_flow_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/lattice_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/lattice_gauge_field_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/metropolis_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/metropolis_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/verification_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/gauge_field_lattice/wilson_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/link_variable/link_variable_coverage_tests.rs
+modified  +1     -1     deep_causality_topology/tests/types/gauge/link_variable/link_variable_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/de_rham_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/hodge_decomposition_property_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/interior_product_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/leray_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/spectral_poisson_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/stencil_tests.rs
+modified  +2     -1     deep_causality_topology/tests/types/manifold/wedge_tests.rs
+modified  +1     -0     deep_causality_uncertain/BUILD.bazel
+modified  +4     -0     deep_causality_uncertain/Cargo.toml
+modified  +85    -61    deep_causality_uncertain/deep_causality_uncertain_sbom.spdx.json
+modified  +1     -1     deep_causality_uncertain/deep_causality_uncertain_sbom.spdx.json.sha
+modified  +1     -1     deep_causality_uncertain/src/types/computation/operator/arithmetic_operator.rs
+modified  +1     -1     deep_causality_uncertain/src/types/computation/operator/comparison_operator.rs
+modified  +1     -1     deep_causality_uncertain/src/types/uncertain/uncertain_op_arithmetic.rs
+modified  +2     -1     deep_causality_uncertain/src/types/uncertain/uncertain_statistics.rs
+modified  +38    -0     deep_causality_uncertain/tests/BUILD.bazel
+modified  +1     -0     examples/avionics_examples/Cargo.toml
+modified  +1     -1     examples/avionics_examples/cfd/flight_envelope_placard/model.rs
+modified  +2     -2     examples/avionics_examples/cfd/plasma_blackout_weather/model.rs
+modified  +2     -1     examples/avionics_examples/cfd/turbulence_flow/model.rs
+modified  +1     -1     examples/avionics_examples/src/shared/stages.rs
+modified  +2     -1     examples/avionics_examples/src/shared/utils.rs
+modified  +1     -1     examples/avionics_examples/src/shared/world.rs
+modified  +1     -0     examples/chronometric_examples/Cargo.toml
+modified  +1     -1     examples/chronometric_examples/gm_recovery/display.rs
+modified  +2     -1     examples/chronometric_examples/gm_recovery/pipeline.rs
+modified  +2     -1     examples/chronometric_examples/src/proces_utils/lagrange.rs
+modified  +1     -1     examples/chronometric_examples/src/proces_utils/mad_filter.rs
+modified  +1     -1     examples/chronometric_examples/src/types/gravity_types.rs
+modified  +3     -0     examples/mathematics_examples/Cargo.toml
+modified  +1     -1     examples/mathematics_examples/algebra/dixon_multivector.rs
+modified  +2     -1     examples/mathematics_examples/calculus/leibniz_dual_integration.rs
+modified  +2     -1     examples/mathematics_examples/composable_multi_math/capstone_spinor_minkowski/main.rs
+modified  +1     -1     examples/mathematics_examples/composable_multi_math/effect_kalman_predict_correct/main.rs
+modified  +2     -1     examples/mathematics_examples/composable_multi_math/effect_tensor_algebra_roundtrip/main.rs
+modified  +1     -1     examples/mathematics_examples/composable_multi_math/tensor_x_algebra_rotation_field/main.rs
+modified  +1     -1     examples/mathematics_examples/topology/lattice_gauge_simulation.rs
+modified  +3     -0     examples/physics_examples/Cargo.toml
+modified  +2     -1     examples/physics_examples/gauge_gr/main.rs
+modified  +2     -1     examples/physics_examples/gauge_lattice_u1_2d/main.rs
+modified  +2     -1     examples/physics_examples/laser_resonator_stability/main.rs
+modified  +1     -1     examples/physics_examples/multi_physics_pipeline/main.rs
+modified  +2     -0     examples/quantum_examples/Cargo.toml
+modified  +2     -1     examples/quantum_examples/gauge_electroweak/main.rs
+modified  +1     -1     examples/quantum_examples/hopf_fibration_multivector/main.rs
+modified  +2     -1     examples/quantum_examples/ikkt_matrix_model/main.rs
+modified  +2     -1     examples/quantum_examples/quantum_counterfactual/main.rs
+modified  +1     -1     examples/quantum_examples/quantum_geometric_tensor/main.rs
+modified  +2     -1     examples/quantum_examples/topological_insulator/model.rs
+modified  +36    -3     lean/DeepCausalityFormal.lean
+added     +47    -0     lean/DeepCausalityFormal/Algebra/CommutativeMonoid.lean
+added     +27    -0     lean/DeepCausalityFormal/Algebra/DivisionAlgebra.lean
+added     +45    -0     lean/DeepCausalityFormal/Algebra/Field.lean
+added     +41    -0     lean/DeepCausalityFormal/Algebra/Group.lean
+added     +70    -0     lean/DeepCausalityFormal/Algebra/Module.lean
+renamed   +5     -5     lean/DeepCausalityFormal/Algebra/Monoid.lean
+added     +38    -0     lean/DeepCausalityFormal/Algebra/MonoidGeneric.lean
+added     +52    -0     lean/DeepCausalityFormal/Algebra/Ring.lean
+added     +62    -0     lean/DeepCausalityFormal/Algebra/Scalar.lean
+added     +46    -0     lean/DeepCausalityFormal/Algebra/Verdict.lean
+added     +58    -0     lean/DeepCausalityFormal/Complex/Complex.lean
+added     +59    -0     lean/DeepCausalityFormal/Complex/Quaternion.lean
+added     +91    -0     lean/DeepCausalityFormal/Dual/Dual.lean
+added     +32    -0     lean/DeepCausalityFormal/Num/Cast.lean
+added     +42    -0     lean/DeepCausalityFormal/Num/Float106.lean
+added     +35    -0     lean/DeepCausalityFormal/Num/Identity.lean
+added     +38    -0     lean/DeepCausalityFormal/Num/Integer.lean
+modified  +20    -7     lean/README.md
+modified  +64    -2     lean/THEOREM_MAP.md
+added     +2     -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/design.md
+added     +36    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/proposal.md
+added     +52    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/specs/comonoid-graph-join/spec.md
+added     +34    -0     openspec/changes/archive/2026-07-07-comonoid-graph-join/tasks.md
+added     +2     -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/.openspec.yaml
+added     +49    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/design.md
+added     +34    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/proposal.md
+added     +24    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-commutative-semilattice/spec.md
+added     +24    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-generic-monoid/spec.md
+added     +29    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/specs/num-verdict-algebra/spec.md
+added     +36    -0     openspec/changes/archive/2026-07-07-num-generic-monoid-tower/tasks.md
+added     +2     -0     openspec/changes/formalize-main-crate/.openspec.yaml
+added     +58    -0     openspec/changes/formalize-main-crate/design.md
+added     +37    -0     openspec/changes/formalize-main-crate/proposal.md
+added     +38    -0     openspec/changes/formalize-main-crate/specs/causaloid-formalization/spec.md
+added     +24    -0     openspec/changes/formalize-main-crate/specs/context-hypergraph-formalization/spec.md
+added     +34    -0     openspec/changes/formalize-main-crate/specs/graph-reasoning-formalization/spec.md
+added     +38    -0     openspec/changes/formalize-main-crate/specs/intervention-do-operator/spec.md
+added     +70    -0     openspec/changes/formalize-main-crate/specs/quantum-causal-model-support/spec.md
+added     +54    -0     openspec/changes/formalize-main-crate/tasks.md
+added     +2     -0     openspec/changes/haft-categorical-machinery/.openspec.yaml
+added     +48    -0     openspec/changes/haft-categorical-machinery/design.md
+added     +40    -0     openspec/changes/haft-categorical-machinery/proposal.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-arrow-interpreter/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-category-kleisli/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-foldable-foldmap/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-free-arrow/spec.md
+added     +24    -0     openspec/changes/haft-categorical-machinery/specs/haft-symmetric-monoidal-prop/spec.md
+added     +40    -0     openspec/changes/haft-categorical-machinery/tasks.md
+added     +67    -0     openspec/notes/causal-algebra/Causaloid-structure.md
+modified  +43    -14    openspec/notes/causal-algebra/algebraic-causaloid-assumptions.md
+added     +0     -0     openspec/notes/quantum/Causal and compositional structure of unitary transformations-2001.07774v2.pdf
+added     +0     -0     openspec/notes/quantum/Cyclic Quantum Causal Models-2002.12157v3.pdf
+added     +0     -0     openspec/notes/quantum/Quantum causal models-lorenz2022.pdf
+added     +56    -0     openspec/specs/comonoid-graph-join/spec.md
+added     +28    -0     openspec/specs/num-commutative-semilattice/spec.md
+added     +28    -0     openspec/specs/num-generic-monoid/spec.md
+added     +33    -0     openspec/specs/num-verdict-algebra/spec.md
+modified  +3     -3     ultragraph/ultragraph_sbom.spdx.json
+modified  +1     -1     ultragraph/ultragraph_sbom.spdx.json.sha
+--- DIFF DO CÓDIGO LIGADO
+### deep_causality_topology/src/types/manifold/differential/leray.rs
+@@ -20,7 +20,8 @@
+ 
+ use core::fmt::{Debug, Display};
+ 
+-use deep_causality_num::{FromPrimitive, RealField};
++use deep_causality_algebra::RealField;
++use deep_causality_num::FromPrimitive;
+ use deep_causality_tensor::CausalTensor;
+ 
+ use crate::errors::topology_error::TopologyError;
+
+===== P240 | repo dallay/agentsync | PR #327: fix: resolve PR review issues | capacidade: agents-skills-repo
+--- SPEC VIVA
+# Specification: agents-skills Monorepo
+
+| Field         | Value                  |
+|---------------|------------------------|
+| **Change ID** | agents-skills-monorepo |
+| **Version**   | 1.0                    |
+| **Status**    | Draft                  |
+
+## Requirements
+
+### REQ-01: Repository Structure
+
+The `dallay/agents-skills` repository MUST follow this structure:
+
+```text
+agents-skills/
+├── README.md                      # Overview, badges, quick install
+├── CONTRIBUTING.md                # How to add/update skills
+├── LICENSE                        # MIT (consistent with agentsync)
+├── skills/
+│   ├── accessibility/
+│   │   ├── SKILL.md               # Manifest + instructions (frontmatter required)
+│   │   └── ... (optional resources)
+│   ├── best-practices/
+│   │   └── SKILL.md
+│   ├── brainstorming/
+│   │   └── SKILL.md
+│   ├── core-web-vitals/
+│   │   └── SKILL.md
+│   ├── docker-expert/
+│   │   └── SKILL.md
+│   ├── frontend-design/
+│   │   └── SKILL.md
+│   ├── github-actions/
+│   │   └── SKILL.md
+│   ├── grafana-dashboards/
+│   │   └── SKILL.md
+│   ├── makefile/
+│   │   └── SKILL.md
+│   ├── markdown-a11y/
+│   │   └── SKILL.md
+│   ├── performance/
+│   │   └── SKILL.md
+│   ├── pinned-tag/
+│   │   └── SKILL.md
+│   ├── pr-creator/
+│   │   └── SKILL.md
+│   ├── rust-async-patterns/
+│   │   └── SKILL.md
+│   ├── seo/
+│   │   └── SKILL.md
+│   ├── skill-creator/
+│   │   └── SKILL.md
+│   ├── sql-optimization-patterns/
+│   │   └── SKILL.md
+│   ├── web-quality-audit/
+│   │   └── SKILL.md
+│   └── webapp-testing/
+│       └── SKILL.md
+└── .github/
+    └── workflows/
+        ├── validate-skills.yml    # CI: manifest parsing, lint
+        └── notify-catalog.yml     # Optional: repository_dispatch to agentsync
+```
+
+### REQ-02: SKILL.md Manifest Format
+
+Every skill MUST have a `SKILL.md` file with valid YAML frontmatter:
+
+```yaml
+---
+name: skill-name          # Required. kebab-case, matches directory name
+version: 1.0.0            # Optional. Semver format
+description: >            # Required. Short description
+  One-line description of what this skill does.
+triggers: # Required. List of trigger phrases
+  - "trigger phrase 1"
+  - "trigger phrase 2"
+---
+
+# Skill Title
+
+Skill instructions content here...
+```
+
+**Validation rules:**
+
+- `name` MUST be kebab-case and MUST match the parent directory name
+- `name` MUST NOT contain path separators, dots, or special characters
+- `version`, if present, MUST be valid semver
+- `description` MUST be non-empty
+- `triggers` MUST be a non-empty array of strings
+- Content after frontmatter MUST be non-empty
+
+### REQ-03: Deterministic Resolution
+
+When the CLI resolves a skill with `provider_skill_id` matching pattern
+`dallay/agents-skills/{skill-name}`, it MUST construct the download URL
+deterministically as:
+
+```text
+https://github.com/dallay/agents-skills/archive/HEAD.zip#skills/{skill-name}
+```
+
+No search API call is needed for this pattern.
+
+### REQ-04: Catalog Integration
+
+The `catalog.v1.toml` in agentsync MUST be updated so that all dallay-owned skills
+use the deterministic `provider_skill_id` format:
+
+```toml
+[[skills]]
+provider_skill_id = "dallay/agents-skills/accessibility"
+local_skill_id = "accessibility"
+title = "Accessibility"
+summary = "WCAG 2.1 audit and improvement guidelines"
+```
+
+### REQ-05: CI Validation Pipeline
+
+The `agents-skills` repo MUST have a CI pipeline that:
+
+1. Discovers all `skills/*/SKILL.md` files
+2. Parses and validates each manifest (frontmatter schema)
+3. Verifies `name` matches directory name
+4. Checks for empty content after frontmatter
+5. Fails the build on any validation error
+6. Runs on every PR and push to main
+
+### REQ-06: Catalog Integrity Check (agentsync side)
+
+The agentsync repo SHOULD have a CI check or test that:
+
+1. Reads all `provider_skill_id` entries from `catalog.v1.toml` that match `dallay/agents-skills/*`
+2. Verifies the corresponding `skills/{skill-name}/SKILL.md` exists in the agents-skills repo
+3. Reports drift (missing skills, renamed skills) as test failures
+
+This MAY be an E2E test gated behind `RUN_E2E=1`.
+
+### REQ-07: Backward Compatibility
+
+During the transition period:
+
+1. The skills.sh search fallback MUST remain functional for skills not yet migrated
+2. Users who previously installed skills via the old resolution path MUST NOT be broken
+3. The `registry.json` format MUST NOT change
+
+### REQ-08: Contributing Guidelines
+
+The `CONTRIBUTING.md` MUST document:
+
+1. How to create a new skill (directory structure, manifest format)
+2. Quality expectations (useful content, proper triggers, no placeholder text)
+3. Naming conventions (kebab-case, descriptive, technology-specific)
+4. PR process (what reviewers look for)
+5. How to test a skill locally before submitting
+
+## Scenarios
+
+### SC-01: Install a dallay-owned skill
+
+```text
+GIVEN the catalog maps "accessibility" to provider_skill_id "dallay/agents-skills/accessibility"
+WHEN  the user runs: agentsync skill install accessibility
+THEN  the CLI resolves to https://github.com/dallay/agents-skills/archive/HEAD.zip#skills/accessibility
+AND   downloads, extracts, validates SKILL.md, and installs to .agents/skills/accessibility/
+AND   NO search API call is made
+```
+
+### SC-02: Install an externally-owned skill
+
+```text
+GIVEN the catalog maps "angular-developer" to provider_skill_id "angular/skills/angular-developer"
+WHEN  the user runs: agentsync skill install angular-developer
+THEN  the CLI resolves to https://github.com/angular/skills/archive/HEAD.zip#skills/angular-developer
+AND   the external resolution path is unchanged
+```
+
+### SC-03: Suggest detects and recommends dallay skills
+
+```text
+GIVEN a project with Dockerfiles detected
+WHEN  the user runs: agentsync skill suggest
+THEN  "docker-expert" appears in recommendations
+AND   its source shows "dallay/agents-skills"
+```
+
+### SC-04: Community submits a new skill via PR
+
+```text
+GIVEN a contributor creates skills/terraform/SKILL.md with valid manifest
+WHEN  they open a PR to dallay/agents-skills
+THEN  CI validates the manifest automatically
+AND   reviewers can merge when quality gates pass
+AND   a follow-up PR to agentsync adds the catalog entry
+```
+
+### SC-05: Catalog drift detection
+
+```text
+GIVEN "dallay/agents-skills/old-skill" is in catalog.v1.toml
+BUT   skills/old-skill/ was deleted from agents-skills repo
+WHEN  the agentsync CI integrity check runs
+THEN  the check FAILS with a clear message about the missing skill
+```
+
+--- ARQUIVOS DO PR (4)
+modified  +4     -2     openspec/specs/skill-recommendations/spec.md
+modified  +37    -3     src/skills/catalog.rs
+modified  +13    -2     src/skills/provider.rs   <== código ligado à spec
+modified  +5     -1     tests/unit/suggest_catalog.rs
+--- DIFF DO CÓDIGO LIGADO
+### src/skills/provider.rs
+@@ -104,20 +104,30 @@ fn repo_uses_skills_subdirectory(repo: &str) -> bool {
+ }
+ 
+ fn local_catalog_skill_source_dir(
++    provider_skill_id: &str,
+     local_skill_id: &str,
+     project_root: Option<&Path>,
+ ) -> Option<PathBuf> {
++    // Try AGENTSYNC_TEST_SKILL_SOURCE_DIR with provider_skill_id (full path like "dallay/agents-skills/rust-async-patterns")
+     if let Ok(path) = std::env::var("AGENTSYNC_TEST_SKILL_SOURCE_DIR") {
+-        let candidate = PathBuf::from(path).join(local_skill_id);
++        // First try the full provider_skill_id path (e.g., "dallay/agents-skills/rust-async-patterns")
++        let candidate = PathBuf::from(path.clone()).join(provider_skill_id);
+         if candidate.exists() {
+             return Some(candidate);
+         }
++        // Fall back to local_skill_id only (e.g., "rust-async-patterns")
++        let fallback = PathBuf::from(path).join(local_skill_id);
++        if fallback.exists() {
++            return Some(fallback);
++        }
+     }
+ 
++    // Try AGENTSYNC_LOCAL_SKILLS_REPO/skills/local_skill_id
+     if let Ok(path) = std::env::var("AGENTSYNC_LOCAL_SKILLS_REPO") {
+         return Some(PathBuf::from(path).join("skills").join(local_skill_id));
+     }
+ 
++    // Try project_parent/agents-skills/skills/local_skill_id
+     project_root
+         .and_then(Path::parent)
+         .map(|parent| {
+@@ -141,7 +151,8 @@ pub fn resolve_catalog_install_source(
+     }
+ 
+     if provider_skill_id.starts_with(DALLAY_AGENTS_SKILLS_PREFIX)
+-        && let Some(path) = local_catalog_skill_source_dir(local_skill_id, project_root)
++        && let Some(path) =
++            local_catalog_skill_source_dir(provider_skill_id, local_skill_id, project_root)
+     {
+         return Ok(path.to_string_lossy().into_owned());
+     }
+
+===== P241 | repo yazelin/ching-tech-os | PR #131: feat: configurable restricted mode settings via Agent JSONB | capacidade: public-share
+--- SPEC VIVA
+# public-share Specification
+
+## Purpose
+TBD - created by archiving change add-linebot-md-converter-agents. Update Purpose after archive.
+## Requirements
+### Requirement: Content Resource Type
+系統 SHALL 支援 `content` 資源類型，直接儲存內容而非引用其他資源。
+
+#### Scenario: 建立內容分享
+- **GIVEN** 用戶有一段文字內容要分享
+- **WHEN** 呼叫 `POST /api/share` 並設定 resource_type='content'
+- **AND** 提供 content, content_type, filename 參數
+- **THEN** 系統將內容直接儲存在分享記錄中
+- **AND** 回傳分享連結
+
+#### Scenario: 存取內容分享
+- **GIVEN** 存在 resource_type='content' 的分享連結
+- **WHEN** 呼叫 `GET /api/public/{token}`
+- **THEN** 系統回傳儲存的內容
+- **AND** 包含 content_type 和 filename
+
+### Requirement: CORS Support
+系統 SHALL 對公開分享 API 支援 CORS 跨域存取。
+
+#### Scenario: 跨域存取
+- **GIVEN** MD2PPT 網站要存取分享內容
+- **WHEN** 從 https://md-2-ppt-evolution.vercel.app 發送請求
+- **THEN** 回應包含正確的 CORS headers
+- **AND** 允許該來源存取
+
+
+--- ARQUIVOS DO PR (59)
+modified  +1     -1     README.md
+added     +74    -0     backend/migrations/versions/010_add_bot_restricted_settings.py
+modified  +2     -2     backend/src/ching_tech_os/api/linebot_router.py
+modified  +4     -4     backend/src/ching_tech_os/services/ai_manager.py
+modified  +35    -16    backend/src/ching_tech_os/services/bot/command_handlers.py
+modified  +64    -13    backend/src/ching_tech_os/services/bot/identity_router.py
+modified  +48    -5     backend/src/ching_tech_os/services/bot/rate_limiter.py
+modified  +1     -1     backend/src/ching_tech_os/services/bot_telegram/handler.py
+modified  +9     -0     backend/src/ching_tech_os/services/linebot_agents.py   <== código ligado à spec
+modified  +13    -1     backend/tests/test_api_linebot_router_events.py
+modified  +49    -20    backend/tests/test_bot_multi_mode_integration.py
+modified  +8     -3     backend/tests/test_bot_telegram_handler.py
+modified  +260   -139   backend/tests/test_identity_router.py
+modified  +87    -0     backend/tests/test_rate_limiter.py
+modified  +36    -1     docs/database-design.md
+modified  +16    -0     docs/linebot.md
+modified  +7     -0     docs/module-index.md
+modified  +1     -0     docs/telegram-bot.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/design.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/specs/bot-platform/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/specs/infrastructure/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/specs/research-provider-brave/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/specs/research-skill/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-add-brave-search-provider-default-file-manager/tasks.md
+added     +2     -0     openspec/changes/archive/2026-02-27-configurable-restricted-mode/.openspec.yaml
+added     +61    -0     openspec/changes/archive/2026-02-27-configurable-restricted-mode/design.md
+added     +39    -0     openspec/changes/archive/2026-02-27-configurable-restricted-mode/proposal.md
+added     +67    -0     openspec/changes/archive/2026-02-27-configurable-restricted-mode/specs/bot-restricted-settings/spec.md
+added     +10    -0     openspec/changes/archive/2026-02-27-configurable-restricted-mode/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/design.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/ai-log-observability/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/bot-platform/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/research-artifact-tracking/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/research-background-worker/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/research-claude-webtools-executor/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/specs/research-skill/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-enhance-research-background-worker/tasks.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/.openspec.yaml
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/design.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/proposal.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/specs/infrastructure/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/specs/mcp-tools/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/specs/skill-management/spec.md
+renamed   +0     -0     openspec/changes/archive/2026-02-27-scriptify-native-base-file-manager-skills/tasks.md
+added     +17    -0     openspec/specs/ai-log-observability/spec.md
+modified  +17    -191   openspec/specs/bot-platform/spec.md
+added     +67    -0     openspec/specs/bot-restricted-settings/spec.md
+modified  +17    -114   openspec/specs/infrastructure/spec.md
+modified  +1     -204   openspec/specs/mcp-tools/spec.md
+added     +25    -0     openspec/specs/research-artifact-tracking/spec.md
+added     +30    -0     openspec/specs/research-background-worker/spec.md
+added     +25    -0     openspec/specs/research-claude-webtools-executor/spec.md
+added     +22    -0     openspec/specs/research-provider-brave/spec.md
+modified  +17    -43    openspec/specs/research-skill/spec.md
+modified  +1     -139   openspec/specs/skill-management/spec.md
+--- DIFF DO CÓDIGO LIGADO
+### backend/src/ching_tech_os/services/linebot_agents.py
+@@ -8,6 +8,7 @@
+ from . import ai_manager
+ from ..config import settings
+ from ..models.ai import AiPromptCreate, AiAgentCreate
++from .bot.command_handlers import DEFAULT_WELCOME_MESSAGE
+ from .permissions import get_effective_app_permissions
+ 
+ # 從平台無關的 bot.agents 模組匯入工具 Prompt 與函式（向後相容）
+@@ -510,6 +511,14 @@
+         "description": "未綁定用戶的受限模式 Agent，prompt 和工具可由部署方自訂",
+         "model": f"claude-{settings.bot_restricted_model}",
+         "tools": ["search_knowledge"],
++        "settings": {
++            "welcome_message": DEFAULT_WELCOME_MESSAGE,
++            "binding_prompt": "",
++            "rate_limit_hourly_msg": "",
++            "rate_limit_daily_msg": "",
++            "disclaimer": "",
++            "error_message": "",
++        },
+         "prompt": {
+             "name": AGENT_BOT_RESTRICTED,
+             "display_name": "受限模式助理 Prompt",
+
+===== P242 | repo igamenovoer/houmao | PR #9: Release v0.4.1 | capacidade: cao-rest-client-contract
+--- SPEC VIVA
+## Purpose
+Define requirements for the repo-owned CAO REST client contract and related CAO backend behaviors (typed parsing, tmux env propagation, and provider mapping).
+## Requirements
+### Requirement: CAO REST client matches the vendored CAO API contract
+The system SHALL implement a CAO-compatible REST client whose request parameter names, parameter locations, and response shapes match the pinned CAO server API contract.
+
+For supported loopback compatibility base URLs, the CAO-compatible REST client SHALL bypass ambient proxy environment variables by default by ensuring loopback entries exist in `NO_PROXY` and `no_proxy`.
+
+When `HOUMAO_PRESERVE_NO_PROXY_ENV=1`, the CAO-compatible REST client SHALL NOT modify `NO_PROXY` or `no_proxy` and will respect caller-provided values.
+
+#### Scenario: Loopback compatibility requests bypass ambient proxy env on a non-default port
+- **WHEN** the CAO-compatible client is configured with pair root base URL `http://127.0.0.1:9990`
+- **AND WHEN** caller environment includes `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`
+- **THEN** client requests to the loopback compatibility authority bypass those proxy endpoints by default
+
+### Requirement: CAO REST responses are parsed into typed models
+The system SHALL parse CAO REST JSON responses into typed models (Pydantic) for at least terminal status and output.
+
+The terminal `status` field SHALL remain validated against CAO's known terminal status values.
+
+The terminal `provider` field SHALL be treated as a non-empty provider identifier string returned by CAO rather than a repo-owned closed enum. New upstream provider identifiers SHALL parse successfully without requiring a local model update before unrelated fields can be consumed.
+
+The `CaoProvider` enum type SHALL NOT remain the Pydantic response-model field type or public typed response contract for terminal `provider`.
+
+#### Scenario: Terminal status is a validated enum
+- **WHEN** the runtime fetches `GET /terminals/{TERM_ID}`
+- **THEN** the parsed terminal response exposes a `status` value validated against CAO’s known terminal statuses (for example `idle`, `processing`, `completed`, `waiting_user_answer`, `error`)
+
+#### Scenario: Unknown upstream provider id still parses
+- **WHEN** the runtime fetches `GET /terminals/{TERM_ID}`
+- **AND WHEN** CAO returns terminal `provider = "kimi_cli"`
+- **THEN** the parsed terminal response preserves `provider = "kimi_cli"`
+- **AND THEN** parsing does not fail solely because that provider identifier was not predeclared in repo-owned code
+
+### Requirement: CAO backend uses tmux session env for allowlisted credential propagation
+When using the CAO backend, the system SHALL apply allowlisted credential environment variables by configuring a unique tmux session environment before spawning the CAO terminal into that session.
+
+For supported loopback CAO base URLs, the tmux session environment SHALL preserve proxy variables for agent egress and SHALL include loopback entries in `NO_PROXY` and `no_proxy` by default.
+
+When `HOUMAO_PRESERVE_NO_PROXY_ENV=1`, the system SHALL NOT modify `NO_PROXY` or `no_proxy` and will respect caller-provided values.
+
+#### Scenario: Preserve mode does not modify tmux `NO_PROXY`
+- **WHEN** the runtime launches a CAO-backed session against a supported loopback CAO base URL
+- **AND WHEN** caller environment includes `HOUMAO_PRESERVE_NO_PROXY_ENV=1`
+- **THEN** the created tmux session environment does not inject or modify `NO_PROXY` or `no_proxy`
+
+### Requirement: Runtime-generated CAO profiles include required metadata
+When using Houmao's CAO-compatible control path, the system SHALL render and store compatibility agent profiles that conform to the pinned CAO agent-profile format and can be loaded by Houmao-owned provider adapters without validation errors.
+
+Those compatibility profiles SHALL live in a Houmao-managed profile store rather than in a caller-managed standalone CAO `HOME`.
+
+#### Scenario: Rendered compatibility profile includes required YAML frontmatter fields
+- **WHEN** the system generates a compatibility agent profile for role `R`
+- **THEN** the YAML frontmatter includes `name` and `description` as non-empty strings
+- **AND THEN** Houmao-owned compatibility profile loading accepts the rendered profile successfully
+
+#### Scenario: Pair install writes compatibility profile into Houmao-managed store
+- **WHEN** a pair-owned install flow stores a compatibility profile for provider `codex`
+- **THEN** the resulting profile artifact is written into the Houmao-managed profile store
+- **AND THEN** callers do not need to manage a separate CAO-home profile directory as part of the supported pair contract
+
+### Requirement: CAO backend provider mapping is explicit and validated
+The system SHALL map runtime tool identities to CAO provider identifiers explicitly at launch time and fail fast for unsupported tools.
+
+Parsing a CAO response that contains a provider identifier SHALL NOT widen the set of runtime-supported CAO launch targets by itself.
+
+#### Scenario: CAO provider mapping for codex and claude
+- **WHEN** the runtime launches a CAO-backed session for tool `codex`
+- **THEN** it uses CAO provider `codex`
+- **AND WHEN** the runtime launches a CAO-backed session for tool `claude`
+- **THEN** it uses CAO provider `claude_code`
+
+#### Scenario: Unsupported CAO tool fails fast
+- **WHEN** the runtime is asked to launch a CAO-backed session for a tool that has no CAO provider mapping
+- **THEN** the runtime fails with an explicit error describing the unsupported tool/provider mapping
+
+#### Scenario: Parsed provider id does not imply launch support
+- **WHEN** the runtime successfully parses a CAO terminal response whose provider id is `kimi_cli`
+- **AND WHEN** the runtime is later asked to launch a CAO-backed session for tool `kimi`
+- **THEN** the runtime still rejects that launch request with an explicit unsupported tool/provider mapping error
+
+### Requirement: CAO REST client exposes overrideable operational timeout budgets
+The system SHALL expose supported operational timeout configuration for the repo-owned CAO-compatible REST client rather than relying on one unoverrideable flat timeout budget for every request.
+
+At minimum, the client contract SHALL distinguish between:
+
+- a general request timeout budget
+- a create-operation timeout budget
+
+The default general request timeout SHALL be 15 seconds.
+
+The default create-operation timeout SHALL be 75 seconds.
+
+The create-operation timeout SHALL apply to:
+
+- `POST /sessions`
+- `POST /sessions/{session_name}/terminals`
+
+Other client requests SHALL continue using the general request timeout unless a later change defines a more specific budget.
+
+Direct Python callers SHALL be able to override both budgets through supported client construction or call configuration without patching repository source.
+
+#### Scenario: Default client uses split timeout budgets
+- **WHEN** a caller uses the default CAO-compatible client configuration
+- **THEN** lightweight requests such as health, list, detail, input, output, and delete use a 15-second timeout budget
+- **AND THEN** session and terminal creation requests use a 75-second timeout budget
+
+#### Scenario: Explicit client override changes create budget without widening other requests
+- **WHEN** a caller constructs the CAO-compatible client with `timeout_seconds = 5` and `create_timeout_seconds = 90`
+- **THEN** lightweight requests use a 5-second timeout budget
+- **AND THEN** `create_session()` and `create_terminal()` use a 90-second timeout budget
+
+
+--- ARQUIVOS DO PR (383)
+modified  +29    -0     CHANGELOG.md
+modified  +11    -4     CLAUDE.md
+modified  +11    -12    README.md
+modified  +4     -7     context/issues/enhance/README.md
+modified  +4     -5     context/issues/features/README.md
+modified  +4     -5     context/issues/known/README.md
+added     +11    -0     context/issues/obsolete/README.md
+renamed   +5     -0     context/issues/obsolete/enhance-agent-def-dir-inspection-and-selector-listing.md
+renamed   +5     -0     context/issues/obsolete/enhance-api-credential-profiles-publish-capacity-hints.md
+renamed   +5     -0     context/issues/obsolete/enhance-gateway-attach-for-serverless-local-interactive-tui-agents.md
+renamed   +5     -0     context/issues/obsolete/enhance-gateway-tui-state-tracking-for-local-interactive-sessions.md
+renamed   +5     -0     context/issues/obsolete/enhance-houmao-server-cli-defaults-should-share-config-constants.md
+renamed   +5     -0     context/issues/obsolete/enhance-mailbox-runtime-smoke-tests-use-minimal-sender-prompts.md
+renamed   +5     -0     context/issues/obsolete/enhance-remove-dead-child-cao-manager.md
+renamed   +5     -0     context/issues/obsolete/enhance-shadow-watch-user-visible-state-stability-window.md
+renamed   +5     -0     context/issues/obsolete/feat-agent-session-resume.md
+renamed   +5     -0     context/issues/obsolete/feat-gemini-headless-parser-architecture.md
+renamed   +5     -0     context/issues/obsolete/feat-houmao-server-cao-compat-namespace-boundary.md
+renamed   +5     -0     context/issues/obsolete/feat-houmao-srv-ctrl-cao-subcommand-boundary.md
+renamed   +5     -0     context/issues/obsolete/feat-main-cli-integrates-cao-server-launcher.md
+renamed   +5     -0     context/issues/obsolete/feat-runtime-master-shared-resource-config.md
+renamed   +5     -0     context/issues/obsolete/feat-two-agent-mail-ping-pong-gateway-wakeup-demo.md
+renamed   +5     -0     context/issues/obsolete/issue-001-shadow-sentinel-prompt-echo-false-positive.md
+renamed   +5     -0     context/issues/obsolete/issue-002-shadow-turn-monitor-imperative-timing.md
+renamed   +5     -0     context/issues/obsolete/issue-003-shadow-bag-of-signals-classification.md
+renamed   +5     -0     context/issues/obsolete/issue-004-shadow-fresh-environment-readiness.md
+renamed   +5     -0     context/issues/obsolete/issue-005-shadow-baseline-invalidation-and-four-root-coupling.md
+renamed   +5     -0     context/issues/obsolete/issue-006-shadow-version-preset-treadmill.md
+renamed   +5     -0     context/issues/obsolete/issue-007-shadow-mail-result-observer-gated-by-generic-completion.md
+renamed   +5     -0     context/issues/obsolete/issue-008-mailbox-prompt-should-not-reference-skill-install-paths.md
+renamed   +5     -0     context/issues/obsolete/issue-009-codex-shadow-post-completion-oscillation.md
+renamed   +5     -0     context/issues/obsolete/issue-cao-rest-ignores-tool-adapter-launch-args.md
+renamed   +5     -0     context/issues/obsolete/issue-cao-session-creation-client-timeout-budget-mismatch.md
+renamed   +5     -0     context/issues/obsolete/issue-claude-oauth-login-cannot-seed-easy-specialist-auth.md
+renamed   +5     -0     context/issues/obsolete/issue-claude-unattended-strategy-version-gap-blocks-runtime-agent-launch.md
+renamed   +5     -0     context/issues/obsolete/issue-houmao-server-interactive-prompt-turns-do-not-surface-lifecycle-transitions.md
+renamed   +5     -0     context/issues/obsolete/issue-local-interactive-mail-send-hangs-after-valid-sentinel.md
+renamed   +5     -0     context/issues/obsolete/issue-real-agent-htt-worktree-runs-mix-snapshot-and-host-state.md
+renamed   +5     -0     context/issues/obsolete/issue-tmux-session-env-fallback-for-live-agent-bindings-is-incomplete.md
+renamed   +5     -0     context/issues/obsolete/issue-tracking-semantics-duplicated-across-server-replay-and-demo.md
+modified  +1     -1     docs/getting-started/easy-specialists.md
+modified  +3     -0     docs/getting-started/launch-profiles.md
+modified  +37    -26    docs/getting-started/system-skills-overview.md
+modified  +8     -2     docs/index.md
+removed   +0     -156   docs/reference/agents/contracts/public-interfaces.md
+removed   +0     -60    docs/reference/agents/index.md
+removed   +0     -130   docs/reference/agents/internals/state-and-recovery.md
+removed   +0     -172   docs/reference/agents/operations/session-and-message-flows.md
+modified  +3     -3     docs/reference/cli.md
+modified  +15    -2     docs/reference/cli/agents-gateway.md
+modified  +29    -2     docs/reference/cli/agents-mail.md
+modified  +10    -1     docs/reference/cli/houmao-mgr.md
+modified  +35    -24    docs/reference/cli/system-skills.md
+renamed   +5     -5     docs/reference/codex-cao-approval-prompt-troubleshooting.md
+modified  +92    -39    docs/reference/gateway/contracts/protocol-and-state.md
+modified  +4     -3     docs/reference/gateway/index.md
+modified  +4     -3     docs/reference/gateway/operations/lifecycle.md
+added     +259   -0     docs/reference/gateway/operations/reminders.md
+modified  +0     -1     docs/reference/index.md
+modified  +4     -3     docs/reference/mailbox/contracts/canonical-model.md
+modified  +4     -3     docs/reference/mailbox/index.md
+modified  +22    -3     docs/reference/mailbox/operations/common-workflows.md
+modified  +26    -6     docs/reference/mailbox/quickstart.md
+modified  +7     -0     docs/reference/realm_controller.md
+modified  +1     -1     docs/reference/registry/index.md
+modified  +1     -1     docs/reference/system-files/agents-and-runtime.md
+modified  +1     -1     docs/reference/system-files/index.md
+renamed   +3     -3     docs/reference/system-files/project-aware-operations.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/.openspec.yaml
+added     +137   -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/design.md
+added     +28    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/proposal.md
+added     +40    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/specs/agent-mailbox-fs-transport/spec.md
+added     +77    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/specs/docs-system-skills-overview-guide/spec.md
+added     +53    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/specs/houmao-adv-usage-pattern-skill/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/specs/houmao-mgr-system-skills-cli/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/specs/houmao-system-skill-installation/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-08-add-advanced-usage-patterns/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/.openspec.yaml
+added     +187   -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/design.md
+added     +34    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/proposal.md
+added     +26    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/docs-cli-reference/spec.md
+added     +18    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/docs-readme-system-skills/spec.md
+added     +18    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/docs-system-skills-overview-guide/spec.md
+added     +95    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/houmao-mailbox-mgr-skill/spec.md
+added     +36    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/houmao-mgr-system-skills-cli/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/specs/houmao-system-skill-installation/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-08-add-houmao-mailbox-mgr-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/.openspec.yaml
+added     +77    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/design.md
+added     +34    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/proposal.md
+added     +68    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/docs-cli-reference/spec.md
+added     +41    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/docs-readme-system-skills/spec.md
+added     +68    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/docs-system-skills-overview-guide/spec.md
+added     +50    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/houmao-mgr-system-skills-cli/spec.md
+added     +93    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/houmao-project-mgr-skill/spec.md
+added     +42    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/specs/houmao-system-skill-installation/spec.md
+added     +15    -0     openspec/changes/archive/2026-04-08-add-houmao-project-mgr-skill/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/.openspec.yaml
+added     +92    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/design.md
+added     +30    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/proposal.md
+added     +63    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/specs/brain-launch-runtime/spec.md
+added     +33    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/specs/component-agent-construction/spec.md
+added     +49    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/specs/houmao-mgr-agents-launch/spec.md
+added     +35    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/specs/houmao-mgr-project-easy-cli/spec.md
+added     +24    -0     openspec/changes/archive/2026-04-08-add-managed-launch-force-mode/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/.openspec.yaml
+added     +203   -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/design.md
+added     +36    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/proposal.md
+added     +114   -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/agent-gateway/spec.md
+added     +25    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/agent-mailbox-fs-transport/spec.md
+added     +42    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/agent-mailbox-operator-origin-send/spec.md
+added     +21    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/agent-mailbox-protocol/spec.md
+added     +36    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/docs-cli-reference/spec.md
+added     +24    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/houmao-mgr-mailbox-cli/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/houmao-mgr-project-mailbox-cli/spec.md
+added     +76    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/houmao-srv-ctrl-native-cli/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/mailbox-reference-docs/spec.md
+added     +13    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/specs/passive-server-gateway-proxy/spec.md
+added     +23    -0     openspec/changes/archive/2026-04-08-add-operator-origin-filesystem-mail/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/.openspec.yaml
+added     +125   -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/design.md
+added     +30    -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/proposal.md
+added     +106   -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/specs/agent-gateway/spec.md
+added     +56    -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/specs/houmao-mgr-project-easy-cli/spec.md
+added     +51    -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/specs/houmao-srv-ctrl-native-cli/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-08-default-managed-gateway-to-foreground/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/.openspec.yaml
+added     +140   -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/design.md
+added     +34    -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/proposal.md
+added     +34    -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/specs/agent-gateway-reference-docs/spec.md
+added     +188   -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/specs/agent-gateway/spec.md
+added     +72    -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/specs/houmao-agent-gateway-skill/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-08-extend-gateway-reminders-with-send-keys/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-fix-cli-custom-renderer-model-normalization/.openspec.yaml
+added     +87    -0     openspec/changes/archive/2026-04-08-fix-cli-custom-renderer-model-normalization/design.md
+added     +27    -0     openspec/changes/archive/2026-04-08-fix-cli-custom-renderer-model-normalization/proposal.md
+added     +38    -0     openspec/changes/archive/2026-04-08-fix-cli-custom-renderer-model-normalization/specs/houmao-mgr-print-style/spec.md
+added     +15    -0     openspec/changes/archive/2026-04-08-fix-cli-custom-renderer-model-normalization/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/.openspec.yaml
+added     +97    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/design.md
+added     +33    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/proposal.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-agent-gateway-skill/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-agent-messaging-skill/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-create-specialist-skill/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-mailbox-mgr-skill/spec.md
+added     +41    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-manage-agent-definition-skill/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-manage-agent-instance-skill/spec.md
+added     +40    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/specs/houmao-manage-credentials-skill/spec.md
+added     +14    -0     openspec/changes/archive/2026-04-08-fix-system-skill-launcher-resolution/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/.openspec.yaml
+added     +93    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/design.md
+added     +48    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/proposal.md
+added     +61    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/agents-reference-docs/spec.md
+added     +38    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/docs-project-aware-operations/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/docs-project-instructions-file/spec.md
+added     +18    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/docs-readme-system-skills/spec.md
+added     +34    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/docs-run-phase-reference/spec.md
+added     +96    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/specs/docs-site-structure/spec.md
+added     +56    -0     openspec/changes/archive/2026-04-08-refresh-top-level-docs-and-claude-md/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/.openspec.yaml
+added     +148   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/design.md
+added     +43    -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/proposal.md
+added     +80    -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/docs-cli-reference/spec.md
+added     +39    -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/docs-readme-system-skills/spec.md
+added     +61    -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/docs-system-skills-overview-guide/spec.md
+added     +159   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-create-specialist-credential-sources/spec.md
+added     +153   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-create-specialist-skill/spec.md
+added     +149   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-manage-agent-definition-skill/spec.md
+added     +161   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-manage-agent-instance-skill/spec.md
+added     +146   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-manage-credentials-skill/spec.md
+added     +169   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-mgr-system-skills-cli/spec.md
+added     +178   -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/specs/houmao-system-skill-installation/spec.md
+added     +20    -0     openspec/changes/archive/2026-04-08-rename-system-skill-identifiers/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/.openspec.yaml
+added     +137   -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/design.md
+added     +33    -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/proposal.md
+added     +185   -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/specs/agent-gateway/spec.md
+added     +57    -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/specs/docs-cli-reference/spec.md
+added     +114   -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/specs/houmao-agent-gateway-skill/spec.md
+added     +22    -0     openspec/changes/archive/2026-04-08-replace-gateway-wakeups-with-ranked-reminders/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-skip-missing-files-in-agent-cleanup/.openspec.yaml
+added     +115   -0     openspec/changes/archive/2026-04-08-skip-missing-files-in-agent-cleanup/design.md
+added     +27    -0     openspec/changes/archive/2026-04-08-skip-missing-files-in-agent-cleanup/proposal.md
+added     +114   -0     openspec/changes/archive/2026-04-08-skip-missing-files-in-agent-cleanup/specs/houmao-mgr-cleanup-cli/spec.md
+added     +16    -0     openspec/changes/archive/2026-04-08-skip-missing-files-in-agent-cleanup/tasks.md
+added     +2     -0     openspec/changes/archive/2026-04-08-unify-self-notification-patterns/.openspec.yaml
+added     +117   -0     openspec/changes/archive/2026-04-08-unify-self-notification-patterns/design.md
+added     +30    -0     openspec/changes/archive/2026-04-08-unify-self-notification-patterns/proposal.md
+added     +69    -0     openspec/changes/archive/2026-04-08-unify-self-notification-patterns/specs/houmao-adv-usage-pattern-skill/spec.md
+added     +17    -0     openspec/changes/archive/2026-04-08-unify-self-notification-patterns/tasks.md
+modified  +34    -2     openspec/specs/agent-gateway-reference-docs/spec.md
+modified  +179   -173   openspec/specs/agent-gateway/spec.md
+modified  +60    -0     openspec/specs/agent-mailbox-fs-transport/spec.md
+added     +45    -0     openspec/specs/agent-mailbox-operator-origin-send/spec.md
+modified  +18    -0     openspec/specs/agent-mailbox-protocol/spec.md
+modified  +9     -183   openspec/specs/agents-reference-docs/spec.md
+modified  +61    -0     openspec/specs/brain-launch-runtime/spec.md
+modified  +32    -0     openspec/specs/component-agent-construction/spec.md
+modified  +95    -26    openspec/specs/docs-cli-reference/spec.md
+modified  +9     -1     openspec/specs/docs-project-aware-operations/spec.md
+added     +67    -0     openspec/specs/docs-project-instructions-file/spec.md
+modified  +44    -9     openspec/specs/docs-readme-system-skills/spec.md
+modified  +33    -0     openspec/specs/docs-run-phase-reference/spec.md
+modified  +57    -1     openspec/specs/docs-site-structure/spec.md
+modified  +3     -3     openspec/specs/docs-stale-content-removal/spec.md
+modified  +38    -6     openspec/specs/docs-system-skills-overview-guide/spec.md
+added     +85    -0     openspec/specs/houmao-adv-usage-pattern-skill/spec.md
+modified  +71    -41    openspec/specs/houmao-agent-gateway-skill/spec.md
+modified  +29    -21    openspec/specs/houmao-agent-messaging-skill/spec.md
+modified  +6     -6     openspec/specs/houmao-create-specialist-credential-sources/spec.md
+modified  +41    -39    openspec/specs/houmao-create-specialist-skill/spec.md
+added     +115   -0     openspec/specs/houmao-mailbox-mgr-skill/spec.md
+modified  +39    -37    openspec/specs/houmao-manage-agent-definition-skill/spec.md
+modified  +44    -42    openspec/specs/houmao-manage-agent-instance-skill/spec.md
+modified  +41    -39    openspec/specs/houmao-manage-credentials-skill/spec.md
+modified  +47    -0     openspec/specs/houmao-mgr-agents-launch/spec.md
+modified  +53    -5     openspec/specs/houmao-mgr-cleanup-cli/spec.md
+modified  +21    -0     openspec/specs/houmao-mgr-mailbox-cli/spec.md
+modified  +24    -2     openspec/specs/houmao-mgr-print-style/spec.md
+modified  +52    -5     openspec/specs/houmao-mgr-project-easy-cli/spec.md
+modified  +19    -0     openspec/specs/houmao-mgr-project-mailbox-cli/spec.md
+modified  +74    -32    openspec/specs/houmao-mgr-system-skills-cli/spec.md
+added     +96    -0     openspec/specs/houmao-project-mgr-skill/spec.md
+modified  +35    -10    openspec/specs/houmao-srv-ctrl-native-cli/spec.md
+modified  +71    -19    openspec/specs/houmao-system-skill-installation/spec.md
+modified  +22    -0     openspec/specs/mailbox-reference-docs/spec.md
+modified  +11    -0     openspec/specs/passive-server-gateway-proxy/spec.md
+modified  +1     -1     pixi.lock
+modified  +1     -1     pyproject.toml
+modified  +35    -15    src/houmao/agents/assets/system_skills/catalog.toml
+added     +21    -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/SKILL.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/agents/openai.yaml
+added     +55    -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/patterns/self-notification-via-reminders.md
+added     +42    -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/patterns/self-notification.md
+added     +99    -0     src/houmao/agents/assets/system_skills/houmao-adv-usage-pattern/patterns/self-wakeup-via-self-mail.md
+renamed   +13    -13    src/houmao/agents/assets/system_skills/houmao-agent-definition/SKILL.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-agent-definition/actions/create.md
+renamed   +5     -5     src/houmao/agents/assets/system_skills/houmao-agent-definition/actions/get.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-agent-definition/actions/list.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-agent-definition/actions/remove.md
+renamed   +5     -5     src/houmao/agents/assets/system_skills/houmao-agent-definition/actions/set.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-agent-definition/agents/openai.yaml
+modified  +5     -0     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/SKILL.md
+added     +19    -0     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/actions/post.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/actions/send.md
+modified  +9     -1     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/references/curl-examples.md
+modified  +4     -1     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/references/endpoint-contract.md
+modified  +1     -1     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/references/filesystem-resolver-fields.md
+modified  +3     -0     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/references/managed-agent-fallback.md
+added     +13    -0     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/references/self-notification-via-gateway.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/transports/filesystem.md
+modified  +1     -1     src/houmao/agents/assets/system_skills/houmao-agent-email-comms/transports/stalwart.md
+modified  +18    -16    src/houmao/agents/assets/system_skills/houmao-agent-gateway/SKILL.md
+modified  +5     -5     src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/discover.md
+modified  +8     -8     src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/gateway-services.md
+modified  +13    -13    src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/lifecycle.md
+modified  +5     -5     src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/mail-notifier.md
+added     +90    -0     src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/reminders.md
+removed   +0     -44    src/houmao/agents/assets/system_skills/houmao-agent-gateway/actions/wakeups.md
+modified  +1     -1     src/houmao/agents/assets/system_skills/houmao-agent-gateway/agents/openai.yaml
+modified  +7     -6     src/houmao/agents/assets/system_skills/houmao-agent-gateway/references/http-surface.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-gateway/references/scope-and-routing.md
+renamed   +13    -13    src/houmao/agents/assets/system_skills/houmao-agent-instance/SKILL.md
+renamed   +9     -9     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/cleanup.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/join.md
+renamed   +5     -5     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/launch.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/list.md
+renamed   +4     -4     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/relaunch.md
+renamed   +4     -4     src/houmao/agents/assets/system_skills/houmao-agent-instance/actions/stop.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-agent-instance/agents/openai.yaml
+modified  +8     -6     src/houmao/agents/assets/system_skills/houmao-agent-messaging/SKILL.md
+modified  +4     -4     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/discover.md
+modified  +6     -6     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/gateway-queue.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/interrupt.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/mail.md
+modified  +4     -4     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/prompt.md
+modified  +2     -2     src/houmao/agents/assets/system_skills/houmao-agent-messaging/actions/send-keys.md
+renamed   +12    -12    src/houmao/agents/assets/system_skills/houmao-credential-mgr/SKILL.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-credential-mgr/actions/add.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-credential-mgr/actions/get.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-credential-mgr/actions/list.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-credential-mgr/actions/remove.md
+renamed   +2     -2     src/houmao/agents/assets/system_skills/houmao-credential-mgr/actions/set.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-credential-mgr/agents/openai.yaml
+added     +97    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/SKILL.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/accounts-get.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/accounts-list.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/agent-binding-register.md
+added     +23    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/agent-binding-status.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/agent-binding-unregister.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/cleanup.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/init.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/messages-get.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/messages-list.md
+added     +27    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/register.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/repair.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/status.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/actions/unregister.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/agents/openai.yaml
+added     +17    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/references/launcher-resolution.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/references/mode-vocabulary.md
+added     +21    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/references/root-selection.md
+added     +22    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/references/stalwart-boundary.md
+added     +25    -0     src/houmao/agents/assets/system_skills/houmao-mailbox-mgr/references/structural-vs-actor-state.md
+removed   +0     -4     src/houmao/agents/assets/system_skills/houmao-manage-agent-definition/agents/openai.yaml
+removed   +0     -4     src/houmao/agents/assets/system_skills/houmao-manage-agent-instance/agents/openai.yaml
+removed   +0     -4     src/houmao/agents/assets/system_skills/houmao-manage-credentials/agents/openai.yaml
+removed   +0     -4     src/houmao/agents/assets/system_skills/houmao-manage-specialist/agents/openai.yaml
+added     +94    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/SKILL.md
+added     +34    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/actions/easy-instances.md
+added     +26    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/actions/init.md
+added     +37    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/actions/launch-profiles.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/actions/status.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/agents/openai.yaml
+added     +31    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/references/overlay-resolution.md
+added     +28    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/references/project-aware-effects.md
+added     +39    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/references/project-layout.md
+added     +24    -0     src/houmao/agents/assets/system_skills/houmao-project-mgr/references/routing-boundaries.md
+renamed   +13    -13    src/houmao/agents/assets/system_skills/houmao-specialist-mgr/SKILL.md
+renamed   +7     -7     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/create.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/get.md
+renamed   +4     -4     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/launch.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/list.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/remove.md
+renamed   +3     -3     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/actions/stop.md
+added     +4     -0     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/agents/openai.yaml
+renamed   +0     -0     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/references/claude-credential-lookup.md
+renamed   +0     -0     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/references/codex-credential-lookup.md
+renamed   +0     -0     src/houmao/agents/assets/system_skills/houmao-specialist-mgr/references/gemini-credential-lookup.md
+modified  +45    -6     src/houmao/agents/brain_builder.py
+modified  +51    -1     src/houmao/agents/mailbox_runtime_support.py
+added     +29    -0     src/houmao/agents/managed_launch_force.py
+modified  +2     -2     src/houmao/agents/managed_prompt_header.py
+modified  +41    -18    src/houmao/agents/realm_controller/gateway_client.py
+modified  +120   -5     src/houmao/agents/realm_controller/gateway_mailbox.py
+modified  +204   -62    src/houmao/agents/realm_controller/gateway_models.py
+modified  +652   -250   src/houmao/agents/realm_controller/gateway_service.py
+modified  +1     -1     src/houmao/agents/realm_controller/mail_commands.py
+modified  +19    -1     src/houmao/agents/realm_controller/runtime.py
+modified  +9     -5     src/houmao/agents/system_skills.py
+modified  +4     -0     src/houmao/mailbox/filesystem.py
+modified  +132   -23    src/houmao/mailbox/managed.py
+modified  +70    -9     src/houmao/mailbox/protocol.py
+modified  +10    -0     src/houmao/passive_server/app.py
+modified  +16    -0     src/houmao/passive_server/client.py
+modified  +20    -3     src/houmao/passive_server/service.py
+modified  +6     -2     src/houmao/server/app.py
+modified  +9     -1     src/houmao/server/client.py
+modified  +7     -0     src/houmao/server/models.py
+modified  +6     -1     src/houmao/server/pair_client.py
+modified  +13    -2     src/houmao/server/service.py
+modified  +256   -2     src/houmao/srv_ctrl/commands/agents/core.py
+modified  +8     -8     src/houmao/srv_ctrl/commands/agents/gateway.py
+modified  +30    -0     src/houmao/srv_ctrl/commands/agents/mail.py
+modified  +65    -0     src/houmao/srv_ctrl/commands/common.py
+modified  +2     -2     src/houmao/srv_ctrl/commands/mailbox.py
+modified  +130   -5     src/houmao/srv_ctrl/commands/managed_agents.py
+modified  +6     -5     src/houmao/srv_ctrl/commands/output.py
+modified  +32    -2     src/houmao/srv_ctrl/commands/project.py
+modified  +5     -2     src/houmao/srv_ctrl/commands/renderers/gateway.py
+modified  +253   -28    src/houmao/srv_ctrl/commands/runtime_cleanup.py
+modified  +71    -24    tests/integration/agents/realm_controller/test_gateway_runtime_contract.py
+modified  +3     -3     tests/integration/agents/realm_controller/test_mailbox_runtime_contract.py   <== código ligado à spec
+modified  +79    -2     tests/integration/server/test_managed_agent_gateway_contract.py
+modified  +277   -4     tests/integration/srv_ctrl/test_cli_shape_contract.py
+modified  +553   -121   tests/unit/agents/realm_controller/test_gateway_support.py
+modified  +49    -0     tests/unit/agents/realm_controller/test_runtime_registry.py
+modified  +33    -12    tests/unit/agents/test_brain_builder.py
+modified  +35    -3     tests/unit/agents/test_mailbox_runtime_support.py
+modified  +361   -88    tests/unit/agents/test_system_skills.py
+modified  +226   -3     tests/unit/mailbox/test_managed.py
+modified  +22    -0     tests/unit/mailbox/test_protocol.py
+modified  +67    -0     tests/unit/passive_server/test_app_contracts.py
+modified  +23    -4     tests/unit/server/test_app_contracts.py
+modified  +15    -1     tests/unit/server/test_client.py
+modified  +552   -1     tests/unit/srv_ctrl/commands/test_agents_core.py
+modified  +54    -0     tests/unit/srv_ctrl/commands/test_output.py
+modified  +22    -6     tests/unit/srv_ctrl/commands/test_runtime_artifacts_join.py
+modified  +247   -1     tests/unit/srv_ctrl/test_cleanup_commands.py
+modified  +215   -33    tests/unit/srv_ctrl/test_commands.py
+modified  +52    -3     tests/unit/srv_ctrl/test_managed_agents.py
+modified  +420   -0     tests/unit/srv_ctrl/test_project_commands.py
+modified  +99    -28    tests/unit/srv_ctrl/test_system_skills_commands.py
+--- DIFF DO CÓDIGO LIGADO
+### tests/integration/agents/realm_controller/test_mailbox_runtime_contract.py
+@@ -166,14 +166,14 @@ def test_mailbox_runtime_contract_covers_build_start_refresh_and_resume(
+     visible_processing_skill = (
+         build_result.home_path / "skills/houmao-process-emails-via-gateway/SKILL.md"
+     )
+-    visible_gateway_skill = (
+-        build_result.home_path / "skills/houmao-agent-email-comms/SKILL.md"
+-    )
++    visible_gateway_skill = build_result.home_path / "skills/houmao-agent-email-comms/SKILL.md"
++    visible_mailbox_mgr_skill = build_result.home_path / "skills/houmao-mailbox-mgr/SKILL.md"
+     visible_skill = (
+         build_result.home_path / "skills/houmao-agent-email-comms/transports/filesystem.md"
+     )
+     assert visible_processing_skill.is_file()
+     assert visible_gateway_skill.is_file()
++    assert visible_mailbox_mgr_skill.is_file()
+     assert visible_skill.is_file()
+     assert "pixi run houmao-mgr agents mail resolve-live" not in visible_processing_skill.read_text(
+         encoding="utf-8"
+

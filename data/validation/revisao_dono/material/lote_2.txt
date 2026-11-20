@@ -1,0 +1,1955 @@
+===== P017 | quiqr/quiqr-desktop PR #661 | capacidade do par: user-feedback
+PR: main
+arquivos ligados: packages/frontend/src/api.ts
+--- linhas alteradas (14; mostrando até 40)
++/**
++ * Trigger a browser download for a file within the workspace's site directory.
++ * Uses a hidden anchor element to initiate the download from the file-download endpoint.
++ */
++export function fileDownload(siteKey: string, workspaceKey: string, filePath: string) {
++  const url = `/api/sites/${encodeURIComponent(siteKey)}/workspaces/${encodeURIComponent(workspaceKey)}/file-download?path=${encodeURIComponent(filePath)}`;
++  const a = document.createElement('a');
++  a.href = url;
++  a.download = '';
++  document.body.appendChild(a);
++  a.click();
++  document.body.removeChild(a);
++}
++  fileDownload: typeof fileDownload;
+--- candidata: communication-layer [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: WebSocket Push Notification Layer
+  | The web adapter SHALL use WebSocket connections for backend-to-frontend push notifications only, not for request-response patterns.
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints, maintaining the existing communication pattern.
+  > - **THEN** it uses `mainProcessBridge.request()` to POST to HTTP endpoint
+  > - **AND** works identically in both Electron and web browser
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints using relative URLs, with an `Authorization: Bearer <token>` header when auth is enabled.
+  > SSE endpoints SHALL accept JWT tokens via query parameter since `EventSource` cannot send custom headers.
+  > All frontend-to-backend requests SHALL use HTTP POST to `/api/*` endpoints using relative URLs, maintaining the existing communication pattern while working on any deployment origin.
+  > ### Requirement: File download endpoint with path restriction
+  > The backend SHALL expose a file download endpoint that streams a file from the workspace's site directory, with path traversal protection.
+--- candidata: frontend-components [tasks+PR+termos]
+  | # Capability: Frontend Components
+  | ## ADDED Requirements
+  | ### Requirement: Functional Component Pattern
+  > #### Scenario: No class component remains in components directory
+  > - **GIVEN** a directory or module in the codebase
+  > - **THEN** the directory MUST be removed from the codebase
+  > - **AND** any references in documentation SHOULD note the replacement
+  > - **AND** the `frontend/src/components/HoForm/` directory MUST NOT exist
+  > - **AND** clicking the button SHALL open the `FieldAIAssistDialog`
+  > #### Scenario: FieldAIAssistButton hidden without templates
+  > - **WHEN** user clicks "Generate" or "Process" button
+--- candidata: application-settings-ui [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Semantic separation of Application Settings and User Preferences
+  | The system SHALL establish a clear UI separation between Application Settings (system-wide configuration for the Quiqr application) and Preferences (per-user settings).
+  > - **THEN** Application Settings appear in a separate menu group that can be conditionally hidden or restricted in future implementations
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+  > The system SHALL render a Storage settings page at route `/prefs/storage` within the Preferences layout.
+  > #### Scenario: User clicks Storage menu item
+  > - **WHEN** user clicks "Storage" in the Application Settings menu group
+  > #### Scenario: User clicks Git menu item
+  > - **WHEN** user clicks "Git" in the Application Settings menu group
+--- candidata: ui-components [tasks]
+  | # UI Components Specification
+  | ## ADDED Requirements
+  | ### Requirement: LogViewer Component
+  > - **WHEN** user clicks copy button on a log row
+  > The system SHALL provide a dedicated view for global application logs accessible from the workspace toolbar.
+  > - **WHEN** user is in a workspace
+  > - **THEN** an "Application Logs" button is visible in the workspace toolbar (renamed from "Log")
+  > - **WHEN** user clicks "Application Logs" button
+  > The system SHALL provide a dedicated view for site-specific workspace logs accessible from the workspace toolbar.
+  > - **WHEN** user is in a workspace with applicationRole "siteDeveloper"
+  > - **THEN** a "Site Log" button is visible next to the "Tools" button in the workspace toolbar
+--- candidata: logging [tasks]
+  | # Logging Specification
+  | ## ADDED Requirements
+  | ### Requirement: Structured JSONL Log Files
+  > The system SHALL write structured logs in newline-delimited JSON (JSONL) format with separate files for global application logs and site-specific workspace logs.
+  > - **THEN** a site log file is created at `$HOME/Quiqr/sites/{siteKey}/{workspaceKey}-YYYY-MM-DD.jsonl` (where YYYY-MM-DD is the current date)
+  > - **THEN** categories include: electron-init, standalone-init, llm-connection, config, backend-server, resource-download, and others as needed
+  > - **THEN** categories include: sync, content, buildaction, model, import, workspace, and others as needed
+  > - **THEN** it uses logger.debugSite(), logger.infoSite(), logger.warningSite(), logger.errorSite() methods with siteKey, workspaceKey, category, message, and optional metadata
+  > The system SHALL provide backend API endpoints for retrieving and filtering logs.
+  > - **WHEN** frontend requests site logs via getSiteLogs({ siteKey, workspaceKey, date?, level?, category?, search?, limit?, offset? })
+  > - **THEN** the backend returns matching log entries for that workspace with pagination
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff adiciona download no frontend, fora do escopo de user-feedback.
+
+===== P067 | AshkanYarmoradi/go-mink PR #175 | capacidade do par: data-export
+PR: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan
+arquivos ligados: adapters/postgres/subscription.go
+--- linhas alteradas (67; mostrando até 40)
++	"strconv"
++	"strings"
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, er
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++	limit = adapters.DefaultLimit(limit, 1000)
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++	return a.scanEvents(rows)
++}
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
+--- candidata: event-subscriptions [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  | The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  > The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > across a contiguous, stable prefix of `global_position`, bounded by a safe watermark below
+  > which no in-flight transaction can still commit a lower position — covering `SubscribeAll`,
+  > `SubscribeCategory`, async projections (`loadEventsFromPosition`, which also checkpoints),
+  > and the saga manager's event loop. The watermark SHALL be enforced
+  > at the adapter's load-from-position query (returning nothing above it) and SHALL NOT
+  > gap-detection with a staleness timeout). An event whose transaction is assigned a lower
+--- candidata: cli-tooling [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code generation does not overwrite existing files without --force
+  | `mink generate` SHALL refuse to overwrite an existing target file unless a `--force`
+  > - **THEN** the command returns an error and leaves the existing file unchanged
+  > - **THEN** `migrate down` returns an error and exits non-zero rather than reporting success
+  > ### Requirement: `mink events` queries the global feed by indexed axes
+  > The `mink` CLI SHALL provide a top-level `events` command that reads the global event feed through the adapter's `FilteredFeedAdapter.LoadFromPositionFiltered`, filtered by the indexed axes the `FeedF
+  > #### Scenario: A type filter reads only matching events across streams
+  > - **WHEN** `mink events --type OrderPlaced` runs against a feed where `OrderPlaced` spans several streams
+  > - **THEN** only `OrderPlaced` events are printed, across all their streams, in ascending `global_position` order, up to the limit
+  > #### Scenario: Multi-valued and multi-axis filters AND/OR-compose
+--- candidata: retention-policies [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable retention policy
+  | The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > - **WHEN** a policy is defined to shred events older than `MaxAge` for a category
+  > - **THEN** events in that category whose age exceeds `MaxAge` are selected for shredding
+  > - **THEN** each matched event has the action of every policy that matches it applied
+  > A `RetentionManager` SHALL apply the configured policies over the event store on demand via `Apply(ctx)`, SHALL be safe to run on a schedule, and SHALL return a `RetentionReport` (matched, acted-on, s
+  > #### Scenario: Apply enforces matching policies
+  > - **WHEN** `Apply` runs with a shred policy and matching events exist
+  > - **THEN** the matching subjects' keys are revoked and the report counts them
+--- candidata: in-place-stream-re-encryption [PR]
+  | ## ADDED Requirements
+  | ### Requirement: In-place stream re-encryption
+  | `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > ### Requirement: In-place stream re-encryption
+  > `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > string) (reEncrypted int, keyIDs []string, err error)` that brings a stream's
+  > existing events under the current `FieldEncryptionConfig` in place — sealing each
+  > event's configured fields under the current key and rewriting the same row — while
+  > preserving the event's id, type, stream, version, global position, and timestamp
+  > (the payload's at-rest encoding changes, not the event's identity or order). The key
+  > MUST be resolved exactly as the append path would (running the configured
+--- candidata: saga-orchestration [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Saga retry attempts are at least one
+  | `WithSagaRetryAttempts(n)` SHALL clamp the configured attempts to a minimum of 1, so a
+  > saga event is always attempted at least once. A configured value of 0 SHALL NOT cause
+  > the processing loop to skip the event, drop it silently, or advance the position past an
+  > unprocessed event.
+  > #### Scenario: Zero retry attempts still processes the event
+  > - **WHEN** the saga manager is configured with `WithSagaRetryAttempts(0)` and an event arrives
+  > - **THEN** the event is dispatched at least once and the position advances only after a real attempt, not over a silently-dropped event
+  > ### Requirement: Context cancellation during dispatch does not trigger compensation
+  > The saga manager SHALL NOT treat a command-dispatch failure of `context.Canceled` or
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR acrescenta comportamentos como criptografia e limpeza de dados antigos.
+
+===== P073 | arabold/docs-mcp-server PR #431 | capacidade do par: subresource-blocklist
+PR: Fix embedding dimension resolution for custom models
+arquivos ligados: src/store/DocumentStore.test.ts
+--- linhas alteradas (152; mostrando até 40)
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
+-import { loadConfig } from "../utils/config";
++import { loadConfig, markVectorDimensionSource } from "../utils/config";
+-import { EmbeddingModelChangedError } from "./errors";
++import { DimensionError, EmbeddingModelChangedError } from "./errors";
++const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
++const mockEmbeddingCalls = vi.hoisted(() => ({ query: 0, documents: 0 }));
++        mockEmbeddingCalls.query += 1;
+-        const embedding = new Array(1536).fill(0);
++        const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-            const index = (baseIndex + i) % 1536;
++            const index = (baseIndex + i) % mockEmbeddingDimension.value;
++        mockEmbeddingCalls.documents += 1;
+-          const embedding = new Array(1536).fill(0);
++          const embedding = new Array(mockEmbeddingDimension.value).fill(0);
+-              const index = (baseIndex + i) % 1536;
++              const index = (baseIndex + i) % mockEmbeddingDimension.value;
++    mockEmbeddingDimension.value = 1536;
++      mockEmbeddingDimension.value = 1536;
++  let tempDir: string;
++    mockEmbeddingDimension.value = 1536;
++    mockEmbeddingCalls.query = 0;
++    mockEmbeddingCalls.documents = 0;
++    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-store-"));
++    rmSync(tempDir, { recursive: true, force: true });
++    dbPath = ":memory:",
++      markVectorDimensionSource(cfg, true);
+-    const s = new DocumentStore(":memory:", cfg);
++    const s = new DocumentStore(dbPath, cfg);
++    it("should not throw after restarting with an auto-detected unknown model dimension", async () => {
++      mockEmbeddingDimension.value = 1024;
++      store = await createStore("openai:custom-1024-model");
++      // Metadata was persisted with the resolved dimension, not the default config value.
++      expect(store.getEmbeddingMetadata().dimension).toBe("1024");
++      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
++    });
++    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
++      mockEmbeddingDimension.value = 1024;
+--- candidata: embedding-generation [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Chunk Metadata Header
+  | The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > ### Requirement: Chunk Metadata Header
+  > The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
+  > This enriches the embedding vector with document context to improve semantic search relevance. The header is prepended only for the embedding input; it is not stored as part of the chunk content in th
+  > **Code reference:** `src/store/DocumentStore.ts:1170-1173`
+  > - **THEN** the embedding input SHALL be prefixed with `<title>React Docs</title>\n<url>https://react.dev/learn</url>\n<path>Learn / Installation / Setup</path>\n`
+  > - **AND** the chunk content in the database SHALL remain unchanged (without the header)
+  > #### Scenario: Chunk with empty section path
+  > - **WHEN** a chunk has an empty section path `[]`
+--- candidata: embedding-model-change-safety [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Embedding Metadata Persistence
+  | The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > ### Requirement: Embedding Metadata Persistence
+  > The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+  > - `embedding_model`: The full model specification string (e.g., `openai:text-embedding-3-small`)
+  > - `embedding_dimension`: The configured vector dimension as a string (e.g., `"1536"`)
+  > The `metadata` table SHALL be created by a database migration with the schema `CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`.
+  > The metadata SHALL be written after successful embedding initialization during `DocumentStore.initialize()`. If embeddings are disabled (FTS-only mode), no embedding metadata SHALL be stored.
+  > #### Scenario: Metadata stored after successful embedding init
+  > - **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
+--- candidata: embedding-resolution [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Model Specification Parsing
+  | The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > The system SHALL parse an embedding model specification string in the format `provider:model`, splitting on the first colon only. When no colon is present, the system SHALL default to the `openai` pro
+  > **Supported providers:** `openai`, `vertex`, `gemini`, `aws`, `microsoft`, `sagemaker` (parse-only; model creation not yet implemented).
+  > **Code reference:** `src/store/embeddings/EmbeddingConfig.ts:290-317`
+  > #### Scenario: Model string without provider prefix
+  > - **WHEN** the model specification is `text-embedding-3-small` (no colon)
+  > - **THEN** the system SHALL use `openai` as the provider and `text-embedding-3-small` as the model name
+  > #### Scenario: Model string with provider prefix
+  > - **WHEN** the model specification is `gemini:embedding-001`
+--- candidata: configuration [tasks]
+  | # configuration Specification
+  | ## Purpose
+  | Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands.
+  > Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands.
+  > - **GIVEN** no custom configuration for `scraper.document.maxSize`
+  > The system SHALL support overriding any configuration setting via environment variables using a predictable naming convention.
+  > - **WHEN** the environment variable `DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE` is set
+  > - **WHEN** converted to environment variable format
+  > - **WHEN** converted to environment variable name
+  > The system SHALL apply configuration overrides in a defined priority order.
+  > - **AND** `--storePath=/cli/path` is passed
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Não identifiquei a spec responsável. A mudança parece tratar de embedding de vetores, fora do escopo desta spec.
+
+===== P081 | Xeonice/soul-killer PR #2 | capacidade do par: build-script
+PR: fix: Windows viewer 路径对齐 + updater 父目录自愈
+arquivos ligados: src/cli/updater.ts
+--- linhas alteradas (25; mostrando até 40)
+-import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync } from 'node:fs'
++import { readFileSync, writeFileSync, renameSync, chmodSync, unlinkSync, existsSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
+-import { join } from 'node:path'
++import { dirname, join } from 'node:path'
++/**
++ * Replace the viewer static-assets directory atomically.
++ *
++ * Ensures the parent directory (~/.soulkiller) exists before attempting
++ * rename — install.ps1 never creates ~/.soulkiller on Windows, so the first
++ * --update after a fresh install would otherwise hit ENOENT.
++ *
++ * Extracted as its own function to make the ordering (mkdir → rm → rename)
++ * directly testable without standing up the whole download pipeline.
++ */
++export function replaceViewer(src: string, dst: string): void {
++  mkdirSync(dirname(dst), { recursive: true })
++  rmSync(dst, { recursive: true, force: true })
++  renameSync(src, dst)
++}
+-  // Replace viewer static files (if present in archive)
++  // Replace viewer static files (if present in archive).
+-    const viewerDst = join(homedir(), '.soulkiller', 'viewer')
+-    rmSync(viewerDst, { recursive: true, force: true })
+-    renameSync(extractedViewer, viewerDst)
++    replaceViewer(extractedViewer, join(homedir(), '.soulkiller', 'viewer'))
+--- candidata: install-script [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Unix 安装脚本自动检测平台并安装
+  | `scripts/install.sh` SHALL 检测 OS 和 Arch，下载对应二进制到 `~/.soulkiller/bin/`。
+  > `scripts/install.sh` SHALL 检测 OS 和 Arch，下载对应二进制到 `~/.soulkiller/bin/`。
+  > - **WHEN** 在 macOS ARM64 上执行 `curl -fsSL .../install.sh | sh`
+  > - **THEN** SHALL 下载 `soulkiller-darwin-arm64.tar.gz`，解压到 `~/.soulkiller/bin/soulkiller`，文件具有可执行权限
+  > - **THEN** SHALL 下载 `soulkiller-linux-x64.tar.gz` 并安装到 `~/.soulkiller/bin/soulkiller`
+  > 安装脚本 SHALL 检测 `~/.soulkiller/bin` 是否在 PATH 中，若不在则写入 shell 配置文件。
+  > - **WHEN** 用户使用 zsh 且 PATH 不含 `~/.soulkiller/bin`
+  > - **THEN** SHALL 追加 `export PATH="$HOME/.soulkiller/bin:$PATH"` 到 `~/.zshrc`
+  > - **WHEN** `~/.soulkiller/bin` 已在 PATH 中
+--- candidata: self-update [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: 统一的 atomicReplaceBinary 原语
+  | `updater.ts` SHALL 将"把一个临时文件原子替换到目标可执行路径"的逻辑抽出为独立函数 `atomicReplaceBinary(src, dst)`，所有平台差异收敛在该函数内部。`runUpdate` 主流程 SHALL NOT 出现 `isWindows` / `process.platform` 分支。
+  > ### Requirement: 统一的 atomicReplaceBinary 原语
+  > `updater.ts` SHALL 将"把一个临时文件原子替换到目标可执行路径"的逻辑抽出为独立函数 `atomicReplaceBinary(src, dst)`，所有平台差异收敛在该函数内部。`runUpdate` 主流程 SHALL NOT 出现 `isWindows` / `process.platform` 分支。
+  > - **WHEN** `atomicReplaceBinary(src, dst)` 成功完成
+  > - **THEN** SHALL 只有一处 `await atomicReplaceBinary(...)` 调用
+  > - **AND** 平台特定逻辑 SHALL 全部位于 `atomicReplaceBinary` 内部
+  > ### Requirement: Windows 平台 rename-self 替换策略
+  > 在 Windows 平台下，`soulkiller --update` SHALL 使用"rename running exe"策略替换二进制：先 rename 运行中的 exe 到 `<execPath>.old`，再将新二进制写入 `<execPath>`。运行中 exe 的文件锁是 Windows 特有约束，直接写入或删除会返回 `EBUSY` / `ERROR_SHARING_VIOLAT
+  > #### Scenario: Windows 正常升级
+--- candidata: skill-install [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI 命令形状
+  | CLI SHALL 在 `soulkiller skill install` 下提供如下命令签名：`install <slug|url|path> [--to <target>]... [--scope global|project] [--overwrite] [--catalog <url>]`；其中 `<slug>` 指 catalog 中的 slug，`<url>` 指远端 `.skill
+  > CLI SHALL 在 `soulkiller skill install` 下提供如下命令签名：`install <slug|url|path> [--to <target>]... [--scope global|project] [--overwrite] [--catalog <url>]`；其中 `<slug>` 指 catalog 中的 slug，`<url>` 指远端 `.skill
+  > - **WHEN** 用户执行 `soulkiller skill install fate-zero --to claude-code`
+  > - **WHEN** 用户执行 `soulkiller skill install fate-zero --to claude-code --to codex --to openclaw`
+  > - **WHEN** 用户在 `/home/user/proj/` 执行 `soulkiller skill install fate-zero --to claude-code --scope project`
+  > - **WHEN** 用户执行 `soulkiller skill install --all --to claude-code`
+  > - **WHEN** 用户执行 `soulkiller skill install /path/to/local.skill --to claude-code`
+  > - **THEN** CLI 跳过 catalog 与网络，直接读本地文件，解内嵌 `soulkiller.json` 校验 engine_version，完成后安装
+  > - **WHEN** 用户执行 `soulkiller skill install https://example.com/custom.skill --to claude-code`
+--- candidata: repl-upgrade [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: `/upgrade` REPL 命令
+  | REPL SHALL 注册 `/upgrade` 命令，其行为是在 REPL 内部完成整套二进制升级流程（查询版本 → 确认 → 下载 → 校验 → 原子替换），**全程不退出 REPL**。该命令 MUST 复用现有 `runUpdate()` 的下载、sha256 校验、原子替换、Windows self-rename 逻辑，并以可重入的方式在 ink 渲染循环中执行。
+  > REPL SHALL 注册 `/upgrade` 命令，其行为是在 REPL 内部完成整套二进制升级流程（查询版本 → 确认 → 下载 → 校验 → 原子替换），**全程不退出 REPL**。该命令 MUST 复用现有 `runUpdate()` 的下载、sha256 校验、原子替换、Windows self-rename 逻辑，并以可重入的方式在 ink 渲染循环中执行。
+  > - **THEN** UI 切到 "upgrading" 状态；流程通过 progress callback 实时渲染 "downloading X/Y MB" / "verifying checksum" / "replacing binary" 状态；升级成功后 UI 渲染明显视觉强调的 "Upgrade complete — current session stays on vX.Y.Z u
+  > 系统 SHALL 在升级成功后显式告知用户，当前 REPL 进程仍运行旧版本代码；新功能、bug 修复、engine_version 升级只有在 `/exit` 并重启 `soulkiller` 后生效。此提示 MUST 以视觉对比（warning 色 / 高亮背景 / 多行展示）突出显示，避免用户误以为当前会话已切换到新版。
+  > - **WHEN** 升级成功但用户未重启，此后尝试 `/install` 一个需要新 engine_version 的 skill
+  > - **THEN** `/install` 报告 "engine too high"（正常行为，因为当前进程仍是旧二进制逻辑）；错误文案引导用户 `/exit` 重启
+  > `runUpdate()` SHALL 支持 `silent: true` 与 `onProgress` 参数。在 REPL 调用下，该函数 MUST NOT 直接使用 `console.log/warn/error` 写 stdout（会污染 ink 渲染循环）；所有阶段事件、错误信息 MUST 通过 `onProgress` 回调上报，由 `UpgradeCommand` 组件渲染。CLI 直
+  > - **WHEN** 用户执行 `soulkiller --update`（不走 REPL）
+  > - **WHEN** `/upgrade` 在 downloading/verifying/replacing 任一阶段，用户按 Esc
+--- candidata: skill-catalog [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: catalog.json 端点
+  | Worker SHALL 在 `/examples/catalog.json` 提供可公开访问的 JSON 端点，内容为 CI 自动生成的 skill 清单；响应 `Content-Type: application/json`，且允许跨源（CORS）。
+  > - **THEN** 返回 HTTP 200 + JSON 响应，顶层字段 `version` / `updated_at` / `soulkiller_version_min` / `skills[]` 齐备
+  > catalog JSON SHALL 遵循以下结构：顶层 `version: 1`、`updated_at: ISO8601 string`、`soulkiller_version_min: semver string`、`skills: array`。每个 skills 元素 SHALL 包含 `slug`（kebab-case）、`display_name`、`description`、`ve
+  > - **THEN** 输出如 `{ "slug": "fate-zero", "display_name": "Fate/Zero", "description": "…", "version": "1.0.0", "engine_version": 3, "size_bytes": 2411724, "sha256": "abc…", "url": "/examples/skills/fate-
+  > - **THEN** 客户端识别 `version !== 1` 时打印警告 "catalog version unsupported; please update soulkiller" 并 fall back 到缓存
+  > 构建流水线 SHALL 在每次 `.skill` 发布前扫描 `examples/skills/*.skill`，对每个档案解包读取 `soulkiller.json` 与 `SKILL.md` frontmatter，计算 sha256，合成 `catalog.json`，随 `.skill` 一并上传到 Worker。
+  > - **THEN** CI 自动重新生成 `catalog.json` 包含新条目；下一次 `soulkiller skill catalog` 即可看到
+  > CLI SHALL 按下列优先级解析 catalog URL：命令行 `--catalog <url>` > 环境变量 `SOULKILLER_CATALOG_URL` > 硬编码默认值 `https://soulkiller-download.ad546971975.workers.dev/examples/catalog.json`。
+  > - **WHEN** 用户设 `SOULKILLER_CATALOG_URL=a` 且执行 `soulkiller skill install foo --catalog b`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR acrescenta comportamentos específicos de Windows e tratamento de diretórios que a spec não descreve.
+
+===== P093 | huytdps13400/react-native-ssl-manager PR #5 | capacidade do par: ios-urlsession-documentation
+PR: feat: eager SSL init, runtime config, cert-rotation graceful degradation; fix packaging (#3) and CI
+arquivos ligados: scripts/postinstall.js
+--- linhas alteradas (36; mostrando até 40)
+-const { generateNscXml, mergeNscXml } = require('./nsc-utils');
++const {
++  generateNscXml,
++  mergeNscXml,
++  isPinningEnforced,
++  getConfigExpiration,
++} = require('./nsc-utils');
++    // Expiration precedence: env var > config field > default (1 year).
++    const pinExpiration =
++      process.env.SSL_PIN_EXPIRATION || getConfigExpiration(sslConfig);
+-    if (sha256Keys && Object.keys(sha256Keys).length > 0) {
+-      const xmlDir = path.join(
+-        androidDir,
+-        'app',
+-        'src',
+-        'main',
+-        'res',
+-        'xml'
++    if (!isPinningEnforced(sslConfig)) {
++      console.log(
++        'ℹ️ enforcePinning is false — skipping network_security_config.xml (monitor mode)'
++    } else if (sha256Keys && Object.keys(sha256Keys).length > 0) {
++      const xmlDir = path.join(androidDir, 'app', 'src', 'main', 'res', 'xml');
+-        const mergedXml = mergeNscXml(existingXml, sha256Keys);
++        const mergedXml = mergeNscXml(existingXml, sha256Keys, pinExpiration);
+-        const xml = generateNscXml(sha256Keys);
++        const xml = generateNscXml(sha256Keys, pinExpiration);
+-      console.log('⚠️ No sha256Keys in ssl_config.json, skipping XML generation');
++      console.log(
++        '⚠️ No sha256Keys in ssl_config.json, skipping XML generation'
++      );
+-    console.warn('⚠️ Failed to generate Network Security Config XML:', error.message);
++    console.warn(
++      '⚠️ Failed to generate Network Security Config XML:',
++      error.message
++    );
+--- candidata: expo-plugin [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Expo Plugin Registration
+  | The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > The library SHALL provide an Expo config plugin that can be registered in `app.json` or `app.config.js` under the `plugins` array, accepting an optional `sslConfigPath` parameter (default: `ssl_config
+  > - **THEN** the plugin uses `ssl_config.json` from the project root
+  > - **WHEN** the plugin is added as `["react-native-ssl-manager", { "sslConfigPath": "./custom/path.json" }]`
+  > The Expo plugin SHALL automatically add the `ssl_config.json` file to the iOS Xcode project bundle resources during prebuild.
+  > The Expo plugin SHALL automatically copy the `ssl_config.json` file to the Android `assets` directory and ensure the INTERNET permission is present in `AndroidManifest.xml` during prebuild.
+  > The Expo config plugin and build scripts SHALL allow the Network Security Config
+  > - **WHEN** the plugin is configured with `pinExpiration: "2027-12-31"`
+  > - **THEN** the generated `network_security_config.xml` uses that expiration date
+--- candidata: ssl-pinning-api [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Set SSL Pinning State
+  | The library SHALL export a `setUseSSLPinning(usePinning: boolean): Promise<void>` function that enables or disables SSL certificate pinning at runtime by persisting the state to native storage (UserDe
+  > #### Scenario: App restart required
+  > - `SslPinningConfig`: an interface with a `sha256Keys` property mapping domain strings to arrays of SHA-256 pin strings
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > - **WHEN** an app bundles `ssl_config.json` and never calls a JS method from this module
+  > ### Requirement: TrustKit initialized at most once per process
+  > The iOS implementation SHALL initialize TrustKit at most once per process and
+  > optional `enforcePinning` flag so pinning can degrade gracefully and avoid a
+  > - **WHEN** `enforcePinning` is `false`
+--- candidata: android-network-security-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: XML Generation from SSL Config
+  | The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > The library SHALL generate an Android `network_security_config.xml` file from `ssl_config.json` at build time, containing `<pin-set>` entries for each domain with its SHA-256 public key pins.
+  > #### Scenario: Generate XML from valid ssl_config.json
+  > - **WHEN** `ssl_config.json` contains domains with SHA-256 pins
+  > - **THEN** the library generates `res/xml/network_security_config.xml` with corresponding `<domain-config>` and `<pin-set>` entries
+  > - **WHEN** `ssl_config.json` contains `api.example.com` with 2 pins and `api.dev.example.com` with 1 pin
+  > - **THEN** the generated XML contains two `<domain-config>` blocks, one for each domain
+  > - **WHEN** XML is generated
+  > #### Scenario: ssl_config.json not found
+--- candidata: android-pinned-client-api [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Public Pinned OkHttpClient Singleton
+  | The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+  > The library SHALL expose a public `PinnedOkHttpClient` object with a `getInstance(context: Context): OkHttpClient` method that returns an OkHttpClient configured with certificate pinning from `ssl_con
+  > - **THEN** an OkHttpClient with `CertificatePinner` configured from `ssl_config.json` is returned
+  > The library SHALL document how to manually configure SSL pinning with Ktor's CIO engine using a custom `TrustManager`, since CIO does not use OkHttp and is not covered by Network Security Config or `P
+  > - **THEN** they find a code example showing how to configure Ktor's `CIO` engine with a custom `TrustManagerFactory` that validates certificate pins from `ssl_config.json`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de documentação técnica; o diff altera condições do ciclo de vida do postinstall.
+
+===== P112 | epam/ai-dial-admin-frontend PR #2544 | capacidade do par: container-redeploy-snapshot
+PR: fix(deployements): disable image change modal in intermediate state (Issue #2534)
+arquivos ligados: apps/ai-dial-admin/src/utils/deployments/tests/containers.spec.ts
+--- linhas alteradas (2; mostrando até 40)
++      expect(isEditDisabled({ status: CONTAINER_STATUS.RUNNING } as Container)).toBeFalsy();
++      expect(isEditDisabled({ status: CONTAINER_STATUS.NOT_DEPLOYED } as Container)).toBeFalsy();
+--- candidata: entity-container-status-banner [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Warning banner shown when entity source container is not running
+  | Entity detail views for Models, Applications, Toolsets, and Interceptors SHALL render a top-of-view warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sou
+  > Entity detail views for Models, Applications, Toolsets, and Interceptors SHALL render a top-of-view warning banner whenever the **saved (original)** entity's source is a container (`originalEntity.sou
+  > - **WHEN** a user opens `/[lang]/models/[id]` for a model whose `source.$type === 'container'`, `source.containerId === 'ykchattest'`, and the container with `name === 'ykchattest'` has `status === 's
+  > - **WHEN** a user opens `/[lang]/applications/[id]` for an application whose source container has `status === 'crashed'`
+  > - **WHEN** a user opens `/[lang]/toolsets/[id]` for a toolset whose source container has `status === 'pending'`
+  > - **WHEN** a user opens `/[lang]/interceptors/[id]` for an interceptor whose source container has `status === 'not_deployed'`
+  > #### Scenario: Banner triggers for every non-running status
+  > - **WHEN** the selected container's status is any of `pending`, `not_deployed`, `crashed`, `stopped`, or `stopping`
+  > - **WHEN** the selected container's status is `running`
+--- candidata: change-image-button [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Change image button uses proper button semantics
+  | The change image action SHALL be rendered as a `DialGhostButton` with the image name and version as `label` and the OpenPopup icon as `iconAfter`. The `DialLabelledText` SHALL provide only the label, 
+  > ### Requirement: Change image button disabled during intermediate statuses
+  > The change image button SHALL be disabled via native button `disabled` prop when the container is in a PENDING or STOPPING status. The button SHALL be visually indicated as disabled and SHALL NOT open
+  > - **WHEN** the container status is PENDING
+  > - **WHEN** the container status is STOPPING
+  > #### Scenario: Button enabled when container is RUNNING
+  > - **WHEN** the container status is RUNNING
+  > - **WHEN** the container status is STOPPED
+  > - **WHEN** the container status is FAILED
+--- candidata: inline-source-field-warnings [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Shared WarningIcon component lives under Common
+  | A shared `<WarningIcon />` component SHALL live at `components/Common/WarningIcon/WarningIcon.tsx`. The component SHALL accept a single optional prop `warningText?: string`. When `warningText` is a no
+  > - **WHEN** `<WarningIcon warningText="Container is not running" />` renders
+  > - **AND** hovering the icon reveals the tooltip with the text "Container is not running"
+  > ### Requirement: Container source field shows warning icon when saved container is not running
+  > The Container source field rendered by `components/SourceField/Containers/Containers.tsx` SHALL render `<WarningIcon warningText={...} />` inside the `DialInputPopup`'s `iconBefore` slot whenever the 
+  > - **WHEN** the field renders for an entity whose saved container has `status === 'stopped'`
+  > - **THEN** `DialInputPopup` SHALL receive an `iconBefore` containing a `WarningIcon` whose `warningText` resolves to `t(ContainersI18nKey.ContainerNotRunningTooltip)`
+  > - **WHEN** the saved container's status is any of `pending`, `crashed`, `stopping`, `not_deployed`
+  > - **WHEN** the saved container's status is `running`
+--- candidata: deployments-node-pool-selector [termos]
+  | # deployments-node-pool-selector Specification
+  | ## Purpose
+  | Provide a discoverable UI for choosing the Kubernetes node pool a container targets, backed by the `/node-pools` API contract, supporting an explicit "Any node pool" default and visible handling of da
+  > - **WHEN** the `/node-pools` endpoint returns a non-success status or the request throws
+  > ### Requirement: Container model carries `nodePoolId` and cached `nodePoolName`
+  > The `Container` model SHALL declare `nodePoolId?: string | null` (source of truth, submitted to the backend) and `nodePoolName?: string | null` (read-only display cache captured at selection time). A 
+  > - **THEN** `setContainer` SHALL be called with an object whose `nodePoolId === "gpu-pool"` and `nodePoolName === "GPU pool"`
+  > - **THEN** `setContainer` SHALL be called with `nodePoolId: null` and `nodePoolName: null`
+  > The `ContainerNodePool` field SHALL render exactly one of two states at a time: loading or ready. The action button SHALL only be rendered in the ready state and SHALL be disabled when the container i
+  > - `Deployments/Modals/ContainerNodePoolModal/ContainerNodePoolModal.tsx` — the `DialPopup` shell (`PopupSize.Lg`, fixed-height container) with Cancel / Apply footer buttons; owns the pending selection
+  > - **WHEN** the `/node-pools` endpoint returns a non-success status or the request throws
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O teste trata de um status de edição que a spec não descreve. A mudança possivelmente pertence a outra capacidade.
+
+===== P123 | Kulitorum/Decenza PR #1449 | capacidade do par: frame-transition-reason
+PR: Recipe wizard + tea: drink-type-first creation, tea bags, two-stage URL extraction
+arquivos ligados: src/controllers/maincontroller.cpp
+--- linhas alteradas (60; mostrando até 40)
++    //
++    // Exception (add-recipe-wizard-tea): a PROFILE-LESS recipe — no title,
++    // hot-water block present — is a valid hot-water drink (tea). It skips
++    // every profile-coupled stage below (profile load, dose write, yield/temp
++    // overrides, steam-heater hold) and leaves the loaded espresso profile
++    // untouched: the machine action is the user starting Hot Water.
+-    const QString filename = m_profileManager->findProfileByTitle(profileTitle);
+-    if (filename.isEmpty() && profileJson.isEmpty()) {
++    const bool profileLess = profileTitle.trimmed().isEmpty()
++        && Recipe::hotWaterActive(recipe.value("hotWaterJson").toString());
++    const QString filename = profileLess ? QString()
++                                         : m_profileManager->findProfileByTitle(profileTitle);
++    if (filename.isEmpty() && profileJson.isEmpty() && !profileLess) {
+-    if (!filename.isEmpty()) {
+-        m_profileManager->loadProfile(filename);
+-    } else {
+-        m_profileManager->loadProfileFromJson(profileJson);
+-        m_profileManager->persistCurrentProfile();
++    if (!profileLess) {
++        if (!filename.isEmpty()) {
++            m_profileManager->loadProfile(filename);
++        } else {
++            m_profileManager->loadProfileFromJson(profileJson);
++            m_profileManager->persistCurrentProfile();
++        }
++        // Profile-less recipes skip it: dyeBeanWeight is espresso-shot
++        // metadata, and a hot-water tea's leaf dose is not a shot dose.
+-        if (doseG > 0) {
++        if (doseG > 0 && !profileLess) {
++        // Profile-less recipes have no profile to override or re-upload.
+-        const double yieldG = recipe.value("yieldG").toDouble();
+-        if (yieldG > 0) {
+-            m_settings->brew()->setBrewYieldOverride(yieldG);
+-            hasOverrides = true;
+-        }
+-        const double tempC = recipe.value("tempOverrideC").toDouble();
+-        if (tempC > 0) {
+-            m_settings->brew()->setTemperatureOverride(tempC);
+-            hasOverrides = true;
++        if (!profileLess) {
+--- candidata: shot-analysis-pipeline [tasks+termos]
+  | # shot-analysis-pipeline delta
+  | ## ADDED Requirements
+  | ### Requirement: Grind detector SHALL emit a coverage signal distinguishing verified-clean from not-analyzable
+  > The grind detector SHALL emit a `grindCoverage` signal taking one of three values (`"verified"`, `"notAnalyzable"`, `"skipped"`) so that the system can distinguish a positively-verified clean grind fr
+  > fired `chokedPuck`, `yieldOvershoot`, or a large `delta` BOTH carry
+  > - `"notAnalyzable"` — `GrindCheck.hasData == false && GrindCheck.skipped == false`,
+  > AND the espresso shot's pour window was non-degenerate (`pourEndSec > pourStartSec`),
+  > AND the beverage type is not in the non-espresso skip list.
+  > - `"skipped"` — `GrindCheck.skipped == true` (non-espresso beverages or profiles
+  > (consistent with how the channeling, flow-trend, temp, and grind blocks are
+  > - **GIVEN** an espresso shot with beverage type `"espresso"` and a healthy
+--- candidata: recipe-wizard [PR]
+  | # recipe-wizard Specification (delta)
+  | ## ADDED Requirements
+  | ### Requirement: Drink-type-first step sequence
+  > # recipe-wizard Specification (delta)
+  > The system SHALL provide a recipe wizard as the single surface for recipe creation and editing. Creation SHALL walk: drink type → bean → profile → details → summary. The drink types SHALL be espresso,
+  > - **WHEN** the user taps Espresso, then a bag, then a profile
+  > - **THEN** the wizard is on the details step with no intermediate Next taps
+  > Each drink type SHALL configure the wizard via a static template: the profile beverage-type filter set, the bag kind filter, block pre-seeds (latte/cappuccino pre-enables the steam block with milk; am
+  > - **THEN** the details step includes the milk fields and the saved recipe carries a steam block with hasMilk true
+  > - **WHEN** the user creates an Espresso recipe and, on the summary, adds the hot-water block
+  > - **THEN** the recipe saves with both drink type "espresso" and a hot-water block, and activation behaves per the blocks
+--- candidata: recipe-activation [PR]
+  | # recipe-activation
+  | ## ADDED Requirements
+  | ### Requirement: Single activation path shared by all surfaces
+  > # recipe-activation
+  > ### Requirement: Single activation path shared by all surfaces
+  > Recipe activation SHALL be implemented once in the main controller, reusing the existing shot-load pipeline (`applyLoadedShotMetadata` semantics: profile by title with stored-JSON fallback, bag select
+  > - **WHEN** a recipe is activated from any surface
+  > - **THEN** the profile is loaded, the linked bean's open bag becomes active, equipment package is selected, dose/yield/temperature apply, grind resolves per inherit-or-pin, and steam settings are writ
+  > - **WHEN** the same recipe is activated via QML, MCP, or the web API
+  > - **THEN** the resulting app and machine state are identical
+  > ### Requirement: Optionality ladder is never violated
+--- candidata: visualizer-upload-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  | When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  > When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > There SHALL be exactly one authoritative writeback path. The pre-existing QML `onUploadSuccess` persistence calls in `PostShotReviewPage` and `ShotDetailPage` SHALL no longer perform the DB write (the
+  > #### Scenario: Auto-upload with the post-shot review page disabled still records the id
+  > - **GIVEN** `visualizer/showAfterShot` is `false` (post-shot review page never shown)
+  > - **AND** auto-upload is enabled with valid credentials
+  > - **WHEN** a shot is pulled, saved as local row N, and the upload completes successfully returning Visualizer id `V`
+  > #### Scenario: Post-shot review page dismissed before the upload completes
+--- candidata: recipe-quick-switch [PR]
+  | # recipe-quick-switch Specification (delta)
+  | ## ADDED Requirements
+  | ### Requirement: Recipe pills show a drink-type icon
+  > # recipe-quick-switch Specification (delta)
+  > ### Requirement: Recipe pills show a drink-type icon
+  > Recipe pills in the idle widget and recipe lists SHALL show a small icon for the recipe's drink type (stored value, derived from blocks when absent), rendered as an SVG image (never a Unicode glyph pe
+  > - **WHEN** the idle widget shows an espresso, a latte, and a tea recipe
+  > - **THEN** each pill carries its distinct drink-type icon
+  > # recipe-quick-switch Specification
+  > TBD - created by archiving change add-recipes. Update Purpose after archive.
+  > ### Requirement: Recipes idle widget mirrors the Beans button
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A mudança trata de regras de negócio para criar bebidas. A spec original se concentra na UI e na apresentação dos dados.
+
+===== P130 | RandyChen1985/yunshu-ai-agent-platform PR #1 | capacidade do par: embedchat-upload-attachments
+PR: Pull Request: AI 执行层迁移至 AgentScope 并重构 ChatBI/General/Knowledge 链路
+arquivos ligados: app/api/v1/endpoints/chat.py;app/services/ai/agent_service.py;app/services/ai/executors/data_executor.py;app/services/ai/memory_service.py;frontend/src/components/embed/ChatInput.vue;frontend/src/views/EmbedChat.vue
+--- linhas alteradas (1060; mostrando até 40)
++    permission_options: Optional[Dict[str, Any]] = None
++class ToolPermissionConfirmRequest(BaseModel):
++    confirmed: bool = Field(..., description="是否允许执行该工具调用")
++class ExternalExecutionResultItem(BaseModel):
++    id: str = Field(..., description="tool_call id")
++    name: str = Field(..., description="tool name")
++    output: str = Field(..., description="tool execution output text")
++    state: str = Field(default="success", description="tool result state")
++class ExternalExecutionResumeRequest(BaseModel):
++    results: list[ExternalExecutionResultItem] = Field(
++        ...,
++        description="外部执行工具返回结果列表",
++    )
+-                debug_options=completion_request.debug_options
++                debug_options=completion_request.debug_options,
++                permission_options=completion_request.permission_options,
+-            enable_multi_agent=completion_request.enable_multi_agent
++            enable_multi_agent=completion_request.enable_multi_agent,
++            permission_options=completion_request.permission_options,
++@router.post(
++    "/permissions/{permission_request_id}/confirm",
++    summary="确认或拒绝待执行工具调用",
++    description="确认 AgentScope ASK 工具调用后继续原 Agent 运行，流式返回后续 SSE。",
++)
++async def confirm_tool_permission(
++    permission_request_id: str,
++    confirm_request: ToolPermissionConfirmRequest,
++    user_info: Dict[str, Any] = Depends(require_api_key),
++):
++    async def sse_generator() -> AsyncGenerator[str, None]:
++        async for chunk in agent_service.resume_agentscope_permission_stream(
++            permission_request_id=permission_request_id,
++            confirmed=confirm_request.confirmed,
++            user_info=user_info,
++        ):
++            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
++        yield "data: [DONE]\n\n"
++    return StreamingResponse(sse_generator(), media_type="text/event-stream")
++@router.post(
++    "/external-executions/{external_execution_request_id}/resume",
+--- candidata: agentscope-core-integration [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: AgentScope 作为唯一 AI 运行时
+  | 系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+  > ### Requirement: AgentScope 作为唯一 AI 运行时
+  > 系统完成重构后，AI 执行链路 MUST 以 AgentScope 作为唯一运行时，不得继续依赖 LangChain 执行器、LangChain Message、LangChain Tool 或 `ChatOpenAI`。
+  > - **那么** 不应在运行代码或自动化测试中发现 `langchain`、`ChatOpenAI`、`StructuredTool`、`BaseTool`、`ToolMessage`、`SystemMessage`、`HumanMessage`、`AIMessage` 等 LangChain 依赖
+  > - **当** 用户通过 `/api/v1/chat/completions` 发起通用对话或 ChatBI 请求
+  > - **那么** 请求必须进入 AgentScope runtime 与对应 runner
+  > - **并且** 不得调用旧 LangChain executor 中的 `bind_tools()` 或 `astream()` 路径
+  > - **并且** 不要求新增 `RagAgentRunner` 或 `OpenClawAgentRunner`
+  > 系统 MUST 提供平台中立的消息、工具、事件、错误和 workspace 抽象，业务执行器不得直接依赖 AgentScope 具体对象。
+--- candidata: chatbi-multi-agent-team [PR]
+  | # chatbi-multi-agent-team Specification
+  | ## Purpose
+  | TBD - created by archiving change refactor-to-agentscope. Update Purpose after archive.
+  > # chatbi-multi-agent-team Specification
+  > TBD - created by archiving change refactor-to-agentscope. Update Purpose after archive.
+  > ### Requirement: ChatBI DataAgentRunner 阶段化执行
+  > ChatBI MUST 由 AgentScope native Agent + Toolkit 承接，并由 `DataAgentRunner` 以显式运行状态处理自然语言查数请求。
+  > - **当** 用户发起新的 ChatBI 数据查询
+  > - **那么** `DataAgentRunner` 必须完成问题归一化、结构化业务意图分析、元数据检索、SQL 生成、权限/顺序守卫、SQL 执行、结果审查和最终总结
+  > - **当** 用户发起新的 ChatBI 数据查询
+  > - **那么** `DataAgentRunner` 必须在 schema 检索前生成 `DataQueryIntentFrame`，至少表达业务目标、指标、维度、筛选语义、时间范围和粒度
+--- candidata: embedded-chat [tasks]
+  | # 嵌入式聊天组件 (Embedded Chat Interface)
+  | ## ADDED Requirements
+  | ### Requirement: 沉浸式嵌入聊天页 (Interactive Embedded Chat View)
+  > ### Requirement: 沉浸式嵌入聊天页 (Interactive Embedded Chat View)
+  > 系统 MUST 支持通过 URL 参数和 postMessage 初始化两种方式进行鉴权，以适应不同的嵌入场景。
+  > - **Given** 我访问 `/embed/chat?token=valid_token&agent_id=my-agent`
+  > - **And** 连接到指定的 `agent_id`。
+  > #### Scenario: PostMessage 初始化
+  > - **When** 父窗口发送 `postMessage`，内容为 `{ type: 'INIT_CONFIG', token: '...', agent_id: '...' }`
+  > 系统 MUST 提供机制，使嵌入组件能通过 postMessage 向宿主窗口发送 UI 状态变更请求（如调整大小）。
+  > 嵌入式聊天界面 MUST 支持快捷指令（如 `/clear`, `/help`），且体验需与主调试界面保持一致。指令菜单 MUST 支持通过输入框输入 `/` 触发，并支持键盘或触摸选择。
+--- candidata: system-config [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Configuration Audit Trail (配置审计追踪)
+  | 系统 **MUST** 为所有系统级配置（`system_configs`）的变更保留历史记录。
+  > - **WHEN** 用户或系统更新某个配置项（如 `llm_model_name` 或 `router_system_prompt`）
+  > ### Requirement: Configuration History Query (配置历史查询)
+  > - **WHEN** 管理员请求查询 `router_system_prompt` 的历史
+  > - **WHEN** 管理员在“参数配置”中编辑 `llm_model_name`
+  > - **THEN** `agent_execution_history` 中必须记录 `model_id` (模型标识) 和 `model_config_id` (引用 ID)
+  > - **WHEN** 管理员在“参数配置”中编辑 `llm_model_name`
+  > - **THEN** `agent_execution_history` 中必须记录 `model_id` (模型标识) 和 `model_config_id` (引用 ID)
+  > TBD - created by archiving change centralize-system-config. Update Purpose after archive.
+--- candidata: conversation-memory [tasks]
+  | # 规范：服务端对话记忆 (Conversation Memory)
+  | ## ADDED Requirements
+  | ### Requirement: 服务端历史存储 (Server-Side History Storage)
+  > # 规范：服务端对话记忆 (Conversation Memory)
+  > ### Requirement: 服务端历史存储 (Server-Side History Storage)
+  > 当请求中提供 `conversation_id` 时，系统必须 (MUST) 将对话历史存储在 Redis 中。
+  > #### Scenario: 客户端发送带 conversation_id 的新消息
+  > -   **And** 客户端发送聊天请求，包含 `conversation_id="test-conv-1"`
+  > #### Scenario: AgentDebug 页面初始化
+  > -   **Given** 用户打开 Agent Debug 页面
+  > -   **Then** 页面应自动生成一个新的 UUID 作为 `conversation_id`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Os novos endpoints de permissão e retomada de execução ficam fora do escopo de upload de anexos.
+
+===== P149 | travishathaway/osmprj PR #8 | capacidade do par: color-output
+PR: Add limit to concurrent downloads, implement processing pipeline
+arquivos ligados: src/commands/sync.rs;src/output.rs
+--- linhas alteradas (799; mostrando até 40)
++use tokio::sync::Semaphore;
++/// Return type for an import task: source name plus an optional post-process warning.
++type ImportResult = Result<(String, Option<OsmprjError>), (String, OsmprjError)>;
++/// Issue a HEAD request to determine the file size before downloading.
++/// Returns 0 on failure or if `Content-Length` is absent — those sources
++/// sort to the back of the download queue without causing a sync failure.
++async fn fetch_content_length(client: &reqwest::Client, url: &str) -> u64 {
++    client
++        .head(url)
++        .send()
++        .await
++        .ok()
++        .and_then(|r| r.content_length())
++        .unwrap_or(0)
++}
++/// Sort a list of `(name, url, size)` tuples largest-first by `size`.
++/// Uses a stable sort so equal-sized sources preserve their original order.
++fn sort_sources_by_size(sources: &mut [(String, String, u64)]) {
++    sources.sort_by_key(|b| std::cmp::Reverse(b.2));
++}
+-    while let Some(chunk) = stream
+-        .chunk()
+-        .await
+-        .map_err(|e| OsmprjError::DownloadFailed {
+-            url: url.to_string(),
+-            message: e.to_string(),
+-        })?
+-    {
+-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
++    let stream_result = async {
++        while let Some(chunk) = stream
++            .chunk()
+-            .map_err(OsmprjError::Io)?;
+-        bar.inc(chunk.len() as u64);
++            .map_err(|e| OsmprjError::DownloadFailed {
++                url: url.to_string(),
++                message: e.to_string(),
++            })?
++        {
++            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+--- candidata: sync-command [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Sync accepts optional source filter
+  | `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > ### Requirement: Sync accepts optional source filter
+  > `osmprj sync` SHALL accept zero or more positional `source` arguments. When provided, only those sources SHALL be processed. When omitted, all sources in `osmprj.toml` SHALL be processed. Unknown sour
+  > #### Scenario: Sync all sources
+  > - **THEN** all sources defined in `osmprj.toml` are downloaded and imported
+  > #### Scenario: Sync specific sources
+  > - **WHEN** user runs `osmprj sync albania us-alabama`
+  > - **THEN** only the `albania` and `us-alabama` sources are processed
+  > #### Scenario: Unknown source name
+--- candidata: pipelined-sync [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Import begins immediately when download completes
+  | The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > ### Requirement: Import begins immediately when download completes
+  > The system SHALL start importing a source as soon as its download and MD5 verification complete, without waiting for other downloads to finish. The import SHALL be submitted to the import semaphore im
+  > #### Scenario: Small source imports while large source downloads
+  > - **WHEN** source A (100 MB) finishes downloading while source B (1 GB) is still downloading
+  > - **THEN** source A's import begins immediately, running concurrently with source B's download
+  > #### Scenario: Import semaphore blocks when at capacity
+  > - **WHEN** `max_concurrent_imports = 1` and an import is already running
+  > - **THEN** the next completed download's import waits until the running import finishes before starting
+--- candidata: sync-concurrency-controls [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Concurrent download limit is configurable
+  | The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > ### Requirement: Concurrent download limit is configurable
+  > The system SHALL read `max_concurrent_downloads` from the `[project]` section of `osmprj.toml`. When absent, the effective value SHALL be 3. The value SHALL be a positive integer. Download concurrency
+  > #### Scenario: Default concurrent downloads
+  > - **WHEN** `osmprj.toml` has no `max_concurrent_downloads` field
+  > - **THEN** at most 3 PBF downloads run simultaneously
+  > #### Scenario: Custom concurrent downloads
+  > - **WHEN** `osmprj.toml` sets `max_concurrent_downloads = 2`
+  > - **THEN** at most 2 PBF downloads run simultaneously
+--- candidata: test-http-server [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: PBF fixture cache
+  | The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > The test suite SHALL maintain a local cache of `.osm.pbf` fixtures so that no network requests to
+  > `download.geofabrik.de` are made during test runs after the first setup. The cache location SHALL
+  > On first use the fixture SHALL be downloaded from `download.geofabrik.de` and a `.md5` sidecar
+  > SHALL be computed and stored alongside it.
+  > #### Scenario: Cache populated on first use
+  > - **THEN** the `pbf_fixture_cache` fixture downloads the file from Geofabrik and saves it to that path
+  > - **WHEN** `tests/fixtures/pbf/europe/monaco-latest.osm.pbf` already exists
+  > - **THEN** no download is attempted and the existing file is used
+--- candidata: osm2pgsql-tuner [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Tuner computes cache size from RAM and PBF size
+  | The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > The tuner SHALL accept system RAM (GB) and PBF file size (GB) and compute an appropriate `--cache` value in MB using the formula: `cache_mb = min(slim_cache, cache_max) * 1024`, where `slim_cache = 0.
+  > #### Scenario: Cache capped by available RAM
+  > The tuner SHALL set `--flat-nodes=<data_dir>/<source_name>.nodes` and `--cache=0` when PBF size is ≥ 8.0 GB and `ssd=true`, or when PBF size is ≥ 30.0 GB regardless of storage type.
+  > Every generated osm2pgsql command SHALL include `--slim` and `--create`. `--drop` SHALL never be included. This ensures middle tables are retained for subsequent replication updates.
+  > - **WHEN** tuner builds a command for any source
+  > - **THEN** the command contains `--slim` and `--create` and does not contain `--drop`
+  > ### Requirement: Database and schema flags always present
+  > The generated command SHALL always include `--database=<database_url>` and `--schema=<effective_schema>`.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata de UI; o PR implementa processamento paralelo.
+
+===== P164 | AshkanYarmoradi/go-mink PR #175 | capacidade do par: outbox-publishing
+PR: feat: in-place stream re-encryption + filtered feed reads + bounded retention scan
+arquivos ligados: adapters/postgres/subscription.go
+--- linhas alteradas (67; mostrando até 40)
++	"strconv"
++	"strings"
++// LoadFromPositionFiltered is the filtered variant of LoadFromPosition: it pushes an
++// indexed FeedFilter (event type, stream id, category) into the shared position-scan
++// query, so a narrow read touches only matching rows via an index rather than
++// scanning the whole feed. Because it reuses positionScanQuery, it inherits the same
++// gapless safe watermark — a filtered read keeps the no-skip guarantee. An empty
++// filter produces exactly the LoadFromPosition query.
++func (a *PostgresAdapter) LoadFromPositionFiltered(ctx context.Context, fromPosition uint64, limit int, filter adapters.FeedFilter) ([]adapters.StoredEvent, er
++	if a.closed.Load() {
++		return nil, ErrAdapterClosed
++	}
++	limit = adapters.DefaultLimit(limit, 1000)
++	// Placeholders: $1 is fromPosition; filter predicates start at $2; limit is last.
++	extraWhere, filterArgs, nextIdx := buildFeedFilterWhere(filter, 2)
++	query := positionScanQuery(a.schemaQ, extraWhere, "$"+strconv.Itoa(nextIdx))
++	args := make([]any, 0, len(filterArgs)+2)
++	args = append(args, fromPosition)
++	args = append(args, filterArgs...)
++	args = append(args, limit)
++	rows, err := a.db.QueryContext(ctx, query, args...)
++	if err != nil {
++		return nil, fmt.Errorf("mink/postgres: failed to load filtered events: %w", err)
++	}
++	defer func() { _ = rows.Close() }()
++	return a.scanEvents(rows)
++}
++// buildFeedFilterWhere renders the AND-composed WHERE fragment for a FeedFilter with
++// positional placeholders starting at startIdx. It returns the fragment (a leading
++// " AND ..."; empty when the filter is empty), the ordered args, and the next free
++// placeholder index. Indexed axes only: event_type IN (...), stream_id IN (...), and
++// a category prefix (stream_id LIKE '<category>-%') escaped like SubscribeCategory.
++func buildFeedFilterWhere(filter adapters.FeedFilter, startIdx int) (string, []any, int) {
++	var b strings.Builder
++	args := make([]any, 0, len(filter.EventTypes)+len(filter.StreamIDs)+1)
++	idx := startIdx
++	writeInClause := func(column string, values []string) {
++		if len(values) == 0 {
++			return
++		}
+--- candidata: event-subscriptions [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  | The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > ### Requirement: Position-based delivery never skips an out-of-order-committed event
+  > The PostgreSQL shared load-from-position mechanism SHALL advance its cursor/checkpoint only
+  > across a contiguous, stable prefix of `global_position`, bounded by a safe watermark below
+  > which no in-flight transaction can still commit a lower position — covering `SubscribeAll`,
+  > `SubscribeCategory`, async projections (`loadEventsFromPosition`, which also checkpoints),
+  > and the saga manager's event loop. The watermark SHALL be enforced
+  > at the adapter's load-from-position query (returning nothing above it) and SHALL NOT
+  > gap-detection with a staleness timeout). An event whose transaction is assigned a lower
+--- candidata: cli-tooling [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Code generation does not overwrite existing files without --force
+  | `mink generate` SHALL refuse to overwrite an existing target file unless a `--force`
+  > - **THEN** the command returns an error and leaves the existing file unchanged
+  > - **THEN** `migrate down` returns an error and exits non-zero rather than reporting success
+  > ### Requirement: `mink events` queries the global feed by indexed axes
+  > The `mink` CLI SHALL provide a top-level `events` command that reads the global event feed through the adapter's `FilteredFeedAdapter.LoadFromPositionFiltered`, filtered by the indexed axes the `FeedF
+  > #### Scenario: A type filter reads only matching events across streams
+  > - **WHEN** `mink events --type OrderPlaced` runs against a feed where `OrderPlaced` spans several streams
+  > - **THEN** only `OrderPlaced` events are printed, across all their streams, in ascending `global_position` order, up to the limit
+  > #### Scenario: Multi-valued and multi-axis filters AND/OR-compose
+--- candidata: retention-policies [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Configurable retention policy
+  | The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > The `mink` package SHALL provide a `RetentionPolicy` describing a rule: a matcher (any of category, stream prefix, event type, tenant id, or age via `MaxAge`) and an action (`Shred` crypto-shredding, 
+  > - **WHEN** a policy is defined to shred events older than `MaxAge` for a category
+  > - **THEN** events in that category whose age exceeds `MaxAge` are selected for shredding
+  > - **THEN** each matched event has the action of every policy that matches it applied
+  > A `RetentionManager` SHALL apply the configured policies over the event store on demand via `Apply(ctx)`, SHALL be safe to run on a schedule, and SHALL return a `RetentionReport` (matched, acted-on, s
+  > #### Scenario: Apply enforces matching policies
+  > - **WHEN** `Apply` runs with a shred policy and matching events exist
+  > - **THEN** the matching subjects' keys are revoked and the report counts them
+--- candidata: in-place-stream-re-encryption [PR]
+  | ## ADDED Requirements
+  | ### Requirement: In-place stream re-encryption
+  | `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > ### Requirement: In-place stream re-encryption
+  > `EventStore` SHALL provide `ReEncryptStreamInPlace(ctx context.Context, streamID
+  > string) (reEncrypted int, keyIDs []string, err error)` that brings a stream's
+  > existing events under the current `FieldEncryptionConfig` in place — sealing each
+  > event's configured fields under the current key and rewriting the same row — while
+  > preserving the event's id, type, stream, version, global position, and timestamp
+  > (the payload's at-rest encoding changes, not the event's identity or order). The key
+  > MUST be resolved exactly as the append path would (running the configured
+--- candidata: saga-orchestration [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Saga retry attempts are at least one
+  | `WithSagaRetryAttempts(n)` SHALL clamp the configured attempts to a minimum of 1, so a
+  > saga event is always attempted at least once. A configured value of 0 SHALL NOT cause
+  > the processing loop to skip the event, drop it silently, or advance the position past an
+  > unprocessed event.
+  > #### Scenario: Zero retry attempts still processes the event
+  > - **WHEN** the saga manager is configured with `WithSagaRetryAttempts(0)` and an event arrives
+  > - **THEN** the event is dispatched at least once and the position advances only after a real attempt, not over a silently-dropped event
+  > ### Requirement: Context cancellation during dispatch does not trigger compensation
+  > The saga manager SHALL NOT treat a command-dispatch failure of `context.Canceled` or
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR cria funções para lidar com dados do banco; a spec trata do padrão Outbox.
+
+===== P185 | ChenChenyaqi/learn-anything PR #98 | capacidade do par: site-generator
+PR: refactor: decompose site components, composables, and utils
+arquivos ligados: packages/cli/site/src/composables/useI18n.ts;packages/cli/site/src/composables/useTopicData.ts;packages/cli/site/vite.config.ts
+--- linhas alteradas (380; mostrando até 40)
++import en, { type I18nKey } from './locales/en';
++import zhCN from './locales/zh-CN';
++export type { I18nKey } from './locales/en';
+-export type I18nKey =
+-  | 'dashboard.title'
+-  | 'dashboard.noTopics'
+-  | 'dashboard.startLearning'
+-  | 'dashboard.topicCount'
+-  | 'topic.progress'
+-  | 'topic.domains'
+-  | 'topic.concepts'
+-  | 'topic.mastered'
+-  | 'topic.notFound'
+-  | 'domain.notes'
+-  | 'domain.exercises'
+-  | 'domain.noNotes'
+-  | 'domain.noExercises'
+-  | 'domain.backToMap'
+-  | 'domain.selectFile'
+-  | 'status.mastered'
+-  | 'status.inProgress'
+-  | 'status.needsPractice'
+-  | 'status.unexplored'
+-  | 'sidebar.topics'
+-  | 'sidebar.exercises'
+-  | 'sidebar.quizzes'
+-  | 'sidebar.noNotes'
+-  | 'sidebar.noExercises'
+-  | 'sidebar.orphanTip'
+-  | 'quiz.empty'
+-  | 'quiz.start'
+-  | 'quiz.previous'
+-  | 'quiz.next'
+-  | 'quiz.submit'
+-  | 'quiz.retry'
+-  | 'quiz.complete'
+-  | 'quiz.score'
+-  | 'quiz.correct'
+-  | 'quiz.incorrect'
+-  | 'quiz.referenceAnswer'
+--- candidata: site-theme [tasks+termos]
+  | ## ADDED Requirements
+  | > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  | ### Requirement: Dashboard page shows all topics as cards
+  > > **Note:** This spec describes the actual implementation — a custom Vue 3 + Vite application (not VitePress). The architecture was pivoted from VitePress custom theme to a standalone Vue app with Vue
+  > ### Requirement: Dashboard page shows all topics as cards
+  > The system SHALL render a Dashboard page at the site root (`/`) that scans `/topics/` for all topic directories via `import.meta.glob`, reads each topic's `state.json`, and displays each topic as a ca
+  > #### Scenario: Dashboard with multiple topics
+  > - **WHEN** `/topics/` contains subdirectories `javascript/` and `python/`, each with a valid `state.json`
+  > - **THEN** the Dashboard displays two cards, one for "JavaScript" with its progress and one for "Python" with its progress
+  > #### Scenario: Dashboard with no topics
+  > - **WHEN** `/topics/` exists but contains no topic subdirectories with valid `state.json` files
+--- candidata: quiz-results-summary [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Results display after quiz completion
+  | After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > ### Requirement: Results display after quiz completion
+  > After all questions are submitted, the system SHALL display a results summary screen replacing the question card view.
+  > #### Scenario: Quiz completed
+  > - **WHEN** the user submits the final question
+  > - **AND** the results show a large score indicator (e.g., "7 / 8")
+  > - **AND** the results show a percentage (e.g., "87.5%")
+  > The results summary SHALL show each question's grading outcome with the user's answer, correct answer, and explanation.
+  > #### Scenario: Exact-match question graded correctly
+--- candidata: quiz-card-practice [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz modal container
+  | The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > The system SHALL display quiz questions in a full-screen modal dialog with backdrop blur and body scroll lock.
+  > - **WHEN** a quiz file is launched from the sidebar
+  > - **AND** the first question is displayed as a card
+  > - **THEN** the modal closes
+  > - **AND** any current quiz session state is discarded
+  > #### Scenario: Multiple choice question
+  > - **WHEN** the current question has type `multiple_choice`
+  > - **THEN** all options from `question.options[]` are rendered as radio buttons
+--- candidata: quiz-sidebar-tab [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Quiz tab in topic sidebar
+  | The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > ### Requirement: Quiz tab in topic sidebar
+  > The sidebar on topic pages SHALL include a "Quizzes" tab alongside the existing "Topics" and "Exercises" tabs, visible only when the sidebar context is `topic`.
+  > #### Scenario: User is on a topic page
+  > - **WHEN** the sidebar context is `topic`
+  > - **THEN** three tabs are displayed: Topics, Exercises, Quizzes
+  > - **AND** the Quizzes tab label is "Quizzes" (English locale) or "测验" (Chinese locale)
+  > #### Scenario: User is on the dashboard
+  > - **WHEN** the sidebar context is `dashboard`
+--- candidata: site-cli [tasks]
+  | ## ADDED Requirements
+  | > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  | > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > > **Status: Pending implementation.** The dev project at `packages/cli/site/` is fully functional, but the CLI commands (`serve`, `init --site`, `update --site`) have not yet been created.
+  > > **Note:** The original spec referenced VitePress (`vitepress dev`). The actual implementation uses Vite (`vite dev`). The requirements below have been updated accordingly.
+  > ### Requirement: serve command generates files, installs dependencies, and starts Vite dev server
+  > The system SHALL provide a `learn-anything serve [path]` command that: (1) calls `SiteGenerator.generate()` to write template files to `.learn/`, (2) runs `npm install --prefix .learn` to install vue,
+  > #### Scenario: serve generates files before starting
+  > - **WHEN** user runs `learn-anything serve` in a project directory
+  > - **THEN** the system writes all site template files to `.learn/` before attempting npm install
+  > - **WHEN** user runs `learn-anything serve` and `.learn/package.json` exists
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata da geração de sites; o PR cria suporte a internacionalização.
+
+===== P205 | spencermarx/open-code-review PR #49 | capacidade do par: reviewer-management
+PR: Pre-release hardening: shared-package extraction, canonical verdict contract, process supervision + DB integrity
+arquivos ligados: packages/cli-e2e/src/agent-sessions.test.ts;packages/cli/src/commands/models.ts;packages/cli/src/commands/review.ts;packages/cli/src/commands/session.ts;packages/dashboard/src/server/db.ts;packages/dashboard/src/server/routes/agent-sessions.ts;packages/dashboard/src/server/routes/team.ts;packages/dashboard/src/server/socket/command-runner.ts
+--- linhas alteradas (953; mostrando até 40)
+-  it("rejects a workflow with no captured vendor session id", async () => {
++  it("hands off to the baseline skill path when no vendor session id was captured", async () => {
+-    // Start an agent session BUT do not bind a vendor id
+-    await spawnCli(
++    // Start an agent session BUT do not bind a vendor id, then end it so the
++    // owning turn is dead → the run is a stranded, forward-resumable mid-pipeline
++    // run with no resumable vendor conversation.
++    const start = await spawnCli(
++    const agentId = start.stdout.trim();
++    await spawnCli(["session", "end-instance", agentId, "--exit-code", "0"], {
++      cwd: project.dir,
++    });
+-    expect(result.exitCode).not.toBe(0);
+-    expect(result.stderr).toMatch(/no vendor session id/i);
++    // Intentional behavior change: rather than erroring, `--resume` with no
++    // captured vendor id now performs the honest baseline handoff (exit 0) —
++    // re-invoke the review skill, which forward-resumes with no adapter.
++    expect(result.exitCode).toBe(0);
++    expect(result.stderr).toMatch(/no resumable vendor session|re-invoking the review skill/i);
++      // APPROVE: the 50 findings are all `should_fix` (residual work, zero
++      // blockers), so the merge gate is open — REQUEST CHANGES would require a
++      // blocker under the directional verdict↔blocker-count contract.
+-      verdict: "REQUEST CHANGES",
++      verdict: "APPROVE",
+-    expect(written.verdict).toBe("REQUEST CHANGES");
++    expect(written.verdict).toBe("APPROVE");
+-} from "../lib/models.js";
++} from "@open-code-review/config/models";
+- * Today this is a thin pipe: `--resume <workflow-id>` looks up the vendor
+- * session id captured for that workflow's most recent `agent_sessions` row
+- * and execs the corresponding AI CLI with its native resume flag. The AI
+- * picks up the conversation where it left off; the user can then continue
+- * the OCR review workflow naturally.
++ * `--resume <workflow-id>` is the OPTIONAL convenience path that backs the
++ * dashboard's "Continue here" affordance and the "Pick up in terminal" handoff.
++ * The BASELINE forward-resume path needs no flag at all: a human re-invokes the
++ * review skill, whose Phase 0 reads `ocr state status --json` and continues from
++ * `current_phase`. This command adds the same forward-only guarantees the
++ * watchdog uses:
+- * A full `ocr review` flow (target args, `--fresh`, `--team`, `--reviewer`)
+--- candidata: dashboard [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Session List
+  | The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > ## ADDED Requirements
+  > The dashboard SHALL display a list of all OCR sessions from SQLite, with real-time updates via Socket.IO.
+  > #### Scenario: Sessions exist
+  > - **GIVEN** one or more sessions exist in SQLite
+  > - **WHEN** user opens the dashboard
+  > - **THEN** sessions are listed sorted by `updated_at` descending
+  > - **AND** each session shows: branch name, status badge (active/closed), current phase, workflow type (review/map), start date, elapsed time
+  > #### Scenario: No sessions
+--- candidata: session-management [tasks+PR+termos]
+  | # Session Management
+  | Review session storage, history, and artifact management.
+  | ## ADDED Requirements
+  > Review session storage, history, and artifact management.
+  > ## ADDED Requirements
+  > The system SHALL store all review artifacts in a structured session directory.
+  > - **GIVEN** a new review is initiated
+  > - **WHEN** the session begins
+  > - **THEN** the system SHALL create directory `.ocr/sessions/{YYYY-MM-DD}-{branch}/`
+  > #### Scenario: Session ID format
+  > - **GIVEN** a review runs on branch `feat/auth-flow`
+--- candidata: cli [tasks+PR+termos]
+  | # Capability: CLI
+  | ## ADDED Requirements
+  | ### Requirement: CLI Package Distribution
+  > ## ADDED Requirements
+  > The CLI SHALL be distributed as an npm package (`@open-code-review/cli`) that can be executed via `npx`, `pnpm dlx`, or global installation.
+  > - **WHEN** user runs `npx @open-code-review/cli --help`
+  > - **THEN** the CLI help message is displayed
+  > - **GIVEN** user runs `npm install -g @open-code-review/cli`
+  > - **THEN** the CLI help message is displayed
+  > - **WHEN** user runs `pnpm dlx @open-code-review/cli init`
+  > - **THEN** the init command executes
+--- candidata: sqlite-state [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: SQLite as Single Source of Truth
+  | The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > ## ADDED Requirements
+  > ### Requirement: SQLite as Single Source of Truth
+  > The system SHALL use a SQLite database at `.ocr/data/ocr.db` as the single source of truth for all OCR state, replacing `state.json` as the primary state medium.
+  > #### Scenario: Database location
+  > - **GIVEN** OCR is initialized in a project
+  > - **WHEN** any consumer needs to read or write state
+  > - **AND** the database file SHALL be gitignored
+  > #### Scenario: Three-layer schema
+--- candidata: review-orchestration [tasks+PR]
+  | # Review Orchestration
+  | Core multi-agent code review workflow orchestrated by the Tech Lead.
+  | ## ADDED Requirements
+  > # Review Orchestration
+  > Core multi-agent code review workflow orchestrated by the Tech Lead.
+  > ## ADDED Requirements
+  > The system SHALL provide a Tech Lead agent that orchestrates the complete code review process, coordinating context discovery, requirements analysis, reviewer assignment, discourse facilitation, and f
+  > #### Scenario: Complete review orchestration
+  > - **GIVEN** user requests a code review
+  > - **THEN** Tech Lead SHALL execute the 8-phase workflow:
+  > 1. Context Discovery (including requirements/specs)
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O comportamento de ocr review --resume muda inclusive quando não há uma sessão do fornecedor para retomar. A spec trata da gestão de personas revisoras.
+
+===== P211 | zhukunpenglinyutong/desktop-cc-gui PR #716 | capacidade do par: architecture-cross-platform-compatibility
+PR: fix-0.5.13
+arquivos ligados: src/app-shell.tsx;src/services/tauri.ts
+--- linhas alteradas (20; mostrando até 40)
++    providerProfileId: null as string | null,
++  CuratedSkillOption,
++export async function getCuratedSkills() {
++  return invoke<CuratedSkillOption[]>("get_curated_skills");
++}
++export async function setCuratedSkillEnabled(
++  skillId: string,
++  enabled: boolean,
++) {
++  return invoke<AppSettings>("set_curated_skill_enabled", {
++    skillId,
++    enabled,
++  });
++}
++export async function getEnabledCuratedSkillIds() {
++  return invoke<string[]>("get_enabled_curated_skill_ids");
++}
++export async function getCuratedSkillBodies() {
++  return invoke<Array<[string, string]>>("get_curated_skill_bodies");
++}
+--- candidata: curated-skill-bundles [tasks+PR+termos]
+  | # Spec Delta: curated-skill-bundles
+  | ## ADDED Requirements
+  | ### Requirement: Client MUST Bundle Curated Skills As Versioned Assets
+  > ### Requirement: `AppSettings.enabled_curated_skill_ids` MUST Persist And Not Trigger Codex Restart
+  > The `AppSettings` struct MUST gain a new field `enabled_curated_skill_ids: Vec<String>` (serialized as `enabledCuratedSkillIds`) that defaults to an empty array. The field MUST be persisted to the pro
+  > - **AND** the user toggles a curated skill on via the `set_curated_skill_enabled` IPC
+  > - **AND** the Codex session's next prompt (after the toggle) MUST use the new `enabled_curated_skill_ids` set when constructing its `developer_instructions` config arg.
+  > - **WHEN** the persisted `config.json` does not contain the `enabledCuratedSkillIds` field (e.g. upgraded from a pre-v0.5.14 config)
+  > - **THEN** the `AppSettings.enabled_curated_skill_ids` array MUST contain `"lazy-senior-dev"`
+  > - **THEN** workspace B MUST show `lazy-senior-dev` as enabled in both the `Curated` section and the chip row.
+  > The `Settings` view, when the user navigates to the Skills section, MUST render a new `CuratedSection` component above the existing `SkillsSection` component (the `SkillsSection` MUST continue to rend
+--- candidata: codex-message-recovery-hook [tasks+PR+termos]
+  | # Spec Delta: codex-message-recovery-hook
+  | ## Purpose
+  | 定义 `useCodexMessageRecovery` 子 hook 的契约,作为 Codex stale thread binding recovery / fresh continuation / fork 路径的对外接口,使 `useThreadMessaging` 主 hook 与恢复逻辑解耦,便于后续 Gemini / Claude 接入同款 liveness 抽象。
+  > The hook SHALL ensure `tryFreshDraftReplacement` is invoked at most once per send attempt by guarding with an internal `attempted` flag, even if called from multiple call sites.
+  > - **AND** `deps.providerProfileId` is a non-empty string after trimming
+  > - **THEN** the hook SHALL call `startThreadForMessageSend(workspace, "codex", { providerProfileId })`
+  > - **AND** the debug event payload SHOULD include the normalized `providerProfileId`
+  > - **AND** `deps.providerProfileId` is a non-empty string after trimming
+  > - **THEN** the hook SHALL call `forkThreadForWorkspace(workspace.id, threadId, { activate: true, providerProfileId })`
+  > - **AND** `deps.providerProfileId` is a non-empty string after trimming
+  > - **THEN** the hook SHALL call `startThreadForMessageSend(workspace, "codex", { providerProfileId })`
+--- candidata: codex-provider-scoped-session-launch [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Codex Conversation Creation MUST Select A Provider Profile
+  | The system MUST treat Codex provider selection as a new-conversation launch decision rather than a global active provider switch.
+  > - **AND** the disk provider MAY keep the legacy workspace-only runtime key as the compatibility representation of `providerProfileId="__disk__"`
+  > - **WHEN** the user invokes a provider-sensitive workspace command such as model list, account read, provider diagnostics, or MCP status
+  > - **WHEN** a remote or daemon adapter receives a Codex creation or fork command with a managed `providerProfileId`
+  > - **AND** it MUST NOT drop `providerProfileId`
+  > - **THEN** the frontend MUST preserve `providerProfileId`, `providerProfileSource`, `providerProfileName`, `providerAvailability`, and `sourceLabel` when present
+  > - **WHEN** the user selects a Codex custom model whose selector option carries `providerProfileId`
+  > - **THEN** the frontend MUST pass that `providerProfileId` to the Codex thread creation path
+  > - **WHEN** the user selects a Codex model whose selector option does not carry `providerProfileId`
+--- candidata: workspace-sidebar-visual-harmony [tasks+PR]
+  | # workspace-sidebar-visual-harmony Specification Delta
+  | ## ADDED Requirements
+  | ### Requirement: 项目管理区必须保持单主焦点视觉语义
+  > - **WHEN** hide-exited mode is enabled for a workspace or worktree
+  > - **WHEN** hide-exited mode is enabled for a workspace or worktree
+--- candidata: app-shell-runtime-boundaries [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: AppShell Uses Typed Runtime Boundaries
+  | AppShell SHALL assemble application sections and layout while delegating runtime, task/run, navigation, context, and low-frequency feature activation behavior to typed boundaries.
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff adiciona chamadas para consultar e ativar skills selecionadas.
+
+===== P219 | Kulitorum/Decenza PR #1412 | capacidade do par: shot-rating-capture
+PR: Live steam coaching: milk-weight-gated during-steam cues (banner + voice, off by default)
+arquivos ligados: src/controllers/maincontroller.cpp
+--- linhas alteradas (4; mostrando até 40)
++    // Create LiveSteamCoach — local, real-time during-steam coaching cues. It
++    // subscribes itself to MachineState phase/shot-time changes and reads the
++    // target steam duration from Settings; no AI/network/DB in the hot path.
++    m_liveSteamCoach = new LiveSteamCoach(m_machineState, m_settings, this);
+--- candidata: live-steam-coaching [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Feature is optional and off by default
+  | The live steam coaching feature SHALL be disabled by default. It SHALL be controlled by two independent user settings — a visual banner toggle and a spoken audio toggle — each of which SHALL default t
+  > The live steam coaching feature SHALL be disabled by default. It SHALL be controlled by two independent user settings — a visual banner toggle and a spoken audio toggle — each of which SHALL default t
+  > #### Scenario: Fresh install shows no coaching
+  > - **WHEN** a user with no prior configuration starts a steam operation
+  > - **THEN** no coaching banner is shown and no coaching cue is spoken
+  > - **WHEN** the user enables the visual steam-coaching setting but leaves the audio setting off
+  > - **AND** a steam operation runs
+  > - **AND** no coaching cue is spoken
+  > - **WHEN** the user enables the audio steam-coaching setting but leaves the visual setting off
+--- candidata: shot-analysis-pipeline [tasks+termos]
+  | # shot-analysis-pipeline delta
+  | ## ADDED Requirements
+  | ### Requirement: Grind detector SHALL emit a coverage signal distinguishing verified-clean from not-analyzable
+  > - **AND** either `targetWeightG == 0` OR `finalWeightG / targetWeightG >= 0.85`
+  > "Grind tracked goal during pour"
+  > - **GIVEN** an espresso shot whose phase markers are exclusively flow-mode OR
+  > whose pressurized duration is below 15 s
+  > 2. **Aborted-during-preinfusion gate**: a shot that died during preinfusion-start does NOT flag per-phase `temperatureUnstable`, even with a large measured temp deviation, because `reachedExtractionPh
+  > The tests SHALL use a `MockShotDataModel` (or equivalent test double) that exposes the curve and phase-marker accessor methods `summarize()` reads. The mock SHALL NOT depend on the full `ShotDataModel
+  > - **THEN** the resulting `ShotSummary::summaryLines`, `pourTruncatedDetected`, and `phases` SHALL be byte-equal
+  > - **AND** `convertShotRecord` SHALL read `summaryLines` and `detectorResults` from the cached struct without invoking `ShotAnalysis::analyzeShot` itself
+--- candidata: settings-architecture [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Settings Domain Decomposition
+  | The `Settings` class SHALL be decomposed into domain sub-objects. Each domain sub-object SHALL be a standalone `QObject` subclass owning its own `QSettings` instance and containing only the properties
+  > ### Requirement: Settings Domain Decomposition
+  > The `Settings` class SHALL be decomposed into domain sub-objects. Each domain sub-object SHALL be a standalone `QObject` subclass owning its own `QSettings` instance and containing only the properties
+  > - **THEN** it includes `settings_mqtt.h` and receives a `SettingsMqtt*` — not `Settings*`
+  > #### Scenario: Settings.h shrinks to a thin façade
+  > All QML code that accesses settings SHALL use the domain sub-object accessor (e.g., `Settings.mqtt.mqttEnabled`) rather than the flat `Settings` property (e.g., `Settings.mqttEnabled`). Forwarding `Q_
+  > #### Scenario: QML reads a setting via domain sub-object
+  > - **WHEN** `SettingsHomeAutomationTab.qml` reads the MQTT broker host
+  > - **THEN** it accesses `Settings.mqtt.mqttBrokerHost`
+--- candidata: visualizer-upload-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  | When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  > When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > - **WHEN** a shot is pulled, saved as local row N, and the upload completes successfully returning Visualizer id `V`
+  > - **THEN** local shot row N SHALL have `visualizer_id == V` and a non-empty `visualizer_url`
+  > - **WHEN** the upload completes successfully for local row N returning id `V`
+  > - **WHEN** an upload fails (network error, 4xx/5xx, or no id in the response)
+  > The application SHALL run, at most once per device (guarded by an internal QSettings run-once flag), a reconciliation pass that lists the user's shots from the Visualizer API and links them to local s
+  > - consider only local rows whose `visualizer_id` is empty and whose shot timestamp is within the window;
+--- candidata: refractometer-tds-capture [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Refractometer readings only populate the active shot review page
+  | Refractometer TDS readings from the DiFluid R2 (received via the BLE `tdsChanged` signal) SHALL populate shot review fields only when the PostShotReviewPage is the active page in the QML navigation st
+  > Refractometer TDS readings from the DiFluid R2 (received via the BLE `tdsChanged` signal) SHALL populate shot review fields only when the PostShotReviewPage is the active page in the QML navigation st
+  > - **THEN** the page's local `editDrinkTds` field is set to the received value
+  > - **AND** the page's local `editDrinkEy` field is recomputed from the current `editDoseWeight` and `editDrinkWeight`
+  > - **AND** no Settings field is modified
+  > - **AND** the DiFluid R2 emits a `tdsChanged` signal during this window
+  > #### Scenario: Sub-threshold reading dropped during review
+  > The BLE-level R2 signal handler in `MainController` SHALL NOT write to `Settings.dyeDrinkTds` or `Settings.dyeDrinkEy` from the `tdsChanged` callback. It MAY emit a non-mutating debug log to make devi
+  > Additionally, `Settings.dyeDrinkTds` and `Settings.dyeDrinkEy` SHALL be in-memory (session-scratch) values, not persisted to QSettings or written to settings backup files. A stale TDS reading from a p
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR altera outra capacidade no Main Controller.
+
+===== P224 | HiroyukiFuruno/KatanA PR #282 | capacidade do par: markdown-authoring
+PR: release: v0.22.10
+arquivos ligados: crates/katana-ui/src/shell_ui/shell_ui_shortcuts.rs;crates/katana-ui/src/views/panels/editor/logic.rs
+--- linhas alteradas (85; mostrando até 40)
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::app_state::{AppAction, AppState};
++    use crate::editor_undo::EditorUndoIdentity;
++    use katana_core::{ai::AiProviderRegistry, document::Document, plugin::PluginRegistry};
++    use std::path::Path;
++    use std::sync::Arc;
++    fn app_with_focused_editor(ctx: &egui::Context) -> KatanaApp {
++        let mut state = AppState::new(
++            AiProviderRegistry::new(),
++            PluginRegistry::new(),
++            Default::default(),
++            Arc::new(katana_platform::InMemoryCacheService::default()),
++        );
++        state
++            .document
++            .open_documents
++            .push(Document::new("/tmp/editor.md", ""));
++        state.document.active_doc_idx = Some(0);
++        let editor_id = EditorUndoIdentity::text_edit_id(None, Path::new("/tmp/editor.md"));
++        ctx.memory_mut(|mem| {
++            mem.request_focus(editor_id);
++        });
++        KatanaApp::new(state)
++    }
++    fn shifted_primary_v_input() -> egui::RawInput {
++        let mut modifiers = egui::Modifiers::NONE;
++        modifiers.command = true;
++        modifiers.shift = true;
++        let mut input = egui::RawInput::default();
++        input.events.push(egui::Event::Key {
++            key: egui::Key::V,
++            physical_key: None,
++            pressed: true,
++            repeat: false,
++            modifiers,
++        });
++        input
++    }
+--- candidata: markdown-asset-ingest [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: user は local image file を active Markdown document に添付できなければならない
+  | システムは、user が local image file を選択したとき、その画像を active Markdown document を起点にした `./asset/img` 配下へ保存し、相対 path の Markdown image reference を挿入できなければならない（SHALL）。
+  > ### Requirement: user は local image file を active Markdown document に添付できなければならない
+  > システムは、user が local image file を選択したとき、その画像を active Markdown document を起点にした `./asset/img` 配下へ保存し、相対 path の Markdown image reference を挿入できなければならない（SHALL）。
+  > - **WHEN** user が active Markdown document に対して image file attach を実行する
+  > - **THEN** system は active Markdown document の親ディレクトリ配下に `asset/img` を解決する
+  > - **THEN** system は選択した画像を保存し、相対 path の Markdown image reference を editor に挿入する
+  > ### Requirement: user は clipboard image を active Markdown document に貼り付けできなければならない
+  > - **WHEN** user が image data を含む clipboard から paste image を実行する
+  > - **THEN** system は保存した画像への相対 path を editor に挿入する
+--- candidata: renderer-runtime-interface [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Diagram rendering is owned by the `katana-canvas-forge` library
+  | システムは、Mermaid / Draw.io 描画と HTML / PDF / PNG / JPEG export を、KatanA 内部実装ではなく外部 library `katana-canvas-forge`（kcf）が所有しなければならない（MUST）。KatanA は kcf を git tag pinned dependency として consume する。
+  > #### Scenario: Build cache keys from rendering-relevant inputs
+  > システムは、kcf を KatanA preview / editor / `egui` / KatanA UI state に依存させてはならない（MUST NOT）。
+  > - **THEN** kcf crate dependency graph に `egui`、KatanA preview、KatanA editor、KatanA UI state は含まれない
+  > - **WHEN** preview crate（v0.26.0 で分離）が描画を行う
+  > - **THEN** preview crate は kcf を library として呼ぶ
+  > - **THEN** kcf は preview crate へ依存しない
+  > #### Scenario: Compare first render and repeated render time
+--- candidata: diagram-block-preview [PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: ダイアグラムプレビューは現在のテーマスナップショットを使用する
+  | システムは、アプリ起動時点のスナップショットや dark/light 切り替えだけに依存するのではなく、現在のテーマスナップショットに基づいてダイアグラムプレビューを描画しなければならない（SHALL）。
+  > - **WHEN** a diagram job completes after the document source has already changed or the preview was explicitly invalidated
+  > - **WHEN** the active Markdown document contains a valid ````mermaid` block
+  > - **WHEN** the active Markdown document contains a valid `~~~mermaid` block
+  > - **THEN** KatanA passes the source, Mermaid.js-compatible `RenderConfig`, KatanA `RenderPolicy`, and theme `RenderContext` to the kcf `Renderer`
+  > - **WHEN** the active Markdown document contains a valid `~~~drawio` block
+  > #### Scenario: kcf の crate version を手書きで固定しない
+  > - **THEN** `crate=katana-canvas-forge:0.1.0` のような古い手書き文字列を cache invalidation の根拠にしない
+  > #### Scenario: kdr を crates.io dependency として参照する
+--- candidata: document-viewer-integration [PR]
+  | # Document Viewer Integration Spec
+  | ## Requirements
+  | ### 1. Local Document Viewing
+  > # Document Viewer Integration Spec
+  > ### 1. Local Document Viewing
+  > KatanA SHALL support viewing various document formats locally.
+  > #### Scenario: Office Document Viewing
+  > - **THEN** The app displays a read-only preview of the document.
+  > ### 2. Web Document Integration
+  > KatanA SHALL support viewing web-based documents via URL.
+  > - **NOTE** Private documents may require the user to log in within the WebView.
+--- candidata: mermaid-rendering-compatibility-investigation [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Mermaid rendering inherits the useful `mmdc` output contract without depending on `mmdc`
+  | システムは、Mermaid 図形を描画するとき、実行時に `mmdc` を必須とせず、旧 `mmdc` 経路が担っていた安定した出力条件を KatanA 管理下で採用した単一 Mermaid renderer 内で満たさなければならない（MUST）。
+  > - **THEN** it includes screenshot or image evidence generated from reproducible commands or `scripts/screenshot`
+  > - **THEN** the finding records whether it should be fixed in the renderer, deferred to a later versioned change, or accepted as a documented Mermaid.js difference
+  > - **THEN** it includes screenshot or image evidence generated from reproducible commands or `scripts/screenshot`
+  > - **THEN** the finding records whether it should be fixed in the renderer, deferred to a later versioned change, or accepted as a documented Mermaid.js difference
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A spec trata da autoria de specs; o PR move lógicas para outros domínios.
+
+===== P230 | TencentBlueKing/bk-lite PR #3448 | capacidade do par: otp-challenge-flow
+PR: Feature windyzhao
+arquivos ligados: server/apps/system_mgmt/nats_api.py
+--- linhas alteradas (9; mostrando até 40)
+-def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com"):
++def save_operation_log(username, source_ip, app, action_type, summary="", domain="domain.com",
++                       target_type="", target_id="", detail=None):
++    :param target_type: 操作目标类型（可选）
++    :param target_id: 操作目标ID（可选）
++    :param detail: 操作详情 JSON（可选，默认空字典）
++            target_type=target_type or "",
++            target_id=str(target_id or ""),
++            detail=detail or {},
+--- candidata: admin-expired-password-login [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  | When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+  > When the account whose username is `admin` logs in with correct username and password and the password is expired, the system SHALL require password reset before allowing access to the product instead
+  > - **WHEN** the user whose username is `admin` submits correct username and password on the main web login page
+  > - **WHEN** the user whose username is `admin` submits correct username and password in the session-expired re-login window
+  > - **WHEN** the user whose username is `admin` has entered the forced password reset flow because the password is expired
+  > The system SHALL keep existing expired-password behavior for every account whose username is not `admin`.
+  > - **WHEN** a user whose username is not `admin` submits correct username and password
+  > ### Requirement: Expired `admin` account password enters forced reset flow during username/password login
+--- candidata: cmdb-file-field-fulltext-search [PR]
+  | ## ADDED Requirements
+  | ### Requirement: 附件/图片字段生成文件名词干冗余字段
+  | 写入或更新实例时，对于属于文件型（attachment/image，由 `is_file_attr_type` 判定）的字段，系统 SHALL 生成 `<attr_id>_display` 冗余字段，其值为该字段所有文件「文件名词干」的逗号分隔字符串。文件名词干 = 文件 `name` 去掉目录路径、去掉最后一个扩展名。
+--- candidata: secure-token-cookie [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: bklite_token cookie SHALL be set by the server with secure attributes
+  | The backend SHALL set the `bklite_token` cookie via `Set-Cookie` response header on successful login. The cookie SHALL include the attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and `Max-
+--- candidata: token-blacklist [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: JWT payload SHALL contain jti and exp standard claims
+  | The system SHALL include a `jti` claim (UUID4 hex string) and an `exp` claim (UNIX timestamp) in every JWT token issued at login. The `exp` value SHALL equal the current time plus the configured `logi
+--- candidata: operation-log-conventions [termos]
+  | ## ADDED Requirements
+  | ### Requirement: 操作日志工具函数
+  | 所有用户操作日志 SHALL 使用统一的 `log_operation` 工具函数记录。
+  > - **GIVEN** `log_operation(request, action_type, app, summary)`
+  > - **AND** `action_type` SHALL 为操作类型字符串
+  > - **AND** `summary` SHALL 为中文操作概要描述
+  > ### Requirement: action_type 取值规范
+  > `action_type` 参数 SHALL 使用以下标准值。
+  > - **THEN** `action_type` SHALL 为 `"create"`
+  > - **THEN** `action_type` SHALL 为 `"update"`
+  > - **THEN** `action_type` SHALL 为 `"delete"`
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O registro de operações ganha alvo e detalhes; a spec trata do fluxo de autenticação OTP.
+
+===== P236 | quiqr/quiqr-desktop PR #649 | capacidade do par: storage-path-configuration
+PR: feat: consolidate settings into preferences UI and fix reactivity
+arquivos ligados: packages/backend/src/api/handlers/config-handlers.ts;packages/frontend/src/api.ts
+--- linhas alteradas (21; mostrando até 40)
++    // Rebuild menu if experimental features setting changed
++    if ('experimentalFeatures' in settings) {
++      container.adapters.menu.createMainMenu();
++    }
++/**
++ * Set a specific instance setting by path (convenience wrapper)
++ * Converts dot-notation path to nested object for updateInstanceSettings
++ */
++export function setInstanceSetting(path: string, value: unknown): Promise<boolean> {
++  // Convert dot notation path to nested object
++  // e.g., 'hugo.serveDraftMode' -> { hugo: { serveDraftMode: value } }
++  const pathParts = path.split('.');
++  const settings: Record<string, unknown> = {};
++  let current: Record<string, unknown> = settings;
++  for (let i = 0; i < pathParts.length - 1; i++) {
++    current[pathParts[i]] = {};
++    current = current[pathParts[i]] as Record<string, unknown>;
++  }
++  current[pathParts[pathParts.length - 1]] = value;
++  return updateInstanceSettings(settings as Partial<InstanceSettings>);
++}
+--- candidata: unified-config [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Auth Configuration in Instance Settings
+  | The instance settings schema SHALL include an `auth` configuration block for authentication settings.
+  > The instance settings schema SHALL include an `auth` configuration block for authentication settings.
+  > - **WHEN** reading instance settings
+  > - **WHEN** instance settings are loaded
+  > - **AND** persist it to instance settings
+  > - **THEN** it SHALL override `auth.enabled` in instance settings
+  > This delta spec clarifies that certain configuration settings are now managed through the Preferences UI. No schema or API changes are required - this is purely documentation of how settings are acces
+  > - **AND** NOT modify instance settings
+  > #### Scenario: Reading instance setting
+--- candidata: application-settings-ui [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Semantic separation of Application Settings and User Preferences
+  | The system SHALL establish a clear UI separation between Application Settings (system-wide configuration for the Quiqr application) and Preferences (per-user settings).
+  > The system SHALL establish a clear UI separation between Application Settings (system-wide configuration for the Quiqr application) and Preferences (per-user settings).
+  > - **THEN** system navigates to `/prefs/storage` route and displays the Storage settings page
+  > ### Requirement: Storage settings page rendering
+  > The system SHALL render a Storage settings page at route `/prefs/storage` within the Preferences layout.
+  > - **THEN** system displays the Storage settings view with the current storage path and controls to modify it
+  > The Application Settings menu group SHALL support adding additional settings pages without modifying the sidebar component's core structure.
+  > #### Scenario: Future settings page addition
+  > - **WHEN** a new settings page is added
+--- candidata: frontend-components [tasks+termos]
+  | # Capability: Frontend Components
+  | ## ADDED Requirements
+  | ### Requirement: Functional Component Pattern
+  > - **THEN** "from input field" mode SHALL apply prompts to the current field content
+  > Frontend utility code that is not a React component SHALL use plain module exports rather than class-with-static-methods or class-with-instance-methods patterns.
+  > - **AND** it MUST NOT use class syntax with instance methods
+  > // ❌ Using class with instance methods
+  > #### Scenario: Multiple debounce instances are independent
+  > - **GIVEN** multiple debounce instances are created
+  > - **WHEN** each instance debounces different functions
+  > - **THEN** each instance MUST maintain its own timer state
+--- candidata: ai-integration [tasks]
+  | # ai-integration Delta Specification
+  | ## ADDED Requirements
+  | ### Requirement: Field-Level Prompt Templates
+  > - **AND** the system SHALL return the template configuration with fields and LLM settings
+  > The system SHALL provide field-specific template variables that give access to current field content and parent page context.
+  > - **WHEN** processing the prompt for a page with nested frontmatter structure:
+  > #### Scenario: Page template accesses nested frontmatter
+  > - **WHEN** processing the prompt for a page with nested frontmatter:
+  > - **AND** the system SHALL support `self.content`, `self.file_path` (unchanged)
+  > #### Scenario: Multiple provider instances
+  > - **THEN** the system SHALL initialize two separate OpenAI provider instances
+--- candidata: user-feedback [tasks]
+  | # User Feedback (NEW)
+  | **Status**: active
+  | **Capability**: user-feedback
+  > - Converting file structures
+  > - Changing settings
+  > #### Scenario: Error includes specific reason
+  > The system SHALL display a snackbar message when the interface style user preference is changed.
+  > - **THEN** system SHALL display success snackbar "Interface style changed to quiqr10-dark"
+  > - **THEN** system SHALL display success snackbar "Interface style changed to quiqr10-light"
+  > The system SHALL display snackbar messages when Git instance settings are changed.
+  > - **WHEN** user updates Git binary path instance setting
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O diff altera a atualização de configurações gerais e a reconstrução do menu; a spec trata do caminho de armazenamento.
+
+===== P251 | UseJunior/safe-docx PR #348 | capacidade do par: docx-primitives
+PR: feat(docx-mcp): ODF compare_documents — paragraph-granularity redline for .odt (Slice 1)
+arquivos ligados: packages/docx-mcp/src/tool_catalog.ts
+--- linhas alteradas (12; mostrando até 40)
+-      'Compare two DOCX documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or f
++      'Compare two documents and produce a tracked-changes output document. Provide original_file_path + revised_file_path for standalone comparison, or file_p
+-      original_file_path: z.string().optional().describe('Path to the original DOCX file.'),
+-      revised_file_path: z.string().optional().describe('Path to the revised DOCX file.'),
++      original_file_path: z.string().optional().describe('Path to the original DOCX or .odt file.'),
++      revised_file_path: z.string().optional().describe('Path to the revised DOCX or .odt file.'),
+-      save_to_local_path: z.string().describe('Path to save the tracked-changes DOCX output.'),
+-      author: z.string().optional().describe("Author name for track changes. Default: 'Comparison'."),
+-      engine: z.enum(['auto', 'atomizer']).optional().describe("Comparison engine. Default: 'auto'."),
++      save_to_local_path: z.string().describe('Path to save the tracked-changes output (DOCX or .odt).'),
++      author: z.string().optional().describe("Author name for track changes. Default: 'Comparison' (DOCX) or the configured AI author (ODF)."),
++      engine: z.enum(['auto', 'atomizer']).optional().describe("Comparison engine (DOCX only). Default: 'auto'."),
+--- candidata: mcp-server [tasks+PR+termos]
+  | # MCP Server Specification Delta
+  | ## ADDED Requirements
+  | ### Requirement: Tool Feature Parity
+  > - **WHEN** `read_file` is called for a session
+  > - **THEN** the server SHALL return TOON output using the schema:
+  > - `list_label` derived programmatically (empty for non-list paragraphs)
+  > - `text` as the paragraph’s LLM-visible text (with header stripped when header column is populated)
+  > - **GIVEN** a paragraph whose visible text spans multiple runs with different formatting (e.g., underline on one run, plain on the next)
+  > - **THEN** the output paragraph SHALL preserve the original mixed formatting structure as closely as possible
+  > - **THEN** the inserted paragraph(s) SHALL preserve formatting conventions via role models
+  > The TypeScript Safe-Docx MCP server SHALL build and cache a DocumentView IR per session and support a machine-readable JSON output mode for parity testing and downstream tooling.
+--- candidata: odf-core [PR]
+  | ## ADDED Requirements
+  | ### Requirement: DOCX to ODT conversion
+  | `@usejunior/odf-core` SHALL export `convertDocxToOdt(docx: Buffer, options?)` returning
+  > at runtime) and semantic: it traverses the docx-core document view
+  > The produced package SHALL satisfy ODF packaging rules: `mimetype` first and STORED, a complete
+  > `META-INF/manifest.xml`, `office:version="1.3"` document roots, and a passing
+  > synthesized `text:list-style`s; manually-labelled (legal-numbered) paragraphs SHALL keep their
+  > literal label as plain paragraph text. Tables SHALL become `table:table` with a complete
+  > #### Scenario: [CONV-01] Conversion produces a safe, valid ODT package
+  > - **THEN** the output's first ZIP entry is an uncompressed `mimetype` of `application/vnd.oasis.opendocument.text`, `META-INF/manifest.xml` enumerates every part, and `validateOdfArchiveSafety` return
+  > #### Scenario: [CONV-02] Body paragraph visible text is preserved
+--- candidata: docx-comparison [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Formatting-Fidelity Comparison Check
+  | The system SHALL provide a deterministic, in-engine formatting comparison `compareFormattingFidelity(expectedDocumentXml, actualDocumentXml)` that aligns the two views by paragraph text content and re
+  > ### Requirement: Formatting-Fidelity Comparison Check
+  > The system SHALL provide a deterministic, in-engine formatting comparison `compareFormattingFidelity(expectedDocumentXml, actualDocumentXml)` that aligns the two views by paragraph text content and re
+  > #### Scenario: identical document views score perfect formatting fidelity
+  > - **WHEN** the same document.xml view is compared against itself
+  > - **THEN** the score is exactly 1.0 with zero divergences and zero unaligned paragraphs
+  > - **THEN** a run-scope divergence with property "bold" and kind "removed" is reported, the run dimension counts the affected characters as divergent, and the score is below 1.0
+  > - **WHEN** the actual view carries the same paragraph text split into different `w:r` boundaries with equivalent run properties
+  > #### Scenario: dropped paragraph alignment is reported as a paragraph divergence
+--- candidata: docx-generation [termos]
+  | ## ADDED Requirements
+  | ### Requirement: Custom theme and theme-relative colors
+  | `generateDocx` SHALL accept an optional partial document theme that overrides
+  > `generateDocx` SHALL accept an optional partial document theme that overrides
+  > requiring literal hex colors at each authoring site.
+  > #### Scenario: [SDX-GEN-107] custom theme slots drive theme-relative authoring
+  > - **GIVEN** a document spec with `theme.colors.accent1` set to a custom six-digit hex value
+  > - **WHEN** the document spec is compiled
+  > - **AND** a run authored with `themeColor: "accent1"` SHALL emit `w:color` with `w:themeColor="accent1"`
+  > - **AND** a table cell authored with a theme fill SHALL emit `w:shd` with the matching theme-fill attribute
+  > - **AND** compiling without `spec.theme` SHALL preserve the canonical default theme output
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A descrição e o schema de compare_documents passam a aceitar ODF. A spec trata das primitivas DOCX.
+
+===== P255 | Splode/pomotroid PR #406 | capacidade do par: timer-duration-keyboard-entry
+PR: Feat/remember window position
+arquivos ligados: src-tauri/src/settings/mod.rs
+--- linhas alteradas (22; mostrando até 40)
++    /// Last known window X coordinate (physical pixels). `None` = use OS default.
++    pub window_x: Option<i32>,
++    /// Last known window Y coordinate (physical pixels). `None` = use OS default.
++    pub window_y: Option<i32>,
++    /// Last known window width (physical pixels). `None` = use OS default.
++    pub window_width: Option<u32>,
++    /// Last known window height (physical pixels). `None` = use OS default.
++    pub window_height: Option<u32>,
++            window_x: None,
++            window_y: None,
++            window_width: None,
++            window_height: None,
++        window_x: parse_opt_i32(&map, "window_x"),
++        window_y: parse_opt_i32(&map, "window_y"),
++        window_width: parse_opt_u32(&map, "window_width"),
++        window_height: parse_opt_u32(&map, "window_height"),
++fn parse_opt_i32(map: &HashMap<String, String>, key: &str) -> Option<i32> {
++    map.get(key)?.parse().ok()
++}
++fn parse_opt_u32(map: &HashMap<String, String>, key: &str) -> Option<u32> {
++    map.get(key)?.parse().ok()
++}
+--- candidata: settings [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Language setting
+  | The system SHALL store a `language` setting in the settings database with a default value of `'auto'`. The value SHALL be either `'auto'` or a supported IETF BCP 47 locale tag (`'en'`, `'es'`, `'fr'`,
+  > The system SHALL provide a "Check for Updates Automatically" toggle in Settings → System. Toggling it SHALL persist the new value immediately via `settings_set` and take effect on the next settings wi
+  > ### Requirement: window_x and window_y settings
+  > The system SHALL store optional integer settings `window_x` and `window_y` (physical pixel coordinates) in the settings database. These keys are absent on a fresh install and are only written after th
+  > - **THEN** `window_x` and `window_y` SHALL NOT be present in the settings database
+  > #### Scenario: Keys written after window move
+  > - **WHEN** the user moves the main window
+  > - **THEN** `window_x` and `window_y` SHALL be present in the settings database with the new coordinates
+  > ### Requirement: window_width and window_height settings
+--- candidata: window-position [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Window position is persisted on move and resize
+  | The system SHALL save the main window's position (`window_x`, `window_y`) and size (`window_width`, `window_height`) to the settings database whenever the window is moved or resized. Values are physic
+  > The system SHALL save the main window's position (`window_x`, `window_y`) and size (`window_width`, `window_height`) to the settings database whenever the window is moved or resized. Values are physic
+  > #### Scenario: Position saved after window is moved
+  > - **WHEN** the user drags the main window to a new position
+  > - **THEN** the updated `window_x` and `window_y` values SHALL be written to the settings database
+  > #### Scenario: Size saved after window is resized
+  > - **WHEN** the user resizes the main window
+  > - **THEN** the updated `window_width` and `window_height` values SHALL be written to the settings database
+  > The system SHALL read the saved position and size from the settings database on startup and apply them to the main window before it is shown, placing the window at the same location it occupied when l
+--- candidata: autoupdate [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Update manifest hosted in repository
+  | The system SHALL provide a `latest.json` file at the root of the `main` branch following the Tauri updater manifest format. The manifest SHALL contain the latest release version, per-platform download
+  > - **THEN** the update row SHALL display a non-blocking error message and SHALL NOT throw or crash the settings window
+  > The system SHALL declare the `updater` permission in `src-tauri/capabilities/default.json` so that the settings window can invoke `check_update` and `install_update`.
+  > #### Scenario: Commands callable from settings window
+  > - **WHEN** the settings window invokes `check_update` or `install_update`
+  > - **THEN** the update row SHALL display a non-blocking error message and SHALL NOT throw or crash the settings window
+  > The system SHALL declare the `updater` permission in `src-tauri/capabilities/default.json` so that the settings window can invoke `check_update` and `install_update`.
+  > #### Scenario: Commands callable from settings window
+  > - **WHEN** the settings window invokes `check_update` or `install_update`
+--- candidata: diagnostic-logging [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Log file written to OS-conventional directory
+  | The system SHALL write a persistent log file to the platform's conventional application log directory, resolved via `app.path().app_log_dir()` using the app identifier `com.splode.pomotroid`.
+  > The system SHALL use `@tauri-apps/plugin-log` in both Svelte windows to forward frontend log calls to the same log file. JS logging SHALL apply the same level discipline as Rust: errors on failure pat
+  > - **WHEN** an IPC call from a Svelte window fails
+  > - **WHEN** a Svelte window completes its startup sequence (settings loaded, theme applied)
+  > The system SHALL use `@tauri-apps/plugin-log` in both Svelte windows to forward frontend log calls to the same log file. JS logging SHALL apply the same level discipline as Rust: errors on failure pat
+  > - **WHEN** an IPC call from a Svelte window fails
+  > - **WHEN** a Svelte window completes its startup sequence (settings loaded, theme applied)
+--- candidata: local-shortcuts [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Local shortcuts are active while any app window has focus
+  | The system SHALL handle a configurable set of keyboard shortcuts that fire when the user presses a bound key while any Pomotroid window (main or settings) has OS focus. Local shortcuts SHALL NOT fire 
+  > ### Requirement: Local shortcuts are active while any app window has focus
+  > The system SHALL handle a configurable set of keyboard shortcuts that fire when the user presses a bound key while any Pomotroid window (main or settings) has OS focus. Local shortcuts SHALL NOT fire 
+  > #### Scenario: Shortcut fires in main window
+  > - **WHEN** the main timer window has OS focus
+  > #### Scenario: Shortcut fires in settings window
+  > - **WHEN** the settings window has OS focus
+  > - **Fullscreen toggle**: toggles the main window between fullscreen and its previous size/position
+  > - **WHEN** the main window is in windowed mode
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O PR trata de UI não descrita na spec. Esta observação considera que a funcionalidade especificada não muda.
+
+===== P264 | 0verL1nk/PaperSage PR #20 | capacidade do par: trace-middleware
+PR: feat: agent centric orchestration
+arquivos ligados: agent/capabilities.py;agent/middlewares/__init__.py;agent/runtime_agent.py;tests/unit/test_agent_capabilities.py
+--- linhas alteradas (166; mostrando até 40)
++from .middlewares.progressive_tool_disclosure import _TOOL_VISIBILITY_ATTR
+-_TOOL_VISIBILITY_ATTR = "_progressive_tool_visibility"
+-    progressive_enabled = _env_flag("AGENT_PROGRESSIVE_TOOL_DISCLOSURE", default=True)
+-    if not progressive_enabled:
+-        for tool_obj in runtime_tools:
+-            setattr(tool_obj, _TOOL_VISIBILITY_ATTR, "fixed")
+-        logger.info(
+-            "Agent tools prepared (legacy): discovered=%s enabled=%s names=%s",
+-            len(discovered_tools),
+-            len(runtime_tools),
+-            ",".join(tool_item.name for tool_item in runtime_tools),
+-        )
+-        return runtime_tools
+-    for tool_name, tool_obj in runtime_tool_map.items():
+-        visibility = "fixed" if tool_name in fixed_tool_names else "lazy"
+-        setattr(tool_obj, _TOOL_VISIBILITY_ATTR, visibility)
+-    setattr(search_tools, _TOOL_VISIBILITY_ATTR, "fixed")
+-        "Agent tools prepared (progressive): discovered=%s fixed=%s lazy=%s registered=%s names=%s",
++        "Agent tools prepared: discovered=%s registered=%s names=%s",
+-        len(fixed_tool_names),
+-        len(lazy_tool_names),
+-# Deprecated: Import from agent.middlewares instead
+-from .middlewares import (  # noqa: E402, F401
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
+-from .progressive_tool_disclosure import (
+-    ProgressiveToolDisclosureMiddleware,
+-    build_progressive_tool_middleware,
+-)
++from .builder import build_middleware_list
++from .orchestration import OrchestrationMiddleware
++from .plan import plan_middleware
++from .todolist import todolist_middleware
++from .tool_selector import build_tool_selector_middleware
++    "OrchestrationMiddleware",
+-    "ProgressiveToolDisclosureMiddleware",
+-    "build_progressive_tool_middleware",
++    "todolist_middleware",
++    "plan_middleware",
+--- candidata: todolist-middleware [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: LangChain TodoListMiddleware Integration
+  | The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.
+  > ### Requirement: LangChain TodoListMiddleware Integration
+  > The system SHALL integrate LangChain's TodoListMiddleware to provide todolist management capabilities.
+  > - **WHEN** agent is initialized
+  > - **THEN** TodoListMiddleware is registered in the middleware chain
+  > #### Scenario: Todolist tools injection
+  > - **WHEN** agent processes a request
+  > - **THEN** TodoListMiddleware automatically injects todolist management tools
+  > #### Scenario: Remove write_todo tool
+--- candidata: middleware-architecture [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Middleware 目录结构
+  | 系统 SHALL 在 `agent/middlewares/` 目录下组织所有 middleware 实现，包含 `__init__.py` 和具体的 middleware 模块文件。
+  > 系统 SHALL 在 `agent/middlewares/` 目录下组织所有 middleware 实现，包含 `__init__.py` 和具体的 middleware 模块文件。
+  > - **THEN** 存在 `agent/middlewares/__init__.py`、`agent/middlewares/trace.py`、`agent/middlewares/progressive_tool_disclosure.py` 等模块
+  > ### Requirement: 直接继承 LangChain AgentMiddleware
+  > 系统 SHALL 让所有自定义 middleware 直接继承 `langchain.agents.middleware.AgentMiddleware` 基类，无需额外的项目级基类。
+  > #### Scenario: TraceMiddleware 继承 AgentMiddleware
+  > - **WHEN** 定义 TraceMiddleware 类
+  > - **THEN** 使用 `class TraceMiddleware(AgentMiddleware)` 并重写需要的 hook 方法
+  > - **WHEN** middleware 的 before_model hook 需要提前结束执行
+--- candidata: orchestration-middleware [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Context Analysis
+  | The middleware SHALL analyze the conversation context to determine task complexity.
+  > The middleware SHALL analyze the conversation context to determine task complexity.
+  > - **THEN** the middleware does not inject guidance prompts
+  > - **WHEN** the user prompt contains multiple steps or dependencies
+  > - **THEN** the middleware identifies it as a complex task
+  > The middleware SHALL inject guidance prompts when complex tasks are detected.
+  > - **THEN** the middleware injects a system message suggesting create_plan tool
+  > - **THEN** the middleware injects a system message suggesting activate_team_mode tool
+  > - **THEN** the middleware does NOT call planning_service.build_execution_plan
+--- candidata: plan-management [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Plan Creation by Leader
+  | The system SHALL provide a create_plan tool that stores Leader's self-written plan.
+  > #### Scenario: Leader creates plan with own content
+  > - **THEN** the system stores the plan in agent state without generating content
+  > - **AND** the plan content is exactly what Leader provided
+  > - **THEN** the tool does NOT call LLM to generate plan content
+  > - **THEN** the system returns plan_id, goal, and description as written by Leader
+  > - **THEN** the system updates the plan's description field with Leader's new content
+  > - **AND** the tool does NOT regenerate or modify Leader's content
+  > - **WHEN** agent calls delete_plan and a plan exists
+--- candidata: orchestration-tools [PR]
+  | ## ADDED Requirements
+  | ### Requirement: Plan Mode Activation
+  | The system SHALL provide an activate_plan_mode tool that creates execution plans.
+  > - **WHEN** agent calls activate_plan_mode with a goal description
+  > - **THEN** it returns plan_text, steps list, and status="plan_activated"
+  > The system SHALL provide an activate_team_mode tool that enables multi-agent collaboration.
+  > - **WHEN** agent calls activate_team_mode with a task description
+  > - **THEN** it returns summary, rounds count, and status="team_completed"
+  > Both orchestration tools SHALL be marked as lazy for progressive disclosure.
+  > - **WHEN** agent starts a new conversation
+  > - **THEN** orchestration tools are not visible in the initial tool list
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): A montagem do agente incorpora novas middlewares e ferramentas de orquestração. A spec trata do rastreamento de fases.
+
+===== P270 | LuSrackhall/KeyTone PR #129 | capacidade do par: encrypted-outputs
+PR: Add waveform sound trimmer 在裁剪定义声音步骤中, 引入音频波形可视化组件, 降低用户制作键音专辑的难度
+arquivos ligados: sdk/server/server.go
+--- linhas alteradas (85; mostrando até 40)
++	"mime"
++		// ============================================================================
++		// 体验策略：SDK 预览播放严格限制 <= 5000ms
++		//
++		// 背景：SDK 侧目前缺少“暂停”能力；如果允许长片段预览，将造成体验不可控。
++		// 处理：当 isPreviewMode=true 时，严格拒绝超过 5 秒的预览请求。
++		// 注意：这里既做服务端兜底（权威限制），前端也会做一次提前校验以给更友好的提示。
++		// ============================================================================
++		if arg.IsPreviewMode {
++			const maxPreviewMs = 5000.0
++			if (arg.EndTime - arg.StartTime) > maxPreviewMs {
++				ctx.JSON(http.StatusNotAcceptable, gin.H{
++					"message": "error: SDK预览播放仅支持<=5000ms的片段，请使用前端试听播放条",
++				})
++				return
++			}
++		}
++	// ============================================================================
++	// GET /get_audio_stream - 读取当前编辑专辑下的音频源文件（用于前端波形渲染）
++	//
++	// 说明：
++	// - 前端通过 sha256 + type（扩展名，如 ".wav"）定位 audioFiles/<sha256><type>
++	// - 该接口返回音频文件内容，支持 Range（由 http.ServeContent 处理）
++	// - 仅用于编辑器场景（依赖 audio_pkg_uuid 已加载）
++	// ============================================================================
++	keytonePkgRouters.GET("/get_audio_stream", func(ctx *gin.Context) {
++		type Arg struct {
++			Sha256 string `form:"sha256"`
++			Type   string `form:"type"`
++		}
++		var arg Arg
++		if err := ctx.ShouldBindQuery(&arg); err != nil || arg.Sha256 == "" || arg.Type == "" {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{
++				"message": "error: 参数接收失败",
++			})
++			return
++		}
++		// 基础校验：防止路径穿越/非法扩展名
++		if len(arg.Sha256) != 64 {
++			ctx.JSON(http.StatusNotAcceptable, gin.H{"message": "error: sha256 格式不正确"})
+--- candidata: signature-management [tasks+termos]
+  | # 签名管理功能规格增量
+  | ## ADDED Requirements
+  | ### Requirement: 签名授权申请
+  > Normative: The signature picker dialog SHALL additionally provide an "Authorization Request" button when the album requires authorization; clicking this button SHALL open the AuthRequestDialog for the
+  > Normative: The system SHALL copy signature card images from the signature storage directory to the album's audioFiles directory, generating unique filenames using SHA1(qualificationCode + originalFile
+  > - **THEN** 图片文件被复制到`{albumPath}/audioFiles/`，新文件名为哈希值+扩展名，cardImagePath更新为相对路径`audioFiles/{newFilename}`
+  > Normative: The client SHALL call POST /signature/delete with JSON { id }; on success the backend MUST respond 200 with { success: true }, and on failure MUST return an appropriate 4xx/5xx with an erro
+  > Normative: The client SHALL request export via POST /signature/export with the encryptedId; the backend MUST return a .ktsign binary stream whose payload is the KeyB-encrypted JSON export (cardImage e
+  > - 后端根据存储数据构建导出内容（内部 JSON），并使用密钥B进行对称加密，最终返回经 AES-GCM 加密后以十六进制编码的字节流（Content-Type: application/octet-stream）
+  > Normative: The system SHALL broadcast full config via `/stream` after any signature change; the frontend MUST update local state from the `signature` field without requiring manual refresh.
+  > - **自动通过现有的 `/stream` 端点推送全量配置数据**（现有机制，无需新增代码）
+--- candidata: album-config-encryption [tasks+termos]
+  | # 规格增量：专辑配置加密
+  | ## 新增需求
+  | ### 需求：专辑配置加密触发
+  > - **给定** 专辑 UUID 存在于配置中的 `audio_pkg_uuid` 字段或目录名
+  > - **则** 配置以旧密钥（originalAlbumId）解密、更新 `audio_pkg_uuid` 为新 ID，并使用新 ID 重新加密写回 `core`，而后指示 JSON 随之刷新
+  > Normative: The `/keytone_pkg/apply_signature_config` endpoint SHALL accept albumPath, signatureId, requireAuthorization, contactEmail, contactAdditional, updateSignatureContent, and authorizationUUID 
+  > - **THEN** 返回200状态码和`{ message: "ok", qualificationCode: "<sha256>" }`响应体
+  > - **THEN** 返回400错误和`{ message: "error: 需要授权时必须提供联系邮箱" }`
+  > - **THEN** 返回404错误和`{ message: "error: 签名不存在或已被删除" }`
+  > - **THEN** 返回错误和`{ message: "error: 该签名未获得原始作者授权，无法应用到此专辑" }`
+  > Normative: The signature application process SHALL handle missing image files gracefully by skipping the copy and setting cardImagePath to empty string, log errors for debugging, and ensure partial fa
+--- candidata: export-flow [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: 导出状态机编排
+  | Normative: The composable `useExportSignatureFlow` SHALL 根据专辑状态按顺序驱动签名确认、授权策略、授权门控及签名选择；无论用户是否选择“需要签名”，流程都 MUST 在完成授权策略判断后才进入 `done`，取消任何步骤 MUST 终止本次导出并重置状态。
+  > Normative: The album selector component SHALL display direct export author signature information for albums that have signatures; the selected state display MUST be positioned on the top-right border 
+  > Normative: The AuthRequestDialog component SHALL automatically load signature data with authorization status when opened; the component MUST filter and display only unauthorized signatures to allow us
+  > - **WHEN** AuthRequestDialog 打开（visible=true）
+  > Normative: The system SHALL provide an AuthRequestDialog component that guides users through a 3-step wizard to generate authorization request files; the dialog MUST display only unauthorized signatur
+  > - **WHEN** AuthRequestDialog 打开
+  > - **WHEN** 状态机收到 authRequest 事件
+  > - **WHEN** AuthRequestDialog 发出 done 事件
+  > - **WHEN** AuthRequestDialog 发出 cancel 事件
+--- candidata: keytone-album-editor [PR]
+  | # keytone-album-editor Spec Delta (add-album-sound-selector-search)
+  | ## ADDED Requirements
+  | ### Requirement: 键音专辑关键选择器支持输入搜索
+  > Normative: 系统 SHALL 提供可被前端访问的音频流数据源，用于从当前专辑的音频源文件生成波形；该数据源应当能够通过源文件引用信息定位（例如 sha256 + type）。
+  > - **GIVEN** 前端通过 `messageAudioPackage` 事件接收来自后端的键音包配置数据
+  > Normative: `initData()`、`watch(audioFiles)` 与 SSE 更新 三条路径 SHALL 复用 `keytoneAlbumMappers` 中的纯函数，以确保映射行为一致、避免重复代码与行为漂移。
+  > Normative: 联动声效步骤（Step4）的 UI 模板 SHALL 从父组件中拆出到 `steps/StepLinkageEffects.vue`，并通过 inject 使用父组件 provide 的 Context，以降低父组件模板复杂度且保持行为不变。
+  > Normative: 对于同一 `sha256` 的音频源文件，系统在新增别名时 SHALL 生成唯一 UUID 作为 `name_id`；删除旧别名后，后续新增 SHALL NOT 复用历史 `name_id`。
+  > - **GIVEN** 用户曾导入某音频文件（`sha256=A`）并产生别名 `name_id=U1`
+  > - **WHEN** 用户再次导入同一音频文件（同 `sha256=A`）
+  > - **GIVEN** 用户连续多次导入同一 `sha256` 文件
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): O servidor limita prévias a 5 segundos e cria GET /get_audio_stream. A spec trata de saídas criptografadas.
+
+===== P283 | HazelnutParadise/insyra PR #149 | capacidade do par: env-management
+PR: Enhance/stats
+arquivos ligados: cli/commands/hypothesis.go;cli/commands/pca.go;cli/commands/regression.go;cli/commands/stats_adv.go
+--- linhas alteradas (138; mostrando até 40)
+-		result := stats.SingleSampleTTest(dl, mu)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.SingleSampleTTest(dl, mu)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.TwoSampleTTest(a, b, equalVariance)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.TwoSampleTTest(a, b, equalVariance)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.PairedTTest(a, b)
+-		if result == nil {
+-			return fmt.Errorf("ttest failed")
++		result, err := stats.PairedTTest(a, b)
++		if err != nil {
++			return fmt.Errorf("ttest failed: %w", err)
+-		result := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.SingleSampleZTest(dl, mu, sigma, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
+-		if result == nil {
+-			return fmt.Errorf("ztest failed")
++		result, err := stats.TwoSampleZTest(a, b, s1, s2, alternative, 0.95)
++		if err != nil {
++			return fmt.Errorf("ztest failed: %w", err)
+-		result := stats.OneWayANOVA(groups...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.OneWayANOVA(groups...)
++		if err != nil {
++			return fmt.Errorf("anova failed: %w", err)
+-		result := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+-		if result == nil {
+-			return fmt.Errorf("anova failed")
++		result, err := stats.TwoWayANOVA(aLevels, bLevels, cells...)
+--- candidata: dsl-commands [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Load data from file
+  | 系統 SHALL 提供 `load` 命令從檔案載入資料為 DataTable。
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`skewness`、`kurtosis`、`cov`。
+  > #### Scenario: Correlation
+  > - **THEN** 系統呼叫 `stats.Correlation()` 並顯示結果
+  > #### Scenario: Linear regression
+  > - **WHEN** 使用者執行 `regression linear y x1 x2`
+  > - **THEN** 系統呼叫 `stats.LinearRegression()` 並顯示迴歸結果
+  > - **THEN** 系統呼叫 `stats.PCA()` 取前 3 個主成份
+  > 系統 SHALL 提供進階統計命令：`corr`、`corrmatrix`、`regression`、`ttest`、`ztest`、`anova`、`ftest`、`chisq`、`pca`、`kmeans`、`hclust`、`cutree`、`dbscan`、`silhouette`、`skewness`、`kurtosis`、`cov`。
+--- candidata: cli-entry [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: CLI entry point with cobra
+  | 系統 SHALL 提供 `cmd/insyra/main.go` 作為 CLI 程式入口，使用 cobra 框架建立 root command。
+--- candidata: repl-engine [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: REPL interactive loop
+  | 系統 SHALL 提供互動式 REPL 迴圈，使用 readline 行編輯庫，支援行編輯、歷史瀏覽和信號處理。
+--- candidata: script-runner [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Script file execution
+  | 系統 SHALL 提供 `run` 命令執行 `.isr` 腳本檔。
+--- OBSERVAÇÃO DO AVALIADOR HUMANO (rótulo: outra_capacidade): Comandos estatísticos passam a propagar erros retornados pelos testes. A spec trata de gestão de ambientes.

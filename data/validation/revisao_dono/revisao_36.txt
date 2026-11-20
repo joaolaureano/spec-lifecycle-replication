@@ -1,0 +1,486 @@
+===== P217 | kniwase/WebComPy PR #186 | capacidade do par: render-context
+PR: feat: add ClientOnly element for browser-only rendering
+arquivos ligados: scripts/run-e2e-tests.sh
+--- linhas alteradas (2; mostrando até 40)
+-  ["components"]="tests/e2e/test_component.py tests/e2e/test_lifecycle.py tests/e2e/test_scoped_style.py"
++  ["components"]="tests/e2e/test_client_only.py tests/e2e/test_component.py tests/e2e/test_lifecycle.py tests/e2e/test_scoped_style.py"
+--- candidata: app [tasks+termos]
+  | ## MODIFIED Requirements
+  | ### Requirement: The application entry point shall connect a root component to the DOM
+  | `WebComPyApp` SHALL accept a root component, optional router, and optional `AppConfig`, and create an application root that renders the component. The `run(selector)` method SHALL be the browser entry
+  > When components set the document title or meta tags, those changes SHALL be reflected in the browser's document head. When a component is destroyed, its head entries SHALL be removed, and the most rec
+  > All registered components' scoped CSS SHALL be collected and injected into the document as a single `<style>` block during rendering. Each app SHALL have its own `ComponentStore` in its DI scope, ensu
+  > #### Scenario: Rendering multiple components with scoped styles
+  > - **WHEN** components `A` and `B` each define scoped CSS
+  > - **WHEN** two `WebComPyApp` instances are created with different root components and both call `app.run()`
+  > - **AND** components in one app SHALL NOT see DI values from the other
+  > All registered components' scoped CSS SHALL be collected and injected into the document as per-component `<style>` elements identified by `data-webcompy-cid` attributes. Each app SHALL have its own `C
+  > #### Scenario: Rendering multiple components with scoped styles
+--- candidata: app-styles [tasks+termos]
+  | # App-Level Styles
+  | ## Purpose
+  | WebComPy applications may need to inject global CSS rules whose content depends on runtime state (signals, computed values, or other reactive primitives). The existing per-component `scoped_style` and
+  > WebComPy applications may need to inject global CSS rules whose content depends on runtime state (signals, computed values, or other reactive primitives). The existing per-component `scoped_style` and
+  > The framework SHALL wrap the content of each `<style data-webcompy-dynamic>` element in `@layer webcompy-dynamic { ... }` so that dynamic styles have higher cascade priority than `tokens`, `components
+--- candidata: async-rendering [tasks]
+  | # Async Rendering Pipeline
+  | ## Purpose
+  | The rendering pipeline supports async component definitions, async lifecycle hooks, and async child rendering. Sibling children are still rendered sequentially to preserve DOM ordering and short-circu
+  > `SUSPENSE_RESOLVING_KEY: InjectKey[bool]` is provided with value `True` by `SuspenseElement._render()` (scoped to the Suspense subtree) and absent or `False` in all other contexts. When `SUSPENSE_RESO
+--- candidata: cli [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: E2E tests shall verify async on_after_rendering works during router navigation
+  | The e2e test suite SHALL include test cases that verify components with async operations in `on_after_rendering` work correctly when navigated to via RouterLink (reactive path) and direct URL (hydrati
+  > The e2e test suite SHALL include test cases that verify components with async operations in `on_after_rendering` work correctly when navigated to via RouterLink (reactive path) and direct URL (hydrati
+--- candidata: components [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Component after-rendering lifecycle hook shall be deferred when triggered by reactive navigation
+  | When a component's `on_after_rendering` hook is triggered as a side effect of a reactive change (such as a route change via `SwitchElement._refresh()`), the hook SHALL NOT execute synchronously within
+  > Components SHALL provide hooks for before rendering, after rendering, and before destruction. These hooks allow components to perform side effects like fetching data, setting up subscriptions, or clea
+  > Components SHALL provide hooks for before rendering, after rendering, and before destruction. These hooks allow components to perform side effects like fetching data, setting up subscriptions, or clea
+  > `ComponentAbstract`, `@component_class`, `@component_template`, `TypedComponentBase`, `NonPropsComponentBase`, and `ClassStyleComponentContenxt` have been removed. All components SHALL be defined usin
+  > - **AND** `ThemeKey` SHALL be available to descendant components via `inject(ThemeKey)`
+  > - **AND** descendant components' scopes SHALL also be disposed (recursive)
+  > - **AND** `ThemeKey` SHALL be available to descendant components via `inject(ThemeKey)`
+  > - **AND** descendant components' scopes SHALL also be disposed (recursive)
+  > The framework SHALL maintain a per-app registry of component generators by name. If two components are registered with the same name within the same app, an error SHALL be raised. Each `WebComPyApp` S
+
+===== P218 | fselich/dossier PR #18 | capacidade do par: specs-subnav
+PR: Refactor
+arquivos ligados: internal/openspec/loader.go;internal/ui/model.go
+--- linhas alteradas (439; mostrando até 40)
++type Loader struct {
++	fs fileSystem
++}
++func NewLoader(fs fileSystem) *Loader {
++	return &Loader{fs: fs}
++}
++var defaultLoader = NewLoader(OSFS{})
+-func LoadFrom(root string) (*Project, error) {
++func (l *Loader) LoadFrom(root string) (*Project, error) {
+-	if _, err := os.Stat(openspecDir); os.IsNotExist(err) {
++	if _, err := l.fs.Stat(openspecDir); os.IsNotExist(err) {
+-	entries, err := os.ReadDir(changesDir)
++	entries, err := l.fs.ReadDir(changesDir)
+-		cp := filepath.Join(changesDir, e.Name())
+-		ch := Change{Name: e.Name(), Path: cp}
+-		if raw, err := os.ReadFile(filepath.Join(cp, ".openspec.yaml")); err == nil {
+-			var m openspecMeta
+-			_ = yaml.Unmarshal(raw, &m)
+-			ch.Created = m.Created
+-		}
+-		ch.Proposal = loadFile(filepath.Join(cp, "proposal.md"))
+-		ch.Design = loadFile(filepath.Join(cp, "design.md"))
+-		ch.Tasks = loadFile(filepath.Join(cp, "tasks.md"))
+-		ch.Specs, ch.SpecFiles = loadSpecs(filepath.Join(cp, "specs"))
++		ch := l.loadChangeFromDir(filepath.Join(changesDir, e.Name()), e.Name(), "")
+-func LoadConfigFrom(root string) (ProjectConfig, error) {
+-	data, err := os.ReadFile(filepath.Join(root, "openspec", "config.yaml"))
++func (l *Loader) LoadConfigFrom(root string) (ProjectConfig, error) {
++	data, err := l.fs.ReadFile(filepath.Join(root, "openspec", "config.yaml"))
+-		return ProjectConfig{}, nil
++		return ProjectConfig{}, err
+-func LoadProjectSpecsFrom(root string) ([]ProjectSpec, error) {
++func (l *Loader) LoadProjectSpecsFrom(root string) ([]ProjectSpec, error) {
+-	entries, err := os.ReadDir(specsDir)
++	entries, err := l.fs.ReadDir(specsDir)
+-	var specs []ProjectSpec
++	specs := make([]ProjectSpec, 0, len(entries))
+-		if data, err := os.ReadFile(filepath.Join(specsDir, e.Name(), "spec.md")); err == nil {
++		if data, err := l.fs.ReadFile(filepath.Join(specsDir, e.Name(), "spec.md")); err == nil {
+-func ListChangeNamesFrom(root string) ([]string, error) {
+--- candidata: openspec-loader [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Re-read a change's artifacts from disk
+  | The loader SHALL expose a function that, given an already-loaded `Change`, re-reads the content of its artifacts (`proposal.md`, `design.md`, `tasks.md`, `specs/*/spec.md`) from disk and returns a new
+  > ## ADDED Requirements
+  > ### Requirement: Re-read a change's artifacts from disk
+  > The loader SHALL expose a function that, given an already-loaded `Change`, re-reads the content of its artifacts (`proposal.md`, `design.md`, `tasks.md`, `specs/*/spec.md`) from disk and returns a new
+  > #### Scenario: tasks.md content updated on disk
+  > - **WHEN** `tasks.md` has been modified externally since the last load
+  > - **THEN** the function returns a `Change` with `Tasks.Content` equal to the new content of the file
+  > #### Scenario: File deleted between reloads
+  > - **WHEN** `design.md` existed in the previous load but has been deleted
+--- candidata: change-index [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Full-screen index view
+  | The TUI SHALL implement a `ModeIndex` mode that occupies the full screen with the same TUI chrome (borders, header, helpbar). The index SHALL display two sections: "Active" with the active changes and
+  > ## ADDED Requirements
+  > ### Requirement: Full-screen index view
+  > The TUI SHALL implement a `ModeIndex` mode that occupies the full screen with the same TUI chrome (borders, header, helpbar). The index SHALL display two sections: "Active" with the active changes and
+  > #### Scenario: Index with active and archived changes
+  > - **WHEN** the mode is `ModeIndex` and both active and archived changes exist
+  > - **THEN** the screen shows an "Active" section with the active changes followed by an "Archived" section with the archived changes, within the TUI chrome
+  > #### Scenario: Index with no active changes
+  > - **WHEN** the mode is `ModeIndex` and there are no active changes
+--- candidata: filesystem-interface [tasks+PR+termos]
+  | # filesystem-interface Specification
+  | ## Purpose
+  | A `fileSystem` interface in `internal/ui/` decouples filesystem access for testability. The `openspec` loader converts to a struct with an injected filesystem dependency, while preserving backward-com
+  > # filesystem-interface Specification
+  > A `fileSystem` interface in `internal/ui/` decouples filesystem access for testability. The `openspec` loader converts to a struct with an injected filesystem dependency, while preserving backward-com
+  > ## ADDED Requirements
+  > ### Requirement: FileSystem interface defined in consumer package
+  > The UI package SHALL define a `fileSystem` interface with methods `ReadFile`, `WriteFile`, `ReadDir`, and `Stat`, matching the signatures of `os.ReadFile`, `os.WriteFile`, `os.ReadDir`, and `os.Stat` 
+  > - **THEN** the struct satisfies the `fileSystem` interface
+  > #### Scenario: In-memory filesystem satisfies interface
+  > - **WHEN** a test provides a fake filesystem with in-memory data
+--- candidata: tui-viewer [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: TUI layout
+  | The TUI SHALL divide the screen into three fixed zones: header (1 line), tab bar (1 line) and content area (the rest). The header SHALL show `<project> · <change-name> [N/M]` where N is the current ch
+  > ## MODIFIED Requirements
+  > ### Requirement: TUI layout
+  > The TUI SHALL divide the screen into three fixed zones: header (1 line), tab bar (1 line) and content area (the rest). The header SHALL show `<project> · <change-name> [N/M]` where N is the current ch
+  > #### Scenario: Single active change
+  > - **WHEN** only one active change exists
+  > - **THEN** the header shows `my-project · feat-a [1/1]`
+  > #### Scenario: Multiple active changes
+  > - **WHEN** three active changes exist and the second one is selected
+--- candidata: requirement-focus-view [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Focused single-requirement rendering
+  | When `ModeViewingSpec` is activated from an `indexKindRequirement` item, the TUI SHALL render only that requirement's block (from `### Requirement: <name>` to the next `### Requirement:` or end of fil
+  > ## ADDED Requirements
+  > ### Requirement: Focused single-requirement rendering
+  > When `ModeViewingSpec` is activated from an `indexKindRequirement` item, the TUI SHALL render only that requirement's block (from `### Requirement: <name>` to the next `### Requirement:` or end of fil
+  > - **WHEN** the index cursor is on a requirement item and the user presses `Enter`
+  > - **THEN** the viewport shows only the content of that requirement, without the rest of the spec
+  > #### Scenario: Requirement not found shows error message
+  > - **WHEN** the requirement name does not exist in the spec content
+  > - **THEN** the viewport shows `(spec not available)`
+
+===== P219 | Kulitorum/Decenza PR #1412 | capacidade do par: shot-rating-capture
+PR: Live steam coaching: milk-weight-gated during-steam cues (banner + voice, off by default)
+arquivos ligados: src/controllers/maincontroller.cpp
+--- linhas alteradas (4; mostrando até 40)
++    // Create LiveSteamCoach — local, real-time during-steam coaching cues. It
++    // subscribes itself to MachineState phase/shot-time changes and reads the
++    // target steam duration from Settings; no AI/network/DB in the hot path.
++    m_liveSteamCoach = new LiveSteamCoach(m_machineState, m_settings, this);
+--- candidata: live-steam-coaching [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Feature is optional and off by default
+  | The live steam coaching feature SHALL be disabled by default. It SHALL be controlled by two independent user settings — a visual banner toggle and a spoken audio toggle — each of which SHALL default t
+  > The live steam coaching feature SHALL be disabled by default. It SHALL be controlled by two independent user settings — a visual banner toggle and a spoken audio toggle — each of which SHALL default t
+  > #### Scenario: Fresh install shows no coaching
+  > - **WHEN** a user with no prior configuration starts a steam operation
+  > - **THEN** no coaching banner is shown and no coaching cue is spoken
+  > - **WHEN** the user enables the visual steam-coaching setting but leaves the audio setting off
+  > - **AND** a steam operation runs
+  > - **AND** no coaching cue is spoken
+  > - **WHEN** the user enables the audio steam-coaching setting but leaves the visual setting off
+--- candidata: shot-analysis-pipeline [tasks+termos]
+  | # shot-analysis-pipeline delta
+  | ## ADDED Requirements
+  | ### Requirement: Grind detector SHALL emit a coverage signal distinguishing verified-clean from not-analyzable
+  > - **AND** either `targetWeightG == 0` OR `finalWeightG / targetWeightG >= 0.85`
+  > "Grind tracked goal during pour"
+  > - **GIVEN** an espresso shot whose phase markers are exclusively flow-mode OR
+  > whose pressurized duration is below 15 s
+  > 2. **Aborted-during-preinfusion gate**: a shot that died during preinfusion-start does NOT flag per-phase `temperatureUnstable`, even with a large measured temp deviation, because `reachedExtractionPh
+  > The tests SHALL use a `MockShotDataModel` (or equivalent test double) that exposes the curve and phase-marker accessor methods `summarize()` reads. The mock SHALL NOT depend on the full `ShotDataModel
+  > - **THEN** the resulting `ShotSummary::summaryLines`, `pourTruncatedDetected`, and `phases` SHALL be byte-equal
+  > - **AND** `convertShotRecord` SHALL read `summaryLines` and `detectorResults` from the cached struct without invoking `ShotAnalysis::analyzeShot` itself
+--- candidata: settings-architecture [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Settings Domain Decomposition
+  | The `Settings` class SHALL be decomposed into domain sub-objects. Each domain sub-object SHALL be a standalone `QObject` subclass owning its own `QSettings` instance and containing only the properties
+  > ### Requirement: Settings Domain Decomposition
+  > The `Settings` class SHALL be decomposed into domain sub-objects. Each domain sub-object SHALL be a standalone `QObject` subclass owning its own `QSettings` instance and containing only the properties
+  > - **THEN** it includes `settings_mqtt.h` and receives a `SettingsMqtt*` — not `Settings*`
+  > #### Scenario: Settings.h shrinks to a thin façade
+  > All QML code that accesses settings SHALL use the domain sub-object accessor (e.g., `Settings.mqtt.mqttEnabled`) rather than the flat `Settings` property (e.g., `Settings.mqttEnabled`). Forwarding `Q_
+  > #### Scenario: QML reads a setting via domain sub-object
+  > - **WHEN** `SettingsHomeAutomationTab.qml` reads the MQTT broker host
+  > - **THEN** it accesses `Settings.mqtt.mqttBrokerHost`
+--- candidata: visualizer-upload-persistence [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  | When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > ### Requirement: A successful Visualizer upload SHALL persist its returned id to the originating local shot via a non-UI path
+  > When a Visualizer upload succeeds and returns a shot id, the application SHALL persist that id and its shot URL to the local `shots` row of the shot that was uploaded, through a code path that does NO
+  > - **WHEN** a shot is pulled, saved as local row N, and the upload completes successfully returning Visualizer id `V`
+  > - **THEN** local shot row N SHALL have `visualizer_id == V` and a non-empty `visualizer_url`
+  > - **WHEN** the upload completes successfully for local row N returning id `V`
+  > - **WHEN** an upload fails (network error, 4xx/5xx, or no id in the response)
+  > The application SHALL run, at most once per device (guarded by an internal QSettings run-once flag), a reconciliation pass that lists the user's shots from the Visualizer API and links them to local s
+  > - consider only local rows whose `visualizer_id` is empty and whose shot timestamp is within the window;
+--- candidata: refractometer-tds-capture [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Refractometer readings only populate the active shot review page
+  | Refractometer TDS readings from the DiFluid R2 (received via the BLE `tdsChanged` signal) SHALL populate shot review fields only when the PostShotReviewPage is the active page in the QML navigation st
+  > Refractometer TDS readings from the DiFluid R2 (received via the BLE `tdsChanged` signal) SHALL populate shot review fields only when the PostShotReviewPage is the active page in the QML navigation st
+  > - **THEN** the page's local `editDrinkTds` field is set to the received value
+  > - **AND** the page's local `editDrinkEy` field is recomputed from the current `editDoseWeight` and `editDrinkWeight`
+  > - **AND** no Settings field is modified
+  > - **AND** the DiFluid R2 emits a `tdsChanged` signal during this window
+  > #### Scenario: Sub-threshold reading dropped during review
+  > The BLE-level R2 signal handler in `MainController` SHALL NOT write to `Settings.dyeDrinkTds` or `Settings.dyeDrinkEy` from the `tdsChanged` callback. It MAY emit a non-mutating debug log to make devi
+  > Additionally, `Settings.dyeDrinkTds` and `Settings.dyeDrinkEy` SHALL be in-memory (session-scratch) values, not persisted to QSettings or written to settings backup files. A stale TDS reading from a p
+
+===== P220 | inventage-ai/asylum PR #25 | capacidade do par: github-kit-credentials
+PR: Fix kit skill mount failure with shared config
+arquivos ligados: internal/container/container.go;internal/container/container_test.go;internal/kit/kit.go
+--- linhas alteradas (95; mostrando até 40)
++	// ~/.agents — shared agent registry (only in shared mode)
++	if opts.Config.AgentIsolation(opts.Agent.Name()) == "shared" {
++		agentsDir := filepath.Join(home, ".agents")
++		if dirExists(agentsDir) {
++			vol(agentsDir, agentsDir, "")
++		}
++	}
++	Kits          []*kit.Kit
+-	return opts.Agent.Command(resume, opts.ExtraArgs)
++	cmdOpts := agent.CmdOpts{}
++	if kit.AnyProvidesSkills(opts.Kits) {
++		cmdOpts.KitSkillsDir = "/opt/asylum-skills"
++	}
++	return opts.Agent.Command(resume, opts.ExtraArgs, cmdOpts)
++	"github.com/inventage-ai/asylum/internal/agent"
+-func (s stubAgent) Name() string    { return "stub" }
+-func (s stubAgent) Binary() string  { return "stub-bin" }
++func (s stubAgent) Name() string   { return "stub" }
++func (s stubAgent) Binary() string { return "stub-bin" }
+-func (s stubAgent) EnvVars() map[string]string            { return s.envVars }
+-func (s stubAgent) HasSession(_, _ string) bool            { return s.hasSession }
+-func (s stubAgent) Command(resume bool, extra []string) []string {
++func (s stubAgent) EnvVars() map[string]string  { return s.envVars }
++func (s stubAgent) HasSession(_, _ string) bool { return s.hasSession }
++func (s stubAgent) Command(resume bool, extra []string, opts agent.CmdOpts) []string {
++	prefix := "stub"
+-		return append([]string{"stub-resume"}, extra...)
++		prefix = "stub-resume"
+-	return append([]string{"stub"}, extra...)
++	out := []string{prefix}
++	if opts.KitSkillsDir != "" {
++		out = append(out, "--add-dir", opts.KitSkillsDir)
++	}
++	return append(out, extra...)
+-	Isolation     string         // kit-specific isolation level from config
++	Isolation     string // kit-specific isolation level from config
+-	Name              string
+-	Description       string
+-	DockerSnippet     string
+-	EntrypointSnippet string
+--- candidata: browser-kit [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: browser kit registration
+  | The system SHALL register a `browser` kit via `init()` in `internal/kit/browser.go` with name `"browser"`, TierOptIn, and a dependency on the `node` kit.
+  > The system SHALL register a `browser` kit via `init()` in `internal/kit/browser.go` with name `"browser"`, TierOptIn, and a dependency on the `node` kit.
+  > - **THEN** the kit registry contains a `"browser"` entry with Tier set to TierOptIn and Deps containing `"node"`
+  > The kit SHALL provide a DockerSnippet that installs the Playwright npm package and then runs `npx playwright install --with-deps chromium` to install Chromium along with all required system libraries.
+  > #### Scenario: Chromium installed in image
+  > - **WHEN** the browser kit is active and the Docker image is built
+  > - **THEN** Chromium is installed and launchable via Playwright inside the container
+  > - **WHEN** the DockerSnippet executes the Playwright install command with `--with-deps`
+  > The kit SHALL declare a CacheDirs entry mapping `"playwright"` to `/home/claude/.cache/ms-playwright` so the Chromium binary is persisted in a named Docker volume.
+--- candidata: ast-grep-kit [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: ast-grep kit registration
+  | The system SHALL register an `ast-grep` kit via `init()` in `internal/kit/astgrep.go` with name `"ast-grep"`, TierOptIn, and a dependency on the `node` kit.
+  > The system SHALL register an `ast-grep` kit via `init()` in `internal/kit/astgrep.go` with name `"ast-grep"`, TierOptIn, and a dependency on the `node` kit.
+  > - **THEN** the kit registry contains an `"ast-grep"` entry with Tier set to TierOptIn and Deps containing `"node"`
+  > ### Requirement: ast-grep installation via Docker snippet
+  > The kit SHALL provide a DockerSnippet that installs `@ast-grep/cli` globally via npm, making the `sg` command available in the container.
+  > #### Scenario: ast-grep installed in image
+  > - **WHEN** the ast-grep kit is active and the Docker image is built
+  > - **THEN** the `sg` command is available on PATH inside the container
+  > - **WHEN** the DockerSnippet executes
+--- candidata: agent-interface [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Agent interface
+  | The agent package SHALL define an Agent interface with methods: Name, Binary, NativeConfigDir, ContainerConfigDir, AsylumConfigDir, EnvVars, HasSession, Command — matching PLAN.md section 8.
+  > ### Requirement: Agent interface
+  > The agent package SHALL define an Agent interface with methods: Name, Binary, NativeConfigDir, ContainerConfigDir, AsylumConfigDir, EnvVars, HasSession, Command — matching PLAN.md section 8.
+  > - **WHEN** an Agent implementation is used
+  > - **THEN** all interface methods return correct values per the agent profile table in PLAN.md section 3.1
+  > ### Requirement: Agent registry
+  > The agent package SHALL provide a Get function that returns an Agent by name ("claude", "gemini", "codex") or an error for unknown names.
+  > #### Scenario: Valid agent lookup
+  > - **THEN** it returns the Gemini agent implementation with no error
+--- candidata: kit-skills-delivery [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: ProvidesSkills kit field
+  | The `kit.Kit` struct SHALL expose a `ProvidesSkills bool` field. Kits that stage one or more Claude Code skills for runtime use SHALL set this field to `true`.
+  > ### Requirement: ProvidesSkills kit field
+  > The `kit.Kit` struct SHALL expose a `ProvidesSkills bool` field. Kits that stage one or more Claude Code skills for runtime use SHALL set this field to `true`.
+  > #### Scenario: Skill-providing kit declares ProvidesSkills
+  > - **WHEN** a kit such as `agent-browser` or `ast-grep` is registered
+  > - **THEN** its `ProvidesSkills` field is `true`
+  > #### Scenario: Non-skill kit leaves ProvidesSkills false
+  > - **WHEN** a kit that does not stage a Claude skill is registered (e.g. `docker`, `python`, `cx`, `rtk`)
+  > - **THEN** its `ProvidesSkills` field remains at the zero value `false`
+--- candidata: sandbox-rules [tasks]
+  | ## MODIFIED Requirements
+  | ### Requirement: Kit-provided rules snippets
+  | Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > ### Requirement: Kit-provided rules snippets
+  > Each kit that installs tools or provides capabilities MUST populate `RulesSnippet` with a concise markdown description, EXCEPT for kits that generate their own standalone rules files (e.g., cx). At mi
+  > #### Scenario: Docker kit snippet
+  > - **WHEN** the docker kit is active
+  > - **THEN** its rules snippet SHALL mention that full Docker engine is available (not just CLI) and the container runs in privileged mode
+  > #### Scenario: cx kit no longer contributes snippet
+  > - **THEN** its `RulesSnippet` SHALL be empty and the assembled `asylum-sandbox.md` SHALL NOT contain a cx-specific section
+  > - **AND** the cx tool SHALL still appear in the "Kit Tools" list via the `Tools` field
+
+===== P221 | archmaxai/archmax PR #20 | capacidade do par: deployment
+PR: Add local Git versioning and GitHub sync for projects
+arquivos ligados: packages/core/src/config/env.ts
+--- linhas alteradas (2; mostrando até 40)
+-  GITHUB_CLIENT_ID: z.string().optional(),
+-  GITHUB_CLIENT_SECRET: z.string().optional(),
+--- candidata: semantic-model-publishing [tasks+PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Publish Event Model
+  | The system SHALL provide a `PublishEvent` Mongoose model with: `project` (ObjectId ref to Project, required, indexed), `message` (string, required — user-provided publish message), `modelNames` (strin
+  > - **WHEN** `GITHUB_CLIENT_ID` or `GITHUB_CLIENT_SECRET` env vars are not set
+  > - **WHEN** `GITHUB_CLIENT_ID` or `GITHUB_CLIENT_SECRET` env vars are not set
+--- candidata: data-connections [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Connection Model
+  | The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `type` (enum: postgres, mysql, mssql, sqlite
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+  > The API SHALL expose `POST /api/projects/:projectId/connections/reinit` that disposes the project's cached DuckDB instance, rebuilds it by attaching every active connection, runs a schema probe, and r
+  > The system SHALL provide a `Connection` Mongoose model with the following fields: `project` (ObjectId ref to Project, required), `name` (string, required), `slug` (string, required, matches pattern `/
+--- candidata: mcp-server [tasks+PR]
+  | ## MODIFIED Requirements
+  | ### Requirement: Semantic Layer Tools
+  | The MCP server SHALL expose the following tools for AI agent consumption:
+  > - `get_dataset_fields` — Get all fields for a dataset as a compact markdown list with types, examples, enums, synonyms, and instructions, paginated at 25 fields per page (required: `modelName`, `datas
+  > - `execute_query` — Run a scoped SQL query against the project's DuckDB instance (required: `modelName`, `sql`; optional: `params`). Each call is scoped to a single semantic model whose datasets becom
+  > - **WHEN** `get_dataset_fields` is called with a valid `modelName`, `datasetName`, and optional `page`
+  > The MCP server SHALL expose an `execute_query` tool that runs read-only SQL queries scoped to a single semantic model. The tool requires a `modelName` parameter (selecting which model's datasets becom
+  > - `get_dataset_fields` — Get all fields for a dataset as a compact markdown list with types, examples, enums, synonyms, and instructions. Paginated at 25 fields per page (required: `projectId`, `model
+  > - `get_semantic_model` — Get an overview of a semantic model with datasets, relationships, and metrics. Supports scoped pagination for large models (required: `modelName`; optional: `scope` enum `"dat
+  > - `get_dataset` — Get a dataset with all its fields as a compact markdown list with types, examples, enums, synonyms, and instructions. Paginated at 50 fields per page (required: `modelName`, `dataset
+  > The MCP server SHALL expose an `execute_query` tool that runs read-only SQL queries scoped to a single semantic model. The tool requires a `modelName` parameter (selecting which model's datasets becom
+--- candidata: project-git-versioning [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Git Library
+  | The system SHALL use `isomorphic-git` (pure JavaScript Git implementation) for all Git operations. No CLI wrappers or native Git bindings SHALL be used. The library SHALL be imported as individual fun
+  > The system SHALL provide an API endpoint `GET /api/projects/:projectId/git/log` accepting an optional `limit` query parameter (default 20) that returns the most recent commits. Each entry SHALL includ
+  > The system SHALL provide an API endpoint `GET /api/projects/:projectId/git/log` accepting optional `limit` (default 10, max 100) and `page` (default 1) query parameters that returns paginated commit h
+  > The system SHALL provide an API endpoint `GET /api/projects/:projectId/git/log` accepting optional `limit` (default 10, max 100) and `page` (default 1) query parameters that returns paginated commit h
+--- candidata: project-management [tasks+PR]
+  | ## ADDED Requirements
+  | ### Requirement: Project Model
+  | The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `description` (string, optional), `createdAt` (Date), `updatedAt` (Date), `deleted` (
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `description` (string, optional), `createdAt` (Date), `updatedAt` (Date), `deleted` (
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `description` (string, optional), `ensureReadonly` (boolean, default `true`), `create
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `slug` (string, required, unique, indexed), `description` (string, optional), `mcpPag
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `slug` (string, required, unique, indexed), `description` (string, optional), `ensure
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `description` (string, optional), `ensureReadonly` (boolean, default `true`), `mcpPag
+  > The system SHALL provide a `Project` Mongoose model with the following fields: `title` (string, required, unique), `slug` (string, required, unique, indexed), `description` (string, optional), `ensure
+  > The system SHALL store projects in MongoDB with the following fields: `title` (string, required), `slug` (string, required, matching `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/`), `description` (string, default e
+  > The system SHALL store projects in MongoDB with the following fields: `title` (string, required), `slug` (string, required, matching `/^[a-z0-9][a-z0-9-]*[a-z0-9]$/`), `description` (string, default e
+
+===== P222 | tmck-code/yet-another-statusline PR #71 | capacidade do par: task-checklist
+PR: feat(renderer): whole-unit cwd include/omit in fit_path
+arquivos ligados: claude/yas/renderer.py
+--- linhas alteradas (46; mostrando até 40)
+-from yas.render.text import _middle_ellipsis, _visible_width, fmt_dur, fmt_tok
++from yas.render.text import _visible_width, fmt_dur, fmt_tok
+-        *, show_commit: bool = True, show_dirty: bool = True,
++        *, show_path: bool = True, show_commit: bool = True, show_dirty: bool = True,
++        # The cwd path is a whole unit: shown in full or omitted entirely (no
++        # middle-ellipsis). show_path=False yields the branch-only rung (glyph +
++        # arrow + branch) used as a width-degradation step below the path forms.
++        path_part = f'{self.PWD}{short_pwd}{self.R} ' if show_path else ''
+-            f'{self.ICON_PATH}{GLYPH_FOLDER}  {self.PWD}{short_pwd}{self.R}'
+-            f' {self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
++            f'{self.ICON_PATH}{GLYPH_FOLDER}  {path_part}'
++            f'{self.LABEL}{self.ARROW}{BOLD}∈{self.R}'
++    def path_glyph_only(self) -> str:
++        """Presence-glyph floor: the folder glyph alone (1 visible column).
++        The overflow-safe terminal state of the path ladder — it can never
++        exceed the available width or disturb the box border math.
++        """
++        return f'{self.ICON_PATH}{GLYPH_FOLDER}{self.R}'
++        # Whole-unit include/omit ladder; first candidate that fits wins.
++        # full → drop commit → drop commit+dirty → compact path+branch →
++        # branch-only (path omitted) → glyph-only floor. The path is never
++        # middle-ellipsized: it is shown in full or dropped whole, and the
++        # branch outlives the path. compact_only enters at the compact rung.
+-        # Ellipsis on short_pwd only
+-        for pwd_w in range(target_w - 1, 0, -1):
+-            trunc_pwd = _middle_ellipsis(short_pwd, pwd_w)
+-            candidate = self.path_git_compact(trunc_pwd, git)
+-            if fits(candidate):
+-                return candidate
+-        # Ellipsis on both short_pwd and branch
+-        # Overhead of path_git_compact with empty strings is 5 visible chars.
+-        half = max(1, (target_w - 5) // 2)
+-        trunc_pwd    = _middle_ellipsis(short_pwd,  half)
+-        trunc_branch = _middle_ellipsis(git.branch, half)
+-        truncated_git = GitInfo(
+-            branch=trunc_branch, commit=git.commit,
+-            modified=git.modified, untracked=git.untracked,
+-            deleted=git.deleted, renamed=git.renamed,
++        # Path omitted whole, branch retained (glyph + arrow + branch).
++        branch_only = self.path_git(
+--- candidata: path-display [PR+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Whole-unit cwd include or omit
+  | The cwd path SHALL be rendered as a whole unit: it is either included in full
+  > ### Requirement: Whole-unit cwd include or omit
+  > The cwd path SHALL be rendered as a whole unit: it is either included in full
+  > (using the existing initial-collapsed `short_pwd` form) or omitted entirely. The
+  > system SHALL NOT apply middle-ellipsis or any partial truncation to the cwd path
+  > at any width.
+  > #### Scenario: Path included when it fits
+  > - **WHEN** the available width fits the path-plus-branch line
+  > - **THEN** the full `short_pwd` is shown alongside the branch
+--- candidata: statusline-config [tasks+termos]
+  | ## ADDED Requirements
+  | ### Requirement: Layered configuration precedence
+  | The statusline SHALL resolve every configurable knob through a single, fixed precedence chain: CLI flag (where one exists) → canonical `YAS_*` environment variable → legacy-alias environment variable 
+  > - **WHEN** `[layout].max_width = 200` is set in `yas.toml` and `YAS_MAX_WIDTH=160` is set in the environment
+  > - **THEN** the resolved `max_width` is `160`
+  > - **THEN** every knob resolves to its built-in default (`max_width=140`, `full_width=false`, `soft_limit=150000`, `token_window=60`, `theme=dark`, `bg_shift=warm`)
+  > The statusline SHALL read configuration from `yas.toml` located in `CLAUDE_CONFIG_DIR` (defaulting to `~/.claude/`). The file SHALL use a sectioned schema: `[layout]` for `max_width` and `full_width`,
+  > - **WHEN** `yas.toml` contains `[layout]` `max_width = 200`, `[tokens]` `soft_limit = 1000000`, and `[appearance]` `theme = "dark"`
+  > - **THEN** the statusline renders normally using env + defaults and reports no config error
+  > ### Requirement: TOML parsing with graceful 3.10 degradation
+  > The statusline SHALL parse `yas.toml` using the standard-library `tomllib` module and SHALL remain zero-dependency. On a Python runtime where `tomllib` is unavailable (3.10), the statusline SHALL skip
+--- candidata: subagent-row-layout [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Two-line row field set
+  | A subagent rendered in two-line form SHALL place the elapsed duration at the front of line 1, followed by the agent type, a `·` separator, and the description. Line 1 SHALL end with a right-aligned cl
+  > A subagent rendered in two-line form SHALL place the elapsed duration at the front of line 1, followed by the agent type, a `·` separator, and the description. Line 1 SHALL end with a right-aligned cl
+  > #### Scenario: Two-line row renders duration-first with the line-1 cluster
+  > - **WHEN** a subagent is rendered in two-line form with room for all fields
+  > - **THEN** line 1 reads `<dur> <type> · <description>` with a right-aligned `share% · tok · model` cluster, and line 2 reads `└ <glyph> <Tool[arg]>`
+  > - **WHEN** any subagent row is rendered
+  > When line 1 lacks room for the full `share% · tok · model` cluster, the description SHALL truncate first. If the cluster still does not fit, fields SHALL shed in order: share% first, then tok. The mod
+  > - **THEN** the description truncates with an ellipsis while the full cluster is retained
+  > #### Scenario: Cluster sheds share% then tok under width pressure
+--- candidata: subagent-cohort [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Done detection via end_turn
+  | The statusline SHALL treat a subagent as **Done** when, and only when, its transcript jsonl contains an assistant message whose `message.stop_reason` equals `"end_turn"`. The timestamp of that line SH
+  > #### Scenario: Interrupted agent never emits end_turn
+  > - **THEN** the subagent is never marked Done and never receives the Done visual treatment
+  > The statusline SHALL scope the visible subagent cohort to the current turn. A subagent is a member of the cohort when its `first_timestamp` is at or after the last user-prompt timestamp for the sessio
+  > - **WHEN** a subagent's `first_timestamp` is at or after the last user-prompt timestamp
+  > - **WHEN** a subagent started before the last user prompt but its transcript was written within the liveness window
+  > #### Scenario: Running agent is always shown
+  > - **WHEN** a subagent is still running (not Done and written within the liveness window)
+  > - **THEN** it is shown regardless of how long ago it started
+--- candidata: cache-countdown [tasks]
+  | ## ADDED Requirements
+  | ### Requirement: Prompt-cache anchor extraction from the transcript
+  | `TranscriptUsage` SHALL capture, during its existing single forward scan of the transcript jsonl, the wall-clock `timestamp` of the most recent line whose `message.usage` shows prompt-cache activity —
+  > #### Scenario: No cache activity yields a zero anchor
+  > `SessionView` SHALL expose a lazily-evaluated, cached `cache_countdown` derived from `transcript_usage`'s raw anchor and the view's single frozen `now`. It SHALL compute `remaining = cache_ttl − (now 
+  > ### Requirement: Cache Countdown rendering on the wide path/model row
+  > The wide layout SHALL render the **Cache Countdown** as its own vsep-delimited section on the path/model content row, positioned between the rate-limit helper and the model section, with a single left
+  > #### Scenario: Section renders with glyph, value, and divider
+  > - **WHEN** a wide render has a live `cache_countdown` of `(187, 38)`
+  > - **THEN** the path/model row contains a `│`-delimited section showing the cache glyph and `3m07s`, and that divider's column appears in the top border `downs` and the following separator `ups`
+  > - **THEN** the remaining-time figure's colour changes from the theme safe colour to the theme alert colour (the same ladder as the rate-limit percentages)
