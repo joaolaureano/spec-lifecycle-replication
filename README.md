@@ -6,7 +6,7 @@ The method record (`docs/`) is in Portuguese. Code comments are also in Portugue
 The paper asks one research question with two subquestions: RQ1 (editing) and RQ2 (spec decay). RQ2 files are named
 `p4_*`.
 
-**Slides** of the class presentation (in Portuguese, view only): https://claude.ai/artifact/X71QHMWGgRFn1uceRUbAo1
+**Slides** of the class presentation (in Portuguese, view only): https://claude.ai/artifact/CCtwgXAj4CpuP5xStb9j6j
 
 ## Contents
 | Path | What it is |
